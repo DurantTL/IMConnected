@@ -1,0 +1,32 @@
+---
+import { SECTIONS, SITE } from '../lib/site';
+const year = new Date().getFullYear();
+---
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <a class="brand" href="/">
+          <span class="brand-name">IM<span>Connected</span></span>
+        </a>
+        <p>{SITE.tagline}. A publication of the <a href={SITE.publisherUrl}>{SITE.publisher}</a>.</p>
+      </div>
+      <div>
+        <h2>Sections</h2>
+        <ul>
+          {SECTIONS.map((s) => <li><a href={`/${s.key}/`}>{s.label}</a></li>)}
+        </ul>
+      </div>
+      <div>
+        <h2>Get involved</h2>
+        <ul>
+          <li><a href="/submit/">Submit a story</a></li>
+          <li><a href="/search/">Search stories</a></li>
+          <li><a href={`mailto:${SITE.contactEmail}`}>{SITE.contactEmail}</a></li>
+          <li><a href={SITE.publisherUrl}>imsda.org</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="fine">© {year} {SITE.publisher}. All rights reserved.</p>
+  </div>
+</footer>

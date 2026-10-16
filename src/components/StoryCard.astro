@@ -1,0 +1,32 @@
+---
+import { getSection, areaLabel, formatDate } from '../lib/site';
+import { storyUrl, type Story } from '../lib/stories';
+
+interface Props {
+  story: Story;
+  variant?: 'default' | 'lead' | 'compact' | 'text';
+  showDek?: boolean;
+  showKicker?: boolean;
+}
+const { story, variant = 'default', showDek = variant !== 'compact', showKicker = true } = Astro.props;
+const d = story.data;
+const section = getSection(d.section);
+const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
+---
+<a class:list={['card', variant]} href={storyUrl(story)} data-sec={d.section}>
+  {variant !== 'text' && (
+    <div class="media">
+      {d.image ? (
+        <img src={d.image} alt={d.imageAlt ?? ''} loading={variant === 'lead' ? 'eager' : 'lazy'} />
+      ) : (
+        <div class="placeholder" aria-hidden="true"><span>{section?.short}</span></div>
+      )}
+    </div>
+  )}
+  <div style="display:grid;gap:8px">
+    {showKicker && <span class="kicker">{section?.label}{sub && <><span class="sep">/</span>{sub}</>}</span>}
+    <h3>{d.title}</h3>
+    {showDek && d.dek && <p class="dek">{d.dek}</p>}
+    <span class="meta">{d.author}{d.church ? ` · ${d.church}` : ''} · {formatDate(d.date)}</span>
+  </div>
+</a>

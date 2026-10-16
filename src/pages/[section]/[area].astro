@@ -1,0 +1,18 @@
+---
+import SectionList from '../../components/SectionList.astro';
+import { SECTIONS, type Section } from '../../lib/site';
+import { getStories, bySection } from '../../lib/stories';
+
+export function getStaticPaths() {
+  return SECTIONS.flatMap((section) =>
+    (section.areas ?? []).map((area) => ({
+      params: { section: section.key, area: area.key },
+      props: { section, area },
+    })),
+  );
+}
+
+const { section, area } = Astro.props as { section: Section; area: { key: string; label: string } };
+const stories = bySection(await getStories(), section.key, area.key);
+---
+<SectionList section={section} area={area} stories={stories} />

@@ -1,0 +1,204 @@
+---
+import Base from '../../layouts/Base.astro';
+import { SECTIONS, SITE } from '../../lib/site';
+import { LIMITS } from '../../lib/limits';
+
+const submittable = SECTIONS.filter((s) => s.submittable);
+const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]));
+---
+<Base title="Submit a Story" description="Share news and stories from your church, school or club with IMConnected.">
+  <div class="wrap">
+    <header class="page-head">
+      <span class="kicker">Share your story</span>
+      <h1>Submit a Story</h1>
+      <p>
+        Tell us what God is doing in your church, school, club or community. The communication department reviews every
+        submission and may edit for length, clarity and style before publishing.
+      </p>
+    </header>
+
+    <div class="notice" style="background:var(--accent-soft);margin-bottom:24px;max-width:760px">
+      <strong>Writing tip:</strong> Start with the essentials — <em>who</em> was involved, <em>what</em> happened,
+      <em>when</em> and <em>where</em> it took place, and <em>why</em> it matters. Then add details, quotes and background.
+    </div>
+
+    <form class="form" id="submit-form" method="post" action="/api/submit" enctype="multipart/form-data">
+      <div id="form-status" role="status" aria-live="polite"></div>
+
+      <fieldset>
+        <legend>About you</legend>
+        <div class="row-2">
+          <div class="field">
+            <label for="name">Your name *</label>
+            <input id="name" name="name" type="text" required maxlength="120" autocomplete="name" />
+          </div>
+          <div class="field">
+            <label for="church">Church, school or club *</label>
+            <input id="church" name="church" type="text" required maxlength="160" />
+          </div>
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label for="email">Email *</label>
+            <input id="email" name="email" type="email" required maxlength="200" autocomplete="email" />
+            <span class="hint">Only used by our editors if we have questions. Never published.</span>
+          </div>
+          <div class="field">
+            <label for="phone">Phone (optional)</label>
+            <input id="phone" name="phone" type="tel" maxlength="40" autocomplete="tel" />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Your story</legend>
+        <div class="row-2">
+          <div class="field">
+            <label for="section">Section *</label>
+            <select id="section" name="section" required>
+              <option value="">Choose a section…</option>
+              {submittable.map((s) => <option value={s.key}>{s.label}</option>)}
+            </select>
+          </div>
+          <div class="field" id="area-field" hidden>
+            <label for="area">Category *</label>
+            <select id="area" name="area"></select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="title">Headline *</label>
+          <input id="title" name="title" type="text" required maxlength={LIMITS.title} placeholder="e.g. Des Moines church hosts community health fair" />
+        </div>
+        <div class="field">
+          <label for="dek">One-sentence summary (optional)</label>
+          <input id="dek" name="dek" type="text" maxlength={LIMITS.dek} />
+        </div>
+        <div class="field">
+          <label for="body">Story *</label>
+          <textarea id="body" name="body" required minlength={LIMITS.bodyMin} maxlength={LIMITS.bodyMax}></textarea>
+          <span class="hint">Aim for 300–800 words. Separate paragraphs with a blank line. Include quotes if you have them.</span>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Photos</legend>
+        <div class="field">
+          <label for="photos">Upload photos (optional)</label>
+          <input id="photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple />
+          <span class="hint">Up to {LIMITS.maxPhotos} photos (JPG, PNG or WebP). Large photos are resized automatically. The first photo becomes the main image.</span>
+          <div class="previews" id="previews"></div>
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label for="caption">Photo caption (optional)</label>
+            <input id="caption" name="caption" type="text" maxlength="300" />
+          </div>
+          <div class="field">
+            <label for="photoCredit">Photo credit (optional)</label>
+            <input id="photoCredit" name="photoCredit" type="text" maxlength="120" />
+          </div>
+        </div>
+      </fieldset>
+
+      <label class="check">
+        <input type="checkbox" name="consent" value="yes" required />
+        <span>
+          I confirm this story is accurate to the best of my knowledge, I have permission to share any photos and the names of
+          people mentioned (including parent or guardian permission for minors), and I understand {SITE.name} may edit it before publishing.
+        </span>
+      </label>
+
+      <div class="hp" aria-hidden="true">
+        <label for="website">Leave this field empty</label>
+        <input id="website" name="website" type="text" tabindex="-1" autocomplete="off" />
+      </div>
+      <input type="hidden" name="t" id="t" value="" />
+
+      <div><button class="btn accent" type="submit" id="submit-btn">Send my story</button></div>
+    </form>
+  </div>
+</Base>
+
+<script define:vars={{ areaMap, LIMITS }}>
+  const form = document.getElementById('submit-form');
+  const sectionSel = document.getElementById('section');
+  const areaField = document.getElementById('area-field');
+  const areaSel = document.getElementById('area');
+  const photos = document.getElementById('photos');
+  const previews = document.getElementById('previews');
+  const status = document.getElementById('form-status');
+  const btn = document.getElementById('submit-btn');
+  document.getElementById('t').value = String(Date.now());
+
+  function syncAreas() {
+    const areas = areaMap[sectionSel.value] || [];
+    areaSel.innerHTML = '<option value="">Choose…</option>' + areas.map((a) => `<option value="${a.key}">${a.label}</option>`).join('');
+    areaField.hidden = areas.length === 0;
+    areaSel.required = areas.length > 0;
+  }
+  sectionSel.addEventListener('change', syncAreas);
+  syncAreas();
+
+  function show(msg, kind) {
+    status.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'notice ' + kind;
+    p.textContent = msg;
+    status.appendChild(p);
+    status.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  photos.addEventListener('change', () => {
+    previews.innerHTML = '';
+    const files = [...photos.files];
+    if (files.length > LIMITS.maxPhotos) show(`Please choose up to ${LIMITS.maxPhotos} photos.`, 'error');
+    for (const f of files.slice(0, LIMITS.maxPhotos)) {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(f);
+      img.alt = f.name;
+      previews.appendChild(img);
+    }
+  });
+
+  // Shrink photos in the browser before upload: faster on phones and keeps the git repo small.
+  const MAX_EDGE = 2000;
+  async function shrink(file) {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+      if (scale === 1 && file.size < 1.5 * 1024 * 1024) return file;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(bmp.width * scale);
+      canvas.height = Math.round(bmp.height * scale);
+      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
+      if (!blob) return file;
+      return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+    } catch {
+      return file; // browser couldn't decode it; let the server decide
+    }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if ((photos.files?.length || 0) > LIMITS.maxPhotos) return show(`Please choose up to ${LIMITS.maxPhotos} photos.`, 'error');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      const fd = new FormData(form);
+      const files = fd.getAll('photos').filter((f) => f instanceof File && f.size > 0);
+      fd.delete('photos');
+      if (files.length) btn.textContent = 'Preparing photos…';
+      for (const f of files) fd.append('photos', await shrink(f));
+      btn.textContent = 'Sending…';
+      const res = await fetch(form.action, { method: 'POST', body: fd, headers: { Accept: 'application/json' } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Something went wrong. Please try again.');
+      location.href = '/submit/thanks/';
+    } catch (err) {
+      show(err.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Send my story';
+    }
+  });
+</script>

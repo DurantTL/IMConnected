@@ -1,0 +1,28 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="Search" description="Search IMConnected stories">
+  <link slot="head" href="/pagefind/pagefind-ui.css" rel="stylesheet" />
+  <div class="wrap">
+    <header class="page-head">
+      <span class="kicker">IMConnected</span>
+      <h1>Search stories</h1>
+      <p>Find news, features and stories from across Iowa and Missouri.</p>
+    </header>
+    <div id="search" class="search-box"></div>
+    <noscript><p>Search requires JavaScript.</p></noscript>
+  </div>
+</Base>
+<script is:inline src="/pagefind/pagefind-ui.js"></script>
+<script is:inline>
+  window.addEventListener('DOMContentLoaded', () => {
+    if (!window.PagefindUI) {
+      document.getElementById('search').innerHTML =
+        '<p class="empty-state">Search index not found. Run <code>npm run build</code> to generate it.</p>';
+      return;
+    }
+    const params = new URLSearchParams(location.search);
+    const ui = new PagefindUI({ element: '#search', showSubResults: true, showImages: false, resetStyles: false });
+    if (params.get('q')) ui.triggerSearch(params.get('q'));
+  });
+</script>

@@ -1,0 +1,39 @@
+---
+import Base from '../layouts/Base.astro';
+import StoryCard from './StoryCard.astro';
+import type { Section } from '../lib/site';
+import type { Story } from '../lib/stories';
+
+interface Props {
+  section: Section;
+  area?: { key: string; label: string };
+  stories: Story[];
+}
+const { section, area, stories } = Astro.props;
+const title = area ? `${area.label} · ${section.label}` : section.label;
+---
+<Base title={title} description={section.blurb} current={section.key}>
+  <div class="wrap" data-sec={section.key}>
+    <header class="page-head">
+      {area ? <a class="kicker" href={`/${section.key}/`}>{section.label}</a> : <span class="kicker">IMConnected</span>}
+      <h1>{area ? area.label : section.label}</h1>
+      <p>{section.blurb}</p>
+      {section.areas && (
+        <nav class="chips" aria-label={`${section.label} areas`}>
+          <a class="chip" href={`/${section.key}/`} aria-current={!area ? 'page' : undefined}>All</a>
+          {section.areas.map((a) => (
+            <a class="chip" href={`/${section.key}/${a.key}/`} aria-current={area?.key === a.key ? 'page' : undefined}>{a.label}</a>
+          ))}
+        </nav>
+      )}
+    </header>
+
+    {stories.length ? (
+      <div class="grid cols-3">
+        {stories.map((s) => <StoryCard story={s} variant={section.key === 'columns' ? 'text' : 'default'} />)}
+      </div>
+    ) : (
+      <p class="empty-state">No stories here yet. <a href="/submit/">Submit one?</a></p>
+    )}
+  </div>
+</Base>

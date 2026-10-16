@@ -1,0 +1,10 @@
+services:
+  imconnected:
+    image: ghcr.io/duranttl/imconnected:latest
+    container_name: imconnected
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "4321:4321"
+    # To update after a merge:  docker compose pull && docker compose up -d
+    # (or let an image auto-updater you already run handle it)

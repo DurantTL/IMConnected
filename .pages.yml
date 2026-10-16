@@ -1,0 +1,58 @@
+# Pages CMS (https://pagescms.org) — a free web editor for this repo.
+# Sign in at app.pagescms.org with GitHub, open this repo, and editors get a
+# friendly form for every story. Works on submission branches too.
+media:
+  input: public/images
+  output: /images
+
+content:
+  - name: stories
+    label: Stories
+    type: collection
+    path: src/content/stories
+    filename: "{year}-{month}-{day}-{primary}.md"
+    view:
+      fields: [title, section, date, featured, draft]
+      primary: title
+      sort: [date, title]
+      default:
+        sort: date
+        order: desc
+    fields:
+      - { name: title, label: Headline, type: string, required: true }
+      - { name: dek, label: Summary (shown under headline), type: text }
+      - name: section
+        label: Section
+        type: select
+        required: true
+        options:
+          values:
+            - { value: news, label: News }
+            - { value: features, label: Features }
+            - { value: columns, label: Columns }
+            - { value: youth, label: "Youth & Pathfinders" }
+            - { value: kids, label: Kids }
+      - name: area
+        label: Category (News / Youth only)
+        type: select
+        options:
+          values:
+            - { value: conference, label: "News: Conference" }
+            - { value: churches, label: "News: Churches" }
+            - { value: schools, label: "News: Schools" }
+            - { value: camp, label: "News: Camp" }
+            - { value: youth, label: "Youth: Youth" }
+            - { value: pathfinders, label: "Youth: Pathfinders" }
+            - { value: adventurers, label: "Youth: Adventurers" }
+      - { name: column, label: Column name (Columns only), type: string }
+      - { name: author, label: Author, type: string, required: true }
+      - { name: authorTitle, label: Author title, type: string }
+      - { name: church, label: Church / school / club, type: string }
+      - { name: date, label: Date, type: date, required: true }
+      - { name: image, label: Main photo, type: image }
+      - { name: imageAlt, label: Photo caption / alt text, type: string }
+      - { name: photoCredit, label: Photo credit, type: string }
+      - { name: photos, label: More photos, type: image, list: true }
+      - { name: featured, label: Feature on home page, type: boolean, default: false }
+      - { name: draft, label: Draft (hidden), type: boolean, default: false }
+      - { name: body, label: Story, type: rich-text }

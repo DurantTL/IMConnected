@@ -1,0 +1,24 @@
+{
+  "name": "imconnected",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "IMConnected — story magazine for the Iowa-Missouri Conference of Seventh-day Adventists",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build && pagefind --site dist/client",
+    "start": "node dist/server/entry.mjs",
+    "preview": "npm run build && npm start",
+    "check": "astro check"
+  },
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "dependencies": {
+    "@astrojs/node": "11.1.8",
+    "astro": "7.4.0"
+  },
+  "devDependencies": {
+    "pagefind": "1.5.2"
+  }
+}

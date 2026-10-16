@@ -1,0 +1,13 @@
+---
+import SectionList from '../../components/SectionList.astro';
+import { SECTIONS, type Section } from '../../lib/site';
+import { getStories, bySection } from '../../lib/stories';
+
+export function getStaticPaths() {
+  return SECTIONS.map((section) => ({ params: { section: section.key }, props: { section } }));
+}
+
+const { section } = Astro.props as { section: Section };
+const stories = bySection(await getStories(), section.key);
+---
+<SectionList section={section} stories={stories} />

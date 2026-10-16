@@ -1,0 +1,109 @@
+---
+import Base from '../layouts/Base.astro';
+import StoryCard from '../components/StoryCard.astro';
+import { SECTIONS, SITE, getSection } from '../lib/site';
+import { getStories, bySection } from '../lib/stories';
+
+const stories = await getStories();
+
+// Hero: featured stories first, then newest
+const featured = stories.filter((s) => s.data.featured);
+const heroPool = [...featured, ...stories.filter((s) => !s.data.featured)];
+const [lead, ...rest] = heroPool;
+const side = rest.slice(0, 3);
+const used = new Set([lead, ...side].filter(Boolean).map((s) => s.id));
+const fresh = (list: typeof stories) => list.filter((s) => !used.has(s.id));
+
+const news = getSection('news')!;
+const features = fresh(bySection(stories, 'features')).slice(0, 3);
+const columns = bySection(stories, 'columns').slice(0, 3);
+const youth = fresh(bySection(stories, 'youth')).slice(0, 3);
+const kids = bySection(stories, 'kids').slice(0, 3);
+---
+<Base>
+  <section class="tagline-band" aria-label="About IMConnected">
+    <div class="wrap">
+      <p>{SITE.tagline}</p>
+      <span class="words">Connect · Inform · Inspire</span>
+    </div>
+  </section>
+
+  <div class="wrap">
+    {lead ? (
+      <section class="hero" aria-label="Top stories">
+        <StoryCard story={lead} variant="lead" />
+        <div class="hero-side">
+          {side.map((s) => <StoryCard story={s} variant="compact" />)}
+        </div>
+      </section>
+    ) : (
+      <p class="empty-state">No stories yet — check back soon.</p>
+    )}
+
+    {features.length > 0 && (
+      <section class="block" data-sec="features">
+        <div class="block-head">
+          <div><h2>Features</h2><p>{getSection('features')!.blurb}</p></div>
+          <a class="more" href="/features/">All features →</a>
+        </div>
+        <div class="grid cols-3">{features.map((s) => <StoryCard story={s} />)}</div>
+      </section>
+    )}
+
+    <section class="block" data-sec="news">
+      <div class="block-head">
+        <div><h2>Across the Conference</h2><p>{news.blurb}</p></div>
+        <a class="more" href="/news/">All news →</a>
+      </div>
+      <div class="grid cols-4">
+        {news.areas!.map((a) => {
+          const items = bySection(stories, 'news', a.key).slice(0, 3);
+          return (
+            <div class="area-col" data-sec="news">
+              <h3 class="area-title"><a href={`/news/${a.key}/`} style="text-decoration:none">{a.label}</a></h3>
+              {items.length ? items.map((s) => <StoryCard story={s} variant="text" showDek={false} showKicker={false} />) : <p class="empty">No stories yet.</p>}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+
+    {columns.length > 0 && (
+      <section class="block" data-sec="columns">
+        <div class="block-head">
+          <div><h2>Columns</h2><p>{getSection('columns')!.blurb}</p></div>
+          <a class="more" href="/columns/">All columns →</a>
+        </div>
+        <div class="grid cols-3">{columns.map((s) => <StoryCard story={s} variant="text" />)}</div>
+      </section>
+    )}
+
+    {youth.length > 0 && (
+      <section class="block" data-sec="youth">
+        <div class="block-head">
+          <div><h2>Youth &amp; Pathfinders</h2><p>{getSection('youth')!.blurb}</p></div>
+          <a class="more" href="/youth/">More youth news →</a>
+        </div>
+        <div class="grid cols-3">{youth.map((s) => <StoryCard story={s} />)}</div>
+      </section>
+    )}
+
+    {kids.length > 0 && (
+      <section class="block" data-sec="kids">
+        <div class="block-head">
+          <div><h2>Kids</h2><p>{getSection('kids')!.blurb}</p></div>
+          <a class="more" href="/kids/">More for kids →</a>
+        </div>
+        <div class="grid cols-3">{kids.map((s) => <StoryCard story={s} />)}</div>
+      </section>
+    )}
+
+    <section class="cta" aria-label="Submit a story">
+      <div>
+        <h2>Have a story from your church?</h2>
+        <p>Baptisms, outreach, school events, Pathfinder adventures, answered prayers — share what God is doing in your community.</p>
+      </div>
+      <a class="btn accent" href="/submit/">Submit a Story</a>
+    </section>
+  </div>
+</Base>
