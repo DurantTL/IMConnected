@@ -1,0 +1,61 @@
+---
+import '../styles/global.css';
+import { SITE } from '../lib/site';
+
+interface Props {
+  title: string;
+  current?: 'dashboard' | 'drafts' | 'published' | 'editors' | 'account';
+}
+const { title, current } = Astro.props;
+const user = Astro.locals.user;
+const nav = [
+  { key: 'drafts', href: '/admin/drafts', label: 'Drafts' },
+  { key: 'published', href: '/admin/published', label: 'Published' },
+  ...(user?.role === 'admin' ? [{ key: 'editors', href: '/admin/editors', label: 'Editors' }] : []),
+  { key: 'account', href: '/admin/account', label: 'My account' },
+];
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{title} | {SITE.name} editors</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body class="admin">
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="admin-bar">
+      <a class="admin-brand" href="/admin">{SITE.name} <span>editors</span></a>
+      {user && (
+        <nav aria-label="Editor navigation">
+          {nav.map((n) => (
+            <a href={n.href} aria-current={current === n.key ? 'page' : undefined}>{n.label}</a>
+          ))}
+          <form method="post" action="/api/admin/logout"><button type="submit">Sign out</button></form>
+        </nav>
+      )}
+    </header>
+    <main id="main" class="admin-main">
+      <slot />
+    </main>
+  </body>
+</html>
+<style is:global>
+  .admin-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 12px var(--gutter); background: var(--brand); color: var(--brand-ink); }
+  .admin-brand { font-family: var(--serif); font-weight: 700; font-size: 1.2rem; color: inherit; text-decoration: none; }
+  .admin-brand span { font-family: var(--sans); font-weight: 500; font-size: .8rem; opacity: .8; margin-left: 6px; text-transform: uppercase; letter-spacing: .06em; }
+  .admin-bar nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-left: auto; }
+  .admin-bar nav a, .admin-bar nav button { color: inherit; font: inherit; background: none; border: 0; padding: 6px 2px; cursor: pointer; text-decoration: none; border-bottom: 2px solid transparent; }
+  .admin-bar nav a:hover, .admin-bar nav button:hover, .admin-bar nav a[aria-current] { border-bottom-color: currentColor; }
+  .admin-bar form { margin: 0; }
+  .admin-main { max-width: 760px; margin: 0 auto; padding: 32px var(--gutter) 64px; }
+  .admin-main h1 { font-family: var(--serif); margin-top: 0; }
+  .admin-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; }
+  .admin-card label { display: block; font-weight: 600; margin: 16px 0 6px; }
+  .admin-card input { width: 100%; padding: 10px 12px; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+  .admin-card button { margin-top: 20px; padding: 10px 18px; font: inherit; font-weight: 600; border: 0; border-radius: 8px; background: var(--brand); color: var(--brand-ink); }
+  .admin-card button:disabled { opacity: .5; }
+  .admin-note { color: var(--ink-2); }
+</style>

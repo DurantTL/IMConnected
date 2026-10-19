@@ -38,7 +38,7 @@ you to review the current branch against `origin/main`.
    - the confirmation email: the title is HTML-escaped, no other submitted
      text is in it, and no submitter address is ever logged or put in a
      response, a story file or an error message;
-   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts` and `src/pages/api/confirm.ts` set `prerender = false`;
+   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/confirm.ts`, `/admin*` and `/api/admin/*` set `prerender = false`;
    - human-only gates in `AGENTS.md` that the change might cross.
 3. Report only actionable findings, most severe first, each with `path:line`,
    what is wrong, a concrete failure scenario, and a suggested fix. List

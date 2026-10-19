@@ -6,5 +6,6 @@ dist
 .env
 .env.*
 !.env.example
+/data/
 .mock-prs
 *.log

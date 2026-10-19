@@ -2,8 +2,8 @@
 
 A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission becomes a GitHub pull request, and merging the pull request publishes the story.
 
-- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The only server code is `/api/submit`, `/api/publish` and `/api/confirm`.
-- **Stories are Markdown files** in `src/content/stories/`. There's no database.
+- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The server code is `/api/submit`, `/api/publish`, `/api/confirm`, and the editor dashboard (`/admin*` and `/api/admin/*`).
+- **Stories are Markdown files** in `src/content/stories/`. Accounts, sessions, drafts and the audit log for the editor dashboard live in a small SQLite file (see Editor dashboard); stories never do.
 - **Docker image**: on every push to `main`, an image is built and pushed to `ghcr.io/<owner>/imconnected`.
 - **Pagefind** builds a site search index at build time, so search needs no server.
 - **Pages CMS** (optional) gives editors a web form for stories, so they don't have to edit files on GitHub.
@@ -173,27 +173,19 @@ GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http://localhost:4010 npm st
 # submissions are written to ./.mock-prs/<branch>/
 ```
 
-## Spam protection: Turnstile, email checks and confirmation
+## Editor dashboard
 
-**Cloudflare Turnstile.**
-1. In the Cloudflare dashboard open Turnstile and add a widget for the site's hostname (managed mode).
-2. Set the **secret key** as `TURNSTILE_SECRET_KEY` in the server's `.env`. With it unset the check is skipped (local dev); in production the server logs one warning at startup.
-3. Set the **site key** as a repository **variable** `PUBLIC_TURNSTILE_SITE_KEY` (Settings → Secrets and variables → Actions → Variables), not in `.env`. It is public and baked into the prerendered `/submit/` page at build time, so rebuild the image after changing it. When it is empty the widget isn't shown.
-4. Setting `TURNSTILE_SECRET_KEY` without building the image with `PUBLIC_TURNSTILE_SITE_KEY` blocks every submission, because the form then has no widget to produce a token. Set both, or neither.
-5. If Cloudflare can't be reached the form answers 503 ("Please try again in a minute"); it fails closed.
+Editors sign in at `/admin` (invite-only; sign-in methods arrive over the epic in issue #7). The pages are server-rendered, `noindex`, and never cached.
 
-For local testing use Cloudflare's documented test keys: site key `1x00000000000000000000AA` (always passes) with secret `1x0000000000000000000000000000000AA`, and secret `2x0000000000000000000000000000000AA` (always fails). `TURNSTILE_VERIFY_URL` can point at a local stand-in if the network is blocked.
+- **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. Add that volume to your backups; stories themselves are safe in git. Migrations in `src/lib/db/migrations/` apply automatically, once each, the first time `/admin` is used. If the database can't be opened, only `/admin` answers 503 (and logs a line); the public pages and `/api/submit` keep working. `node scripts/migrate.mjs` applies them by hand. A bind mount instead of the named volume must be owned by uid 1000 (the `node` user).
+- **First admin.** Run once on the server (the email and name are yours; the output is a 24-hour, single-use invite link; the invite page arrives with the sign-in feature, issue 2/7):
 
-**Email domain checks** run before anything reaches GitHub. Domains on `src/lib/disposable-domains.txt` (and their subdomains) are refused, as are domains with no MX, A or AAAA record. A DNS timeout or server failure lets the submission through, so a DNS hiccup never loses a story. Add a line to the text file to block another domain.
+  ```bash
+  docker compose exec imconnected node scripts/create-admin.mjs you@example.org "Your Name"
+  ```
 
-**Confirmation email** (sent through Resend's HTTP API; no SDK).
-1. Create a Resend account, add the sending domain and add the DNS records Resend shows until the domain reads **Verified**.
-2. In `.env` set `RESEND_API_KEY`, `EMAIL_FROM` (e.g. `IMConnected <stories@imadventist.org>`), optionally `EMAIL_REPLY_TO` (default `communication@imsda.org`), and `EMAIL_CONFIRM_SECRET` (`openssl rand -hex 32`, 32+ characters).
-3. Without `RESEND_API_KEY` or a long enough secret, nothing is sent and the PR body says so.
-
-Every submission PR is labelled `email-unverified` and its description has an **Email status** row (`confirmation sent`, or `not sent: <reason>`). The PR is created right away either way. When the submitter presses **Confirm** on the link in the email (valid 14 days; the button, not the link itself, confirms, so mail scanners can't do it), the label changes to `email-verified`. Editors can filter the PR list by these labels; an unverified story may still be good, so it is a signal, not a gate. The email address is never logged.
-
-**Testing the email flow locally:** run the mock GitHub API (`node scripts/mock-github.mjs`), the mock Resend endpoint (`node scripts/mock-email.mjs`, port 4011, prints each message as one JSON line; `GET /fail-on` makes it answer 500, `GET /fail-off` restores it), and start the app with `EMAIL_API_URL=http://localhost:4011/emails`, `RESEND_API_KEY=test`, `EMAIL_FROM=test@example.com`, a made-up `EMAIL_CONFIRM_SECRET`. Never send real email from a test.
+  Only a hash of the invite token is stored, so the link can't be shown again. Run the command again to get a fresh one.
+- **Local testing.** `DATA_DIR=/tmp/imc-data npm start`, then `DATA_DIR=/tmp/imc-data node scripts/create-admin.mjs test@example.com "Test Admin"`. Session cookies are always `Secure`, so local sign-in needs Chrome or Firefox on `localhost` (they accept Secure cookies there). Use synthetic data and delete the folder afterwards.
 
 ## Security and spam notes
 
