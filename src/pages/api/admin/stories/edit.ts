@@ -1,10 +1,10 @@
 import type { APIRoute } from 'astro';
 import { createDraftFromStory, getDraftBySlug, isEditable, reloadDraftFromStory } from '../../../../lib/drafts';
 import { loadStory, validSlug } from '../../../../lib/draft-publish';
-import { PublishError } from '../../../../lib/publish';
+import { EditorError } from '../../../../lib/messages';
+import { githubOrNull, readFormLimited, redirectTo } from '../../../../lib/draft-http';
 import { audit } from '../../../../lib/auth/audit';
 import { clientIp } from '../../../../lib/request';
-import { githubOrNull, redirectTo } from '../../../../lib/draft-http';
 
 export const prerender = false;
 
@@ -14,23 +14,19 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
   const user = locals.user!;
   const ip = clientIp(request, clientAddress);
   const back = '/admin/published';
-  let slug = '';
-  try {
-    const v = (await request.formData()).get('slug');
-    slug = typeof v === 'string' ? v : '';
-  } catch {
-    /* handled below */
-  }
-  if (!validSlug(slug)) return redirectTo(back, { e: 'That story address is not valid.' });
+  const form = await readFormLimited(request, 8 * 1024);
+  const slugValue = form && form !== 'too_big' ? form.get('slug') : null;
+  const slug = typeof slugValue === 'string' ? slugValue : '';
+  if (!validSlug(slug)) return redirectTo(back, { e: 'slug_bad' });
 
   const existing = getDraftBySlug(slug);
   if (existing && isEditable(existing)) return redirectTo(`/admin/drafts/${existing.id}`);
 
   const cfg = githubOrNull();
-  if (!cfg) return redirectTo(back, { e: 'Editing live stories is not set up on this server.' });
+  if (!cfg) return redirectTo(back, { e: 'edit_no_github' });
   try {
     const story = await loadStory(cfg, slug);
-    if (!story) return redirectTo(back, { e: 'That story was not found on the live branch.' });
+    if (!story) return redirectTo(back, { e: 'story_missing' });
     let id: number;
     if (existing) {
       reloadDraftFromStory(existing.id, user.id, story.fields, story.photos);
@@ -41,8 +37,8 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
     audit('draft.create', { userId: user.id, target: `draft:${id}`, detail: { source: 'editor', slug }, ip });
     return redirectTo(`/admin/drafts/${id}`);
   } catch (err) {
-    if (err instanceof PublishError) return redirectTo(back, { e: err.message });
+    if (err instanceof EditorError) return redirectTo(back, { e: err.code });
     console.error('[drafts] load story failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    return redirectTo(back, { e: 'We could not load that story right now. Please try again.' });
+    return redirectTo(back, { e: 'load_failed' });
   }
 };

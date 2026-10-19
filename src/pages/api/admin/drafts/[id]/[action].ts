@@ -1,17 +1,18 @@
 import type { APIRoute } from 'astro';
 import {
-  addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, markPublished, photoCount, rejectDraft, restoreDraft, saveAuditDue, saveDraft, writeUpload,
-  removeUploadFiles, type OpResult,
+  addUploadedPhotos, beginPublish, changePhoto, getDraft, isEditable, listPhotos, markPublished, photoCount, rejectDraft, releaseSlug, restoreDraft, retireUploads,
+  saveAuditDue, saveDraft, writeUpload, removeUploadFiles, type OpResult,
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
-import { publishDraft } from '../../../../../lib/draft-publish';
-import { PublishError } from '../../../../../lib/publish';
+import { buildDraftFiles, publishMessage } from '../../../../../lib/draft-publish';
+import { commitToBase } from '../../../../../lib/github';
+import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
 import { sniffImage } from '../../../../../lib/submission';
 import { renderMarkdownSafe, escapeHtml } from '../../../../../lib/markdown';
 import { audit } from '../../../../../lib/auth/audit';
 import { clientIp } from '../../../../../lib/request';
-import { githubOrNull, jsonResponse, redirectTo } from '../../../../../lib/draft-http';
+import { githubOrNull, jsonResponse, readFormLimited, redirectTo } from '../../../../../lib/draft-http';
 
 export const prerender = false;
 
@@ -28,17 +29,13 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
   const draft = id === null ? null : getDraft(id);
   if (!draft || !ACTIONS.has(action)) return jsonResponse(404, { ok: false, error: 'Not found.' });
   const page = `/admin/drafts/${draft.id}`;
+  const isJson = action === 'save' || action === 'preview';
+  const refuse = (code: ErrorCode, status = 400) => (isJson ? jsonResponse(status, { ok: false, error: ERRORS[code] }) : redirectTo(page, { e: code }));
 
-  const declared = Number(request.headers.get('content-length') || 0);
   const maxBytes = action === 'photos' ? (LIMITS.maxPhotos * LIMITS.maxPhotoMB + 2) * 1024 * 1024 : 400 * 1024;
-  if (declared > maxBytes) return action === 'save' || action === 'preview' ? jsonResponse(413, { ok: false, error: 'That is too much to save at once.' }) : redirectTo(page, { e: 'That is too much to send at once.' });
-
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch {
-    return action === 'save' || action === 'preview' ? jsonResponse(400, { ok: false, error: 'The form could not be read.' }) : redirectTo(page, { e: 'The form could not be read.' });
-  }
+  const form = await readFormLimited(request, maxBytes);
+  if (form === 'too_big') return refuse('too_big', 413);
+  if (!form) return refuse('form_unreadable');
   const version = intParam(form.get('version'));
 
   if (action === 'preview') {
@@ -55,22 +52,22 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
   }
 
   if (action === 'save') {
-    if (version === null) return jsonResponse(400, { ok: false, error: 'The page is out of date. Reload it.' });
+    if (version === null) return refuse('stale_page');
     let parsed;
     try {
       parsed = readDraftFields(form);
     } catch (err) {
       return jsonResponse(400, { ok: false, error: (err as Error).message });
     }
-    const r = saveDraft(draft.id, version, parsed.fields, parsed.photoMeta, user.id);
+    const r = saveDraft(draft.id, version, parsed.fields, parsed.photoAlts, user.id);
     if (!r.ok) return jsonResponse(r.reason === 'conflict' ? 409 : r.reason === 'locked' ? 423 : 400, { ok: false, conflict: r.reason === 'conflict', error: r.message });
     if (saveAuditDue(user.id, draft.id)) audit('draft.save', { userId: user.id, target: `draft:${draft.id}`, ip });
     return jsonResponse(200, { ok: true, updatedAt: r.updatedAt, savedBy: user.name, savedAt: r.updatedAt });
   }
 
   // The remaining actions are plain form posts and answer with a redirect back to the editor.
-  if (version === null) return redirectTo(page, { e: 'The page was out of date. Please try again.' });
-  const done = (r: OpResult, code: string) => (r.ok ? redirectTo(page, { n: code }) : redirectTo(page, { e: r.message }));
+  if (version === null) return refuse('stale_page');
+  const done = (r: OpResult, code: string) => (r.ok ? redirectTo(page, { n: code }) : redirectTo(page, { e: r.code }));
 
   if (action === 'reject') {
     const note = String(form.get('note') ?? '').slice(0, 500).trim();
@@ -86,54 +83,71 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
   }
 
   if (action === 'photos') {
-    if (!isEditable(draft)) return redirectTo(page, { e: 'This draft is closed. Restore it to change photos.' });
+    if (!isEditable(draft)) return refuse('photos_closed');
     const op = String(form.get('op') ?? '');
     if (op === 'upload') {
       const files = form.getAll('photos').filter((f): f is File => f instanceof File && f.size > 0);
-      if (!files.length) return redirectTo(page, { e: 'Choose at least one photo to upload.' });
-      if (photoCount(draft.id) + files.length > LIMITS.maxPhotos) return redirectTo(page, { e: `A story can have up to ${LIMITS.maxPhotos} photos.` });
+      if (!files.length) return refuse('upload_none');
+      if (photoCount(draft.id) + files.length > LIMITS.maxPhotos) return refuse('photo_limit');
       const stored: { rel: string; ext: string }[] = [];
-      try {
-        for (const f of files) {
-          if (f.size > LIMITS.maxPhotoMB * 1024 * 1024) throw new Error(`A photo is larger than ${LIMITS.maxPhotoMB} MB.`);
-          const bytes = new Uint8Array(await f.arrayBuffer());
-          const ext = sniffImage(bytes);
-          if (!ext) throw new Error('Photos must be JPG, PNG or WebP images.');
-          stored.push({ rel: writeUpload(draft.id, bytes, ext), ext });
-        }
-      } catch (err) {
-        removeUploadFiles(stored.map((s) => s.rel));
-        return redirectTo(page, { e: (err as Error).message });
+      let problem: ErrorCode | null = null;
+      for (const f of files) {
+        if (f.size > LIMITS.maxPhotoMB * 1024 * 1024) { problem = 'photo_big'; break; }
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        const ext = sniffImage(bytes);
+        if (!ext) { problem = 'photo_type'; break; }
+        stored.push({ rel: writeUpload(draft.id, bytes, ext), ext });
       }
-      const r = addUploadedPhotos(draft.id, version, user.id, stored);
-      return done(r, 'uploaded');
+      if (problem) {
+        removeUploadFiles(stored.map((s) => s.rel));
+        return refuse(problem);
+      }
+      return done(addUploadedPhotos(draft.id, version, user.id, stored), 'uploaded');
     }
     const m = /^(up|down|lead|delete):(\d{1,12})$/.exec(op);
-    if (!m) return redirectTo(page, { e: 'That photo action is not known.' });
-    if (!listPhotos(draft.id).some((p) => p.id === Number(m[2]))) return redirectTo(page, { e: 'That photo is no longer on this draft.' });
+    if (!m) return refuse('photo_op');
+    if (!listPhotos(draft.id).some((p) => p.id === Number(m[2]))) return refuse('photo_gone');
     return done(changePhoto(draft.id, version, user.id, m[1] as 'up' | 'down' | 'lead' | 'delete', Number(m[2])), 'photos');
   }
 
-  // publish
-  if (!isEditable(draft)) return redirectTo(page, { e: 'Only a new or in-review draft can be published.' });
-  if (version !== draft.updatedAt) return redirectTo(page, { e: 'Someone else changed this draft. Reload to see their changes.' });
+  // ---- publish ----
+  if (!isEditable(draft)) return refuse('not_publishable');
+  if (version !== draft.updatedAt) return refuse('conflict');
   const cfg = githubOrNull();
   if (!cfg) {
     console.error('[drafts] GITHUB_TOKEN / GITHUB_REPO not configured');
-    return redirectTo(page, { e: 'Publishing is not set up on this server.' });
+    return refuse('no_github');
   }
-  if (publishing.has(draft.id)) return redirectTo(page, { e: 'This draft is already being published.' });
+  if (publishing.has(draft.id)) return refuse('already_publishing');
   publishing.add(draft.id);
+  let reserved: string | null = null;
   try {
-    const out = await publishDraft(cfg, draft, listPhotos(draft.id), user.name);
-    markPublished(draft.id, { slug: out.slug, commit: out.sha, userId: user.id });
-    audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: out.slug, commit: out.sha }, ip });
-    return redirectTo(page, { n: 'published' });
+    const photos = listPhotos(draft.id);
+    const built = await buildDraftFiles(cfg, draft, photos);
+    // Lock the draft (saves from the page the editor is looking at now conflict instead of being lost)
+    // and reserve the slug before anything reaches GitHub.
+    const lock = beginPublish(draft.id, version, user.id, built.slug);
+    if (!lock.ok) return redirectTo(page, { e: lock.code });
+    if (!draft.slug) reserved = built.slug;
+
+    const { sha } = await commitToBase(cfg, { files: built.files, message: publishMessage(built.title, user.name) });
+    reserved = null; // the story is live from here on, whatever happens next
+
+    try {
+      const r = markPublished(draft.id, { slug: built.slug, commit: sha, userId: user.id, lockedAt: lock.updatedAt });
+      audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: built.slug, commit: sha, newerEditsNotLive: r.stale }, ip });
+      retireUploads(draft.id, built.uploaded);
+      return redirectTo(page, { n: r.stale ? 'published_stale' : 'published' });
+    } catch (err) {
+      console.error('[drafts] published but could not record it', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      return redirectTo(page, { e: 'live_not_recorded' });
+    }
   } catch (err) {
-    if (err instanceof PublishError) return redirectTo(page, { e: err.message });
+    if (err instanceof EditorError) return redirectTo(page, { e: err.code });
     console.error('[drafts] publish failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    return redirectTo(page, { e: 'We could not publish right now. Please try again in a few minutes.' });
+    return redirectTo(page, { e: 'publish_failed' });
   } finally {
+    if (reserved) releaseSlug(draft.id, reserved);
     publishing.delete(draft.id);
   }
 };

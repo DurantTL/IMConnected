@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
+import { ERRORS, type ErrorCode } from './messages';
 
 export type DraftStatus = 'new' | 'in_review' | 'published' | 'rejected';
 export type DraftSource = 'form' | 'studio' | 'editor';
@@ -268,37 +269,39 @@ function takeVersion(id: number, expected: number, userId: number, extra = ''): 
   return Number(r.changes) === 1 ? next : null;
 }
 
-export type SaveResult = { ok: true; updatedAt: number } | { ok: false; reason: 'conflict' | 'locked' | 'invalid'; message: string };
+export type Failure = { ok: false; reason: 'conflict' | 'locked' | 'invalid'; code: ErrorCode; message: string };
+const fail = (reason: Failure['reason'], code: ErrorCode): Failure => ({ ok: false, reason, code, message: ERRORS[code] });
+export type SaveResult = { ok: true; updatedAt: number } | Failure;
 
-const CONFLICT = { ok: false, reason: 'conflict', message: 'Someone else changed this draft. Reload to see their changes.' } as const;
+const CONFLICT = fail('conflict', 'conflict');
 
 /** Validation common to saving (lenient) — publishing enforces the full rules. */
-export function checkFieldValues(f: DraftFields): string | null {
-  if (!getSection(f.section)) return 'That section does not exist.';
-  if (f.date && !/^\d{4}-\d{2}-\d{2}$/.test(f.date)) return 'The date is not valid.';
+export function checkFieldValues(f: DraftFields): ErrorCode | null {
+  if (!getSection(f.section)) return 'bad_section';
+  if (f.date && !/^\d{4}-\d{2}-\d{2}$/.test(f.date)) return 'bad_date';
   return null;
 }
 
-export function saveDraft(id: number, expected: number, f: DraftFields, photoMeta: Map<number, { alt: string; caption: string }>, userId: number): SaveResult {
+export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number): SaveResult {
   const bad = checkFieldValues(f);
-  if (bad) return { ok: false, reason: 'invalid', message: bad };
+  if (bad) return fail('invalid', bad);
   const area = isValidArea(f.section, f.area) ? f.area : '';
   return tx(() => {
     const cur = getDb().prepare('SELECT status FROM drafts WHERE id = ?').get(id) as { status: DraftStatus } | undefined;
-    if (!cur) return { ok: false, reason: 'invalid', message: 'That draft no longer exists.' } as SaveResult;
-    if (!isEditable({ status: cur.status })) return { ok: false, reason: 'locked', message: 'This draft is closed. Restore or reopen it to edit.' } as SaveResult;
+    if (!cur) return fail('invalid', 'draft_gone') as SaveResult;
+    if (!isEditable({ status: cur.status })) return fail('locked', 'closed') as SaveResult;
     const v = takeVersion(id, expected, userId, "status = 'in_review'");
     if (v === null) return CONFLICT;
     getDb()
       .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, featured = ?, body = ? WHERE id = ?')
       .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.featured ? 1 : 0, f.body, id);
-    const upd = getDb().prepare('UPDATE draft_photos SET alt = ?, caption = ? WHERE id = ? AND draft_id = ?');
-    for (const [pid, m] of photoMeta) upd.run(m.alt, m.caption, pid, id);
+    const upd = getDb().prepare('UPDATE draft_photos SET alt = ? WHERE id = ? AND draft_id = ?');
+    for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
     return { ok: true, updatedAt: v } as SaveResult;
   });
 }
 
-export type OpResult = { ok: true; updatedAt: number } | { ok: false; reason: 'conflict' | 'locked' | 'invalid'; message: string };
+export type OpResult = { ok: true; updatedAt: number } | Failure;
 
 /** Max photos a draft may hold. */
 export function photoCount(draftId: number): number {
@@ -346,7 +349,7 @@ export function addUploadedPhotos(draftId: number, expected: number, userId: num
 
 function lockFailure(draftId: number): OpResult {
   const cur = getDb().prepare('SELECT status FROM drafts WHERE id = ?').get(draftId) as { status: DraftStatus } | undefined;
-  if (cur && !isEditable({ status: cur.status })) return { ok: false, reason: 'locked', message: 'This draft is closed. Restore or reopen it to edit.' };
+  if (cur && !isEditable({ status: cur.status })) return fail('locked', 'closed');
   return CONFLICT;
 }
 
@@ -356,7 +359,7 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
   const res = tx((): OpResult => {
     const photos = listPhotos(draftId);
     const i = photos.findIndex((p) => p.id === photoId);
-    if (i === -1) return { ok: false, reason: 'invalid', message: 'That photo is no longer on this draft.' };
+    if (i === -1) return fail('invalid', 'photo_gone');
     const v = takeVersion(draftId, expected, userId);
     if (v === null) return lockFailure(draftId);
     const order = photos.map((p) => p.id);
@@ -413,11 +416,68 @@ export function restoreDraft(id: number, expected: number, userId: number): OpRe
   });
 }
 
-export function markPublished(id: number, info: { slug: string; commit: string; userId: number }): void {
+/**
+ * Step 1 of publishing, before anything is committed: take the draft's lock (so saves made from the
+ * page the editor is looking at now get a conflict instead of being lost) and reserve the slug (the
+ * unique index refuses a slug another draft holds). Returns the new version, or why it failed.
+ */
+export function beginPublish(id: number, expected: number, userId: number, slug: string): { ok: true; updatedAt: number } | Failure {
+  try {
+    return tx(() => {
+      const next = Math.max(Date.now(), expected + 1);
+      const r = getDb()
+        .prepare("UPDATE drafts SET updated_at = ?, updated_by = ?, slug = ? WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
+        .run(next, userId, slug, id, expected);
+      return Number(r.changes) === 1 ? { ok: true as const, updatedAt: next } : lockFailure(id);
+    }) as { ok: true; updatedAt: number } | Failure;
+  } catch (err) {
+    if (/UNIQUE/i.test(err instanceof Error ? err.message : '')) return fail('conflict', 'slug_taken');
+    throw err;
+  }
+}
+
+/** The commit failed: give back a slug this publish reserved (a draft that was never live). */
+export function releaseSlug(id: number, slug: string): void {
+  getDb().prepare('UPDATE drafts SET slug = NULL WHERE id = ? AND slug = ? AND published_commit IS NULL').run(id, slug);
+}
+
+/**
+ * Step 2, after the commit succeeded. `lockedAt` is the version beginPublish returned. If the draft was
+ * saved since (someone reloaded and edited while the commit ran), the commit and slug are still recorded
+ * and the story is live, but the draft stays in review and `stale` is true: the newer edits are not live.
+ */
+export function markPublished(id: number, info: { slug: string; commit: string; userId: number; lockedAt: number }): { stale: boolean } {
   const now = Date.now();
+  const r = getDb()
+    .prepare("UPDATE drafts SET status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
+    .run(info.slug, info.commit, now, info.userId, Math.max(now, info.lockedAt + 1), info.userId, id, info.lockedAt);
+  if (Number(r.changes) === 1) return { stale: false };
   getDb()
-    .prepare("UPDATE drafts SET status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = MAX(?, updated_at + 1), updated_by = ?, rejected_at = NULL, unpublished_at = NULL WHERE id = ?")
-    .run(info.slug, info.commit, now, info.userId, now, info.userId, id);
+    .prepare('UPDATE drafts SET slug = ?, published_commit = ?, published_at = ?, published_by = ?, unpublished_at = NULL WHERE id = ?')
+    .run(info.slug, info.commit, now, info.userId, id);
+  return { stale: true };
+}
+
+/**
+ * After a publish the photos live in the repo. Turn the published uploads into site images (so the draft
+ * still shows them) and delete the uploaded files and folder. `published` maps photo id -> public path.
+ */
+export function retireUploads(draftId: number, published: Map<number, string>): void {
+  const rows = listPhotos(draftId).filter((p) => p.path && published.has(p.id));
+  if (!rows.length) return;
+  tx(() => {
+    const upd = getDb().prepare('UPDATE draft_photos SET url = ?, path = NULL, ext = NULL WHERE id = ?');
+    for (const p of rows) upd.run(published.get(p.id)!, p.id);
+  });
+  removeUploadFiles(rows.map((p) => p.path));
+  const dir = uploadFile(String(draftId));
+  if (dir) {
+    try {
+      fs.rmdirSync(dir); // only when empty
+    } catch {
+      /* other uploads remain */
+    }
+  }
 }
 
 /** After an unpublish the story's draft goes back to in review, keeping its slug so publishing again restores it. */

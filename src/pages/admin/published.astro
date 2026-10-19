@@ -3,6 +3,7 @@ import Admin from '../../layouts/Admin.astro';
 import { getStories } from '../../lib/stories';
 import { listLiveDrafts, listUnpublishedSlugs } from '../../lib/drafts';
 import { NOTICES, fmtTime, sectionLabel } from '../../lib/admin-ui';
+import { errorText } from '../../lib/messages';
 import { siteUrl } from '../../lib/draft-http';
 export const prerender = false;
 
@@ -26,7 +27,7 @@ const list = [...rows.values()].sort((a, b) => b.date.localeCompare(a.date) || (
 
 const q = Astro.url.searchParams;
 const notice = NOTICES[q.get('n') ?? ''] ?? '';
-const error = q.get('e') ?? '';
+const error = errorText(q.get('e'));
 const base = siteUrl();
 ---
 <Admin title="Published" current="published" wide>

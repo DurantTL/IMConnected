@@ -127,6 +127,7 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
         photoPaths,
         imageAlt: lead?.alt,
         photoCredit: lead?.credit,
+        photoAlts: photoMeta.slice(1).map((m) => m.alt),
         featured: false,
         draft: false,
       });

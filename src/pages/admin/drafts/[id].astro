@@ -4,6 +4,7 @@ import { SECTIONS } from '../../../lib/site';
 import { LIMITS } from '../../../lib/limits';
 import { SOURCE_LABEL, STATUS_LABEL, getDraft, isEditable, listPhotos } from '../../../lib/drafts';
 import { NOTICES, fmtTime, looksLikeEmail } from '../../../lib/admin-ui';
+import { errorText } from '../../../lib/messages';
 import { siteUrl } from '../../../lib/draft-http';
 export const prerender = false;
 
@@ -17,7 +18,7 @@ const editable = draft ? isEditable(draft) : false;
 const q = Astro.url.searchParams;
 const published = q.get('n') === 'published';
 const notice = NOTICES[q.get('n') ?? ''] ?? '';
-const error = q.get('e') ?? '';
+const error = errorText(q.get('e'));
 const liveUrl = draft?.slug ? `${siteUrl()}/stories/${draft.slug}/` : '';
 const hasSubmitter = !!draft && (draft.source !== 'editor' || !!(draft.submitterName || draft.submitterEmail || draft.submitterPhone || draft.submitterChurch));
 const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
@@ -141,6 +142,9 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
 
           <section class="ed-card">
             <h2>Story text</h2>
+            {draft.body.includes('<') && (
+              <p class="admin-error" role="alert">This text contains “&lt;”, so it may hold raw HTML. Raw HTML is not kept: after you publish, it is shown to readers as plain text. Rewrite it in Markdown if you need the formatting.</p>
+            )}
             <p class="admin-note">Write in Markdown. Raw HTML is not allowed: a “&lt;” is always saved as plain text.</p>
             <div class="ed-tabs" role="group" aria-label="Show">
               <button type="button" data-view="write" aria-pressed="true">Write</button>
@@ -174,11 +178,8 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
                     {p.path ? <img src={`/api/admin/photos/${p.id}`} alt="" width="96" height="96" /> : p.url && safeImg(p.url) ? <img src={p.url} alt="" width="96" height="96" referrerpolicy="no-referrer" /> : <div></div>}
                     <div class="fields">
                       <strong>{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
-                      <label>Alt text (what the photo shows)
+                      <label>Alt text (describe the photo for readers who can't see it)
                         <input type="text" name={`photo_${p.id}_alt`} value={p.alt} maxlength="300" autocomplete="off" />
-                      </label>
-                      <label>Caption
-                        <input type="text" name={`photo_${p.id}_caption`} value={p.caption} maxlength="300" autocomplete="off" />
                       </label>
                     </div>
                     <div class="ops">

@@ -13,7 +13,7 @@ function text(form: FormData, name: string, max: number, label: string): string 
 const line = (form: FormData, name: string, max: number, label: string) => text(form, name, max, label).replace(/\s+/g, ' ').trim();
 
 /** Throws an Error with an editor-readable message. */
-export function readDraftFields(form: FormData): { fields: DraftFields; photoMeta: Map<number, { alt: string; caption: string }> } {
+export function readDraftFields(form: FormData): { fields: DraftFields; photoAlts: Map<number, string> } {
   const fields: DraftFields = {
     title: line(form, 'title', FIELD_MAX.title, 'The title'),
     dek: line(form, 'dek', FIELD_MAX.dek, 'The summary'),
@@ -28,14 +28,14 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoMet
     featured: form.get('featured') === '1',
     body: text(form, 'body', FIELD_MAX.body, 'The story text'),
   };
-  const photoMeta = new Map<number, { alt: string; caption: string }>();
+  const photoAlts = new Map<number, string>();
   for (const key of form.keys()) {
     const m = /^photo_(\d{1,12})_alt$/.exec(key);
     if (!m) continue;
     const id = Number(m[1]);
-    photoMeta.set(id, { alt: line(form, key, 300, 'Photo text'), caption: line(form, `photo_${id}_caption`, 300, 'Photo text') });
+    photoAlts.set(id, line(form, key, 300, 'Photo text'));
   }
-  return { fields, photoMeta };
+  return { fields, photoAlts };
 }
 
 export const intParam = (v: unknown): number | null => {

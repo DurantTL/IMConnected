@@ -19,6 +19,7 @@ export const NOTICES: Record<string, string> = {
   restored: 'Draft restored to In review.',
   uploaded: 'Photos uploaded.',
   photos: 'Photos updated.',
+  published_stale: 'Published and live in about 3–5 minutes, but edits saved while it was publishing are not live yet. Publish again to include them.',
   unpublished: 'Story unpublished. It will disappear from the site in about 3–5 minutes.',
 };
 

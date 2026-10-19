@@ -49,6 +49,8 @@ export interface StoryFrontmatter {
   photoPaths: string[];
   imageAlt?: string;
   photoCredit?: string;
+  /** Alt text for the gallery photos (every photo after the lead), in the same order as photoPaths.slice(1). */
+  photoAlts?: string[];
   featured: boolean;
   draft: boolean;
 }
@@ -72,6 +74,7 @@ export function storyFrontmatter(f: StoryFrontmatter): string {
     if (f.photoCredit) fm.push(`photoCredit: ${yaml(f.photoCredit)}`);
   }
   if (f.photoPaths.length > 1) fm.push('photos:', ...f.photoPaths.slice(1).map((p) => `  - ${yaml(p)}`));
+  if (f.photoAlts?.some((a) => a)) fm.push('photoAlts:', ...f.photoAlts.map((a) => `  - ${yaml(a)}`));
   fm.push(`featured: ${f.featured ? 'true' : 'false'}`, `draft: ${f.draft ? 'true' : 'false'}`, '---', '');
   return fm.join('\n');
 }

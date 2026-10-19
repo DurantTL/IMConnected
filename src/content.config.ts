@@ -24,6 +24,8 @@ const stories = defineCollection({
     photoCredit: z.string().optional(),
     /** Extra photos shown in a gallery below the story (paths or https:// URLs) */
     photos: z.array(z.string()).default([]),
+    /** Alt text for each of `photos`, in the same order (shorter or missing entries fall back to a generic description) */
+    photoAlts: z.array(z.string()).default([]),
     featured: z.boolean().default(false),
     draft: z.boolean().default(false),
   }),
