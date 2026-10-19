@@ -76,7 +76,7 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
 
     const files: NewFile[] = [];
     const stories: PublishedStory[] = [];
-    const used = new Map<string, number>();
+    const usedSlugs = new Set<string>();
 
     for (const [i, raw] of list.entries()) {
       const r = (raw ?? {}) as Record<string, unknown>;
@@ -107,10 +107,10 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
       if (!Array.isArray(rawPhotos)) throw fail('photos must be a list.');
       if (rawPhotos.length > LIMITS.maxPhotos) throw fail(`Use up to ${LIMITS.maxPhotos} photos per story.`);
 
-      let slug = `${issueDate}-${slugify(title)}`;
-      const n = (used.get(slug) ?? 0) + 1;
-      used.set(slug, n);
-      if (n > 1) slug = `${slug}-${n}`;
+      const baseSlug = `${issueDate}-${slugify(title)}`;
+      let slug = baseSlug;
+      for (let n = 2; usedSlugs.has(slug); n++) slug = `${baseSlug}-${n}`;
+      usedSlugs.add(slug);
 
       const photoPaths: string[] = [];
       const photoMeta: Photo[] = [];
