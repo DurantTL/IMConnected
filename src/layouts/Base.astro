@@ -28,6 +28,7 @@ const ogImage = image ? new URL(image, Astro.site).href : undefined;
     <link rel="canonical" href={canonical} />
     {noindex && <meta name="robots" content="noindex" />}
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="alternate" type="application/rss+xml" title={SITE.name} href="/rss.xml" />
     <meta property="og:site_name" content={SITE.name} />
     <meta property="og:title" content={title ?? SITE.name} />
     <meta property="og:description" content={description} />

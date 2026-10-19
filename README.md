@@ -69,6 +69,15 @@ The container listens on port **4321**. Put it behind your reverse proxy (Nginx 
 
 Go to [app.pagescms.org](https://app.pagescms.org), sign in with GitHub and open this repo. `.pages.yml` already defines the story fields. Editors can switch to a submission branch to edit a pending story before merging.
 
+### 6. Story feeds
+
+Every build publishes the 50 newest published stories in two formats:
+
+- **`/rss.xml`**: RSS 2.0 for feed readers and services that import RSS.
+- **`/stories.json`**: for the IMConnected Studio newsletter builder. Every story has `id`, `url`, `title`, `section`, `sectionLabel`, `author`, `date` (YYYY-MM-DD), `photos` and `featured`. `dek`, `area`, `areaLabel`, `column`, `authorTitle`, `church`, `image`, `imageAlt` and `photoCredit` appear only when the story has them. `FeedItem` in `src/lib/feed.ts` is the definitive list. All links and photo addresses are absolute, so they work inside an email.
+
+For a newsletter tool on another domain to fetch `/stories.json` directly in the browser, your reverse proxy has to add `Access-Control-Allow-Origin: https://tools.imsda.org` to that path. The site's container doesn't set the header itself. See `docs/STUDIO-IMPORT.md` for the newsletter builder plan.
+
 ## Reviewing submissions
 
 1. Open the repo's **Pull requests** tab and filter by the `story-submission` label.

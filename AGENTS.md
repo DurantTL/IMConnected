@@ -10,7 +10,7 @@ Instructions for AI coding agents (Codex, Claude) working in this repo.
 
 ## Rules
 - Section and category definitions live only in `src/lib/site.ts`. If you change them, also update `.pages.yml`.
-- When the content schema changes, keep `.pages.yml`, `src/lib/submission.ts` (frontmatter writer) and the README example in sync.
+- When the content schema changes, keep `.pages.yml`, `src/lib/submission.ts` (frontmatter writer), `src/lib/feed.ts` (the `/stories.json` and `/rss.xml` feeds) and the README example in sync. Treat `/stories.json` fields as a public contract: add fields freely, but don't rename or remove one without bumping its `version`.
 - Never render submitted text as raw HTML. `textToMarkdown()` in `src/lib/submission.ts` must keep escaping `< > & [ ]`.
 - Don't add a database. Stories are files, and publishing is a merge.
 - Before finishing, run `npm run build`. It must pass with no errors.
