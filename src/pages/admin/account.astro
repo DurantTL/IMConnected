@@ -1,7 +1,9 @@
 ---
 import Admin from '../../layouts/Admin.astro';
 import { revokeAllForUser, revokeSession, rotateSession } from '../../lib/auth/session';
-import { checkSecondFactor } from '../../lib/auth/factor';
+import { checkFreshFactor } from '../../lib/auth/factor';
+import { countPasskeys, finishRegistration, listPasskeys, parseJson, passkeysEnabled, removePasskey, renamePasskey } from '../../lib/auth/passkeys';
+import { hasConfirmedTotp } from '../../lib/auth/totp';
 import { hashPassword, passwordProblem, verifyPassword } from '../../lib/auth/password';
 import { LOCKED_MESSAGE, isLocked, releaseAttempt, reserveAttempt } from '../../lib/auth/ratelimit';
 import { generateRecoveryCodes, remainingRecoveryCodes } from '../../lib/auth/recovery';
@@ -20,16 +22,16 @@ let message = '';
 let error = '';
 let codes: string[] | null = null;
 
-/** Sensitive actions need a fresh second factor (TOTP or recovery code), under the sign-in rate limits. */
-function fresh(code: string): boolean {
-  const r = checkSecondFactor(user, code, ip);
+/** Sensitive actions need a fresh second factor (TOTP, recovery code or a passkey), under the sign-in rate limits. */
+async function fresh(form: FormData): Promise<boolean> {
+  const r = await checkFreshFactor(user, form, ip);
   if (r === 'locked') {
     error = LOCKED_MESSAGE;
     Astro.response.status = 429;
     return false;
   }
   if (r === 'invalid') {
-    error = 'That code is not valid.';
+    error = 'That code or passkey is not valid.';
     Astro.response.status = 401;
     return false;
   }
@@ -39,7 +41,6 @@ function fresh(code: string): boolean {
 if (Astro.request.method === 'POST') {
   const form = await readForm(Astro.request);
   const action = form ? field(form, 'action', 40) : '';
-  const code = form ? field(form, 'code', 40) : '';
   if (!form) {
     error = 'The form could not be read.';
   } else if (action === 'password') {
@@ -63,7 +64,7 @@ if (Astro.request.method === 'POST') {
       error = problem;
     } else if (next !== confirm) {
       error = 'The two new passwords don’t match.';
-    } else if (fresh(code)) {
+    } else if (await fresh(form)) {
       db.prepare('UPDATE password_credentials SET hash = ?, updated_at = ? WHERE user_id = ?').run(await hashPassword(next), Date.now(), user.id);
       const rotated = rotateSession(session.id, { mfaPassed: true, cookies: Astro.cookies });
       if (!rotated) return Astro.redirect('/admin/login', 303);
@@ -74,9 +75,47 @@ if (Astro.request.method === 'POST') {
       message = 'Password changed. Every other session was signed out.';
     }
   } else if (action === 'recovery') {
-    if (fresh(code)) {
+    if (await fresh(form)) {
       codes = generateRecoveryCodes(user.id);
       audit('auth.recovery_codes_generated', { userId: user.id, ip, detail: { reason: 'regenerate' } });
+    }
+  } else if (action === 'passkey_add') {
+    const passkey = field(form, 'passkey', 20000);
+    if (!passkeysEnabled()) error = 'Passkeys are not available on this site.';
+    else if (!passkey) error = 'No passkey was received. Please try again.';
+    else if (await fresh(form)) {
+      const res = await finishRegistration(user, parseJson(passkey), field(form, 'name', 80));
+      if (res.result === 'ok') {
+        audit('auth.passkey_registered', { userId: user.id, ip });
+        message = 'Passkey added.';
+      } else {
+        audit('auth.passkey_failed', { userId: user.id, ip, detail: { reason: res.result, purpose: 'register' } });
+        error = res.result === 'duplicate' ? 'That passkey is already registered.' : res.result === 'expired' ? 'That request expired. Please try again.' : 'That passkey could not be registered. Please try again.';
+        Astro.response.status = 400;
+      }
+    }
+  } else if (action === 'passkey_rename') {
+    if (renamePasskey(user.id, field(form, 'id', 1400), field(form, 'name', 80))) {
+      audit('auth.passkey_renamed', { userId: user.id, ip });
+      message = 'Passkey renamed.';
+    } else error = 'Enter a name for the passkey.';
+  } else if (action === 'passkey_remove') {
+    const id = field(form, 'id', 1400);
+    // Check before spending a code: the last second factor can never be removed.
+    if (countPasskeys(user.id) <= 1 && !hasConfirmedTotp(user.id)) {
+      audit('auth.passkey_remove_refused', { userId: user.id, ip, detail: { reason: 'last_factor' } });
+      error = 'You can’t remove your last second factor. Add an authenticator app or another passkey first.';
+      Astro.response.status = 409;
+    } else if (await fresh(form)) {
+      const res = removePasskey(user.id, id);
+      if (res === 'removed') {
+        audit('auth.passkey_removed', { userId: user.id, ip });
+        message = 'Passkey removed.';
+      } else if (res === 'last_factor') {
+        audit('auth.passkey_remove_refused', { userId: user.id, ip, detail: { reason: 'last_factor' } });
+        error = 'You can’t remove your last second factor. Add an authenticator app or another passkey first.';
+        Astro.response.status = 409;
+      } else error = 'That passkey was not found.';
     }
   } else if (action === 'revoke') {
     // Sessions are named by the first 16 characters of their id, and only the user's own can match.
@@ -98,6 +137,9 @@ const sessions = db
   .prepare('SELECT id, created_at, last_seen_at, ip, user_agent FROM sessions WHERE user_id = ? ORDER BY last_seen_at DESC')
   .all(user.id) as { id: string; created_at: number; last_seen_at: number; ip: string | null; user_agent: string | null }[];
 const remaining = remainingRecoveryCodes(user.id);
+const passkeyList = listPasskeys(user.id);
+const passkeysOn = passkeysEnabled();
+const hasPk = passkeyList.length > 0 && passkeysOn;
 const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 ---
 <Admin title="My account" current="account">
@@ -116,16 +158,17 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
 
   <section class="admin-card" aria-labelledby="pw">
     <h2 id="pw">Change password</h2>
-    <form method="post" action="/admin/account">
+    <form method="post" action="/admin/account" data-fresh-form data-has-passkeys={hasPk ? '' : undefined}>
       <input type="hidden" name="action" value="password" />
+      <input type="hidden" name="assertion" value="" />
       <label for="current">Current password</label>
       <input id="current" name="current" type="password" autocomplete="current-password" required maxlength="1024" />
       <label for="next">New password</label>
       <input id="next" name="next" type="password" autocomplete="new-password" required minlength="12" maxlength="256" />
       <label for="confirm">Confirm new password</label>
       <input id="confirm" name="confirm" type="password" autocomplete="new-password" required minlength="12" maxlength="256" />
-      <label for="pw-code">Authenticator or recovery code</label>
-      <input id="pw-code" name="code" type="text" autocomplete="one-time-code" required maxlength="40" />
+      <label for="pw-code">Authenticator or recovery code{hasPk ? ' (leave empty to confirm with a passkey)' : ''}</label>
+      <input id="pw-code" name="code" type="text" autocomplete="one-time-code" required={!hasPk} maxlength="40" />
       <button type="submit">Change password</button>
     </form>
   </section>
@@ -133,13 +176,63 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
   <section class="admin-card" aria-labelledby="rc">
     <h2 id="rc">Recovery codes</h2>
     <p>{remaining} of 10 unused. Codes can’t be shown again. Generating new ones replaces all of them.</p>
-    <form method="post" action="/admin/account">
+    <form method="post" action="/admin/account" data-fresh-form data-has-passkeys={hasPk ? '' : undefined}>
       <input type="hidden" name="action" value="recovery" />
-      <label for="rc-code">Authenticator or recovery code</label>
-      <input id="rc-code" name="code" type="text" autocomplete="one-time-code" required maxlength="40" />
+      <input type="hidden" name="assertion" value="" />
+      <label for="rc-code">Authenticator or recovery code{hasPk ? ' (leave empty to confirm with a passkey)' : ''}</label>
+      <input id="rc-code" name="code" type="text" autocomplete="one-time-code" required={!hasPk} maxlength="40" />
+      <p class="admin-error" role="alert" data-passkey-error hidden></p>
       <button type="submit">Generate new recovery codes</button>
     </form>
   </section>
+
+  {(passkeysOn || passkeyList.length > 0) && (
+    <section class="admin-card" aria-labelledby="pk">
+      <h2 id="pk">Passkeys</h2>
+      <p class="admin-note">A passkey signs you in without a password and also works as your second factor. Adding or removing one needs a fresh code or passkey.</p>
+      <p class="admin-error" role="alert" data-passkey-error hidden></p>
+      {passkeyList.length === 0 ? <p>No passkeys yet.</p> : (
+        <ul class="session-list">
+          {passkeyList.map((p) => (
+            <li>
+              <div>
+                <strong>{p.device_name}</strong>
+                <span class="admin-note"> · added {when(p.created_at)} · {p.last_used_at ? `last used ${when(p.last_used_at)}` : 'never used'}</span>
+              </div>
+              <form method="post" action="/admin/account" class="passkey-inline">
+                <input type="hidden" name="action" value="passkey_rename" />
+                <input type="hidden" name="id" value={p.id} />
+                <label class="visually-hidden" for={`rn-${p.id.slice(0, 12)}`}>New name</label>
+                <input id={`rn-${p.id.slice(0, 12)}`} name="name" type="text" required maxlength="60" value={p.device_name} />
+                <button type="submit">Rename</button>
+              </form>
+              <form method="post" action="/admin/account" class="passkey-inline" data-fresh-form data-has-passkeys>
+                <input type="hidden" name="action" value="passkey_remove" />
+                <input type="hidden" name="id" value={p.id} />
+                <input type="hidden" name="assertion" value="" />
+                <label class="visually-hidden" for={`rm-${p.id.slice(0, 12)}`}>Authenticator or recovery code (leave empty to use a passkey)</label>
+                <input id={`rm-${p.id.slice(0, 12)}`} name="code" type="text" autocomplete="one-time-code" maxlength="40" placeholder="Code, or leave empty to use a passkey" />
+                <button type="submit">Remove</button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
+      {passkeysOn && (
+        <form method="post" action="/admin/account" data-has-passkeys={hasPk ? '' : undefined}>
+          <input type="hidden" name="action" value="passkey_add" />
+          <input type="hidden" name="passkey" value="" />
+          <input type="hidden" name="assertion" value="" />
+          <label for="pk-name">Name for the new passkey (optional)</label>
+          <input id="pk-name" name="name" type="text" maxlength="60" placeholder="Work laptop" />
+          <label for="pk-code">Authenticator or recovery code{passkeyList.length > 0 ? ' (leave empty to confirm with a passkey)' : ''}</label>
+          <input id="pk-code" name="code" type="text" autocomplete="one-time-code" maxlength="40" />
+          <button type="button" data-passkey="register" data-passkey-needs-js hidden>Add a passkey</button>
+          <p class="admin-note" data-passkey-unsupported hidden>This browser can’t use passkeys.</p>
+        </form>
+      )}
+    </section>
+  )}
 
   <section class="admin-card" aria-labelledby="sess">
     <h2 id="sess">Active sessions</h2>
@@ -171,3 +264,4 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
 
   <form method="post" action="/api/admin/logout"><button type="submit" class="admin-link">Sign out</button></form>
 </Admin>
+<script>import '../../scripts/passkeys';</script>

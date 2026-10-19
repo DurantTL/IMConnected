@@ -4,7 +4,8 @@ import { rotateSession } from '../../../lib/auth/session';
 import { canEnrollWithoutMfa } from '../../../lib/auth/mfa';
 import { pendingTotpSecret, totpQrSvg, verifyTotp } from '../../../lib/auth/totp';
 import { generateRecoveryCodes } from '../../../lib/auth/recovery';
-import { LOCKED_MESSAGE, isLocked, recordFailure, recordSuccess } from '../../../lib/auth/ratelimit';
+import { LOCKED_MESSAGE, isLocked, recordFailure, recordSuccess, releaseAttempt, reserveAttempt } from '../../../lib/auth/ratelimit';
+import { finishRegistration, parseJson, passkeysEnabled } from '../../../lib/auth/passkeys';
 import { audit } from '../../../lib/auth/audit';
 import { field, readForm } from '../../../lib/auth/form';
 import { clientIp } from '../../../lib/request';
@@ -24,12 +25,37 @@ if (!canEnrollWithoutMfa(user)) {
   });
 }
 
+const passkeys = passkeysEnabled();
 let error = '';
+let passkeyError = '';
 let codes: string[] | null = null;
 if (Astro.request.method === 'POST') {
   const form = await readForm(Astro.request);
   const code = (form ? field(form, 'code', 20) : '').replace(/\s/g, '');
-  if (isLocked(ip, user.email)) {
+  const passkey = form ? field(form, 'passkey', 20000) : '';
+  if (passkey) {
+    // A passkey instead of an authenticator app. It is the first second factor, so it gets recovery codes.
+    if (isLocked(ip, user.email)) {
+      passkeyError = LOCKED_MESSAGE;
+      Astro.response.status = 429;
+    } else {
+      const attempt = reserveAttempt(ip, user.email); // counted before the await
+      const res = passkeys ? await finishRegistration(user, parseJson(passkey), field(form!, 'name', 80)) : { result: 'off' as const };
+      if (res.result !== 'ok') {
+        audit('auth.passkey_failed', { userId: user.id, ip, detail: { reason: res.result, purpose: 'register', step: 'enroll' } });
+        passkeyError = res.result === 'expired' ? 'That request expired. Please try again.' : 'That passkey could not be registered. Please try again.';
+        Astro.response.status = 401;
+      } else {
+        releaseAttempt(attempt);
+        codes = generateRecoveryCodes(user.id);
+        const rotated = rotateSession(session.id, { mfaPassed: true, cookies: Astro.cookies });
+        if (!rotated) return Astro.redirect('/admin/login', 303);
+        recordSuccess(user.email);
+        audit('auth.passkey_registered', { userId: user.id, ip, detail: { step: 'enroll' } });
+        audit('auth.recovery_codes_generated', { userId: user.id, ip });
+      }
+    }
+  } else if (isLocked(ip, user.email)) {
     error = LOCKED_MESSAGE;
     Astro.response.status = 429;
   } else if (!verifyTotp(user.id, user.email, code, { confirm: true })) {
@@ -56,7 +82,7 @@ const groups = secret ? secret.match(/.{1,4}/g)!.join(' ') : '';
     <>
       <h1>Save your recovery codes</h1>
       <div class="admin-card">
-        <p>Two-factor is on. Each code below works <strong>once</strong> if you lose your authenticator. They are shown only now: store them somewhere safe.</p>
+        <p>Two-factor is on. Each code below works <strong>once</strong> if you lose your authenticator or passkey. They are shown only now: store them somewhere safe.</p>
         <ol class="recovery-codes">
           {codes.map((c) => <li><code>{c}</code></li>)}
         </ol>
@@ -76,6 +102,19 @@ const groups = secret ? secret.match(/.{1,4}/g)!.join(' ') : '';
         <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required maxlength="10" />
         <button type="submit">Confirm and finish</button>
       </form>
+      {passkeys && (
+        <form class="admin-card passkey-card" method="post" action="/admin/2fa/setup">
+          <input type="hidden" name="passkey" value="" />
+          <h2>Use a passkey instead of an authenticator app</h2>
+          <p class="admin-error" role="alert" data-passkey-error hidden={!passkeyError}>{passkeyError}</p>
+          <p>A passkey (your fingerprint, face or screen lock, or a security key) works as your second factor, and can also sign you in without a password.</p>
+          <label for="pk-name">Name this passkey (optional)</label>
+          <input id="pk-name" name="name" type="text" maxlength="60" placeholder="Work laptop" />
+          <button type="button" data-passkey="register" data-passkey-needs-js hidden>Register a passkey</button>
+          <p class="admin-note" data-passkey-unsupported hidden>This browser can’t use passkeys. Use an authenticator app instead.</p>
+        </form>
+      )}
     </>
   )}
 </Admin>
+<script>import '../../../scripts/passkeys';</script>

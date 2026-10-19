@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@astrojs/node": "11.1.8",
+    "@simplewebauthn/browser": "14.0.0",
+    "@simplewebauthn/server": "14.0.2",
     "astro": "7.4.0",
     "otpauth": "9.5.2",
     "qrcode": "1.5.4"

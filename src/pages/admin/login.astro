@@ -2,7 +2,8 @@
 import Admin from '../../layouts/Admin.astro';
 import { SESSION_COOKIE, createSession, revokeSession, readSession, setSessionCookie } from '../../lib/auth/session';
 import { dummyVerify, verifyPassword } from '../../lib/auth/password';
-import { LOCKED_MESSAGE, isLocked, releaseAttempt, reserveAttempt } from '../../lib/auth/ratelimit';
+import { LOCKED_MESSAGE, isAccountLocked, isIpLocked, isLocked, recordSuccess, releaseAttempt, reserveAccountAttempt, reserveAttempt, reserveIpAttempt } from '../../lib/auth/ratelimit';
+import { finishAuthentication, parseJson, passkeysEnabled } from '../../lib/auth/passkeys';
 import { audit } from '../../lib/auth/audit';
 import { field, readForm } from '../../lib/auth/form';
 import { clientIp } from '../../lib/request';
@@ -13,13 +14,52 @@ export const prerender = false;
 // Every failure (unknown email, wrong password, disabled or not-yet-active account) gives the same text.
 const BAD = 'Email or password is incorrect.';
 let error = '';
+let passkeyError = '';
 let email = '';
+const passkeys = passkeysEnabled();
 
 const existing = readSession(Astro.cookies.get(SESSION_COOKIE)?.value);
 if (Astro.request.method === 'GET' && existing?.session.mfaPassed) return Astro.redirect('/admin');
 
 if (Astro.request.method === 'POST') {
   const form = await readForm(Astro.request);
+  const passkey = form ? field(form, 'passkey', 20000) : '';
+  if (passkey) {
+    // Passwordless: a passkey with user verification is both factors. The IP is counted before the first
+    // await; the account is counted as soon as the credential names one (and refused if already locked).
+    const ip = clientIp(Astro.request, Astro.clientAddress);
+    if (isIpLocked(ip)) {
+      passkeyError = LOCKED_MESSAGE;
+      Astro.response.status = 429;
+    } else {
+      const reserved = reserveIpAttempt(ip);
+      const res = await finishAuthentication(parseJson(passkey), 'login', null, (u) => {
+        if (isAccountLocked(u.email)) return 'locked';
+        reserved.push(...reserveAccountAttempt(u.email));
+      });
+      if (res.status === 'ok') {
+        releaseAttempt(reserved);
+        recordSuccess(res.email);
+        if (existing) revokeSession(existing.session.id);
+        const { token } = createSession(res.userId, { ip, userAgent: Astro.request.headers.get('user-agent'), mfaPassed: true });
+        setSessionCookie(Astro.cookies, token);
+        audit('auth.login', { userId: res.userId, ip, detail: { method: 'passkey' } });
+        return Astro.redirect('/admin', 303);
+      }
+      audit(res.status === 'counter' ? 'auth.passkey_counter_rejected' : 'auth.passkey_failed', {
+        userId: res.userId ?? null,
+        ip,
+        detail: { reason: res.status, purpose: 'login' },
+      });
+      if (res.status === 'locked') {
+        passkeyError = LOCKED_MESSAGE;
+        Astro.response.status = 429;
+      } else {
+        passkeyError = res.status === 'expired' ? 'That sign-in request expired. Please try again.' : 'That passkey could not be verified.';
+        Astro.response.status = 401;
+      }
+    }
+  } else {
   email = form ? field(form, 'email', 320).trim().toLowerCase() : '';
   const password = form ? field(form, 'password', 1024) : '';
   const ip = clientIp(Astro.request, Astro.clientAddress);
@@ -49,6 +89,7 @@ if (Astro.request.method === 'POST') {
       return Astro.redirect('/admin/2fa', 303);
     }
   }
+  }
 }
 ---
 <Admin title="Sign in">
@@ -62,4 +103,14 @@ if (Astro.request.method === 'POST') {
     <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" />
     <button type="submit">Continue</button>
   </form>
+  {passkeys && (
+    <form class="admin-card passkey-card" method="post" action="/admin/login">
+      <input type="hidden" name="passkey" value="" />
+      <h2>Passkey</h2>
+      <p class="admin-error" role="alert" data-passkey-error hidden={!passkeyError}>{passkeyError}</p>
+      <p class="admin-note">Have a passkey on this device or a security key? Sign in without a password.</p>
+      <button type="button" data-passkey="login" data-passkey-needs-js hidden>Sign in with a passkey</button>
+    </form>
+  )}
 </Admin>
+<script>import '../../scripts/passkeys';</script>

@@ -15,10 +15,15 @@ const INVITE_PATH = /^\/admin\/invite\/[^/]+$/;
 // Reachable with a session that has passed the first factor but not 2FA yet. EXACT paths only: the
 // later sign-in issues add theirs one by one (and enrollment handlers must also call canEnrollWithoutMfa).
 const MFA_PAGES = ['/admin/login', '/admin/2fa', '/admin/2fa/setup'];
-const MFA_API = ['/api/admin/logout'];
+const MFA_API = [
+  '/api/admin/logout',
+  '/api/admin/passkeys/login/options', // a leftover half-signed-in session must not block a passkey sign-in
+  '/api/admin/passkeys/options',
+  '/api/admin/passkeys/register/options', // the handler also calls canEnrollWithoutMfa
+];
 // Sign-in API routes added by later issues (e.g. /api/admin/login) go here by exact path.
 // Logout is open so an expired or invalid session can still sign out and be sent to the login page.
-const OPEN_API = ['/api/admin/logout'];
+const OPEN_API = ['/api/admin/logout', '/api/admin/passkeys/login/options'];
 
 const isOpen = (kind: 'page' | 'api', path: string) =>
   kind === 'page' ? OPEN_PAGES.includes(path) || INVITE_PATH.test(path) : OPEN_API.includes(path);

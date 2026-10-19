@@ -99,7 +99,7 @@ check('/admin/2fa sends an unenrolled user to setup', r.status === 302 && r.loc 
 r = await a.get('/admin/2fa/setup');
 const secret = (/class="totp-secret[^>]*>([^<]+)</.exec(r.text) || [])[1]?.replace(/\s/g, '');
 check('setup shows a QR code (inline SVG) and a manual key', r.status === 200 && r.text.includes('<svg') && /^[A-Z2-7]{32}$/.test(secret || ''));
-check('no external scripts on the setup page', !/<script[^>]+src=/i.test(r.text));
+check('no external scripts on the setup page (only this site\'s own bundle)', ![...r.text.matchAll(/<script[^>]+src="([^"]*)"/gi)].some((m) => !m[1].startsWith('/')));
 const again = await a.get('/admin/2fa/setup');
 check('reload shows the same pending secret', again.text.includes(secret.match(/.{4}/g).join(' ')));
 const preRotate = a.cookie;
@@ -256,16 +256,30 @@ const g = new Client('10.3.0.1');
 bad.push((await g.post('/admin/login', { email: EMAIL, password: 'definitely wrong 1' })).error);
 bad.push((await new Client('10.3.0.2').post('/admin/login', { email: 'ghost@example.test', password: 'definitely wrong 1' })).error);
 check('same error text for wrong password and unknown email', bad[0] === bad[1] && bad[0] === 'Email or password is incorrect.', JSON.stringify(bad));
-// concurrent burst: 30 parallel wrong passwords for one account (distinct IPs) must not get more than 5 full password checks
+// concurrent burst: 30 parallel wrong passwords for one account (distinct IPs) must not get more than 5 full password checks.
+// It runs against its OWN synthetic account, so the per-account lockout test below starts from a clean count on EMAIL
+// and proves the 5th failure is what trips the lock.
 {
+  const BURST_EMAIL = 'burst-tester@example.test';
+  const BURST_PASSWORD = 'burst account long password 77';
+  const inviteOut = execFileSync('node', ['scripts/create-admin.mjs', BURST_EMAIL, 'Burst Tester'], { env: { ...process.env, DATA_DIR } }).toString();
+  const burstInvite = new URL(inviteOut.match(/https?:\/\/\S+/)[0]).pathname;
+  const setup = await new Client('10.3.4.1').post(burstInvite, { name: 'Burst Tester', password: BURST_PASSWORD, confirm: BURST_PASSWORD });
+  check('burst account created from its own invite', setup.status === 303, String(setup.status));
   const results = await Promise.all(
-    Array.from({ length: 30 }, (_, i) => new Client(`10.3.5.${i + 1}`).post('/admin/login', { email: EMAIL, password: 'burst wrong password ' + i })),
+    Array.from({ length: 30 }, (_, i) => new Client(`10.3.5.${i + 1}`).post('/admin/login', { email: BURST_EMAIL, password: 'burst wrong password ' + i })),
   );
   const checked = results.filter((x) => x.status !== 429).length; // non-429 = a password check ran
-  check(`30 parallel wrong passwords: ${checked} password checks (limit 5), the rest 429`, checked <= 5 && results.every((x) => x.status === 401 || x.status === 429), results.map((x) => x.status).join(','));
+  check(`30 parallel wrong passwords: ${checked} password checks (limit 5), the rest 429`, checked === 5 && results.every((x) => x.status === 401 || x.status === 429), results.map((x) => x.status).join(','));
+  const burstLocked = await new Client('10.3.4.2').post('/admin/login', { email: BURST_EMAIL, password: BURST_PASSWORD });
+  check('burst account is locked afterwards, even with the right password', burstLocked.status === 429, String(burstLocked.status));
 }
 // per-account lockout (fresh IPs each time so only the account counter trips)
-for (let i = 2; i <= 5; i++) await new Client(`10.3.1.${i}`).post('/admin/login', { email: EMAIL, password: 'definitely wrong ' + i });
+// EMAIL already has 1 failure (the first "same error text" probe above); the loop adds 3 more, then the 5th must lock.
+for (let i = 2; i <= 4; i++) await new Client(`10.3.1.${i}`).post('/admin/login', { email: EMAIL, password: 'definitely wrong ' + i });
+r = await new Client('10.3.8.1').post('/admin/login', { email: EMAIL, password: NEW_PASSWORD });
+check('after 4 failures the account is NOT locked yet (right password still works)', r.status === 303 && r.loc === '/admin/2fa', `${r.status} ${r.loc}`);
+await new Client('10.3.1.5').post('/admin/login', { email: EMAIL, password: 'definitely wrong 5' });
 const locked1 = await new Client('10.3.9.1').post('/admin/login', { email: EMAIL, password: NEW_PASSWORD });
 check('account locked after 5 failures, even with the right password', locked1.status === 429 && !!locked1.error, `${locked1.status}`);
 for (let i = 1; i <= 5; i++) await new Client(`10.3.2.${i}`).post('/admin/login', { email: 'ghost@example.test', password: 'definitely wrong ' + i });
