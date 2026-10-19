@@ -31,6 +31,25 @@ export function recordFailure(ip: string, email: string): void {
   db.prepare('DELETE FROM login_attempts WHERE at < ?').run(now - 24 * 60 * 60 * 1000);
 }
 
+/**
+ * Count an attempt BEFORE the slow password check starts, so parallel requests can't all pass isLocked
+ * while earlier ones are still hashing. Call right after isLocked() with no await in between. Returns
+ * the row ids; on success call releaseAttempt() so a correct password doesn't count against the limit.
+ */
+export function reserveAttempt(ip: string, email: string): number[] {
+  const db = getDb();
+  const now = Date.now();
+  const ins = db.prepare('INSERT INTO login_attempts (key, at, ok) VALUES (?, ?, 0)');
+  const ids = [Number(ins.run(ipKey(ip), now).lastInsertRowid), Number(ins.run(accountKey(email), now).lastInsertRowid)];
+  db.prepare('DELETE FROM login_attempts WHERE at < ?').run(now - 24 * 60 * 60 * 1000);
+  return ids;
+}
+
+export function releaseAttempt(ids: number[]): void {
+  const del = getDb().prepare('DELETE FROM login_attempts WHERE id = ?');
+  for (const id of ids) del.run(id);
+}
+
 /** A success clears that account's failures (the IP's count stays). */
 export function recordSuccess(email: string): void {
   getDb().prepare('DELETE FROM login_attempts WHERE key = ?').run(accountKey(email));

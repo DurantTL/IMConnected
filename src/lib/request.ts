@@ -1,9 +1,19 @@
-/** Client IP for rate limits and audit logs. Honors Cloudflare / proxy headers only when TRUST_PROXY=true. */
+/** Rightmost X-Forwarded-For entry: the one our own proxy appended (earlier ones can be forged by the visitor). */
+function rightmostForwarded(request: Request): string | null {
+  const parts = (request.headers.get('x-forwarded-for') || '').split(',').map((x) => x.trim()).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : null;
+}
+
+/**
+ * Client IP for rate limits and audit logs.
+ *   TRUST_PROXY=true        one reverse proxy of ours (e.g. xCloud's nginx): the rightmost X-Forwarded-For entry.
+ *   TRUST_PROXY=cloudflare  behind Cloudflare's proxy: CF-Connecting-IP, else the rightmost X-Forwarded-For entry.
+ *   anything else / unset   the socket address; forwarding headers are ignored.
+ */
 export function clientIp(request: Request, fallback: string): string {
-  if (process.env.TRUST_PROXY === 'true') {
-    const fwd = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0];
-    if (fwd) return fwd.trim();
-  }
+  const mode = process.env.TRUST_PROXY;
+  if (mode === 'cloudflare') return request.headers.get('cf-connecting-ip')?.trim() || rightmostForwarded(request) || fallback;
+  if (mode === 'true') return rightmostForwarded(request) || fallback;
   return fallback;
 }
 

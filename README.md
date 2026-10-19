@@ -61,7 +61,7 @@ cp .env.example .env      # fill in GITHUB_TOKEN, GITHUB_REPO, SITE_URL, etc.
 docker compose up -d
 ```
 
-The container listens on port **4321**. Put it behind your reverse proxy (Nginx Proxy Manager, Cloudflare Tunnel, Traefik…). Set `TRUST_PROXY=true` so the rate limiter sees real visitor IPs.
+The container listens on port **4321**. Put it behind your reverse proxy (Nginx Proxy Manager, Cloudflare Tunnel, Traefik…). Set `TRUST_PROXY` so the rate limiters see real visitor IPs: `cloudflare` when the site is behind Cloudflare's proxy (it trusts `CF-Connecting-IP`), `true` for a single reverse proxy such as xCloud's nginx (it trusts the last `X-Forwarded-For` entry, the one your proxy added). If it is unset behind a proxy, every visitor shares the proxy's IP, so the submit, publish and sign-in rate limits and lockouts are shared by everyone. Never set either value when the app is reachable directly, because visitors could then forge their IP.
 
 **Updating after a merge:** the server never builds the site; it only pulls the finished image. After each merge to `main`, the Action builds and publishes the image, then moves the **`deploy`** branch to that commit. Point your host's git auto-deploy (xCloud) at the `deploy` branch, not `main`, with this deploy command:
 
@@ -194,7 +194,7 @@ Editors sign in at `/admin` with email + password and a required second factor (
 - **Signing in** is two steps: `/admin/login` (email + password), then `/admin/2fa` (6-digit code, or a recovery code). A session that hasn't finished both can only reach the 2FA pages and sign-out. Each step issues a new session id.
 - **Errors and limits.** An unknown email, a wrong password and a disabled account all show "Email or password is incorrect." and cost the same time. 10 failures per IP or 5 per account in 15 minutes lock sign-in for that IP or account (the same message either way). Recovery-code use, failures, password changes and session revocations are in the audit log.
 - **My account** (`/admin/account`): change password (needs the current password plus a fresh code; signs out every other session), generate new recovery codes (old ones stop working), and see or sign out active sessions.
-- **Lost authenticator and recovery codes?** An administrator has to re-invite the editor (a later issue adds that screen; until then run `scripts/create-admin.mjs` for an admin, and ask the maintainer to delete the editor's `totp_credentials` row).
+- **Lost authenticator and recovery codes?** A person runs `docker compose exec imconnected node scripts/reset-2fa.mjs editor@example.org` on the server, only after confirming the editor's identity out of band (for example by phone), and right before the editor signs in. In one transaction it deletes that user's authenticator, recovery codes and sessions, and writes an `admin.reset_2fa` audit entry. The password stays; at the next sign-in the editor enrolls a new authenticator and gets new recovery codes. (Issue 5 adds an admin screen for this.)
 
 ## Security and spam notes
 

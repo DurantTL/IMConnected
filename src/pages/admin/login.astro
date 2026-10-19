@@ -2,7 +2,7 @@
 import Admin from '../../layouts/Admin.astro';
 import { SESSION_COOKIE, createSession, revokeSession, readSession, setSessionCookie } from '../../lib/auth/session';
 import { dummyVerify, verifyPassword } from '../../lib/auth/password';
-import { LOCKED_MESSAGE, isLocked, recordFailure } from '../../lib/auth/ratelimit';
+import { LOCKED_MESSAGE, isLocked, releaseAttempt, reserveAttempt } from '../../lib/auth/ratelimit';
 import { audit } from '../../lib/auth/audit';
 import { field, readForm } from '../../lib/auth/form';
 import { clientIp } from '../../lib/request';
@@ -27,6 +27,7 @@ if (Astro.request.method === 'POST') {
     error = LOCKED_MESSAGE;
     Astro.response.status = 429;
   } else {
+    const attempt = reserveAttempt(ip, email); // counted now, before any await (parallel guesses)
     const user = email
       ? (getDb().prepare(
           `SELECT u.id, u.status, p.hash FROM users u LEFT JOIN password_credentials p ON p.user_id = u.id WHERE u.email = ?`,
@@ -36,11 +37,11 @@ if (Astro.request.method === 'POST') {
     if (user?.hash && user.status === 'active') ok = await verifyPassword(password, user.hash);
     else await dummyVerify(password); // same scrypt cost whether or not the address exists
     if (!ok) {
-      recordFailure(ip, email);
       audit('auth.login_failed', { userId: user?.id ?? null, ip });
       error = BAD;
       Astro.response.status = 401;
     } else {
+      releaseAttempt(attempt);
       if (existing) revokeSession(existing.session.id);
       const { token } = createSession(user!.id, { ip, userAgent: Astro.request.headers.get('user-agent'), mfaPassed: false });
       setSessionCookie(Astro.cookies, token);

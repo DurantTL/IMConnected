@@ -3,7 +3,7 @@ import Admin from '../../layouts/Admin.astro';
 import { revokeAllForUser, revokeSession, rotateSession } from '../../lib/auth/session';
 import { checkSecondFactor } from '../../lib/auth/factor';
 import { hashPassword, passwordProblem, verifyPassword } from '../../lib/auth/password';
-import { LOCKED_MESSAGE, isLocked, recordFailure } from '../../lib/auth/ratelimit';
+import { LOCKED_MESSAGE, isLocked, releaseAttempt, reserveAttempt } from '../../lib/auth/ratelimit';
 import { generateRecoveryCodes, remainingRecoveryCodes } from '../../lib/auth/recovery';
 import { audit } from '../../lib/auth/audit';
 import { field, readForm } from '../../lib/auth/form';
@@ -48,11 +48,14 @@ if (Astro.request.method === 'POST') {
     const confirm = field(form, 'confirm', 1024);
     const stored = db.prepare('SELECT hash FROM password_credentials WHERE user_id = ?').get(user.id) as { hash: string } | undefined;
     const problem = passwordProblem(next, user.email);
-    if (isLocked(ip, user.email)) {
+    const locked = isLocked(ip, user.email);
+    const attempt = locked ? [] : reserveAttempt(ip, user.email); // counted before the await
+    const currentOk = !locked && !!stored && (await verifyPassword(current, stored.hash));
+    if (currentOk) releaseAttempt(attempt);
+    if (locked) {
       error = LOCKED_MESSAGE;
       Astro.response.status = 429;
-    } else if (!stored || !(await verifyPassword(current, stored.hash))) {
-      recordFailure(ip, user.email);
+    } else if (!currentOk) {
       audit('auth.password_change_failed', { userId: user.id, ip });
       error = 'Your current password is incorrect.';
       Astro.response.status = 401;

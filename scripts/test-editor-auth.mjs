@@ -50,6 +50,14 @@ const wrongCode = (secret) => {
   for (let i = 0; i < 1e6; i += 7919) { const c = String(i).padStart(6, '0'); if (!valid.has(c)) return c; }
 };
 
+// cross-origin POST is blocked by the middleware
+{
+  const res = await fetch(BASE + '/admin/login', { method: 'POST', headers: { Origin: 'http://evil.example', 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'email=a%40example.test&password=x', redirect: 'manual' });
+  check('cross-origin POST to /admin/login is 403', res.status === 403, String(res.status));
+  const res2 = await fetch(BASE + '/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'email=a%40example.test&password=x', redirect: 'manual' });
+  check('POST without an Origin header is 403', res2.status === 403, String(res2.status));
+}
+
 // 1. Bootstrap invite (synthetic admin)
 const out = execFileSync('node', ['scripts/create-admin.mjs', EMAIL, 'Test Editor'], { env: { ...process.env, DATA_DIR } }).toString();
 const invitePath = new URL(out.match(/https?:\/\/\S+/)[0]).pathname;
@@ -200,12 +208,62 @@ check('revoked session is gone', r.status === 302);
 r = await new Client('10.2.0.6').post('/admin/login', { email: EMAIL, password: PASSWORD });
 check('old password no longer works', r.status === 401);
 
+// 7b. Lost authenticator: scripts/reset-2fa.mjs wipes the factor, recovery codes and sessions
+const f2 = new Client('10.2.1.1');
+await f2.post('/admin/login', { email: EMAIL, password: NEW_PASSWORD });
+r = await f2.post('/admin/2fa', { code: regenerated[1] });
+check('before the reset a recovery code signs in', r.status === 303 && r.loc === '/admin');
+r = await f.get('/admin');
+check('before the reset the earlier session is signed in', r.status === 200);
+const resetOut = execFileSync('node', ['scripts/reset-2fa.mjs', EMAIL], { env: { ...process.env, DATA_DIR } }).toString();
+console.log('reset-2fa:', resetOut.trim());
+r = await f.get('/admin');
+check('after the reset the old session no longer works', r.status === 302 && r.loc === '/admin/login');
+r = await f2.get('/admin');
+check('after the reset the other old session no longer works', r.status === 302 && r.loc === '/admin/login');
+{
+  const q = new DatabaseSync(path.join(DATA_DIR, 'imconnected.db'));
+  const n = (t) => Number(q.prepare(`SELECT COUNT(*) n FROM ${t} WHERE user_id = (SELECT id FROM users WHERE email = ?)`).get(EMAIL).n);
+  check('reset removed the authenticator, recovery codes and sessions', n('totp_credentials') === 0 && n('recovery_codes') === 0 && n('sessions') === 0);
+  const a2 = q.prepare("SELECT target FROM audit_log WHERE action = 'admin.reset_2fa'").all();
+  check('reset is in the audit log', a2.length === 1 && /^user:\d+$/.test(a2[0].target));
+  q.close();
+}
+const g2 = new Client('10.2.1.2');
+r = await g2.post('/admin/login', { email: EMAIL, password: NEW_PASSWORD });
+check('password still works after the reset', r.status === 303 && r.loc === '/admin/2fa');
+r = await g2.post('/admin/2fa', { code: regenerated[2] });
+check('old recovery code no longer works (user must re-enroll)', r.status === 302 && r.loc === '/admin/2fa/setup', `${r.status} ${r.loc}`);
+r = await g2.get('/admin');
+check('dashboard unreachable until re-enrollment', r.status === 302 && r.loc === '/admin/2fa');
+r = await g2.get('/admin/2fa/setup');
+const secret2 = (/class="totp-secret[^>]*>([^<]+)</.exec(r.text) || [])[1]?.replace(/\s/g, '');
+check('a new authenticator secret is issued', /^[A-Z2-7]{32}$/.test(secret2 || '') && secret2 !== secret);
+r = await g2.post('/admin/2fa/setup', { code: code(secret2) });
+const recovery2 = [...r.text.matchAll(/<code[^>]*>([A-Z2-9]{5}-[A-Z2-9]{5})<\/code>/g)].map((m) => m[1]);
+check('re-enrolled with new recovery codes', r.status === 200 && recovery2.length === 10 && !recovery2.some((x) => [...recovery, ...regenerated].includes(x)));
+await g2.post('/api/admin/logout', {});
+const g3 = new Client('10.2.1.3');
+await g3.post('/admin/login', { email: EMAIL, password: NEW_PASSWORD });
+r = await g3.post('/admin/2fa', { code: regenerated[2] });
+check('old recovery code still fails after re-enrollment', r.status === 401);
+r = await g3.post('/admin/2fa', { code: recovery2[0] });
+check('new recovery code works', r.status === 303 && r.loc === '/admin');
+
 // 8. Rate limits: identical errors, lockouts
 const bad = [];
 const g = new Client('10.3.0.1');
 bad.push((await g.post('/admin/login', { email: EMAIL, password: 'definitely wrong 1' })).error);
 bad.push((await new Client('10.3.0.2').post('/admin/login', { email: 'ghost@example.test', password: 'definitely wrong 1' })).error);
 check('same error text for wrong password and unknown email', bad[0] === bad[1] && bad[0] === 'Email or password is incorrect.', JSON.stringify(bad));
+// concurrent burst: 30 parallel wrong passwords for one account (distinct IPs) must not get more than 5 full password checks
+{
+  const results = await Promise.all(
+    Array.from({ length: 30 }, (_, i) => new Client(`10.3.5.${i + 1}`).post('/admin/login', { email: EMAIL, password: 'burst wrong password ' + i })),
+  );
+  const checked = results.filter((x) => x.status !== 429).length; // non-429 = a password check ran
+  check(`30 parallel wrong passwords: ${checked} password checks (limit 5), the rest 429`, checked <= 5 && results.every((x) => x.status === 401 || x.status === 429), results.map((x) => x.status).join(','));
+}
 // per-account lockout (fresh IPs each time so only the account counter trips)
 for (let i = 2; i <= 5; i++) await new Client(`10.3.1.${i}`).post('/admin/login', { email: EMAIL, password: 'definitely wrong ' + i });
 const locked1 = await new Client('10.3.9.1').post('/admin/login', { email: EMAIL, password: NEW_PASSWORD });
@@ -220,8 +278,8 @@ const locked3 = await h.post('/admin/login', { email: 'another@example.test', pa
 check('IP locked after 10 failures', locked3.status === 429 && locked3.error === locked1.error, `${locked3.status}`);
 
 // 9. Nothing secret in the database files
-const needles = { password: PASSWORD, 'new password': NEW_PASSWORD, 'TOTP secret': secret, 'TOTP secret (grouped)': secret.match(/.{4}/g).join(' ') };
-[...recovery, ...regenerated].forEach((x, i) => { needles[`recovery code ${i}`] = x; needles[`recovery code ${i} (no dash)`] = x.replace('-', ''); });
+const needles = { password: PASSWORD, 'new password': NEW_PASSWORD, 'TOTP secret': secret, 'TOTP secret (grouped)': secret.match(/.{4}/g).join(' '), 'TOTP secret 2': secret2 };
+[...recovery, ...regenerated, ...recovery2].forEach((x, i) => { needles[`recovery code ${i}`] = x; needles[`recovery code ${i} (no dash)`] = x.replace('-', ''); });
 const files = fs.readdirSync(DATA_DIR).map((n) => path.join(DATA_DIR, n));
 const blobs = files.map((p) => fs.readFileSync(p));
 const hit = (s) => blobs.some((b) => b.includes(Buffer.from(s)));

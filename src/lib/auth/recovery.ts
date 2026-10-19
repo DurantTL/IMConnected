@@ -12,9 +12,14 @@ export function normalizeRecovery(input: string): string | null {
 }
 
 function newCode(): string {
-  const bytes = randomBytes(10);
+  // Rejection sampling: 248 = 8 * 31, so bytes 248-255 are skipped and every letter is equally likely.
+  const limit = 256 - (256 % ALPHABET.length);
   let s = '';
-  for (const b of bytes) s += ALPHABET[b % ALPHABET.length];
+  while (s.length < 10) {
+    for (const b of randomBytes(16)) {
+      if (b < limit && s.length < 10) s += ALPHABET[b % ALPHABET.length];
+    }
+  }
   return `${s.slice(0, 5)}-${s.slice(5)}`;
 }
 

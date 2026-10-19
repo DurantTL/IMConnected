@@ -52,7 +52,7 @@ function originOk(request: Request, url: URL): boolean {
   if (site) allowed.add(site);
   const reqHost = request.headers.get('host');
   if (reqHost) allowed.add(reqHost);
-  if (process.env.TRUST_PROXY === 'true') {
+  if (process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === 'cloudflare') {
     const fwd = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
     if (fwd) allowed.add(fwd);
   }
