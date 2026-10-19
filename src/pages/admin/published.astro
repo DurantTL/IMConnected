@@ -1,0 +1,72 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { getStories } from '../../lib/stories';
+import { listLiveDrafts, listUnpublishedSlugs } from '../../lib/drafts';
+import { NOTICES, fmtTime, sectionLabel } from '../../lib/admin-ui';
+import { siteUrl } from '../../lib/draft-http';
+export const prerender = false;
+
+interface Row { slug: string; title: string; section: string; area?: string; date: string; draftId?: number; by?: string | null; at?: number | null }
+const rows = new Map<string, Row>();
+try {
+  for (const s of await getStories()) {
+    rows.set(s.id, { slug: s.id, title: s.data.title, section: s.data.section, area: s.data.area, date: s.data.date.toISOString().slice(0, 10) });
+  }
+} catch (err) {
+  console.error('[admin] could not read the story list', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+}
+// Stories unpublished from the editor may still be in the last site build.
+for (const slug of listUnpublishedSlugs()) rows.delete(slug);
+// Stories published from the editor since the site was last built are not in the built list yet.
+for (const d of listLiveDrafts()) {
+  const slug = d.slug as string;
+  rows.set(slug, { slug, title: d.title, section: d.section, area: d.area, date: d.date, draftId: d.id, by: d.publishedByName, at: d.publishedAt });
+}
+const list = [...rows.values()].sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
+
+const q = Astro.url.searchParams;
+const notice = NOTICES[q.get('n') ?? ''] ?? '';
+const error = q.get('e') ?? '';
+const base = siteUrl();
+---
+<Admin title="Published" current="published" wide>
+  <div class="ad-bar"><h1>Published stories</h1></div>
+  {notice && <p class="admin-ok" role="status">{notice}</p>}
+  {error && <p class="admin-error" role="alert">{error}</p>}
+  <p class="admin-note">Editing loads the story's current file from the live branch into a new draft. Publishing that draft overwrites the same story. Changes reach the public site in about 3–5 minutes.</p>
+  {list.length === 0 ? (
+    <p class="admin-note">No published stories yet.</p>
+  ) : (
+    <ul class="ad-list">
+      {list.map((r) => (
+        <li class="ad-item">
+          <a class="title" href={`${base}/stories/${r.slug}/`} rel="noopener">{r.title || r.slug}</a>
+          <div class="ad-meta">
+            <span>{sectionLabel(r.section, r.area)}</span>
+            <span>{r.date}</span>
+            {r.at && <span>Published <time datetime={new Date(r.at).toISOString()} data-local>{fmtTime(r.at)}</time>{r.by ? ` by ${r.by}` : ''}</span>}
+          </div>
+          <div class="ad-actions">
+            <form method="post" action="/api/admin/stories/edit">
+              <input type="hidden" name="slug" value={r.slug} />
+              <button class="ad-btn" type="submit">Edit</button>
+            </form>
+            <form method="post" action="/api/admin/stories/unpublish" data-confirm={`Unpublish "${r.title || r.slug}"? It will be hidden from the public site.`}>
+              <input type="hidden" name="slug" value={r.slug} />
+              <button class="ad-btn danger" type="submit">Unpublish</button>
+            </form>
+          </div>
+        </li>
+      ))}
+    </ul>
+  )}
+</Admin>
+<script is:inline>
+  document.querySelectorAll('time[data-local]').forEach(function (t) {
+    var d = new Date(t.getAttribute('datetime'));
+    if (!isNaN(d)) t.textContent = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  });
+  document.querySelectorAll('form[data-confirm]').forEach(function (f) {
+    f.addEventListener('submit', function (e) { if (!confirm(f.getAttribute('data-confirm'))) e.preventDefault(); });
+  });
+</script>

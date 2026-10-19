@@ -113,7 +113,7 @@ const stale = new Client('10.1.0.1'); stale.cookie = preRotate;
 r = await stale.get('/admin');
 check('pre-rotation cookie no longer works', r.status === 302 && r.loc === '/admin/login');
 r = await a.get('/admin');
-check('dashboard reachable after enrollment', r.status === 200 && r.text.includes('Dashboard'));
+check('dashboard reachable after enrollment', r.status === 200 && r.text.includes('New story'));
 r = await a.get('/admin/2fa/setup');
 check('setup refused once a factor is confirmed', r.status === 403);
 

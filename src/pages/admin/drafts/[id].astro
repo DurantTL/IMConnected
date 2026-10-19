@@ -1,0 +1,240 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import { SECTIONS } from '../../../lib/site';
+import { LIMITS } from '../../../lib/limits';
+import { SOURCE_LABEL, STATUS_LABEL, getDraft, isEditable, listPhotos } from '../../../lib/drafts';
+import { NOTICES, fmtTime, looksLikeEmail } from '../../../lib/admin-ui';
+import { siteUrl } from '../../../lib/draft-http';
+export const prerender = false;
+
+const id = /^\d{1,12}$/.test(Astro.params.id ?? '') ? Number(Astro.params.id) : null;
+const draft = id === null ? null : getDraft(id);
+if (!draft) {
+  Astro.response.status = 404;
+}
+const photos = draft ? listPhotos(draft.id) : [];
+const editable = draft ? isEditable(draft) : false;
+const q = Astro.url.searchParams;
+const published = q.get('n') === 'published';
+const notice = NOTICES[q.get('n') ?? ''] ?? '';
+const error = q.get('e') ?? '';
+const liveUrl = draft?.slug ? `${siteUrl()}/stories/${draft.slug}/` : '';
+const hasSubmitter = !!draft && (draft.source !== 'editor' || !!(draft.submitterName || draft.submitterEmail || draft.submitterPhone || draft.submitterChurch));
+const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
+---
+<Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current="drafts" wide>
+  {!draft ? (
+    <>
+      <h1>Draft not found</h1>
+      <p class="admin-note"><a href="/admin">Back to the drafts</a></p>
+    </>
+  ) : (
+    <div class="ed" data-draft={draft.id}>
+      <div class="ad-bar">
+        <h1>{draft.title || 'Untitled story'}</h1>
+        <a class="ad-btn secondary" href="/admin">All drafts</a>
+      </div>
+      <div class="ad-meta">
+        <span class={`ad-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : draft.status === 'new' ? 'warn' : ''}`}>{STATUS_LABEL[draft.status]}</span>
+        <span class="ad-badge">{SOURCE_LABEL[draft.source]}</span>
+        <span>Created <time datetime={new Date(draft.createdAt).toISOString()} data-local>{fmtTime(draft.createdAt)}</time></span>
+      </div>
+
+      {published && (
+        <p class="admin-ok" role="status">
+          Published. Live in about 3–5 minutes at <a href={liveUrl}>{liveUrl}</a>.
+        </p>
+      )}
+      {notice && !published && <p class="admin-ok" role="status">{notice}</p>}
+      {error && <p class="admin-error" role="alert">{error}</p>}
+      <p id="conflict" class="admin-error" role="alert" hidden>Someone else changed this draft, so your changes were not saved. <a href={`/admin/drafts/${draft.id}`}>Reload to see their changes</a>.</p>
+
+      {draft.status === 'published' && (
+        <section class="ed-card ed-closed">
+          <h2>Published</h2>
+          <p>
+            This story is live{draft.publishedAt ? <> since <time datetime={new Date(draft.publishedAt).toISOString()} data-local>{fmtTime(draft.publishedAt)}</time></> : null}{draft.publishedByName ? ` (published by ${draft.publishedByName})` : ''}.
+            {liveUrl && <> <a href={liveUrl}>View it on the site</a>.</>}
+          </p>
+          <form method="post" action="/api/admin/stories/edit">
+            <input type="hidden" name="slug" value={draft.slug ?? ''} />
+            <button class="ad-btn" type="submit">Edit this story</button>
+          </form>
+        </section>
+      )}
+
+      {draft.status === 'rejected' && (
+        <section class="ed-card ed-closed">
+          <h2>Rejected</h2>
+          {draft.rejectNote && <p><strong>Note:</strong> {draft.rejectNote}</p>}
+          <p class="admin-note">Photos are kept for 30 days after rejection, then deleted.</p>
+          <form method="post" action={`/api/admin/drafts/${draft.id}/restore`} id="restore-form">
+            <input type="hidden" name="version" value={draft.updatedAt} />
+            <button class="ad-btn" type="submit">Restore to In review</button>
+          </form>
+        </section>
+      )}
+
+      {hasSubmitter && (
+        <section class="ed-card ed-sub">
+          <h2>Submitter</h2>
+          <dl>
+            <dt>Name</dt><dd>{draft.submitterName || '—'}</dd>
+            <dt>Email</dt>
+            <dd>
+              {draft.submitterEmail ? (looksLikeEmail(draft.submitterEmail) ? <a href={`mailto:${draft.submitterEmail}`}>{draft.submitterEmail}</a> : draft.submitterEmail) : '—'}
+              {draft.submitterEmail && (draft.emailVerified ? <span class="ad-badge ok"> Verified</span> : <span class="ad-badge warn"> Not verified</span>)}
+            </dd>
+            <dt>Phone</dt><dd>{draft.submitterPhone || '—'}</dd>
+            <dt>Church</dt><dd>{draft.submitterChurch || '—'}</dd>
+          </dl>
+          <p class="admin-note">Contact details are for editors only and are never published.</p>
+        </section>
+      )}
+
+      <form id="draft-form" method="post" action={`/api/admin/drafts/${draft.id}/save`} data-save={`/api/admin/drafts/${draft.id}/save`} data-preview={`/api/admin/drafts/${draft.id}/preview`}>
+        <input type="hidden" name="version" value={draft.updatedAt} />
+        <fieldset disabled={!editable} class="ed">
+          <section class="ed-card">
+            <h2>Story details</h2>
+            <div class="ed-grid">
+              <label class="full">Title <span class="hint">up to {LIMITS.title} characters</span>
+                <input type="text" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
+              </label>
+              <label class="full">Summary (dek) <span class="hint">one or two sentences, up to {LIMITS.dek} characters</span>
+                <input type="text" name="dek" value={draft.dek} maxlength={LIMITS.dek} autocomplete="off" />
+              </label>
+              <label>Section
+                <select name="section" id="f-section">
+                  {SECTIONS.map((s) => <option value={s.key} selected={s.key === draft.section}>{s.label}</option>)}
+                </select>
+              </label>
+              <label id="f-area-wrap">Category
+                <select name="area" id="f-area">
+                  <option value="" data-section="" hidden={!!SECTIONS.find((s) => s.key === draft.section)?.areas}>None</option>
+                  {SECTIONS.flatMap((s) => (s.areas ?? []).map((a) => (
+                    <option value={a.key} data-section={s.key} selected={s.key === draft.section && a.key === draft.area} hidden={s.key !== draft.section}>{a.label}</option>
+                  )))}
+                </select>
+              </label>
+              <label id="f-column-wrap" hidden={draft.section !== 'columns'}>Column name
+                <input type="text" name="column" value={draft.column} maxlength="80" autocomplete="off" />
+              </label>
+              <label>Author
+                <input type="text" name="author" value={draft.author} maxlength="120" autocomplete="off" />
+              </label>
+              <label>Author title
+                <input type="text" name="authorTitle" value={draft.authorTitle} maxlength="120" autocomplete="off" />
+              </label>
+              <label>Church
+                <input type="text" name="church" value={draft.church} maxlength="160" autocomplete="off" />
+              </label>
+              <label>Date
+                <input type="date" name="date" value={draft.date} />
+              </label>
+              <label>Photo credit
+                <input type="text" name="photoCredit" value={draft.photoCredit} maxlength="120" autocomplete="off" />
+              </label>
+              <label class="ed-check"><input type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
+            </div>
+          </section>
+
+          <section class="ed-card">
+            <h2>Story text</h2>
+            <p class="admin-note">Write in Markdown. Raw HTML is not allowed: a “&lt;” is always saved as plain text.</p>
+            <div class="ed-tabs" role="group" aria-label="Show">
+              <button type="button" data-view="write" aria-pressed="true">Write</button>
+              <button type="button" data-view="preview" aria-pressed="false">Preview</button>
+            </div>
+            <div class="ed-split" id="split" data-view="write">
+              <div class="ed-write">
+                <div class="ed-toolbar" role="toolbar" aria-label="Formatting">
+                  <button type="button" data-md="bold" aria-label="Bold"><strong>B</strong></button>
+                  <button type="button" data-md="italic" aria-label="Italic"><em>I</em></button>
+                  <button type="button" data-md="heading" aria-label="Heading">H</button>
+                  <button type="button" data-md="quote" aria-label="Quote">“ ”</button>
+                  <button type="button" data-md="link" aria-label="Link">Link</button>
+                  <button type="button" data-md="list" aria-label="List">• List</button>
+                </div>
+                <textarea class="body" name="body" id="f-body" aria-label="Story text">{draft.body}</textarea>
+              </div>
+              <div class="ed-preview">
+                <iframe id="preview" title="Story preview" sandbox="" referrerpolicy="no-referrer"></iframe>
+              </div>
+            </div>
+          </section>
+
+          <section class="ed-card" id="photos">
+            <h2>Photos</h2>
+            <p class="admin-note">The first photo leads the story. JPG, PNG or WebP, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
+            {photos.length > 0 && (
+              <ol class="ed-photos">
+                {photos.map((p, i) => (
+                  <li class="ed-photo">
+                    {p.path ? <img src={`/api/admin/photos/${p.id}`} alt="" width="96" height="96" /> : p.url && safeImg(p.url) ? <img src={p.url} alt="" width="96" height="96" referrerpolicy="no-referrer" /> : <div></div>}
+                    <div class="fields">
+                      <strong>{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
+                      <label>Alt text (what the photo shows)
+                        <input type="text" name={`photo_${p.id}_alt`} value={p.alt} maxlength="300" autocomplete="off" />
+                      </label>
+                      <label>Caption
+                        <input type="text" name={`photo_${p.id}_caption`} value={p.caption} maxlength="300" autocomplete="off" />
+                      </label>
+                    </div>
+                    <div class="ops">
+                      <button type="submit" form="photo-form" name="op" value={`up:${p.id}`} disabled={i === 0} aria-label={`Move photo ${i + 1} up`}>Up</button>
+                      <button type="submit" form="photo-form" name="op" value={`down:${p.id}`} disabled={i === photos.length - 1} aria-label={`Move photo ${i + 1} down`}>Down</button>
+                      {i > 0 && <button type="submit" form="photo-form" name="op" value={`lead:${p.id}`}>Make lead</button>}
+                      <button type="submit" form="photo-form" name="op" value={`delete:${p.id}`} class="del" aria-label={`Delete photo ${i + 1}`}>Delete</button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {photos.length < LIMITS.maxPhotos && (
+              <div class="ed-field">
+                <label for="f-upload">Add photos</label>
+                <input id="f-upload" type="file" name="photos" form="photo-form" accept="image/jpeg,image/png,image/webp" multiple />
+                <div><button type="submit" form="photo-form" name="op" value="upload" class="ad-btn secondary">Upload</button></div>
+              </div>
+            )}
+          </section>
+
+          <div class="ed-savebar">
+            <button type="submit" class="ad-btn" id="save-btn">Save</button>
+            <span class="ed-status" id="save-status" role="status" aria-live="polite">
+              {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
+            </span>
+          </div>
+        </fieldset>
+      </form>
+      <form id="photo-form" method="post" action={`/api/admin/drafts/${draft.id}/photos`} enctype="multipart/form-data">
+        <input type="hidden" name="version" value={draft.updatedAt} />
+      </form>
+
+      {editable && (
+        <section class="ed-card">
+          <h2>Publish</h2>
+          <p class="admin-note">
+            {draft.live ? 'This story is already live. Publishing overwrites it with these changes. ' : ''}Publishing saves your changes, checks the story, and commits it to the live site. It appears in about 3–5 minutes.
+          </p>
+          <form id="publish-form" method="post" action={`/api/admin/drafts/${draft.id}/publish`}>
+            <input type="hidden" name="version" value={draft.updatedAt} />
+            <button type="submit" class="ad-btn">{draft.slug ? 'Publish changes' : 'Publish'}</button>
+          </form>
+          <details style="margin-top:12px">
+            <summary>Reject this draft</summary>
+            <form id="reject-form" method="post" action={`/api/admin/drafts/${draft.id}/reject`}>
+              <input type="hidden" name="version" value={draft.updatedAt} />
+              <label class="ed-field">Internal note (optional, never published)
+                <textarea name="note" maxlength="500"></textarea>
+              </label>
+              <p><button type="submit" class="ad-btn danger">Reject draft</button></p>
+            </form>
+          </details>
+        </section>
+      )}
+    </div>
+  )}
+</Admin>
+<script>import '../../../scripts/draft-editor';</script>

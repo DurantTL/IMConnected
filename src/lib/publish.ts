@@ -2,6 +2,7 @@
 import { getSection, isValidArea } from './site';
 import { LIMITS } from './limits';
 import { slugify, sniffImage, textToMarkdown } from './submission';
+import { clean, validDate, leadImageFields, storyFrontmatter, storyPhotoPath } from './storyfile';
 import type { NewFile } from './github';
 
 export class PublishError extends Error {
@@ -12,21 +13,10 @@ export class PublishError extends Error {
 
 export const PUBLISH_LIMITS = { maxStories: 12, maxBodyBytes: 40 * 1024 * 1024, author: 120, alt: 300, caption: 300, quote: 2000, attribution: 200, url: 2000, name: 80 };
 
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
-const clean = (v: unknown) => (typeof v === 'string' ? v.replace(CONTROL, '') : '');
-const yaml = (v: string) => JSON.stringify(v);
-
 export interface PublishedStory {
   ref: string;
   slug: string;
   path: string;
-}
-
-function validDate(s: unknown): s is string {
-  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
-  const d = new Date(`${s}T00:00:00Z`);
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
 interface Photo {
@@ -117,7 +107,7 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
       for (const [pi, rp] of rawPhotos.entries()) {
         const parsed = parsePhoto(rp, ref);
         if (parsed.data) {
-          const publicPath = `/images/stories/${slug}/photo-${pi + 1}.${parsed.data.ext}`;
+          const publicPath = storyPhotoPath(slug, pi + 1, parsed.data.ext);
           files.push({ path: `public${publicPath}`, content: parsed.data.base64, encoding: 'base64' });
           photoPaths.push(publicPath);
         } else {
@@ -126,26 +116,22 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
         photoMeta.push(parsed.photo);
       }
 
-      const fm: string[] = [
-        '---',
-        `title: ${yaml(title)}`,
-        ...(dek ? [`dek: ${yaml(dek)}`] : []),
-        `section: ${section}`,
-        ...(area ? [`area: ${area}`] : []),
-        `author: ${yaml(author)}`,
-        `date: ${issueDate}`,
-      ];
-      if (photoPaths[0]) {
-        const first = photoMeta[0];
-        const credit = /^photo:/i.test(first.caption) ? first.caption.replace(/^photo:\s*/i, '').trim() : '';
-        const alt = first.alt || (credit ? '' : first.caption) || title;
-        fm.push(`image: ${yaml(photoPaths[0])}`, `imageAlt: ${yaml(alt)}`);
-        if (credit) fm.push(`photoCredit: ${yaml(credit)}`);
-      }
-      if (photoPaths.length > 1) fm.push('photos:', ...photoPaths.slice(1).map((p) => `  - ${yaml(p)}`));
-      fm.push('featured: false', 'draft: false', '---', '');
+      const lead = photoPaths[0] ? leadImageFields(photoMeta[0], title) : null;
+      const frontmatter = storyFrontmatter({
+        title,
+        dek,
+        section,
+        area,
+        author,
+        date: issueDate,
+        photoPaths,
+        imageAlt: lead?.alt,
+        photoCredit: lead?.credit,
+        featured: false,
+        draft: false,
+      });
 
-      let md = fm.join('\n') + textToMarkdown(storyBody);
+      let md = frontmatter + textToMarkdown(storyBody);
       if (quote) {
         const lines = textToMarkdown(quote).split('\n').map((l) => (l ? `> ${l}` : '>'));
         if (attribution) lines.push('>', `> — ${textToMarkdown(attribution).replace(/\n+/g, ' ')}`);

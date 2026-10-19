@@ -97,7 +97,7 @@ try {
   check('passkey enrolled during setup; 10 recovery codes shown (first second factor)', recovery.length === 10, String(recovery.length));
   check('the passkey is stored (public key, credential id, name)', count('passkeys') === 1 && q('SELECT device_name d FROM passkeys')[0].d === 'Enrollment key');
   await page.goto(BASE + '/admin');
-  check('dashboard reachable after passkey enrollment', /Dashboard/.test(await text()));
+  check('dashboard reachable after passkey enrollment', /New story/.test(await text()));
   check('registration audited, recovery codes audited once', auditCount('auth.passkey_registered') === 1 && auditCount('auth.recovery_codes_generated') === 1);
 
   // 2. My account: list, exclude already-registered credentials, register a second passkey, remove, last factor
@@ -127,7 +127,7 @@ try {
   // remove the first passkey, proving freshness with a passkey assertion (the second key is on this authenticator)
   const firstId = q("SELECT id FROM passkeys WHERE device_name = 'Enrollment key'")[0].id;
   await page.locator(`form:has(input[name=id][value="${firstId}"]):has(input[name=code]) button`).click();
-  await page.waitForSelector('[role=status]');
+  await page.waitForFunction((m) => document.body.innerText.includes(m), 'Passkey removed'); // wait for this result, not an older status
   check('removing a passkey with a fresh passkey assertion works', /Passkey removed/.test(await text()) && count('passkeys') === 1);
   check('removal audited', auditCount('auth.passkey_removed') === 1);
 
@@ -135,7 +135,7 @@ try {
   const secondId = q('SELECT id FROM passkeys')[0].id;
   await page.locator(`form:has(input[name=action][value=passkey_rename]):has(input[name=id][value="${secondId}"]) input[name=name]`).fill('Renamed key');
   await page.locator(`form:has(input[name=action][value=passkey_rename]):has(input[name=id][value="${secondId}"]) button`).click();
-  await page.waitForSelector('[role=status]');
+  await page.waitForFunction((m) => document.body.innerText.includes(m), 'Passkey renamed'); // wait for this result, not an older status
   check('a passkey can be renamed', q('SELECT device_name d FROM passkeys')[0].d === 'Renamed key');
 
   // last second factor (no authenticator app is enrolled)
@@ -153,7 +153,7 @@ try {
   await page.goto(BASE + '/admin/login');
   await page.click('button[data-passkey=login]');
   await page.waitForURL('**/admin');
-  check('passwordless passkey sign-in reaches the dashboard (both factors)', /Dashboard/.test(await text()));
+  check('passwordless passkey sign-in reaches the dashboard (both factors)', /New story/.test(await text()));
   const sess = q('SELECT mfa_passed m FROM sessions WHERE user_id = ?', uid());
   check('...the session is fully verified (mfa_passed=1)', sess.length === 1 && sess[0].m === 1);
   check('the passkey records last use', q('SELECT last_used_at l FROM passkeys')[0].l !== null);
@@ -182,7 +182,7 @@ try {
   const pendingCookie = (await context.cookies()).find((c) => c.name === '__Host-imc_session')?.value;
   await page.click('button[data-passkey=second]');
   await page.waitForURL('**/admin');
-  check('passkey as second factor after a password reaches the dashboard', /Dashboard/.test(await text()));
+  check('passkey as second factor after a password reaches the dashboard', /New story/.test(await text()));
   const newCookie = (await context.cookies()).find((c) => c.name === '__Host-imc_session')?.value;
   check('session id rotated after the passkey second factor', !!newCookie && newCookie !== pendingCookie);
 
@@ -280,7 +280,7 @@ try {
   await page.goto(BASE + '/admin/login');
   await page.click('button[data-passkey=login]');
   await page.waitForURL('**/admin');
-  check('(signed in again by passkey before the reset)', /Dashboard/.test(await text()));
+  check('(signed in again by passkey before the reset)', /New story/.test(await text()));
   const resetOut = execFileSync('node', ['scripts/reset-2fa.mjs', EMAIL], { env: { ...process.env, DATA_DIR } }).toString();
   console.log('reset-2fa:', resetOut.trim());
   check('reset-2fa deleted the passkeys', count('passkeys') === 0 && /1 passkeys/.test(resetOut));
