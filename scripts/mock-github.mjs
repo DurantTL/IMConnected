@@ -11,6 +11,7 @@ const OUT = process.env.MOCK_OUT || '.mock-prs';
 const blobs = new Map();
 const trees = new Map();
 const commits = new Map();
+const prs = new Map(); // PR number -> { head, labels:Set }
 const directFiles = new Set(); // paths committed straight to the base branch
 let tip = 'base';
 let n = 0;
@@ -63,8 +64,27 @@ createServer(async (req, res) => {
   }
   if (req.method === 'POST' && p === '/pulls') {
     writeFileSync(join(OUT, body.head, 'PR.md'), `# ${body.title}\n\n${body.body}\n`);
+    prs.set(n, { head: body.head, title: body.title, labels: new Set() });
     return send(201, { number: n, html_url: `https://github.com/mock/repo/pull/${n}` });
   }
-  if (req.method === 'POST' && /\/issues\/\d+\/labels/.test(p)) return send(200, []);
+  // Labels: add (POST), remove one (DELETE). The current labels are written to <branch>/LABELS.txt.
+  const lab = /^\/issues\/(\d+)\/labels(?:\/(.+))?$/.exec(p);
+  if (lab) {
+    const pr = prs.get(Number(lab[1]));
+    if (!pr) return send(404, { message: 'Not Found' });
+    if (req.method === 'POST') for (const l of body.labels ?? []) pr.labels.add(l);
+    else if (req.method === 'DELETE') { if (!pr.labels.delete(decodeURIComponent(lab[2] ?? ''))) return send(404, { message: 'Label does not exist' }); }
+    else return send(404, { message: 'Not Found' });
+    writeFileSync(join(OUT, pr.head, 'LABELS.txt'), [...pr.labels].join('\n') + '\n');
+    return send(200, [...pr.labels].map((name) => ({ name })));
+  }
+  // Update a PR description (the submit endpoint records the email status this way).
+  const upd = /^\/pulls\/(\d+)$/.exec(p);
+  if (req.method === 'PATCH' && upd) {
+    const pr = prs.get(Number(upd[1]));
+    if (!pr) return send(404, { message: 'Not Found' });
+    writeFileSync(join(OUT, pr.head, 'PR.md'), `# ${pr.title}\n\n${body.body}\n`);
+    return send(200, { number: Number(upd[1]) });
+  }
   send(404, { message: 'Not Found' });
 }).listen(PORT, () => console.log(`mock GitHub API on http://localhost:${PORT}`));

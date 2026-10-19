@@ -4,6 +4,7 @@ import { SECTIONS, SITE } from '../../lib/site';
 import { LIMITS } from '../../lib/limits';
 
 const submittable = SECTIONS.filter((s) => s.submittable);
+const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY || '';
 const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]));
 ---
 <Base title="Submit a Story" description="Share news and stories from your church, school or club with IMConnected.">
@@ -114,6 +115,14 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
       </div>
       <input type="hidden" name="t" id="t" value="" />
 
+      {turnstileSiteKey && (
+        <>
+          <div class="cf-turnstile" data-sitekey={turnstileSiteKey} data-theme="auto" data-appearance="always"></div>
+          <noscript><p class="hint">The security check needs JavaScript. If you can't turn it on, please email your story to {SITE.contactEmail}.</p></noscript>
+          <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+        </>
+      )}
+
       <div><button class="btn accent" type="submit" id="submit-btn">Send my story</button></div>
     </form>
   </div>
@@ -186,6 +195,10 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
     btn.textContent = 'Sending…';
     try {
       const fd = new FormData(form);
+      if (window.turnstile) {
+        const token = window.turnstile.getResponse();
+        if (token) fd.set('cf-turnstile-response', token);
+      }
       const files = fd.getAll('photos').filter((f) => f instanceof File && f.size > 0);
       fd.delete('photos');
       if (files.length) btn.textContent = 'Preparing photos…';
@@ -197,6 +210,7 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
       location.href = '/submit/thanks/';
     } catch (err) {
       show(err.message, 'error');
+      if (window.turnstile) window.turnstile.reset(); // tokens are single-use
       btn.disabled = false;
       btn.textContent = 'Send my story';
     }

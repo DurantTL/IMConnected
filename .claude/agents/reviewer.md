@@ -28,7 +28,17 @@ you to review the current branch against `origin/main`.
      story field still goes through the escaping and control-character
      stripping, photo checks, nothing is written when any story is invalid,
      and neither the token nor story text reaches logs;
-   - prerendering: only `src/pages/api/submit.ts` and `src/pages/api/publish.ts` set `prerender = false`;
+   - Turnstile: the token is verified on the server before any GitHub call
+     (400 on failure, 503 and fail closed when Cloudflare is unreachable), and
+     the site key is the only Turnstile value that reaches the browser;
+   - the confirm token (`src/lib/email.ts`, `/api/confirm`): HMAC compared in
+     constant time, expiry checked, `EMAIL_CONFIRM_SECRET` required at 32+
+     characters, the confirm page needs a button press (never confirms on
+     GET), rate limited and same-origin only;
+   - the confirmation email: the title is HTML-escaped, no other submitted
+     text is in it, and no submitter address is ever logged or put in a
+     response, a story file or an error message;
+   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts` and `src/pages/api/confirm.ts` set `prerender = false`;
    - human-only gates in `AGENTS.md` that the change might cross.
 3. Report only actionable findings, most severe first, each with `path:line`,
    what is wrong, a concrete failure scenario, and a suggested fix. List

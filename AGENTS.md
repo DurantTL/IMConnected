@@ -3,7 +3,7 @@
 Instructions for AI coding agents (Codex, Claude) working in this repo.
 
 ## Stack
-- Astro 7 (`output: 'static'` + `@astrojs/node` standalone). Pages are prerendered, and only `src/pages/api/submit.ts` and `src/pages/api/publish.ts` run on the server (`prerender = false`).
+- Astro 7 (`output: 'static'` + `@astrojs/node` standalone). Pages are prerendered, and only `src/pages/api/submit.ts`, `src/pages/api/publish.ts` and `src/pages/api/confirm.ts` run on the server (`prerender = false`).
 - Content: `src/content/stories/*.md`, with the schema in `src/content.config.ts`.
 - Search: Pagefind runs after `astro build` (`npm run build`). Article bodies are marked `data-pagefind-body`.
 - Deploy: Docker image built by `.github/workflows/docker.yml` and pushed to GHCR.
@@ -25,6 +25,7 @@ Instructions for AI coding agents (Codex, Claude) working in this repo.
 - Use synthetic data only in sample stories, tests, screenshots and commits. Submission PR descriptions hold the submitter's email and phone; never copy them into story files, issues, logs, prompts or commits.
 - Only a person may merge (publish) or close (reject) a story submission, merge any PR, deploy or pull a new image on the server, change the GitHub token or other secrets, or send a newsletter. Agents may prepare reviewable changes but must not cross those gates.
 - The Studio "Publish to IMConnected" button (`/api/publish`) is a person's action. Agents must never call `/api/publish` against the real site, and must never use or ask for `PUBLISH_TOKEN`. Test it only against `scripts/mock-github.mjs` with a made-up token.
+- Never log submitter email addresses (log the PR number instead). Agents must never send real email: test with `RESEND_API_KEY` unset, or point `EMAIL_API_URL` at a local mock of the Resend endpoint. Use only Cloudflare's documented Turnstile test keys, or `TURNSTILE_VERIFY_URL` pointing at a local mock.
 
 ## Editorial voice (for any sample or generated copy)
 Warm but professional, faith-oriented without being overly formal, inverted-pyramid news style. Never invent names, events, quotes or facts about real people or churches.

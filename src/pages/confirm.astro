@@ -1,0 +1,58 @@
+---
+import Base from '../layouts/Base.astro';
+import { SITE } from '../lib/site';
+---
+<Base title="Confirm your story" noindex>
+  <div class="wrap">
+    <header class="page-head">
+      <span class="kicker">One last step</span>
+      <h1>Confirm your story submission</h1>
+      <p id="confirm-intro">Thank you for sending your story to {SITE.name}. Please confirm your email address so our editors know they can reach you.</p>
+    </header>
+    <div id="confirm-status" role="status" aria-live="polite"></div>
+    <p id="confirm-actions" hidden><button class="btn accent" type="button" id="confirm-btn">Confirm</button></p>
+    <noscript>
+      <p class="notice">This page needs JavaScript to confirm your submission. Please email <a href={`mailto:${SITE.contactEmail}`}>{SITE.contactEmail}</a> and we will confirm it for you.</p>
+    </noscript>
+  </div>
+</Base>
+
+<script is:inline>
+  const token = new URLSearchParams(location.search).get('t') || '';
+  const status = document.getElementById('confirm-status');
+  const actions = document.getElementById('confirm-actions');
+  const btn = document.getElementById('confirm-btn');
+  function show(msg, kind) {
+    status.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'notice ' + kind;
+    p.textContent = msg;
+    status.appendChild(p);
+  }
+  if (!token) {
+    show("This link isn't valid. Please use the link in your confirmation email.", 'error');
+  } else {
+    actions.hidden = false;
+    // A button, not an automatic confirm: email security scanners open links on their own.
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Confirming…';
+      try {
+        const res = await fetch('/api/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ t: token }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Something went wrong. Please try again.');
+        actions.hidden = true;
+        document.getElementById('confirm-intro').hidden = true;
+        show('Thank you — your story is confirmed. Our editors will review it soon.', 'ok');
+      } catch (err) {
+        show(err.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Confirm';
+      }
+    });
+  }
+</script>
