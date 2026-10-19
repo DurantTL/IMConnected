@@ -28,7 +28,7 @@ you to review the current branch against `origin/main`.
      story field still goes through the escaping and control-character
      stripping, photo checks, nothing is written when any story is invalid,
      and neither the token nor story text reaches logs;
-   - prerendering: only `src/pages/api/submit.ts` and `src/pages/api/publish.ts` set `prerender = false`;
+   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `/admin*` and `/api/admin/*` set `prerender = false`;
    - human-only gates in `AGENTS.md` that the change might cross.
 3. Report only actionable findings, most severe first, each with `path:line`,
    what is wrong, a concrete failure scenario, and a suggested fix. List

@@ -15,6 +15,9 @@ process.emitWarning = function (warning, ...args) {
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite');
 process.emitWarning = emit;
 
+/** Migration files are named like 001_init.sql. */
+export const MIGRATION_NAME = /^\d{3}_.*\.sql$/;
+
 /** Directory holding imconnected.db: DATA_DIR, else ./data (the Docker image sets DATA_DIR=/data). */
 export function dataDir() {
   return path.resolve(process.env.DATA_DIR || './data');
@@ -24,9 +27,9 @@ export function dataDir() {
 export function openDatabase(dir = dataDir()) {
   fs.mkdirSync(dir, { recursive: true });
   const db = new DatabaseSync(path.join(dir, 'imconnected.db'));
+  db.exec('PRAGMA busy_timeout = 5000;'); // first, so the WAL switch below waits on a concurrent opener
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
-  db.exec('PRAGMA busy_timeout = 5000;');
   return db;
 }
 
@@ -64,6 +67,6 @@ export function runMigrations(db, migrations) {
 export function readMigrationsFromDir(dir) {
   return fs
     .readdirSync(dir)
-    .filter((f) => /^\d+.*\.sql$/.test(f))
+    .filter((f) => MIGRATION_NAME.test(f))
     .map((name) => ({ name, sql: fs.readFileSync(path.join(dir, name), 'utf8') }));
 }

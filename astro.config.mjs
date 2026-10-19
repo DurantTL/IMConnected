@@ -3,7 +3,7 @@ import { defineConfig } from 'astro/config';
 import node from '@astrojs/node';
 
 // Pages are prerendered to static HTML at build time.
-// Only /api/submit and /api/publish run on the server (they opt out with `prerender = false`).
+// Only /api/submit, /api/publish, /admin* and /api/admin/* run on the server (they opt out with `prerender = false`).
 export default defineConfig({
   site: process.env.SITE_URL || 'https://stories.imadventist.org',
   output: 'static',

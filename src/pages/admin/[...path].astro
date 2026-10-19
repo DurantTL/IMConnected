@@ -1,0 +1,10 @@
+---
+import Admin from '../../layouts/Admin.astro';
+export const prerender = false;
+// Unknown /admin/* URLs land here so they pass through src/middleware.ts (no-store, noindex, DENY).
+Astro.response.status = 404;
+---
+<Admin title="Not found">
+  <h1>Page not found</h1>
+  <p class="admin-note"><a href="/admin">Back to the dashboard</a></p>
+</Admin>

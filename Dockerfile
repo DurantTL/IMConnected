@@ -35,5 +35,4 @@ USER node
 EXPOSE 4321
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD wget -qO- http://127.0.0.1:4321/ >/dev/null || exit 1
-# Create/migrate the database first, then start the server
-CMD ["sh", "-c", "node scripts/migrate.mjs && exec node dist/server/entry.mjs"]
+CMD ["node", "dist/server/entry.mjs"]

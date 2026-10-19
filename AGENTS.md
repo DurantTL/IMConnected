@@ -3,7 +3,7 @@
 Instructions for AI coding agents (Codex, Claude) working in this repo.
 
 ## Stack
-- Astro 7 (`output: 'static'` + `@astrojs/node` standalone). Pages are prerendered, and only `src/pages/api/submit.ts` and `src/pages/api/publish.ts` run on the server (`prerender = false`).
+- Astro 7 (`output: 'static'` + `@astrojs/node` standalone). Pages are prerendered, and only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `/admin*` and `/api/admin/*` run on the server (`prerender = false`).
 - Content: `src/content/stories/*.md`, with the schema in `src/content.config.ts`.
 - Search: Pagefind runs after `astro build` (`npm run build`). Article bodies are marked `data-pagefind-body`.
 - Editor dashboard: `/admin*` and `/api/admin/*` are server-rendered and guarded by `src/middleware.ts` (session, 2FA state, Origin check, no-store/noindex headers). The middleware must return immediately for every other path so public pages stay prerendered. See epic #7.

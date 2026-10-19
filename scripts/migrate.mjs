@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Create the database in DATA_DIR if needed and apply pending migrations. Run before the server starts.
+// Manual tool: create the database in DATA_DIR if needed and apply pending migrations now.
+// The server does this itself on first use of /admin, so running this is optional.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase, runMigrations, readMigrationsFromDir } from '../src/lib/db/db-core.mjs';

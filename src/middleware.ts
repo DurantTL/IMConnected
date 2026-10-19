@@ -1,4 +1,5 @@
 import { defineMiddleware } from 'astro:middleware';
+import { getDb } from './lib/db';
 import { SESSION_COOKIE, readSession, touchSession, clearSessionCookie } from './lib/auth/session';
 
 // Runs for every request, including while prerendering public pages at build time. For anything
@@ -6,15 +7,22 @@ import { SESSION_COOKIE, readSession, touchSession, clearSessionCookie } from '.
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-// Reachable with no session (sign-in screens and invite links).
-const OPEN_PAGES = ['/admin/login', '/admin/invite'];
-// Reachable with a first-factor session that hasn't passed 2FA yet.
-const MFA_PAGES = ['/admin/login', '/admin/2fa', '/admin/enroll'];
-const MFA_API = ['/api/admin/2fa', '/api/admin/enroll', '/api/admin/logout'];
-// Sign-in API routes added by later issues (e.g. /api/admin/login) go in this list when they exist.
-const OPEN_API: string[] = [];
+// Reachable with no session. Invite links are /admin/invite/<token>, hence the prefix.
+const OPEN_PAGES = ['/admin/login'];
+const OPEN_PAGE_PREFIXES = ['/admin/invite'];
+// Reachable with a session that has passed the first factor but not 2FA yet. EXACT paths only: the
+// later sign-in issues add theirs one by one (and enrollment handlers must also call canEnrollWithoutMfa).
+const MFA_PAGES = ['/admin/login', '/admin/2fa'];
+const MFA_API = ['/api/admin/logout'];
+// Sign-in API routes added by later issues (e.g. /api/admin/login) go here by exact path.
+// Logout is open so an expired or invalid session can still sign out and be sent to the login page.
+const OPEN_API = ['/api/admin/logout'];
 
-const under = (path: string, prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(p + '/'));
+const underPrefix = (path: string, prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(p + '/'));
+const isOpen = (kind: 'page' | 'api', path: string) =>
+  kind === 'page' ? OPEN_PAGES.includes(path) || underPrefix(path, OPEN_PAGE_PREFIXES) : OPEN_API.includes(path);
+const mfaPending = (kind: 'page' | 'api', path: string) =>
+  kind === 'page' ? MFA_PAGES.includes(path) || underPrefix(path, OPEN_PAGE_PREFIXES) : MFA_API.includes(path);
 
 function guardedKind(path: string): 'page' | 'api' | null {
   if (path === '/admin' || path.startsWith('/admin/')) return 'page';
@@ -76,6 +84,21 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const kind = guardedKind(path);
   if (!kind) return next();
 
+  // A broken database must only take /admin down, never the public site.
+  try {
+    getDb();
+  } catch (err) {
+    console.error('[db] unavailable:', err instanceof Error ? err.message : err);
+    return kind === 'api'
+      ? json(503, 'The editor dashboard is temporarily unavailable.')
+      : harden(
+          new Response(
+            '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Editors unavailable</title><body style="font-family:system-ui;max-width:640px;margin:48px auto;padding:0 16px"><h1>Editor dashboard unavailable</h1><p>The editor database could not be opened. The public site is not affected. Please tell the site administrator.</p></body>',
+            { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+          ),
+        );
+  }
+
   const request = context.request;
   if (!SAFE_METHODS.has(request.method) && !originOk(request, url)) {
     return json(403, 'Cross-origin request blocked.');
@@ -83,8 +106,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   const found = readSession(context.cookies.get(SESSION_COOKIE)?.value);
   if (!found) {
-    if (context.cookies.has(SESSION_COOKIE)) clearSessionCookie(context.cookies, url);
-    if (under(path, kind === 'page' ? OPEN_PAGES : OPEN_API)) return harden(await next());
+    if (context.cookies.has(SESSION_COOKIE)) clearSessionCookie(context.cookies);
+    if (isOpen(kind, path)) return harden(await next());
     return kind === 'page' ? redirect('/admin/login') : json(401, 'Sign in required.');
   }
 
@@ -92,7 +115,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
   context.locals.user = found.user;
   context.locals.session = found.session;
 
-  if (!found.session.mfaPassed && !under(path, kind === 'page' ? MFA_PAGES : MFA_API)) {
+  if (!found.session.mfaPassed && !mfaPending(kind, path)) {
     return kind === 'page' ? redirect('/admin/2fa') : json(403, 'Two-factor verification required.');
   }
   return harden(await next());

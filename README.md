@@ -2,7 +2,7 @@
 
 A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission becomes a GitHub pull request, and merging the pull request publishes the story.
 
-- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The only server code is `/api/submit` and `/api/publish`.
+- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The server code is `/api/submit`, `/api/publish`, and the editor dashboard (`/admin*` and `/api/admin/*`).
 - **Stories are Markdown files** in `src/content/stories/`. Accounts, sessions, drafts and the audit log for the editor dashboard live in a small SQLite file (see Editor dashboard); stories never do.
 - **Docker image**: on every push to `main`, an image is built and pushed to `ghcr.io/<owner>/imconnected`.
 - **Pagefind** builds a site search index at build time, so search needs no server.
@@ -177,15 +177,15 @@ GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http://localhost:4010 npm st
 
 Editors sign in at `/admin` (invite-only; sign-in methods arrive over the epic in issue #7). The pages are server-rendered, `noindex`, and never cached.
 
-- **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. Add that volume to your backups; stories themselves are safe in git. Migrations in `src/lib/db/migrations/` are applied by `scripts/migrate.mjs` when the server starts (`npm start` and the Docker `CMD`), once each; the server also applies any pending ones on first use.
-- **First admin.** Run once on the server (the email and name are yours; the output is a 24-hour, single-use invite link):
+- **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. Add that volume to your backups; stories themselves are safe in git. Migrations in `src/lib/db/migrations/` apply automatically, once each, the first time `/admin` is used. If the database can't be opened, only `/admin` answers 503 (and logs a line); the public pages and `/api/submit` keep working. `node scripts/migrate.mjs` applies them by hand. A bind mount instead of the named volume must be owned by uid 1000 (the `node` user).
+- **First admin.** Run once on the server (the email and name are yours; the output is a 24-hour, single-use invite link; the invite page arrives with the sign-in feature, issue 2/7):
 
   ```bash
   docker compose exec imconnected node scripts/create-admin.mjs you@example.org "Your Name"
   ```
 
   Only a hash of the invite token is stored, so the link can't be shown again. Run the command again to get a fresh one.
-- **Local testing.** `DATA_DIR=/tmp/imc-data npm start`, then `DATA_DIR=/tmp/imc-data node scripts/create-admin.mjs test@example.com "Test Admin"`. Use synthetic data and delete the folder afterwards.
+- **Local testing.** `DATA_DIR=/tmp/imc-data npm start`, then `DATA_DIR=/tmp/imc-data node scripts/create-admin.mjs test@example.com "Test Admin"`. Session cookies are always `Secure`, so local sign-in needs Chrome or Firefox on `localhost` (they accept Secure cookies there). Use synthetic data and delete the folder afterwards.
 
 ## Security and spam notes
 

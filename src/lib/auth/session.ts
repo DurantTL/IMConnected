@@ -74,8 +74,41 @@ export function touchSession(session: Session): void {
   session.lastSeenAt = now;
 }
 
-export function setMfaPassed(sessionId: string): void {
-  getDb().prepare('UPDATE sessions SET mfa_passed = 1 WHERE id = ?').run(sessionId);
+/**
+ * Swap a session for a fresh token (call after sign-in steps and 2FA, so a token seen earlier is useless).
+ * One transaction: the old row goes, a new random token is inserted keeping the original
+ * created_at and expires_at, so rotating never extends the 7-day limit. Sets the cookie.
+ */
+export function rotateSession(oldId: string, opts: { mfaPassed: boolean; cookies: AstroCookies }): { token: string; session: Session } | null {
+  const db = getDb();
+  const token = randomBytes(32).toString('base64url');
+  const id = hashToken(token);
+  const now = Date.now();
+  let expiresAt = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const old = db.prepare('SELECT user_id, created_at, expires_at, ip, user_agent FROM sessions WHERE id = ?').get(oldId) as
+      | { user_id: number; created_at: number; expires_at: number; ip: string | null; user_agent: string | null }
+      | undefined;
+    if (!old || old.expires_at <= now) {
+      db.exec('ROLLBACK');
+      return null;
+    }
+    db.prepare('DELETE FROM sessions WHERE id = ?').run(oldId);
+    db.prepare(
+      'INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, ip, user_agent, mfa_passed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, old.user_id, old.created_at, now, old.expires_at, old.ip, old.user_agent, opts.mfaPassed ? 1 : 0);
+    db.exec('COMMIT');
+    expiresAt = old.expires_at;
+    setSessionCookie(opts.cookies, token);
+    return {
+      token,
+      session: { id, userId: old.user_id, mfaPassed: opts.mfaPassed, expiresAt, lastSeenAt: now },
+    };
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* already closed */ }
+    throw err;
+  }
 }
 
 /** Revoke by session id (the token hash). */
@@ -83,26 +116,19 @@ export function revokeSession(sessionId: string): void {
   getDb().prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
 }
 
-export function revokeAllForUser(userId: number): void {
-  getDb().prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+/** Sign a user out everywhere, optionally keeping the session they're using now. */
+export function revokeAllForUser(userId: number, exceptSessionId?: string): void {
+  if (exceptSessionId) getDb().prepare('DELETE FROM sessions WHERE user_id = ? AND id <> ?').run(userId, exceptSessionId);
+  else getDb().prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
 }
 
-/** Secure everywhere except plain-http localhost development. */
-export function cookieSecure(url: URL): boolean {
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-  return !(local && url.protocol === 'http:');
+// Always Secure: Chrome and Firefox also accept Secure cookies on http://localhost.
+const cookieOptions = { httpOnly: true, secure: true, sameSite: 'lax', path: '/' } as const;
+
+export function setSessionCookie(cookies: AstroCookies, token: string): void {
+  cookies.set(SESSION_COOKIE, token, { ...cookieOptions, maxAge: Math.floor(ABSOLUTE_MS / 1000) });
 }
 
-export function setSessionCookie(cookies: AstroCookies, token: string, url: URL): void {
-  cookies.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    secure: cookieSecure(url),
-    sameSite: 'lax',
-    path: '/',
-    maxAge: Math.floor(ABSOLUTE_MS / 1000),
-  });
-}
-
-export function clearSessionCookie(cookies: AstroCookies, url: URL): void {
-  cookies.set(SESSION_COOKIE, '', { httpOnly: true, secure: cookieSecure(url), sameSite: 'lax', path: '/', maxAge: 0 });
+export function clearSessionCookie(cookies: AstroCookies): void {
+  cookies.set(SESSION_COOKIE, '', { ...cookieOptions, maxAge: 0 });
 }
