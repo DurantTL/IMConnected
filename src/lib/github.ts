@@ -43,7 +43,7 @@ async function gh<T>(cfg: GitHubConfig, method: string, path: string, body?: unk
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`GitHub ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`);
+    throw Object.assign(new Error(`GitHub ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`), { status: res.status });
   }
   return (await res.json()) as T;
 }
@@ -86,6 +86,25 @@ export async function openPullRequest(
     await gh(cfg, 'POST', `/issues/${pr.number}/labels`, { labels: [cfg.label] }).catch(() => {});
   }
   return { number: pr.number, url: pr.html_url };
+}
+
+/** Adds labels to a pull request. GitHub creates a label that doesn't exist yet. */
+export async function addLabels(cfg: GitHubConfig, number: number, labels: string[]): Promise<void> {
+  await gh(cfg, 'POST', `/issues/${number}/labels`, { labels });
+}
+
+/** Removes one label from a pull request; a label that isn't on it is not an error. */
+export async function removeLabel(cfg: GitHubConfig, number: number, label: string): Promise<void> {
+  try {
+    await gh(cfg, 'DELETE', `/issues/${number}/labels/${encodeURIComponent(label)}`);
+  } catch (err) {
+    if ((err as { status?: number }).status !== 404) throw err;
+  }
+}
+
+/** Replaces a pull request's description. */
+export async function updatePullRequestBody(cfg: GitHubConfig, number: number, body: string): Promise<void> {
+  await gh(cfg, 'PATCH', `/pulls/${number}`, { body });
 }
 
 /** True when the file exists on the base branch. Any non-200/404 answer is an error. */

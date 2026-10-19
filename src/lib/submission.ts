@@ -132,7 +132,12 @@ export async function buildFiles(s: Submission, now = new Date()) {
   return { slug, files, photoCount: photoPaths.length };
 }
 
-export function prBody(s: Submission, slug: string, photoCount: number): string {
+/** Email verification line for the PR body, e.g. "unverified (confirmation sent)". */
+export const EMAIL_PENDING = 'unverified (confirmation pending)';
+export const emailSent = 'unverified (confirmation sent)';
+export const emailNotSent = (reason: string) => `unverified (not sent: ${reason})`;
+
+export function prBody(s: Submission, slug: string, photoCount: number, emailStatus: string = EMAIL_PENDING): string {
   const section = getSection(s.section);
   const area = section?.areas?.find((a) => a.key === s.area)?.label;
   const words = s.body.split(/\s+/).filter(Boolean).length;
@@ -144,6 +149,7 @@ export function prBody(s: Submission, slug: string, photoCount: number): string 
     `|---|---|`,
     `| **Submitted by** | ${esc(s.name)} |`,
     `| **Email** | ${esc(s.email)} |`,
+    `| **Email status** | ${esc(emailStatus)} |`,
     ...(s.phone ? [`| **Phone** | ${esc(s.phone)} |`] : []),
     `| **Church / school / club** | ${esc(s.church)} |`,
     `| **Section** | ${section?.label}${area ? ` → ${area}` : ''} |`,

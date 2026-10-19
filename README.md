@@ -2,7 +2,7 @@
 
 A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission becomes a GitHub pull request, and merging the pull request publishes the story.
 
-- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The only server code is `/api/submit` and `/api/publish`.
+- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The only server code is `/api/submit`, `/api/publish` and `/api/confirm`.
 - **Stories are Markdown files** in `src/content/stories/`. There's no database.
 - **Docker image**: on every push to `main`, an image is built and pushed to `ghcr.io/<owner>/imconnected`.
 - **Pagefind** builds a site search index at build time, so search needs no server.
@@ -173,10 +173,33 @@ GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http://localhost:4010 npm st
 # submissions are written to ./.mock-prs/<branch>/
 ```
 
+## Spam protection: Turnstile, email checks and confirmation
+
+**Cloudflare Turnstile.**
+1. In the Cloudflare dashboard open Turnstile and add a widget for the site's hostname (managed mode).
+2. Set the **secret key** as `TURNSTILE_SECRET_KEY` in the server's `.env`. With it unset the check is skipped (local dev); in production the server logs one warning at startup.
+3. Set the **site key** as a repository **variable** `PUBLIC_TURNSTILE_SITE_KEY` (Settings → Secrets and variables → Actions → Variables), not in `.env`. It is public and baked into the prerendered `/submit/` page at build time, so rebuild the image after changing it. When it is empty the widget isn't shown.
+4. Setting `TURNSTILE_SECRET_KEY` without building the image with `PUBLIC_TURNSTILE_SITE_KEY` blocks every submission, because the form then has no widget to produce a token. Set both, or neither.
+5. If Cloudflare can't be reached the form answers 503 ("Please try again in a minute"); it fails closed.
+
+For local testing use Cloudflare's documented test keys: site key `1x00000000000000000000AA` (always passes) with secret `1x0000000000000000000000000000000AA`, and secret `2x0000000000000000000000000000000AA` (always fails). `TURNSTILE_VERIFY_URL` can point at a local stand-in if the network is blocked.
+
+**Email domain checks** run before anything reaches GitHub. Domains on `src/lib/disposable-domains.txt` (and their subdomains) are refused, as are domains with no MX, A or AAAA record. A DNS timeout or server failure lets the submission through, so a DNS hiccup never loses a story. Add a line to the text file to block another domain.
+
+**Confirmation email** (sent through Resend's HTTP API; no SDK).
+1. Create a Resend account, add the sending domain and add the DNS records Resend shows until the domain reads **Verified**.
+2. In `.env` set `RESEND_API_KEY`, `EMAIL_FROM` (e.g. `IMConnected <stories@imadventist.org>`), optionally `EMAIL_REPLY_TO` (default `communication@imsda.org`), and `EMAIL_CONFIRM_SECRET` (`openssl rand -hex 32`, 32+ characters).
+3. Without `RESEND_API_KEY` or a long enough secret, nothing is sent and the PR body says so.
+
+Every submission PR is labelled `email-unverified` and its description has an **Email status** row (`confirmation sent`, or `not sent: <reason>`). The PR is created right away either way. When the submitter presses **Confirm** on the link in the email (valid 14 days; the button, not the link itself, confirms, so mail scanners can't do it), the label changes to `email-verified`. Editors can filter the PR list by these labels; an unverified story may still be good, so it is a signal, not a gate. The email address is never logged.
+
+**Testing the email flow locally:** run the mock GitHub API (`node scripts/mock-github.mjs`), the mock Resend endpoint (`node scripts/mock-email.mjs`, port 4011, prints each message as one JSON line; `GET /fail-on` makes it answer 500, `GET /fail-off` restores it), and start the app with `EMAIL_API_URL=http://localhost:4011/emails`, `RESEND_API_KEY=test`, `EMAIL_FROM=test@example.com`, a made-up `EMAIL_CONFIRM_SECRET`. Never send real email from a test.
+
 ## Security and spam notes
 
 - Story text has HTML escaped and link syntax neutralized, because Astro renders raw HTML in `.md` files.
 - Photos are checked by file signature (JPG, PNG or WebP only), up to 6 photos at 10 MB each. The browser shrinks photos to a 2000 px long edge before upload, which keeps the repo small.
-- Spam protection: a hidden honeypot field, a minimum time to fill out the form, an Origin check and a per-IP hourly limit (`SUBMIT_RATE_LIMIT`). If spam becomes a problem, Cloudflare Turnstile is the next thing to add.
+- Spam protection: a hidden honeypot field, a minimum time to fill out the form, an Origin check, a per-IP hourly limit (`SUBMIT_RATE_LIMIT`), Cloudflare Turnstile, email domain checks and a confirmation email (see below).
+- Submitter email addresses appear only in the PR description. They are never logged.
 - The GitHub token never reaches the browser and can only touch this one repo.
 - Photos are stored in git. Over a few years that's fine. If the repo eventually gets large, move `public/images` to object storage (R2/S3) and store URLs instead.

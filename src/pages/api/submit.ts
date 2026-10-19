@@ -1,6 +1,10 @@
 import type { APIRoute } from 'astro';
-import { githubConfigFromEnv, openPullRequest } from '../../lib/github';
-import { parseSubmission, buildFiles, prBody, ValidationError } from '../../lib/submission';
+import { githubConfigFromEnv, openPullRequest, addLabels, updatePullRequestBody } from '../../lib/github';
+import { clientIp, originAllowed } from '../../lib/request';
+import { checkEmail, EmailCheckError } from '../../lib/email-check';
+import { verifyTurnstile } from '../../lib/turnstile';
+import { sendConfirmationEmail } from '../../lib/email';
+import { parseSubmission, buildFiles, prBody, emailSent, emailNotSent, ValidationError } from '../../lib/submission';
 import { getSection } from '../../lib/site';
 
 export const prerender = false;
@@ -8,6 +12,14 @@ export const prerender = false;
 // ---- simple in-memory rate limit (per container) ----
 const WINDOW_MS = 60 * 60 * 1000;
 const MAX_PER_WINDOW = Number(process.env.SUBMIT_RATE_LIMIT || 10);
+if (process.env.NODE_ENV === 'production' && !process.env.TURNSTILE_SECRET_KEY) {
+  console.warn('[submit] TURNSTILE_SECRET_KEY is not set: the Turnstile check is off');
+}
+
+for (const v of ['TURNSTILE_VERIFY_URL', 'EMAIL_API_URL']) {
+  if (process.env.NODE_ENV === 'production' && process.env[v]) console.warn(`[submit] ${v} is set: it is for local testing only`);
+}
+
 const hits = new Map<string, number[]>();
 function rateLimited(ip: string): boolean {
   const now = Date.now();
@@ -16,27 +28,6 @@ function rateLimited(ip: string): boolean {
   hits.set(ip, list);
   if (hits.size > 5000) hits.clear();
   return list.length > MAX_PER_WINDOW;
-}
-
-function clientIp(request: Request, fallback: string): string {
-  if (process.env.TRUST_PROXY === 'true') {
-    const fwd = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0];
-    if (fwd) return fwd.trim();
-  }
-  return fallback;
-}
-
-function originAllowed(request: Request): boolean {
-  const origin = request.headers.get('origin');
-  if (!origin) return true; // non-browser clients; other guards still apply
-  const allowed = new Set<string>([new URL(request.url).host]);
-  if (process.env.SITE_URL) allowed.add(new URL(process.env.SITE_URL).host);
-  for (const h of (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)) allowed.add(h);
-  try {
-    return allowed.has(new URL(origin).host);
-  } catch {
-    return false;
-  }
 }
 
 function respond(request: Request, status: number, payload: { ok: boolean; error?: string }) {
@@ -92,6 +83,13 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
   try {
     const sub = parseSubmission(fd);
     const { slug, files, photoCount } = await buildFiles(sub);
+
+    // Checks that need no GitHub call. Email first: a refusal here doesn't use up the Turnstile token.
+    await checkEmail(sub.email);
+    const security = await verifyTurnstile(String(fd.get('cf-turnstile-response') || ''), ip);
+    if (security === 'fail') return respond(request, 400, { ok: false, error: 'Please complete the security check and try again.' });
+    if (security === 'unreachable') return respond(request, 503, { ok: false, error: 'Please try again in a minute.' });
+
     const pr = await openPullRequest(cfg, {
       branch: `submission/${slug}`,
       files,
@@ -100,11 +98,20 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
       body: prBody(sub, slug, photoCount),
     });
     console.log(`[submit] opened PR #${pr.number} for ${slug}`);
+
+    // Mark the PR unverified, then email the submitter a confirmation link and record the outcome in the PR body.
+    await addLabels(cfg, pr.number, ['email-unverified']).catch((e) => console.error(`[submit] PR #${pr.number}: could not add email-unverified label`, e instanceof Error ? e.message : e));
+    const mail = await sendConfirmationEmail({ to: sub.email, title: sub.title, prNumber: pr.number });
+    if (mail.sent) console.log(`[submit] PR #${pr.number}: confirmation email sent`);
+    else console.warn(`[submit] PR #${pr.number}: confirmation email not sent (${mail.reason})`);
+    await updatePullRequestBody(cfg, pr.number, prBody(sub, slug, photoCount, mail.sent ? emailSent : emailNotSent(mail.reason))).catch((e) =>
+      console.error(`[submit] PR #${pr.number}: could not update the email status`, e instanceof Error ? e.message : e),
+    );
     const section = getSection(sub.section)?.label;
     await notifyDiscord(`📰 **New IMConnected story submission**\n**${sub.title}**\n${sub.name} · ${sub.church} · ${section}\n${pr.url}`);
     return respond(request, 200, { ok: true });
   } catch (err) {
-    if (err instanceof ValidationError) return respond(request, 400, { ok: false, error: err.message });
+    if (err instanceof ValidationError || err instanceof EmailCheckError) return respond(request, 400, { ok: false, error: err.message });
     console.error('[submit] failed', err);
     return respond(request, 502, { ok: false, error: 'We couldn’t save your story right now. Please try again in a few minutes.' });
   }
