@@ -7,6 +7,9 @@ COPY . .
 # Canonical URL baked into pages (og:url, canonical, sitemap). Override with --build-arg.
 ARG SITE_URL=https://stories.imadventist.org
 ENV SITE_URL=$SITE_URL
+# Public Cloudflare Turnstile site key, baked into the prerendered /submit/ page. Empty turns the widget off.
+ARG PUBLIC_TURNSTILE_SITE_KEY=
+ENV PUBLIC_TURNSTILE_SITE_KEY=$PUBLIC_TURNSTILE_SITE_KEY
 RUN npm run build
 
 # ---------- runtime deps ----------

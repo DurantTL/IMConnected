@@ -69,6 +69,7 @@ jobs:
           push: true
           build-args: |
             SITE_URL=${{ vars.SITE_URL || 'https://stories.imadventist.org' }}
+            PUBLIC_TURNSTILE_SITE_KEY=${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}

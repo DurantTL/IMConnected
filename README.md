@@ -2,7 +2,7 @@
 
 A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission becomes a GitHub pull request, and merging the pull request publishes the story.
 
-- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The server code is `/api/submit`, `/api/publish`, and the editor dashboard (`/admin*` and `/api/admin/*`).
+- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The server code is `/api/submit`, `/api/publish`, `/api/confirm`, and the editor dashboard (`/admin*` and `/api/admin/*`).
 - **Stories are Markdown files** in `src/content/stories/`. Accounts, sessions, drafts and the audit log for the editor dashboard live in a small SQLite file (see Editor dashboard); stories never do.
 - **Docker image**: on every push to `main`, an image is built and pushed to `ghcr.io/<owner>/imconnected`.
 - **Pagefind** builds a site search index at build time, so search needs no server.
@@ -191,6 +191,7 @@ Editors sign in at `/admin` (invite-only; sign-in methods arrive over the epic i
 
 - Story text has HTML escaped and link syntax neutralized, because Astro renders raw HTML in `.md` files.
 - Photos are checked by file signature (JPG, PNG or WebP only), up to 6 photos at 10 MB each. The browser shrinks photos to a 2000 px long edge before upload, which keeps the repo small.
-- Spam protection: a hidden honeypot field, a minimum time to fill out the form, an Origin check and a per-IP hourly limit (`SUBMIT_RATE_LIMIT`). If spam becomes a problem, Cloudflare Turnstile is the next thing to add.
+- Spam protection: a hidden honeypot field, a minimum time to fill out the form, an Origin check, a per-IP hourly limit (`SUBMIT_RATE_LIMIT`), Cloudflare Turnstile, email domain checks and a confirmation email (see below).
+- Submitter email addresses appear only in the PR description. They are never logged.
 - The GitHub token never reaches the browser and can only touch this one repo.
 - Photos are stored in git. Over a few years that's fine. If the repo eventually gets large, move `public/images` to object storage (R2/S3) and store URLs instead.
