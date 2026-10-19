@@ -10,7 +10,7 @@ const xml = (v: string) =>
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
 export const GET: APIRoute = async ({ site }) => {
-  const base = site ?? new URL('https://stories.imsda.org');
+  const base = site ?? new URL('https://stories.imadventist.org');
   const items = await getFeedItems(base);
   const entries = items.map((s) => {
     const category = s.areaLabel ? `${s.sectionLabel} / ${s.areaLabel}` : s.sectionLabel;

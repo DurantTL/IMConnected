@@ -5,7 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 # Canonical URL baked into pages (og:url, canonical, sitemap). Override with --build-arg.
-ARG SITE_URL=https://stories.imsda.org
+ARG SITE_URL=https://stories.imadventist.org
 ENV SITE_URL=$SITE_URL
 RUN npm run build
 

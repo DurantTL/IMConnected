@@ -10,7 +10,7 @@ repo doesn't change it. This page is the hand-off for whoever maintains Studio.
 
 ## 1. "Import from IMConnected" button
 
-- Fetch `https://stories.imsda.org/stories.json` (the address should be a
+- Fetch `https://stories.imadventist.org/stories.json` (the address should be a
   setting). If the browser blocks the request because the header from the
   README's "Story feeds" section is missing, offer a box to paste the JSON
   instead.

@@ -7,4 +7,4 @@ services:
     ports:
       - "4321:4321"
     # To update after a merge:  docker compose pull && docker compose up -d
-    # (or let an image auto-updater you already run handle it)
+    # (xCloud does this automatically when the deploy branch moves; see the README)

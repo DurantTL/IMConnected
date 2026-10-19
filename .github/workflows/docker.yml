@@ -15,6 +15,12 @@ permissions:
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/imconnected
 
+# Publishes on main run one at a time, so an older run can never overwrite :latest
+# or the deploy branch after a newer one. Pull request test builds just restart.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -49,9 +55,22 @@ jobs:
           context: .
           push: true
           build-args: |
-            SITE_URL=${{ vars.SITE_URL || 'https://stories.imsda.org' }}
+            SITE_URL=${{ vars.SITE_URL || 'https://stories.imadventist.org' }}
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # The server's host (xCloud) watches the `deploy` branch, not main. Moving it only
+  # after the image is published means the server never pulls a stale :latest.
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Move the deploy branch to this commit
+        run: git push origin "${GITHUB_SHA}:refs/heads/deploy" --force
