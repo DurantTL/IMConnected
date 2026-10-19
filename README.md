@@ -175,10 +175,10 @@ GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http://localhost:4010 npm st
 
 ## Editor dashboard
 
-Editors sign in at `/admin` (invite-only; sign-in methods arrive over the epic in issue #7). The pages are server-rendered, `noindex`, and never cached.
+Editors sign in at `/admin` with email + password and a required second factor (invite-only; passkeys, Google and Microsoft arrive over the epic in issue #7). The pages are server-rendered, `noindex`, and never cached.
 
 - **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. Add that volume to your backups; stories themselves are safe in git. Migrations in `src/lib/db/migrations/` apply automatically, once each, the first time `/admin` is used. If the database can't be opened, only `/admin` answers 503 (and logs a line); the public pages and `/api/submit` keep working. `node scripts/migrate.mjs` applies them by hand. A bind mount instead of the named volume must be owned by uid 1000 (the `node` user).
-- **First admin.** Run once on the server (the email and name are yours; the output is a 24-hour, single-use invite link; the invite page arrives with the sign-in feature, issue 2/7):
+- **First admin.** Run once on the server (the email and name are yours; the output is a 24-hour, single-use invite link at `/admin/invite/<token>`):
 
   ```bash
   docker compose exec imconnected node scripts/create-admin.mjs you@example.org "Your Name"
@@ -186,6 +186,15 @@ Editors sign in at `/admin` (invite-only; sign-in methods arrive over the epic i
 
   Only a hash of the invite token is stored, so the link can't be shown again. Run the command again to get a fresh one.
 - **Local testing.** `DATA_DIR=/tmp/imc-data npm start`, then `DATA_DIR=/tmp/imc-data node scripts/create-admin.mjs test@example.com "Test Admin"`. Session cookies are always `Secure`, so local sign-in needs Chrome or Firefox on `localhost` (they accept Secure cookies there). Use synthetic data and delete the folder afterwards.
+
+### Sign-in, 2FA and recovery codes
+
+- **`AUTH_SECRET`** (32+ random characters, in `.env`) is required. It encrypts stored authenticator secrets (AES-256-GCM) and keys the recovery-code hashes. Without it every `/admin` URL answers 503. Don't change it once editors have enrolled, or their authenticators stop working and they need new invites.
+- **Accepting an invite.** The link opens "set your password" (12-256 characters, not the email address, not a common password; hashed with scrypt, N=2^15). The editor then scans a QR code (or types the key) into an authenticator app, confirms with one code, and gets **10 single-use recovery codes**, shown once; only keyed hashes are stored.
+- **Signing in** is two steps: `/admin/login` (email + password), then `/admin/2fa` (6-digit code, or a recovery code). A session that hasn't finished both can only reach the 2FA pages and sign-out. Each step issues a new session id.
+- **Errors and limits.** An unknown email, a wrong password and a disabled account all show "Email or password is incorrect." and cost the same time. 10 failures per IP or 5 per account in 15 minutes lock sign-in for that IP or account (the same message either way). Recovery-code use, failures, password changes and session revocations are in the audit log.
+- **My account** (`/admin/account`): change password (needs the current password plus a fresh code; signs out every other session), generate new recovery codes (old ones stop working), and see or sign out active sessions.
+- **Lost authenticator and recovery codes?** An administrator has to re-invite the editor (a later issue adds that screen; until then run `scripts/create-admin.mjs` for an admin, and ask the maintainer to delete the editor's `totp_credentials` row).
 
 ## Security and spam notes
 

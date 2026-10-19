@@ -1,0 +1,81 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import { rotateSession } from '../../../lib/auth/session';
+import { canEnrollWithoutMfa } from '../../../lib/auth/mfa';
+import { pendingTotpSecret, totpQrSvg, verifyTotp } from '../../../lib/auth/totp';
+import { generateRecoveryCodes } from '../../../lib/auth/recovery';
+import { LOCKED_MESSAGE, isLocked, recordFailure, recordSuccess } from '../../../lib/auth/ratelimit';
+import { audit } from '../../../lib/auth/audit';
+import { field, readForm } from '../../../lib/auth/form';
+import { clientIp } from '../../../lib/request';
+export const prerender = false;
+
+// First-time authenticator enrollment. Allowed without 2FA only while the user has no confirmed second
+// factor (canEnrollWithoutMfa); anyone else must verify the one they have, so a stolen password can't add a new one.
+const user = Astro.locals.user!;
+const session = Astro.locals.session!;
+const ip = clientIp(Astro.request, Astro.clientAddress);
+
+if (!canEnrollWithoutMfa(user)) {
+  audit('auth.enroll_refused', { userId: user.id, ip });
+  return new Response('Two-factor is already set up for this account.', {
+    status: 403,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
+}
+
+let error = '';
+let codes: string[] | null = null;
+if (Astro.request.method === 'POST') {
+  const form = await readForm(Astro.request);
+  const code = (form ? field(form, 'code', 20) : '').replace(/\s/g, '');
+  if (isLocked(ip, user.email)) {
+    error = LOCKED_MESSAGE;
+    Astro.response.status = 429;
+  } else if (!verifyTotp(user.id, user.email, code, { confirm: true })) {
+    recordFailure(ip, user.email);
+    audit('auth.2fa_failed', { userId: user.id, ip, detail: { step: 'enroll' } });
+    error = 'That code is not valid. Check the code in your app and try again.';
+    Astro.response.status = 401;
+  } else {
+    codes = generateRecoveryCodes(user.id);
+    const rotated = rotateSession(session.id, { mfaPassed: true, cookies: Astro.cookies });
+    if (!rotated) return Astro.redirect('/admin/login', 303);
+    recordSuccess(user.email);
+    audit('auth.totp_enrolled', { userId: user.id, ip });
+    audit('auth.recovery_codes_generated', { userId: user.id, ip });
+  }
+}
+
+const secret = codes ? null : pendingTotpSecret(user.id);
+const qr = secret ? await totpQrSvg(secret, user.email) : '';
+const groups = secret ? secret.match(/.{1,4}/g)!.join(' ') : '';
+---
+<Admin title={codes ? 'Recovery codes' : 'Set up two-factor'}>
+  {codes ? (
+    <>
+      <h1>Save your recovery codes</h1>
+      <div class="admin-card">
+        <p>Two-factor is on. Each code below works <strong>once</strong> if you lose your authenticator. They are shown only now: store them somewhere safe.</p>
+        <ol class="recovery-codes">
+          {codes.map((c) => <li><code>{c}</code></li>)}
+        </ol>
+        <p><a class="admin-button" href="/admin">I’ve saved them, continue</a></p>
+      </div>
+    </>
+  ) : (
+    <>
+      <h1>Set up two-factor</h1>
+      <form class="admin-card" method="post" action="/admin/2fa/setup">
+        {error && <p class="admin-error" role="alert">{error}</p>}
+        <p>Every editor needs an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password and similar). Scan this code, then enter the 6-digit number it shows.</p>
+        <div class="totp-qr" role="img" aria-label="QR code for your authenticator app" set:html={qr} />
+        <p class="admin-note">Can’t scan? Enter this key by hand (time-based, 6 digits):</p>
+        <p><code class="totp-secret">{groups}</code></p>
+        <label for="code">6-digit code</label>
+        <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required maxlength="10" />
+        <button type="submit">Confirm and finish</button>
+      </form>
+    </>
+  )}
+</Admin>

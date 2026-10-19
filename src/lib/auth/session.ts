@@ -78,6 +78,8 @@ export function touchSession(session: Session): void {
  * Swap a session for a fresh token (call after sign-in steps and 2FA, so a token seen earlier is useless).
  * One transaction: the old row goes, a new random token is inserted keeping the original
  * created_at and expires_at, so rotating never extends the 7-day limit. Sets the cookie.
+ * Returns null when the old session is gone, expired, idle too long or its user is not active.
+ * Callers must use the returned session: `locals.session` still holds the old id.
  */
 export function rotateSession(oldId: string, opts: { mfaPassed: boolean; cookies: AstroCookies }): { token: string; session: Session } | null {
   const db = getDb();
@@ -87,11 +89,18 @@ export function rotateSession(oldId: string, opts: { mfaPassed: boolean; cookies
   let expiresAt = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
-    const old = db.prepare('SELECT user_id, created_at, expires_at, ip, user_agent FROM sessions WHERE id = ?').get(oldId) as
-      | { user_id: number; created_at: number; expires_at: number; ip: string | null; user_agent: string | null }
+    const old = db
+      .prepare(
+        `SELECT s.user_id, s.created_at, s.expires_at, s.last_seen_at, s.ip, s.user_agent, u.status
+           FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?`,
+      )
+      .get(oldId) as
+      | { user_id: number; created_at: number; expires_at: number; last_seen_at: number; ip: string | null; user_agent: string | null; status: string }
       | undefined;
-    if (!old || old.expires_at <= now) {
-      db.exec('ROLLBACK');
+    // Same checks as readSession: absolute limit, idle limit, and the user must still be active.
+    if (!old || old.expires_at <= now || old.last_seen_at + IDLE_MS <= now || old.status !== 'active') {
+      if (old) db.prepare('DELETE FROM sessions WHERE id = ?').run(oldId);
+      db.exec('COMMIT');
       return null;
     }
     db.prepare('DELETE FROM sessions WHERE id = ?').run(oldId);

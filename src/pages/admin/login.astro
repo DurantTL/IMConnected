@@ -1,16 +1,64 @@
 ---
 import Admin from '../../layouts/Admin.astro';
+import { SESSION_COOKIE, createSession, revokeSession, readSession, setSessionCookie } from '../../lib/auth/session';
+import { dummyVerify, verifyPassword } from '../../lib/auth/password';
+import { LOCKED_MESSAGE, isLocked, recordFailure } from '../../lib/auth/ratelimit';
+import { audit } from '../../lib/auth/audit';
+import { field, readForm } from '../../lib/auth/form';
+import { clientIp } from '../../lib/request';
+import { getDb } from '../../lib/db';
 export const prerender = false;
-// Placeholder: the real sign-in is wired up in the next editor issue.
+
+// Step 1 of sign-in: email + password. Success starts a session with mfa_passed=0 and goes to /admin/2fa.
+// Every failure (unknown email, wrong password, disabled or not-yet-active account) gives the same text.
+const BAD = 'Email or password is incorrect.';
+let error = '';
+let email = '';
+
+const existing = readSession(Astro.cookies.get(SESSION_COOKIE)?.value);
+if (Astro.request.method === 'GET' && existing?.session.mfaPassed) return Astro.redirect('/admin');
+
+if (Astro.request.method === 'POST') {
+  const form = await readForm(Astro.request);
+  email = form ? field(form, 'email', 320).trim().toLowerCase() : '';
+  const password = form ? field(form, 'password', 1024) : '';
+  const ip = clientIp(Astro.request, Astro.clientAddress);
+  if (isLocked(ip, email)) {
+    error = LOCKED_MESSAGE;
+    Astro.response.status = 429;
+  } else {
+    const user = email
+      ? (getDb().prepare(
+          `SELECT u.id, u.status, p.hash FROM users u LEFT JOIN password_credentials p ON p.user_id = u.id WHERE u.email = ?`,
+        ).get(email) as { id: number; status: string; hash: string | null } | undefined)
+      : undefined;
+    let ok = false;
+    if (user?.hash && user.status === 'active') ok = await verifyPassword(password, user.hash);
+    else await dummyVerify(password); // same scrypt cost whether or not the address exists
+    if (!ok) {
+      recordFailure(ip, email);
+      audit('auth.login_failed', { userId: user?.id ?? null, ip });
+      error = BAD;
+      Astro.response.status = 401;
+    } else {
+      if (existing) revokeSession(existing.session.id);
+      const { token } = createSession(user!.id, { ip, userAgent: Astro.request.headers.get('user-agent'), mfaPassed: false });
+      setSessionCookie(Astro.cookies, token);
+      audit('auth.password_ok', { userId: user!.id, ip });
+      return Astro.redirect('/admin/2fa', 303);
+    }
+  }
+}
 ---
 <Admin title="Sign in">
   <h1>Editor sign-in</h1>
-  <form class="admin-card" onsubmit="return false" aria-describedby="soon">
-    <p id="soon" class="admin-note">Sign-in isn’t switched on yet. Accounts are by invitation only.</p>
+  <form class="admin-card" method="post" action="/admin/login">
+    {error && <p class="admin-error" role="alert">{error}</p>}
+    <p class="admin-note">Accounts are by invitation only.</p>
     <label for="email">Email</label>
-    <input id="email" type="email" autocomplete="username" disabled />
+    <input id="email" name="email" type="email" autocomplete="username" required maxlength="320" value={email} />
     <label for="password">Password</label>
-    <input id="password" type="password" autocomplete="current-password" disabled />
-    <button type="submit" disabled>Sign in</button>
+    <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" />
+    <button type="submit">Continue</button>
   </form>
 </Admin>

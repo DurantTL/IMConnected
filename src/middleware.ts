@@ -1,5 +1,6 @@
 import { defineMiddleware } from 'astro:middleware';
 import { getDb } from './lib/db';
+import { authSecretOk } from './lib/auth/secret';
 import { SESSION_COOKIE, readSession, touchSession, clearSessionCookie } from './lib/auth/session';
 
 // Runs for every request, including while prerendering public pages at build time. For anything
@@ -7,22 +8,21 @@ import { SESSION_COOKIE, readSession, touchSession, clearSessionCookie } from '.
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-// Reachable with no session. Invite links are /admin/invite/<token>, hence the prefix.
+// Reachable with no session. Invite links are exactly /admin/invite/<token> (one segment), so a
+// future /admin/invite page (an admin inviting an editor) stays behind sign-in.
 const OPEN_PAGES = ['/admin/login'];
-const OPEN_PAGE_PREFIXES = ['/admin/invite'];
+const INVITE_PATH = /^\/admin\/invite\/[^/]+$/;
 // Reachable with a session that has passed the first factor but not 2FA yet. EXACT paths only: the
 // later sign-in issues add theirs one by one (and enrollment handlers must also call canEnrollWithoutMfa).
-const MFA_PAGES = ['/admin/login', '/admin/2fa'];
+const MFA_PAGES = ['/admin/login', '/admin/2fa', '/admin/2fa/setup'];
 const MFA_API = ['/api/admin/logout'];
 // Sign-in API routes added by later issues (e.g. /api/admin/login) go here by exact path.
 // Logout is open so an expired or invalid session can still sign out and be sent to the login page.
 const OPEN_API = ['/api/admin/logout'];
 
-const underPrefix = (path: string, prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(p + '/'));
 const isOpen = (kind: 'page' | 'api', path: string) =>
-  kind === 'page' ? OPEN_PAGES.includes(path) || underPrefix(path, OPEN_PAGE_PREFIXES) : OPEN_API.includes(path);
-const mfaPending = (kind: 'page' | 'api', path: string) =>
-  kind === 'page' ? MFA_PAGES.includes(path) || underPrefix(path, OPEN_PAGE_PREFIXES) : MFA_API.includes(path);
+  kind === 'page' ? OPEN_PAGES.includes(path) || INVITE_PATH.test(path) : OPEN_API.includes(path);
+const mfaPending = (kind: 'page' | 'api', path: string) => (kind === 'page' ? MFA_PAGES.includes(path) : MFA_API.includes(path));
 
 function guardedKind(path: string): 'page' | 'api' | null {
   if (path === '/admin' || path.startsWith('/admin/')) return 'page';
@@ -83,6 +83,19 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const path = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
   const kind = guardedKind(path);
   if (!kind) return next();
+
+  // Without AUTH_SECRET (32+ characters) nothing under /admin runs: it protects the stored TOTP secrets.
+  if (!authSecretOk()) {
+    console.error('[auth] AUTH_SECRET is missing or shorter than 32 characters; /admin is disabled.');
+    return kind === 'api'
+      ? json(503, 'The editor dashboard is not configured.')
+      : harden(
+          new Response(
+            '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Editors unavailable</title><body style="font-family:system-ui;max-width:640px;margin:48px auto;padding:0 16px"><h1>Editor dashboard not configured</h1><p>The server is missing its AUTH_SECRET setting. The public site is not affected. Please tell the site administrator.</p></body>',
+            { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+          ),
+        );
+  }
 
   // A broken database must only take /admin down, never the public site.
   try {
