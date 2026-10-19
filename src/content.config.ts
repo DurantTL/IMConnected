@@ -18,11 +18,11 @@ const stories = defineCollection({
     authorTitle: z.string().optional(),
     church: z.string().optional(),
     date: z.coerce.date(),
-    /** Path under /public, e.g. /images/stories/my-story/photo-1.jpg */
+    /** Path under /public (e.g. /images/stories/my-story/photo-1.jpg) or an absolute https:// URL */
     image: z.string().optional(),
     imageAlt: z.string().optional(),
     photoCredit: z.string().optional(),
-    /** Extra photos shown in a gallery below the story */
+    /** Extra photos shown in a gallery below the story (paths or https:// URLs) */
     photos: z.array(z.string()).default([]),
     featured: z.boolean().default(false),
     draft: z.boolean().default(false),

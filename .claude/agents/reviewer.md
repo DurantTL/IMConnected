@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Read-only review of one IMConnected change (a PR or the current branch diff) against its issue and AGENTS.md. Use before opening or updating any code PR, and always for changes touching the submit endpoint, escaping, photo checks, the GitHub token, or submitter contact details.
+description: Read-only review of one IMConnected change (a PR or the current branch diff) against its issue and AGENTS.md. Use before opening or updating any code PR, and always for changes touching the submit or publish endpoint, escaping, photo checks, the GitHub token, or submitter contact details.
 tools: Read, Grep, Glob, Bash
 model: opus
 ---
@@ -23,7 +23,12 @@ you to review the current branch against `origin/main`.
      the story file, the built site, or logs;
    - schema drift between `src/content.config.ts`, `.pages.yml`,
      `src/lib/submission.ts`, `src/lib/site.ts` and the README example;
-   - prerendering: only `src/pages/api/submit.ts` sets `prerender = false`;
+   - `/api/publish`: the bearer token is compared in constant time, 503 when
+     `PUBLISH_TOKEN` is unset or short, CORS only for `PUBLISH_ORIGINS`, every
+     story field still goes through the escaping and control-character
+     stripping, photo checks, nothing is written when any story is invalid,
+     and neither the token nor story text reaches logs;
+   - prerendering: only `src/pages/api/submit.ts` and `src/pages/api/publish.ts` set `prerender = false`;
    - human-only gates in `AGENTS.md` that the change might cross.
 3. Report only actionable findings, most severe first, each with `path:line`,
    what is wrong, a concrete failure scenario, and a suggested fix. List

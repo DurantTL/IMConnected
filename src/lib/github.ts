@@ -87,3 +87,53 @@ export async function openPullRequest(
   }
   return { number: pr.number, url: pr.html_url };
 }
+
+/** True when the file exists on the base branch. Any non-200/404 answer is an error. */
+export async function fileExistsOnBase(cfg: GitHubConfig, path: string): Promise<boolean> {
+  const url = `${cfg.apiUrl}/repos/${cfg.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(cfg.baseBranch)}`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'imconnected-submissions',
+    },
+  });
+  await res.arrayBuffer().catch(() => {});
+  if (res.status === 200) return true;
+  if (res.status === 404) return false;
+  throw new Error(`GitHub GET contents → ${res.status}`);
+}
+
+/**
+ * Commits files straight to the base branch in one commit (no pull request).
+ * Blobs, tree on the current tip, commit, then a non-forced ref update. If the branch
+ * moved in the meantime, the tree and commit are rebuilt on the new tip once.
+ */
+export async function commitToBase(cfg: GitHubConfig, opts: { files: NewFile[]; message: string }): Promise<{ sha: string }> {
+  const entries = [];
+  for (const f of opts.files) {
+    const blob = await gh<{ sha: string }>(cfg, 'POST', '/git/blobs', { content: f.content, encoding: f.encoding });
+    entries.push({ path: f.path, mode: '100644', type: 'blob', sha: blob.sha });
+  }
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ref = await gh<{ object: { sha: string } }>(cfg, 'GET', `/git/ref/heads/${encodeURIComponent(cfg.baseBranch)}`);
+      const baseSha = ref.object.sha;
+      const baseCommit = await gh<{ tree: { sha: string } }>(cfg, 'GET', `/git/commits/${baseSha}`);
+      const tree = await gh<{ sha: string }>(cfg, 'POST', '/git/trees', { base_tree: baseCommit.tree.sha, tree: entries });
+      const commit = await gh<{ sha: string }>(cfg, 'POST', '/git/commits', {
+        message: opts.message,
+        tree: tree.sha,
+        parents: [baseSha],
+      });
+      await gh(cfg, 'PATCH', `/git/refs/heads/${encodeURIComponent(cfg.baseBranch)}`, { sha: commit.sha, force: false });
+      return { sha: commit.sha };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}

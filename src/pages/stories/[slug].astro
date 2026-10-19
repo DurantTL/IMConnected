@@ -30,7 +30,7 @@ const enc = encodeURIComponent;
     author: { '@type': 'Person', name: d.author },
     publisher: { '@type': 'Organization', name: SITE.publisher, url: SITE.publisherUrl },
     image: d.image ? new URL(d.image, Astro.site).href : undefined,
-  })} />
+  }).replace(/</g, '\\u003c')} />
   <div class="wrap">
     <article class="article" data-sec={d.section} data-pagefind-body>
       <div data-pagefind-ignore>
