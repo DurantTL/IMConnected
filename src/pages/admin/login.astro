@@ -1,0 +1,16 @@
+---
+import Admin from '../../layouts/Admin.astro';
+export const prerender = false;
+// Placeholder: the real sign-in is wired up in the next editor issue.
+---
+<Admin title="Sign in">
+  <h1>Editor sign-in</h1>
+  <form class="admin-card" onsubmit="return false" aria-describedby="soon">
+    <p id="soon" class="admin-note">Sign-in isn’t switched on yet. Accounts are by invitation only.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" disabled />
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" disabled />
+    <button type="submit" disabled>Sign in</button>
+  </form>
+</Admin>

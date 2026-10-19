@@ -1,0 +1,9 @@
+---
+import Admin from '../../layouts/Admin.astro';
+export const prerender = false;
+const user = Astro.locals.user;
+---
+<Admin title="Dashboard" current="dashboard">
+  <h1>Dashboard</h1>
+  <p class="admin-note">Welcome{user ? `, ${user.name}` : ''}. Drafts and publishing will appear here.</p>
+</Admin>

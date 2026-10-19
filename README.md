@@ -3,7 +3,7 @@
 A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission becomes a GitHub pull request, and merging the pull request publishes the story.
 
 - **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The only server code is `/api/submit` and `/api/publish`.
-- **Stories are Markdown files** in `src/content/stories/`. There's no database.
+- **Stories are Markdown files** in `src/content/stories/`. Accounts, sessions, drafts and the audit log for the editor dashboard live in a small SQLite file (see Editor dashboard); stories never do.
 - **Docker image**: on every push to `main`, an image is built and pushed to `ghcr.io/<owner>/imconnected`.
 - **Pagefind** builds a site search index at build time, so search needs no server.
 - **Pages CMS** (optional) gives editors a web form for stories, so they don't have to edit files on GitHub.
@@ -172,6 +172,20 @@ node scripts/mock-github.mjs &                  # fake GitHub API on :4010
 GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http://localhost:4010 npm start
 # submissions are written to ./.mock-prs/<branch>/
 ```
+
+## Editor dashboard
+
+Editors sign in at `/admin` (invite-only; sign-in methods arrive over the epic in issue #7). The pages are server-rendered, `noindex`, and never cached.
+
+- **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. Add that volume to your backups; stories themselves are safe in git. Migrations in `src/lib/db/migrations/` are applied by `scripts/migrate.mjs` when the server starts (`npm start` and the Docker `CMD`), once each; the server also applies any pending ones on first use.
+- **First admin.** Run once on the server (the email and name are yours; the output is a 24-hour, single-use invite link):
+
+  ```bash
+  docker compose exec imconnected node scripts/create-admin.mjs you@example.org "Your Name"
+  ```
+
+  Only a hash of the invite token is stored, so the link can't be shown again. Run the command again to get a fresh one.
+- **Local testing.** `DATA_DIR=/tmp/imc-data npm start`, then `DATA_DIR=/tmp/imc-data node scripts/create-admin.mjs test@example.com "Test Admin"`. Use synthetic data and delete the folder afterwards.
 
 ## Security and spam notes
 

@@ -24,8 +24,16 @@ ENV NODE_ENV=production \
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
+# create-admin.mjs and the migrations it applies (run with `docker compose exec`)
+COPY scripts ./scripts
+COPY src/lib/db ./src/lib/db
+# SQLite database lives on a volume at /data
+RUN mkdir -p /data && chown node:node /data
+ENV DATA_DIR=/data
+VOLUME /data
 USER node
 EXPOSE 4321
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD wget -qO- http://127.0.0.1:4321/ >/dev/null || exit 1
-CMD ["node", "dist/server/entry.mjs"]
+# Create/migrate the database first, then start the server
+CMD ["sh", "-c", "node scripts/migrate.mjs && exec node dist/server/entry.mjs"]

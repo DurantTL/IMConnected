@@ -4,7 +4,12 @@ services:
     container_name: imconnected
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - imconnected-data:/data
     ports:
       - "4321:4321"
     # To update after a merge:  docker compose pull && docker compose up -d
     # (xCloud does this automatically when the deploy branch moves; see the README)
+
+volumes:
+  imconnected-data:
