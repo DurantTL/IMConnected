@@ -6,7 +6,7 @@ import { SITE } from '../lib/site';
 // Strips characters XML 1.0 forbids (one stray control character would break the whole feed), then escapes.
 const xml = (v: string) =>
   v
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
 export const GET: APIRoute = async ({ site }) => {
