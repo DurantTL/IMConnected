@@ -3,7 +3,7 @@
 // Usage: node scripts/reset-2fa.mjs <email>
 //   Docker: docker compose exec imconnected node scripts/reset-2fa.mjs <email>
 // A PERSON runs this on the server, only after confirming the editor's identity out of band (for
-// example a call), and right before the editor signs in. It deletes the authenticator, the recovery
+// example a call), and right before the editor signs in. It deletes the authenticator, the passkeys, the recovery
 // codes and every session of that user, in one transaction. The editor's password stays; at the next
 // sign-in they enroll a new authenticator and get new recovery codes.
 import path from 'node:path';
@@ -29,13 +29,15 @@ if (!user) {
 db.exec('BEGIN IMMEDIATE');
 try {
   const t = db.prepare('DELETE FROM totp_credentials WHERE user_id = ?').run(user.id);
+  const k = db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(user.id);
+  db.prepare('DELETE FROM webauthn_challenges WHERE user_id = ?').run(user.id);
   const r = db.prepare('DELETE FROM recovery_codes WHERE user_id = ?').run(user.id);
   const s = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
   db.prepare('INSERT INTO audit_log (at, user_id, action, target, detail, ip) VALUES (?, NULL, ?, ?, ?, NULL)').run(
-    Date.now(), 'admin.reset_2fa', `user:${user.id}`, JSON.stringify({ authenticators: Number(t.changes), recoveryCodes: Number(r.changes), sessions: Number(s.changes) }),
+    Date.now(), 'admin.reset_2fa', `user:${user.id}`, JSON.stringify({ authenticators: Number(t.changes), passkeys: Number(k.changes), recoveryCodes: Number(r.changes), sessions: Number(s.changes) }),
   );
   db.exec('COMMIT');
-  console.log(`Reset two-factor for user ${user.id}: removed ${t.changes} authenticator, ${r.changes} recovery codes, ${s.changes} sessions. They enroll a new authenticator at their next sign-in.`);
+  console.log(`Reset two-factor for user ${user.id}: removed ${t.changes} authenticator, ${k.changes} passkeys, ${r.changes} recovery codes, ${s.changes} sessions. They enroll a new authenticator or passkey at their next sign-in.`);
 } catch (err) {
   db.exec('ROLLBACK');
   throw err;
