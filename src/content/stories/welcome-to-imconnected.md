@@ -1,14 +1,13 @@
 ---
-title: "Welcome to IMConnected"
-dek: "A new home for stories from the churches, schools and ministries of the Iowa-Missouri Conference — and a place for you to share yours."
+title: Welcome to IMConnected
+dek: A new home for stories from the churches, schools and ministries of the
+  Iowa-Missouri Conference — and a place for you to share yours.
 section: features
-author: "IMConnected Editorial Team"
+author: IMConnected Editorial Team
 date: 2026-10-16
 featured: true
+draft: false
 ---
-
-**SAMPLE STORY — replace or delete before launch.**
-
 IMConnected is a story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. It gathers news, features and testimonies from across both states in one place, so members can see how God is working in congregations beyond their own.
 
 ## Share what God is doing
@@ -26,3 +25,4 @@ Every submission is reviewed by the communication department before it is publis
 - **Kids** content for younger readers
 
 > “Let your light so shine before men, that they may see your good works, and glorify your Father which is in heaven.” — Matthew 5:16 (KJV)
+
