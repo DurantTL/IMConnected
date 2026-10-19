@@ -227,20 +227,22 @@ export async function finishAuthentication(
       credential: {
         id: row.id,
         publicKey: new Uint8Array(Buffer.from(row.public_key, 'base64url')),
-        counter: row.counter,
+        counter: 0, // the library checks the counter BEFORE the signature; we check it ourselves after
         transports: transportsOf(row.transports),
       },
     });
     if (!v.verified) return { status: 'invalid', userId: row.user_id };
+    // A counter that did not go forward (when either value is non-zero) means a cloned authenticator.
+    // Only a response with a valid signature can raise this, so a forged one can't cause false alarms.
+    const next = v.authenticationInfo.newCounter;
+    if ((next > 0 || row.counter > 0) && next <= row.counter) return { status: 'counter', userId: row.user_id };
     // Conditional on the stored counter, so a parallel use of the same credential can't both advance it.
     const upd = db
       .prepare('UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ? AND counter = ?')
       .run(v.authenticationInfo.newCounter, Date.now(), row.id, row.counter);
     if (Number(upd.changes) !== 1) return { status: 'counter', userId: row.user_id };
     return { status: 'ok', userId: row.user_id, email: row.email, passkeyId: row.id };
-  } catch (err) {
-    // The library refuses a counter that did not go forward when either value is non-zero (a cloned authenticator).
-    if (err instanceof Error && /counter/i.test(err.message)) return { status: 'counter', userId: row.user_id };
+  } catch {
     return { status: 'invalid', userId: row.user_id };
   }
 }

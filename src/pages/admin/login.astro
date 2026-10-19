@@ -2,7 +2,7 @@
 import Admin from '../../layouts/Admin.astro';
 import { SESSION_COOKIE, createSession, revokeSession, readSession, setSessionCookie } from '../../lib/auth/session';
 import { dummyVerify, verifyPassword } from '../../lib/auth/password';
-import { LOCKED_MESSAGE, isAccountLocked, isIpLocked, isLocked, recordSuccess, releaseAttempt, reserveAccountAttempt, reserveAttempt, reserveIpAttempt } from '../../lib/auth/ratelimit';
+import { LOCKED_MESSAGE, clearOptionsRequests, isAccountLocked, isIpLocked, isLocked, recordSuccess, releaseAttempt, reserveAccountAttempt, reserveAttempt, reserveIpAttempt } from '../../lib/auth/ratelimit';
 import { finishAuthentication, parseJson, passkeysEnabled } from '../../lib/auth/passkeys';
 import { audit } from '../../lib/auth/audit';
 import { field, readForm } from '../../lib/auth/form';
@@ -40,6 +40,7 @@ if (Astro.request.method === 'POST') {
       if (res.status === 'ok') {
         releaseAttempt(reserved);
         recordSuccess(res.email);
+        clearOptionsRequests(ip);
         if (existing) revokeSession(existing.session.id);
         const { token } = createSession(res.userId, { ip, userAgent: Astro.request.headers.get('user-agent'), mfaPassed: true });
         setSessionCookie(Astro.cookies, token);

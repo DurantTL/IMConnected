@@ -73,3 +73,21 @@ export function reserveIpAttempt(ip: string): number[] {
 export function reserveAccountAttempt(email: string): number[] {
   return [Number(getDb().prepare('INSERT INTO login_attempts (key, at, ok) VALUES (?, ?, 0)').run(accountKey(email), Date.now()).lastInsertRowid)];
 }
+
+// Requests for passkey sign-in options (an unauthenticated endpoint that stores a challenge each time).
+// Counted per IP under their own key, separate from the failure counters, so asking for options can't
+// lock anyone out of signing in and a flood from one IP can't fill the shared challenge table.
+export const MAX_OPTIONS_PER_IP = 20;
+const optionsKey = (ip: string) => `pkopt:${ip}`;
+
+/** Count one options request; false (and not counted) once the IP has made 20 in the last 15 minutes. */
+export function reserveOptionsRequest(ip: string): boolean {
+  if (failures(optionsKey(ip)) >= MAX_OPTIONS_PER_IP) return false;
+  getDb().prepare('INSERT INTO login_attempts (key, at, ok) VALUES (?, ?, 0)').run(optionsKey(ip), Date.now());
+  return true;
+}
+
+/** A completed passkey sign-in from this IP clears its options requests. */
+export function clearOptionsRequests(ip: string): void {
+  getDb().prepare('DELETE FROM login_attempts WHERE key = ?').run(optionsKey(ip));
+}

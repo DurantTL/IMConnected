@@ -186,6 +186,23 @@ try {
   const newCookie = (await context.cookies()).find((c) => c.name === '__Host-imc_session')?.value;
   check('session id rotated after the passkey second factor', !!newCookie && newCookie !== pendingCookie);
 
+  // 5b. A 'login' assertion can't be used as a 'fresh' confirmation
+  {
+    const codesBefore = auditCount('auth.recovery_codes_generated');
+    const res = await page.evaluate(async () => {
+      const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const unb64 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+      const { options } = await (await fetch('/api/admin/passkeys/login/options', { method: 'POST' })).json();
+      const cred = await navigator.credentials.get({ publicKey: { challenge: unb64(options.challenge), rpId: options.rpId, userVerification: 'required', allowCredentials: [] } });
+      const r = cred.response;
+      const assertion = { id: cred.id, rawId: b64(cred.rawId), type: cred.type, clientExtensionResults: {}, response: {
+        clientDataJSON: b64(r.clientDataJSON), authenticatorData: b64(r.authenticatorData), signature: b64(r.signature), userHandle: r.userHandle ? b64(r.userHandle) : undefined } };
+      const out = await fetch('/admin/account', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'recovery', code: '', assertion: JSON.stringify(assertion) }) });
+      return { status: out.status, html: await out.text() };
+    });
+    check('a login-purpose assertion is rejected as a fresh confirmation (401, no new recovery codes)', res.status === 401 && auditCount('auth.recovery_codes_generated') === codesBefore, String(res.status));
+  }
+
   // 6. An expired challenge is rejected
   await signOut();
   await page.route('**/admin/login', async (route) => {
@@ -220,6 +237,10 @@ try {
     const statuses = [];
     for (let i = 0; i < 11; i++) statuses.push((await c.post('/admin/login', { passkey: JSON.stringify({ id: 'junk' + i, response: { clientDataJSON: 'e30' } }) })).status);
     check('passkey sign-in attempts are rate limited per IP (10 failures, then 429)', statuses.slice(0, 10).every((s) => s === 401) && statuses[10] === 429, statuses.join(','));
+    const flood = [];
+    for (let i = 0; i < 25; i++) flood.push((await new Client('10.11.0.1').req('POST', '/api/admin/passkeys/login/options')).status);
+    check('25 rapid options requests from one IP: the first 20 pass, the 21st is 429', flood.slice(0, 20).every((s) => s === 200) && flood.slice(20).every((s) => s === 429), flood.join(','));
+    check('...and another IP still gets options', (await new Client('10.11.0.2').req('POST', '/api/admin/passkeys/login/options')).status === 200);
     const ok = await new Client('10.9.0.2').req('POST', '/api/admin/passkeys/login/options');
     check('another IP is not affected', ok.status === 200);
     const locked = await c.req('POST', '/api/admin/passkeys/login/options');
@@ -230,7 +251,24 @@ try {
   {
     const original = q('SELECT counter c FROM passkeys')[0].c;
     run('UPDATE passkeys SET counter = 100000');
+    // First a FORGED response (garbage signature) against that high stored counter: a plain failure, not a counter alarm.
+    const failedBefore = auditCount('auth.passkey_failed');
+    await page.route('**/admin/login', async (route) => {
+      const req = route.request();
+      if (req.method() !== 'POST') return route.continue();
+      const params = new URLSearchParams(req.postData() || '');
+      const body = JSON.parse(params.get('passkey') || '{}');
+      body.response.signature = Buffer.alloc(70, 7).toString('base64url');
+      params.set('passkey', JSON.stringify(body));
+      await route.continue({ postData: params.toString() });
+    });
     await page.goto(BASE + '/admin/login');
+    await page.click('button[data-passkey=login]');
+    await page.waitForSelector('[role=alert]:visible');
+    await page.unroute('**/admin/login');
+    check('a forged response (garbage signature, low counter) is audited as a failure, not a counter rejection',
+      auditCount('auth.passkey_counter_rejected') === 0 && auditCount('auth.passkey_failed') === failedBefore + 1);
+    // Now the real authenticator, whose counter is below the (tampered) stored one.    await page.goto(BASE + '/admin/login');
     await page.click('button[data-passkey=login]');
     await page.waitForSelector('[role=alert]:visible');
     check('a passkey whose counter went backwards is refused', /could not be verified/.test(await alertText()) && page.url().endsWith('/admin/login'), await alertText());

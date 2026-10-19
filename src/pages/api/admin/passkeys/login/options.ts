@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { authenticationOptions, passkeysEnabled } from '../../../../../lib/auth/passkeys';
-import { isIpLocked } from '../../../../../lib/auth/ratelimit';
+import { isIpLocked, reserveOptionsRequest } from '../../../../../lib/auth/ratelimit';
 import { clientIp } from '../../../../../lib/request';
 
 export const prerender = false;
@@ -12,7 +12,9 @@ const reply = (status: number, body: unknown) =>
 
 export const POST: APIRoute = async ({ request, clientAddress }) => {
   if (!passkeysEnabled()) return reply(503, { ok: false, error: 'Passkeys are not available on this site.' });
-  if (isIpLocked(clientIp(request, clientAddress))) return reply(429, { ok: false, error: 'Too many attempts. Please wait 15 minutes and try again.' });
+  const ip = clientIp(request, clientAddress);
+  // Each request stores a challenge, so it is limited per IP (20 in 15 minutes); the global cap is only a backstop.
+  if (isIpLocked(ip) || !reserveOptionsRequest(ip)) return reply(429, { ok: false, error: 'Too many attempts. Please wait 15 minutes and try again.' });
   const options = await authenticationOptions('login', null);
   return options ? reply(200, { ok: true, options }) : reply(429, { ok: false, error: 'Busy. Please try again in a few minutes.' });
 };
