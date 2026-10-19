@@ -50,7 +50,7 @@ GitHub → Settings → Developer settings → **Fine-grained tokens** → Gener
 
 ### 3. Image builds
 
-The Action at `.github/workflows/docker.yml` builds the image and pushes it to GHCR. There's nothing to configure. To set the canonical URL, add a repository **variable** `SITE_URL` (Settings → Secrets and variables → Actions → Variables). Otherwise it defaults to `https://stories.imsda.org`.
+The Action at `.github/workflows/docker.yml` builds the image and pushes it to GHCR. There's nothing to configure. To set the canonical URL, add a repository **variable** `SITE_URL` (Settings → Secrets and variables → Actions → Variables). Otherwise it defaults to `https://stories.imadventist.org`.
 
 If the GHCR package is private, run `docker login ghcr.io` on the server first, using a token with `read:packages`.
 
@@ -63,7 +63,15 @@ docker compose up -d
 
 The container listens on port **4321**. Put it behind your reverse proxy (Nginx Proxy Manager, Cloudflare Tunnel, Traefik…). Set `TRUST_PROXY=true` so the rate limiter sees real visitor IPs.
 
-**Updating after a merge:** run `docker compose pull && docker compose up -d`, or let an image auto-updater you already run on that host handle it.
+**Updating after a merge:** the server never builds the site; it only pulls the finished image. After each merge to `main`, the Action builds and publishes the image, then moves the **`deploy`** branch to that commit. Point your host's git auto-deploy (xCloud) at the `deploy` branch, not `main`, with this deploy command:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Watching `main` instead would start the deploy about two minutes before the new image exists, and the server would pull the previous version. To update by hand, run the same command. If the Action's `deploy` job fails, the server stays on the previous version until the next merge; re-run the newest "Build & publish image" run from the Actions tab (older runs skip publishing on purpose).
+
+The site address defaults to `https://stories.imadventist.org`. If you set `SITE_URL` anywhere (the server's `.env` or the repository variable), it overrides that default, so keep both on the current domain.
 
 ### 5. (Optional) Editor-friendly CMS
 

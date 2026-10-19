@@ -5,7 +5,7 @@ import node from '@astrojs/node';
 // Pages are prerendered to static HTML at build time.
 // Only /api/submit runs on the server (it opts out with `prerender = false`).
 export default defineConfig({
-  site: process.env.SITE_URL || 'https://stories.imsda.org',
+  site: process.env.SITE_URL || 'https://stories.imadventist.org',
   output: 'static',
   adapter: node({ mode: 'standalone' }),
   trailingSlash: 'ignore',

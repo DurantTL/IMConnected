@@ -5,7 +5,7 @@ import { getFeedItems } from '../lib/feed';
 import { SITE } from '../lib/site';
 
 export const GET: APIRoute = async ({ site }) => {
-  const base = site ?? new URL('https://stories.imsda.org');
+  const base = site ?? new URL('https://stories.imadventist.org');
   const body = {
     version: 1,
     title: SITE.name,
