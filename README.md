@@ -69,7 +69,9 @@ The container listens on port **4321**. Put it behind your reverse proxy (Nginx 
 docker compose pull && docker compose up -d
 ```
 
-Watching `main` instead would start the deploy about two minutes before the new image exists, and the server would pull the previous version. To update by hand, run the same command.
+Watching `main` instead would start the deploy about two minutes before the new image exists, and the server would pull the previous version. To update by hand, run the same command. If the Action's `deploy` job fails, the server stays on the previous version until the next merge; re-run the newest "Build & publish image" run from the Actions tab (older runs skip publishing on purpose).
+
+The site address defaults to `https://stories.imadventist.org`. If you set `SITE_URL` anywhere (the server's `.env` or the repository variable), it overrides that default, so keep both on the current domain.
 
 ### 5. (Optional) Editor-friendly CMS
 
