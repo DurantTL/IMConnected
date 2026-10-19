@@ -67,6 +67,7 @@ function withTimeout<T>(p: Promise<T>): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
+const BAD_NAME = new Set(['EBADNAME', 'EBADQUERY', 'EFORMERR']);
 const code = (e: unknown) => (e as { code?: string })?.code;
 
 /**
@@ -83,7 +84,7 @@ export async function domainCanReceiveMail(domain: string, resolver: Resolver = 
     if (real.length > 0) return 'ok';
     if (mx.length > 0) return 'missing'; // a "null MX" (RFC 7505): the domain accepts no mail
   } catch (e) {
-    if (code(e) === 'ENOTFOUND') return 'missing'; // NXDOMAIN
+    if (code(e) === 'ENOTFOUND' || BAD_NAME.has(code(e) ?? '')) return 'missing'; // NXDOMAIN or a name DNS refuses to parse
     if (code(e) !== 'ENODATA') return 'unknown'; // timeout, SERVFAIL, refused...
   }
 
@@ -93,18 +94,24 @@ export async function domainCanReceiveMail(domain: string, resolver: Resolver = 
       const records = await withTimeout(lookup.call(resolver, domain));
       if (records.length > 0) return 'ok';
     } catch (e) {
-      if (code(e) !== 'ENODATA' && code(e) !== 'ENOTFOUND') sawFailure = true;
+      if (code(e) !== 'ENODATA' && code(e) !== 'ENOTFOUND' && !BAD_NAME.has(code(e) ?? '')) sawFailure = true;
     }
   }
   return sawFailure ? 'unknown' : 'missing';
 }
 
 /** Throws EmailCheckError (shown to the submitter) when the address should be refused. */
+const HOSTNAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const BAD_LOCAL = /[<>",;:()[\]\\\s]/;
+
 export async function checkEmail(email: string, resolver: Resolver = systemResolver): Promise<void> {
+  const at = email.lastIndexOf('@');
+  if (at < 1 || BAD_LOCAL.test(email.slice(0, at))) throw new EmailCheckError('Please enter a valid email address.');
   const domain = emailDomain(email);
+  if (!HOSTNAME.test(domain)) throw new EmailCheckError("We couldn't find that email domain. Please check the spelling.");
   const suggestion = suggestDomain(domain);
   if (suggestion) {
-    throw new EmailCheckError(`Did you mean ${email.slice(0, email.lastIndexOf('@') + 1)}${suggestion}? Please check the spelling of your email address.`);
+    throw new EmailCheckError(`Did you mean @${suggestion}? Please check the spelling of your email address.`);
   }
   if (isDisposableDomain(domain)) {
     throw new EmailCheckError("Please use a personal or church email address — temporary inboxes can't receive our confirmation.");

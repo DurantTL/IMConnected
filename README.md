@@ -179,7 +179,8 @@ GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http://localhost:4010 npm st
 1. In the Cloudflare dashboard open Turnstile and add a widget for the site's hostname (managed mode).
 2. Set the **secret key** as `TURNSTILE_SECRET_KEY` in the server's `.env`. With it unset the check is skipped (local dev); in production the server logs one warning at startup.
 3. Set the **site key** as a repository **variable** `PUBLIC_TURNSTILE_SITE_KEY` (Settings → Secrets and variables → Actions → Variables), not in `.env`. It is public and baked into the prerendered `/submit/` page at build time, so rebuild the image after changing it. When it is empty the widget isn't shown.
-4. If Cloudflare can't be reached the form answers 503 ("Please try again in a minute"); it fails closed.
+4. Setting `TURNSTILE_SECRET_KEY` without building the image with `PUBLIC_TURNSTILE_SITE_KEY` blocks every submission, because the form then has no widget to produce a token. Set both, or neither.
+5. If Cloudflare can't be reached the form answers 503 ("Please try again in a minute"); it fails closed.
 
 For local testing use Cloudflare's documented test keys: site key `1x00000000000000000000AA` (always passes) with secret `1x0000000000000000000000000000000AA`, and secret `2x0000000000000000000000000000000AA` (always fails). `TURNSTILE_VERIFY_URL` can point at a local stand-in if the network is blocked.
 
@@ -192,7 +193,7 @@ For local testing use Cloudflare's documented test keys: site key `1x00000000000
 
 Every submission PR is labelled `email-unverified` and its description has an **Email status** row (`confirmation sent`, or `not sent: <reason>`). The PR is created right away either way. When the submitter presses **Confirm** on the link in the email (valid 14 days; the button, not the link itself, confirms, so mail scanners can't do it), the label changes to `email-verified`. Editors can filter the PR list by these labels; an unverified story may still be good, so it is a signal, not a gate. The email address is never logged.
 
-**Testing the email flow locally:** run the mock GitHub API, a small local server that accepts `POST /emails`, and start the app with `EMAIL_API_URL=http://localhost:4011/emails`, `RESEND_API_KEY=test`, `EMAIL_FROM=test@example.com`, a made-up `EMAIL_CONFIRM_SECRET`. Never send real email from a test.
+**Testing the email flow locally:** run the mock GitHub API (`node scripts/mock-github.mjs`), the mock Resend endpoint (`node scripts/mock-email.mjs`, port 4011, prints each message as one JSON line; `GET /fail-on` makes it answer 500, `GET /fail-off` restores it), and start the app with `EMAIL_API_URL=http://localhost:4011/emails`, `RESEND_API_KEY=test`, `EMAIL_FROM=test@example.com`, a made-up `EMAIL_CONFIRM_SECRET`. Never send real email from a test.
 
 ## Security and spam notes
 

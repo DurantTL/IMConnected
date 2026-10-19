@@ -1,6 +1,8 @@
 // Cloudflare Turnstile server-side verification.
 const DEFAULT_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
+const SERVER_SIDE_CODES = new Set(['invalid-input-secret', 'missing-input-secret', 'internal-error']);
+
 export type TurnstileResult = 'skipped' | 'pass' | 'fail' | 'unreachable';
 
 /**
@@ -21,8 +23,16 @@ export async function verifyTurnstile(token: string, ip: string, env = process.e
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return 'unreachable';
-    const data = (await res.json()) as { success?: boolean };
-    return data.success === true ? 'pass' : 'fail';
+    const data = (await res.json()) as { success?: boolean; 'error-codes'?: string[] };
+    if (data.success === true) return 'pass';
+    const codes = Array.isArray(data['error-codes']) ? data['error-codes'].filter((c) => typeof c === 'string').slice(0, 10) : [];
+    console.warn(`[turnstile] verification failed: ${codes.join(',') || 'no error codes'}`);
+    // Our own configuration is wrong, not the visitor: don't blame them.
+    if (codes.some((c) => SERVER_SIDE_CODES.has(c))) {
+      console.error('[turnstile] Cloudflare rejected the secret or had an internal error: check TURNSTILE_SECRET_KEY');
+      return 'unreachable';
+    }
+    return 'fail';
   } catch {
     return 'unreachable';
   }

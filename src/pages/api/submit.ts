@@ -16,6 +16,10 @@ if (process.env.NODE_ENV === 'production' && !process.env.TURNSTILE_SECRET_KEY) 
   console.warn('[submit] TURNSTILE_SECRET_KEY is not set: the Turnstile check is off');
 }
 
+for (const v of ['TURNSTILE_VERIFY_URL', 'EMAIL_API_URL']) {
+  if (process.env.NODE_ENV === 'production' && process.env[v]) console.warn(`[submit] ${v} is set: it is for local testing only`);
+}
+
 const hits = new Map<string, number[]>();
 function rateLimited(ip: string): boolean {
   const now = Date.now();
