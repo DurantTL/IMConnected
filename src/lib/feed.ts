@@ -51,7 +51,7 @@ export function feedItem(story: Story, site: URL): FeedItem {
     imageAlt: d.imageAlt,
     photoCredit: d.photoCredit,
     photos: d.photos.map(abs),
-    photoAlts: d.photoAlts,
+    photoAlts: d.photos.map((_, i) => d.photoAlts[i] ?? ''),
     featured: d.featured,
   };
 }

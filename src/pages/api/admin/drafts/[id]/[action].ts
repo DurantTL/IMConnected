@@ -133,17 +133,28 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     const { sha } = await commitToBase(cfg, { files: built.files, message: publishMessage(built.title, user.name) });
     reserved = null; // the story is live from here on, whatever happens next
 
+    let r: { stale: boolean; wasRejected: boolean };
     try {
-      const r = markPublished(draft.id, { slug: built.slug, commit: sha, userId: user.id, lockedAt: lock.updatedAt });
-      audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: built.slug, commit: sha, newerEditsNotLive: r.stale }, ip });
-      retireUploads(draft.id, built.uploaded);
-      return redirectTo(page, { n: r.stale ? 'published_stale' : 'published' });
+      r = markPublished(draft.id, { slug: built.slug, commit: sha, userId: user.id, lockedAt: lock.updatedAt });
     } catch (err) {
       console.error('[drafts] published but could not record it', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
       return redirectTo(page, { e: 'live_not_recorded' });
     }
+    // Housekeeping after the story is recorded: a failure here must never read as "not recorded".
+    try {
+      audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: built.slug, commit: sha, newerEditsNotLive: r.stale }, ip });
+      if (r.wasRejected) audit('draft.restore', { userId: user.id, target: `draft:${draft.id}`, detail: { reason: 'rejected while publishing' }, ip });
+      retireUploads(draft.id, built.uploaded);
+    } catch (err) {
+      console.error('[drafts] published; cleanup afterwards failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+    }
+    return redirectTo(page, { n: r.stale ? 'published_stale' : 'published' });
   } catch (err) {
     if (err instanceof EditorError) return redirectTo(page, { e: err.code });
+    // Give the slug back only when GitHub definitely refused the commit (4xx). After a network error or a
+    // 5xx the commit may still have landed, so the reservation stays and a retry overwrites the same slug.
+    const status = (err as { status?: unknown }).status;
+    if (!(typeof status === 'number' && status >= 400 && status < 500)) reserved = null;
     console.error('[drafts] publish failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     return redirectTo(page, { e: 'publish_failed' });
   } finally {

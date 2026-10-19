@@ -475,6 +475,57 @@ async function mockCommit(files) {
   check('publishing again makes the newer edits live', r.params.get('n') === 'published' && readCommitted(draftRow(T).published_commit, `src/content/stories/${t.slug}.md`).includes('Edited while the publish was running.') && draftRow(T).status === 'published');
 }
 
+// ================= rejected mid-publish, GitHub refusals, ?n= lookup =================
+{
+  const mk = async (title) => { const id = idOf(await c1.form('/api/admin/drafts/new', {})); await c1.json(`/api/admin/drafts/${id}/save`, { version: version(id), ...baseFields({ title, body: 'A short story body for the refusal tests.' }) }); return id; };
+  let r = await c1.get('/admin/published?n=constructor');
+  check('?n= with a prototype-style name or any other text shows nothing', !/class="admin-ok"/.test(r.text) && !(await c1.get('/admin/published?n=hello+there')).text.includes('hello there'));
+  r = await c1.get(`/admin/drafts/${A}?n=constructor`);
+  check('...also on the editor page', !/class="admin-ok"/.test(r.text));
+
+  // rejected while the commit is running
+  const R = await mk('Rejected During Publish');
+  await mock('POST', '/__mock/delay', { ms: 1800 });
+  const before = commits();
+  const pR = c1.form(`/api/admin/drafts/${R}/publish`, { version: version(R) });
+  await new Promise((x) => setTimeout(x, 600));
+  r = await c2.form(`/api/admin/drafts/${R}/reject`, { version: version(R), note: 'Rejected mid-publish (synthetic).' });
+  check('another editor who reloaded can reject while the commit runs', r.params.get('n') === 'rejected' && draftRow(R).status === 'rejected');
+  const resR = await pR;
+  await mock('POST', '/__mock/delay', { ms: 0 });
+  const dR = draftRow(R);
+  check('the story is live, so the draft returns to in review linked to its slug and commit (note kept)', resR.params.get('n') === 'published_stale' && dR.status === 'in_review' && dR.rejected_at === null && dR.slug === '2026-10-19-rejected-during-publish' && !!dR.published_commit && dR.reject_note.startsWith('Rejected mid-publish'), JSON.stringify([resR.loc, dR.status, dR.slug]));
+  check('...and the editor sees the stale notice', (await c1.get(`/admin/drafts/${R}?n=published_stale`)).text.includes('not live yet'));
+  check('...and the restore is audited', q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.restore' AND target = ? AND detail LIKE '%rejected while publishing%'", `draft:${R}`)[0].n === 1);
+  const shaFirst = dR.published_commit;
+  await c1.json(`/api/admin/drafts/${R}/save`, { version: version(R), ...baseFields({ title: 'Rejected During Publish', body: 'Second version after the mid-publish reject.' }) });
+  r = await c1.form(`/api/admin/drafts/${R}/publish`, { version: version(R) });
+  const dR2 = draftRow(R);
+  check('publishing again overwrites the same slug', r.params.get('n') === 'published' && dR2.slug === dR.slug && dR2.published_commit !== shaFirst && readCommitted(dR2.published_commit, `src/content/stories/${dR.slug}.md`).includes('Second version after'));
+  check('...no second story was created', newCommit(before).filter((c) => commitFiles(c).some((f) => f.startsWith('src/content/stories/2026-10-19-rejected-during-publish'))).length === 2 && q("SELECT COUNT(*) n FROM drafts WHERE slug LIKE '2026-10-19-rejected-during-publish%'")[0].n === 1);
+
+  // GitHub refuses the commit (422): the reservation is released and nothing is lost
+  const F = await mk('Refused By GitHub');
+  await c1.form(`/api/admin/drafts/${F}/photos`, { version: version(F), op: 'upload' }, [{ bytes: PNG_A, filename: 'keep.png' }]);
+  const fFile = path.join(DATA_DIR, 'uploads', q('SELECT path FROM draft_photos WHERE draft_id = ?', F)[0].path);
+  await mock('POST', '/__mock/fail', { status: 422 });
+  r = await c1.form(`/api/admin/drafts/${F}/publish`, { version: version(F) });
+  check('a 422 from GitHub reports "could not publish", frees the slug and leaves the draft editable', r.params.get('e') === 'publish_failed' && draftRow(F).slug === null && draftRow(F).status === 'in_review' && draftRow(F).published_commit === null, r.loc);
+  check('...and the uploaded photo is still there', fs.existsSync(fFile) && q('SELECT COUNT(*) n FROM draft_photos WHERE draft_id = ? AND path IS NOT NULL', F)[0].n === 1);
+  await mock('POST', '/__mock/fail', { status: 0 });
+  r = await c1.form(`/api/admin/drafts/${F}/publish`, { version: version(F) });
+  check('...and publishing works once GitHub accepts it', r.params.get('n') === 'published' && draftRow(F).slug === '2026-10-19-refused-by-github');
+
+  // a 5xx: the commit may have landed, so the slug stays reserved and a retry overwrites the same story
+  const G = await mk('Server Error From GitHub');
+  await mock('POST', '/__mock/fail', { status: 500 });
+  r = await c1.form(`/api/admin/drafts/${G}/publish`, { version: version(G) });
+  check('a 500 from GitHub reports "could not publish" but keeps the slug reserved', r.params.get('e') === 'publish_failed' && draftRow(G).slug === '2026-10-19-server-error-from-github' && draftRow(G).status === 'in_review', r.loc);
+  await mock('POST', '/__mock/fail', { status: 0 });
+  r = await c1.form(`/api/admin/drafts/${G}/publish`, { version: version(G) });
+  check('...the retry publishes to the same slug (no -2)', r.params.get('n') === 'published' && draftRow(G).slug === '2026-10-19-server-error-from-github');
+}
+
 // ================= audit log =================
 {
   const rows = q('SELECT action, target, detail FROM audit_log WHERE action LIKE ? ORDER BY id', 'draft.%');

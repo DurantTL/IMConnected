@@ -446,16 +446,19 @@ export function releaseSlug(id: number, slug: string): void {
  * saved since (someone reloaded and edited while the commit ran), the commit and slug are still recorded
  * and the story is live, but the draft stays in review and `stale` is true: the newer edits are not live.
  */
-export function markPublished(id: number, info: { slug: string; commit: string; userId: number; lockedAt: number }): { stale: boolean } {
+export function markPublished(id: number, info: { slug: string; commit: string; userId: number; lockedAt: number }): { stale: boolean; wasRejected: boolean } {
   const now = Date.now();
   const r = getDb()
     .prepare("UPDATE drafts SET status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
     .run(info.slug, info.commit, now, info.userId, Math.max(now, info.lockedAt + 1), info.userId, id, info.lockedAt);
-  if (Number(r.changes) === 1) return { stale: false };
+  if (Number(r.changes) === 1) return { stale: false, wasRejected: false };
+  // Changed while the commit ran. The story is live either way. A draft rejected meanwhile goes back to
+  // in review (its note stays) so it can be published again; the editor is told.
+  const wasRejected = (getDb().prepare('SELECT status FROM drafts WHERE id = ?').get(id) as { status: DraftStatus } | undefined)?.status === 'rejected';
   getDb()
-    .prepare('UPDATE drafts SET slug = ?, published_commit = ?, published_at = ?, published_by = ?, unpublished_at = NULL WHERE id = ?')
+    .prepare("UPDATE drafts SET slug = ?, published_commit = ?, published_at = ?, published_by = ?, unpublished_at = NULL, status = CASE WHEN status = 'rejected' THEN 'in_review' ELSE status END, rejected_at = NULL WHERE id = ?")
     .run(info.slug, info.commit, now, info.userId, id);
-  return { stale: true };
+  return { stale: true, wasRejected };
 }
 
 /**

@@ -24,4 +24,7 @@ export const NOTICES: Record<string, string> = {
 };
 
 /** Only an address that looks like an email gets a mailto: link. */
+/** The message for a ?n= code, or '' for anything that is not one of ours. */
+export const noticeText = (code: string | null | undefined): string => (code && Object.hasOwn(NOTICES, code) ? NOTICES[code] : '');
+
 export const looksLikeEmail = (v: string) => /^[^\s@<>"',;:?&]+@[^\s@<>"',;:?&]+\.[^\s@<>"',;:?&]+$/.test(v);

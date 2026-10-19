@@ -15,6 +15,7 @@ const commits = new Map();
 const prs = new Map(); // PR number -> { head, labels:Set }
 const directFiles = new Map(); // path -> Buffer, files committed straight to the base branch (newest wins)
 let tip = 'base';
+let failStatus = 0; // POST /__mock/fail {"status":422} makes every final ref update answer with that status until set to 0
 let delayMs = 0; // POST /__mock/delay {"ms":1500} slows the final ref update, to test edits made while a publish is in flight
 let n = 0;
 const id = () => (++n).toString(16).padStart(40, '0');
@@ -28,6 +29,7 @@ createServer(async (req, res) => {
   console.log(req.method, p);
 
   if (!req.headers.authorization?.startsWith('Bearer ')) return send(401, { message: 'Bad credentials' });
+  if (req.method === 'POST' && p === '/__mock/fail') { failStatus = Number(body.status) || 0; return send(200, { ok: true }); }
   if (req.method === 'POST' && p === '/__mock/delay') { delayMs = Number(body.ms) || 0; return send(200, { ok: true }); }
   if (req.method === 'GET' && p.startsWith('/git/ref/heads/')) return send(200, { object: { sha: tip } });
   if (req.method === 'GET' && p.startsWith('/git/commits/')) return send(200, { tree: { sha: commits.get(p.split('/').pop())?.tree ?? 'basetree' } });
@@ -40,6 +42,7 @@ createServer(async (req, res) => {
   if (req.method === 'PATCH' && p.startsWith('/git/refs/heads/')) {
     // Direct commit to the base branch (the publish API). Mirrors GitHub: non-fast-forward is refused.
     if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+    if (failStatus) return send(failStatus, { message: 'Mock failure' });
     const commit = commits.get(body.sha);
     if (!commit || commit.parents?.[0] !== tip) return send(422, { message: 'Update is not a fast forward' });
     const dir = join(OUT, 'direct', body.sha);

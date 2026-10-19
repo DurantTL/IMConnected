@@ -2,7 +2,7 @@
 import Admin from '../../layouts/Admin.astro';
 import { getStories } from '../../lib/stories';
 import { listLiveDrafts, listUnpublishedSlugs } from '../../lib/drafts';
-import { NOTICES, fmtTime, sectionLabel } from '../../lib/admin-ui';
+import { noticeText, fmtTime, sectionLabel } from '../../lib/admin-ui';
 import { errorText } from '../../lib/messages';
 import { siteUrl } from '../../lib/draft-http';
 export const prerender = false;
@@ -26,7 +26,7 @@ for (const d of listLiveDrafts()) {
 const list = [...rows.values()].sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
 
 const q = Astro.url.searchParams;
-const notice = NOTICES[q.get('n') ?? ''] ?? '';
+const notice = noticeText(q.get('n'));
 const error = errorText(q.get('e'));
 const base = siteUrl();
 ---
