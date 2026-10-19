@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { githubConfigFromEnv, commitToBase, fileExistsOnBase } from '../../lib/github';
 import { buildPublish, PublishError, PUBLISH_LIMITS } from '../../lib/publish';
 import { SECTIONS } from '../../lib/site';
+import { clientIp } from '../../lib/request';
 
 // Second server route (the other is /api/submit). Called by IMConnected Studio.
 export const prerender = false;
@@ -18,14 +19,6 @@ function rateLimited(ip: string): boolean {
   hits.set(ip, list);
   if (hits.size > 5000) hits.clear();
   return list.length > MAX_PER_WINDOW;
-}
-
-function clientIp(request: Request, fallback: string): string {
-  if (process.env.TRUST_PROXY === 'true') {
-    const fwd = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0];
-    if (fwd) return fwd.trim();
-  }
-  return fallback;
 }
 
 function siteUrl(): string {

@@ -1,0 +1,49 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import { rotateSession } from '../../../lib/auth/session';
+import { checkSecondFactor } from '../../../lib/auth/factor';
+import { LOCKED_MESSAGE, recordSuccess } from '../../../lib/auth/ratelimit';
+import { hasConfirmedTotp } from '../../../lib/auth/totp';
+import { audit } from '../../../lib/auth/audit';
+import { field, readForm } from '../../../lib/auth/form';
+import { clientIp } from '../../../lib/request';
+export const prerender = false;
+
+// Step 2 of sign-in: an authenticator code or a recovery code. The middleware guarantees a session here.
+const user = Astro.locals.user!;
+const session = Astro.locals.session!;
+if (session.mfaPassed) return Astro.redirect('/admin');
+if (!hasConfirmedTotp(user.id)) return Astro.redirect('/admin/2fa/setup');
+
+let error = '';
+if (Astro.request.method === 'POST') {
+  const form = await readForm(Astro.request);
+  const ip = clientIp(Astro.request, Astro.clientAddress);
+  const result = checkSecondFactor(user, form ? field(form, 'code', 40) : '', ip);
+  if (result === 'locked') {
+    error = LOCKED_MESSAGE;
+    Astro.response.status = 429;
+  } else if (result === 'invalid') {
+    error = 'That code is not valid.';
+    Astro.response.status = 401;
+  } else {
+    // Callers must use the returned session; Astro.locals.session still holds the old id.
+    const rotated = rotateSession(session.id, { mfaPassed: true, cookies: Astro.cookies });
+    if (!rotated) return Astro.redirect('/admin/login', 303);
+    recordSuccess(user.email);
+    audit('auth.login', { userId: user.id, ip, detail: { method: result } });
+    return Astro.redirect('/admin', 303);
+  }
+}
+---
+<Admin title="Two-factor check">
+  <h1>Two-factor check</h1>
+  <form class="admin-card" method="post" action="/admin/2fa">
+    {error && <p class="admin-error" role="alert">{error}</p>}
+    <p class="admin-note">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+    <label for="code">Code</label>
+    <input id="code" name="code" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required maxlength="40" />
+    <button type="submit">Sign in</button>
+  </form>
+  <form method="post" action="/api/admin/logout" class="admin-note"><button type="submit" class="admin-link">Cancel and sign out</button></form>
+</Admin>

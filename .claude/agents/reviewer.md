@@ -39,6 +39,14 @@ you to review the current branch against `origin/main`.
      text is in it, and no submitter address is ever logged or put in a
      response, a story file or an error message;
    - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/confirm.ts`, `/admin*` and `/api/admin/*` set `prerender = false`;
+   - editor sign-in (`src/lib/auth/`, `src/pages/admin/`, `src/middleware.ts`): `AUTH_SECRET` required at 32+
+     characters (503 otherwise); passwords scrypt-hashed and compared with `timingSafeEqual`; unknown email,
+     wrong password and disabled account give one message and one cost (dummy scrypt); TOTP secrets
+     AES-GCM encrypted, replay refused by `last_used_step`; recovery codes stored as keyed hashes and
+     single-use; 10 per IP / 5 per account in 15 minutes with identical lockout text; the session id is
+     rotated after each factor and callers use the returned session; `canEnrollWithoutMfa` is true only
+     with no confirmed second factor; new middleware allowlist entries are exact paths; passwords, codes,
+     secrets and tokens never reach logs, the audit log or the database in plain text;
    - human-only gates in `AGENTS.md` that the change might cross.
 3. Report only actionable findings, most severe first, each with `path:line`,
    what is wrong, a concrete failure scenario, and a suggested fix. List

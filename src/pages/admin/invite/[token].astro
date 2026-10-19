@@ -1,0 +1,95 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import { SESSION_COOKIE, createSession, hashToken, readSession, revokeSession, setSessionCookie } from '../../../lib/auth/session';
+import { hashPassword, passwordProblem } from '../../../lib/auth/password';
+import { audit } from '../../../lib/auth/audit';
+import { field, readForm } from '../../../lib/auth/form';
+import { clientIp } from '../../../lib/request';
+import { getDb } from '../../../lib/db';
+export const prerender = false;
+
+// Accept an invite: set a password, activate the account, start a session that still needs 2FA.
+const tokenHash = hashToken(Astro.params.token ?? '');
+const db = getDb();
+const invite = db
+  .prepare(
+    `SELECT i.user_id, u.name, u.email FROM invites i JOIN users u ON u.id = i.user_id
+      WHERE i.token_hash = ? AND i.used_at IS NULL AND i.expires_at > ? AND u.status = 'invited'`,
+  )
+  .get(tokenHash, Date.now()) as { user_id: number; name: string; email: string } | undefined;
+
+let error = '';
+let invalid = !invite;
+let name = invite?.name ?? '';
+if (!invite) {
+  Astro.response.status = 404;
+} else if (Astro.request.method === 'POST') {
+  const form = await readForm(Astro.request);
+  name = (form ? field(form, 'name', 200) : '').trim() || invite.name;
+  const password = form ? field(form, 'password', 1024) : '';
+  const confirm = form ? field(form, 'confirm', 1024) : '';
+  const problem = passwordProblem(password, invite.email);
+  if (problem) error = problem;
+  else if (password !== confirm) error = 'The two passwords don’t match.';
+  else {
+    const hash = await hashPassword(password);
+    const now = Date.now();
+    let accepted = false;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      // Both updates must hit exactly one row (unused and unexpired invite, user still 'invited'), or nothing is kept.
+      const used = db.prepare('UPDATE invites SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?').run(now, tokenHash, now);
+      const activated = Number(used.changes) === 1
+        ? db.prepare("UPDATE users SET status = 'active', name = ?, updated_at = ? WHERE id = ? AND status = 'invited'").run(name, now, invite.user_id)
+        : null;
+      if (activated && Number(activated.changes) === 1) {
+        db.prepare('INSERT OR REPLACE INTO password_credentials (user_id, hash, updated_at) VALUES (?, ?, ?)').run(invite.user_id, hash, now);
+        db.exec('COMMIT');
+        accepted = true;
+      } else {
+        db.exec('ROLLBACK');
+      }
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    if (!accepted) {
+      invalid = true; // used, expired or the account changed in the meantime
+      Astro.response.status = 404;
+    } else {
+      const ip = clientIp(Astro.request, Astro.clientAddress);
+      const old = readSession(Astro.cookies.get(SESSION_COOKIE)?.value);
+      if (old) revokeSession(old.session.id);
+      const { token } = createSession(invite.user_id, { ip, userAgent: Astro.request.headers.get('user-agent'), mfaPassed: false });
+      setSessionCookie(Astro.cookies, token);
+      audit('auth.invite_accepted', { userId: invite.user_id, ip });
+      return Astro.redirect('/admin/2fa/setup', 303);
+    }
+  }
+}
+---
+<Admin title="Accept invite">
+  {invite && !invalid ? (
+    <>
+      <h1>Set your password</h1>
+      <form class="admin-card" method="post">
+        {error && <p class="admin-error" role="alert">{error}</p>}
+        <p class="admin-note">Welcome. Choose a password of at least 12 characters. Next you’ll set up an authenticator app.</p>
+        <label for="name">Your name</label>
+        <input id="name" name="name" type="text" autocomplete="name" required maxlength="200" value={name} />
+        <label for="email">Email</label>
+        <input id="email" type="email" value={invite.email} disabled autocomplete="username" />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="256" />
+        <label for="confirm">Confirm password</label>
+        <input id="confirm" name="confirm" type="password" autocomplete="new-password" required minlength="12" maxlength="256" />
+        <button type="submit">Set password</button>
+      </form>
+    </>
+  ) : (
+    <>
+      <h1>Invite link not valid</h1>
+      <p class="admin-note">This invite link is invalid, has expired or has already been used. Ask an administrator for a new one.</p>
+    </>
+  )}
+</Admin>

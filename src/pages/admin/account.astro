@@ -1,0 +1,173 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { revokeAllForUser, revokeSession, rotateSession } from '../../lib/auth/session';
+import { checkSecondFactor } from '../../lib/auth/factor';
+import { hashPassword, passwordProblem, verifyPassword } from '../../lib/auth/password';
+import { LOCKED_MESSAGE, isLocked, releaseAttempt, reserveAttempt } from '../../lib/auth/ratelimit';
+import { generateRecoveryCodes, remainingRecoveryCodes } from '../../lib/auth/recovery';
+import { audit } from '../../lib/auth/audit';
+import { field, readForm } from '../../lib/auth/form';
+import { clientIp } from '../../lib/request';
+import { getDb } from '../../lib/db';
+export const prerender = false;
+
+const user = Astro.locals.user!;
+let session = Astro.locals.session!;
+const ip = clientIp(Astro.request, Astro.clientAddress);
+const db = getDb();
+
+let message = '';
+let error = '';
+let codes: string[] | null = null;
+
+/** Sensitive actions need a fresh second factor (TOTP or recovery code), under the sign-in rate limits. */
+function fresh(code: string): boolean {
+  const r = checkSecondFactor(user, code, ip);
+  if (r === 'locked') {
+    error = LOCKED_MESSAGE;
+    Astro.response.status = 429;
+    return false;
+  }
+  if (r === 'invalid') {
+    error = 'That code is not valid.';
+    Astro.response.status = 401;
+    return false;
+  }
+  return true;
+}
+
+if (Astro.request.method === 'POST') {
+  const form = await readForm(Astro.request);
+  const action = form ? field(form, 'action', 40) : '';
+  const code = form ? field(form, 'code', 40) : '';
+  if (!form) {
+    error = 'The form could not be read.';
+  } else if (action === 'password') {
+    const current = field(form, 'current', 1024);
+    const next = field(form, 'next', 1024);
+    const confirm = field(form, 'confirm', 1024);
+    const stored = db.prepare('SELECT hash FROM password_credentials WHERE user_id = ?').get(user.id) as { hash: string } | undefined;
+    const problem = passwordProblem(next, user.email);
+    const locked = isLocked(ip, user.email);
+    const attempt = locked ? [] : reserveAttempt(ip, user.email); // counted before the await
+    const currentOk = !locked && !!stored && (await verifyPassword(current, stored.hash));
+    if (currentOk) releaseAttempt(attempt);
+    if (locked) {
+      error = LOCKED_MESSAGE;
+      Astro.response.status = 429;
+    } else if (!currentOk) {
+      audit('auth.password_change_failed', { userId: user.id, ip });
+      error = 'Your current password is incorrect.';
+      Astro.response.status = 401;
+    } else if (problem) {
+      error = problem;
+    } else if (next !== confirm) {
+      error = 'The two new passwords don’t match.';
+    } else if (fresh(code)) {
+      db.prepare('UPDATE password_credentials SET hash = ?, updated_at = ? WHERE user_id = ?').run(await hashPassword(next), Date.now(), user.id);
+      const rotated = rotateSession(session.id, { mfaPassed: true, cookies: Astro.cookies });
+      if (!rotated) return Astro.redirect('/admin/login', 303);
+      session = rotated.session;
+      revokeAllForUser(user.id, session.id);
+      audit('auth.password_changed', { userId: user.id, ip });
+      audit('auth.sessions_revoked', { userId: user.id, ip, detail: { scope: 'others', reason: 'password_change' } });
+      message = 'Password changed. Every other session was signed out.';
+    }
+  } else if (action === 'recovery') {
+    if (fresh(code)) {
+      codes = generateRecoveryCodes(user.id);
+      audit('auth.recovery_codes_generated', { userId: user.id, ip, detail: { reason: 'regenerate' } });
+    }
+  } else if (action === 'revoke') {
+    // Sessions are named by the first 16 characters of their id, and only the user's own can match.
+    const ref = field(form, 'ref', 40);
+    const target = db.prepare('SELECT id FROM sessions WHERE user_id = ? AND substr(id, 1, 16) = ?').get(user.id, ref) as { id: string } | undefined;
+    if (target && target.id !== session.id) {
+      revokeSession(target.id);
+      audit('auth.session_revoked', { userId: user.id, ip });
+      message = 'Session signed out.';
+    }
+  } else if (action === 'revoke-others') {
+    revokeAllForUser(user.id, session.id);
+    audit('auth.sessions_revoked', { userId: user.id, ip, detail: { scope: 'others' } });
+    message = 'All other sessions were signed out.';
+  }
+}
+
+const sessions = db
+  .prepare('SELECT id, created_at, last_seen_at, ip, user_agent FROM sessions WHERE user_id = ? ORDER BY last_seen_at DESC')
+  .all(user.id) as { id: string; created_at: number; last_seen_at: number; ip: string | null; user_agent: string | null }[];
+const remaining = remainingRecoveryCodes(user.id);
+const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+---
+<Admin title="My account" current="account">
+  <h1>My account</h1>
+  <p class="admin-note">{user.name} · {user.email} · {user.role}</p>
+  {message && <p class="admin-ok" role="status">{message}</p>}
+  {error && <p class="admin-error" role="alert">{error}</p>}
+
+  {codes && (
+    <section class="admin-card" aria-labelledby="new-codes">
+      <h2 id="new-codes">Your new recovery codes</h2>
+      <p>The old codes no longer work. Each of these works <strong>once</strong>. They are shown only now.</p>
+      <ol class="recovery-codes">{codes.map((c) => <li><code>{c}</code></li>)}</ol>
+    </section>
+  )}
+
+  <section class="admin-card" aria-labelledby="pw">
+    <h2 id="pw">Change password</h2>
+    <form method="post" action="/admin/account">
+      <input type="hidden" name="action" value="password" />
+      <label for="current">Current password</label>
+      <input id="current" name="current" type="password" autocomplete="current-password" required maxlength="1024" />
+      <label for="next">New password</label>
+      <input id="next" name="next" type="password" autocomplete="new-password" required minlength="12" maxlength="256" />
+      <label for="confirm">Confirm new password</label>
+      <input id="confirm" name="confirm" type="password" autocomplete="new-password" required minlength="12" maxlength="256" />
+      <label for="pw-code">Authenticator or recovery code</label>
+      <input id="pw-code" name="code" type="text" autocomplete="one-time-code" required maxlength="40" />
+      <button type="submit">Change password</button>
+    </form>
+  </section>
+
+  <section class="admin-card" aria-labelledby="rc">
+    <h2 id="rc">Recovery codes</h2>
+    <p>{remaining} of 10 unused. Codes can’t be shown again. Generating new ones replaces all of them.</p>
+    <form method="post" action="/admin/account">
+      <input type="hidden" name="action" value="recovery" />
+      <label for="rc-code">Authenticator or recovery code</label>
+      <input id="rc-code" name="code" type="text" autocomplete="one-time-code" required maxlength="40" />
+      <button type="submit">Generate new recovery codes</button>
+    </form>
+  </section>
+
+  <section class="admin-card" aria-labelledby="sess">
+    <h2 id="sess">Active sessions</h2>
+    <ul class="session-list">
+      {sessions.map((s) => (
+        <li>
+          <div>
+            <strong>{s.id === session.id ? 'This session' : 'Signed in'}</strong>
+            <span class="admin-note"> · {when(s.created_at)} · last active {when(s.last_seen_at)}</span>
+            <div class="admin-note">{s.ip ?? 'unknown address'} · {(s.user_agent ?? 'unknown browser').slice(0, 80)}</div>
+          </div>
+          {s.id !== session.id && (
+            <form method="post" action="/admin/account">
+              <input type="hidden" name="action" value="revoke" />
+              <input type="hidden" name="ref" value={s.id.slice(0, 16)} />
+              <button type="submit">Sign out</button>
+            </form>
+          )}
+        </li>
+      ))}
+    </ul>
+    {sessions.length > 1 && (
+      <form method="post" action="/admin/account">
+        <input type="hidden" name="action" value="revoke-others" />
+        <button type="submit">Sign out all other sessions</button>
+      </form>
+    )}
+  </section>
+
+  <form method="post" action="/api/admin/logout"><button type="submit" class="admin-link">Sign out</button></form>
+</Admin>

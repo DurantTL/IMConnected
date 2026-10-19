@@ -27,9 +27,14 @@ export function dataDir() {
 export function openDatabase(dir = dataDir()) {
   fs.mkdirSync(dir, { recursive: true });
   const db = new DatabaseSync(path.join(dir, 'imconnected.db'));
-  db.exec('PRAGMA busy_timeout = 5000;'); // first, so the WAL switch below waits on a concurrent opener
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA foreign_keys = ON;');
+  try {
+    db.exec('PRAGMA busy_timeout = 5000;'); // first, so the WAL switch below waits on a concurrent opener
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec('PRAGMA foreign_keys = ON;');
+  } catch (err) {
+    db.close(); // e.g. a read-only file: don't leak a handle on every request
+    throw err;
+  }
   return db;
 }
 
