@@ -102,7 +102,7 @@ async function servePublic(key: string, next: () => Promise<Response>): Promise<
   const out = await cachedPage(key, async () => {
     const res = await next();
     if (res.status !== 200) return { response: res };
-    return { page: { body: await res.text(), type: res.headers.get('Content-Type') ?? 'text/html; charset=utf-8' } };
+    return { page: { body: await res.text(), type: res.headers.get('Content-Type') || 'text/html; charset=utf-8' } };
   });
   if ('page' in out) {
     return new Response(out.page.body, {

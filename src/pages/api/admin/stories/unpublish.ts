@@ -1,7 +1,8 @@
 import type { APIRoute } from 'astro';
 import { markUnpublished } from '../../../../lib/drafts';
 import { unpublishStory, validSlug } from '../../../../lib/draft-publish';
-import { unpublishStory as hideStory } from '../../../../lib/story-store';
+import { holdStory, unpublishStory as hideStory } from '../../../../lib/story-store';
+import { computeBuildMarker } from '../../../../lib/story-sync';
 import { invalidateStories } from '../../../../lib/public-cache';
 import { EditorError } from '../../../../lib/messages';
 import { githubOrNull, readFormLimited, redirectTo } from '../../../../lib/draft-http';
@@ -28,6 +29,8 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
     // The page cache is cleared even when there is no row, because pages read the unpublished list while the mirror is still filling.
     try {
       hideStory(slug);
+      // Publishing it again later must not bring the old built text back: hold it until a different build runs.
+      holdStory(slug, await computeBuildMarker());
     } catch (err) {
       console.error('[stories] could not hide the unpublished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }

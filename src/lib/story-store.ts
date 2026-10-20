@@ -210,11 +210,23 @@ export function unpublishStory(slug: string, now = Date.now()): boolean {
   return Number(r.changes) > 0;
 }
 
-/** Put an unpublished story back on the site (the reverse of unpublishStory). True when an unpublished story was changed. */
-export function republishStory(slug: string, now = Date.now()): boolean {
-  const r = getDb().prepare("UPDATE stories SET status = 'live', updated_at = ? WHERE slug = ? AND status = 'unpublished'").run(now, slug);
-  if (Number(r.changes) > 0) invalidateStories();
-  return Number(r.changes) > 0;
+/** Keep a story off the public pages while the build with this marker is running (see migration 012). */
+export function holdStory(slug: string, buildMarker: string, now = Date.now()): void {
+  getDb().prepare('INSERT OR REPLACE INTO story_holds (slug, build_marker, created_at) VALUES (?, ?, ?)').run(slug, buildMarker, now);
+  invalidateStories();
+}
+
+/** The build marker a story is held for, if it is held. */
+export function getHold(slug: string): string | undefined {
+  return (getDb().prepare('SELECT build_marker FROM story_holds WHERE slug = ?').get(slug) as { build_marker: string } | undefined)?.build_marker;
+}
+
+export function listHolds(): Map<string, string> {
+  return new Map((getDb().prepare('SELECT slug, build_marker FROM story_holds').all() as { slug: string; build_marker: string }[]).map((r) => [r.slug, r.build_marker]));
+}
+
+export function releaseHold(slug: string): void {
+  getDb().prepare('DELETE FROM story_holds WHERE slug = ?').run(slug);
 }
 
 /** Slugs of the stories of one source with a given status (the git sync uses this to find stories that left the build). */

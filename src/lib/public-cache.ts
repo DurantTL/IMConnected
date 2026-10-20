@@ -68,31 +68,33 @@ export function publicCacheKey(pathname: string): string | null {
 export const PUBLIC_CACHE_CONTROL = 'public, max-age=60, stale-while-revalidate=300';
 
 type Rendered = { page: CachedPage } | { response: Response };
-const inflight = new Map<string, Promise<Rendered>>();
+const inflight = new Map<string, { gen: number; promise: Promise<Rendered> }>();
 
 /**
  * Serve `key` from the cache, or render it with `render` and keep the result. Concurrent misses for one key share a
- * single render. `render` returns a `response` for anything that is not a plain 200 (such a response is never
- * cached or shared; a request that was waiting for it renders on its own).
+ * single render, but only a render that started after the latest invalidation. `render` returns a `response` for
+ * anything that is not a plain 200 (never cached or shared); a request that was waiting for such a response, or for
+ * a render that threw, renders on its own.
  */
 export async function cachedPage(key: string, render: () => Promise<Rendered>): Promise<Rendered & { hit: boolean }> {
   const hit = cacheGet(key);
   if (hit) return { page: hit, hit: true };
   const running = inflight.get(key);
-  if (running) {
-    const shared = await running;
-    if ('page' in shared) return { ...shared, hit: false };
+  if (running && running.gen === generation) {
+    const shared = await running.promise.catch(() => null);
+    if (shared && 'page' in shared) return { ...shared, hit: false };
     return { ...(await render()), hit: false };
   }
   const gen = generation;
-  const p = render().then((r) => {
+  const promise = render().then((r) => {
     if ('page' in r && gen === generation) cacheSet(key, r.page);
     return r;
   });
-  inflight.set(key, p);
+  const entry = { gen, promise };
+  inflight.set(key, entry);
   try {
-    return { ...(await p), hit: false };
+    return { ...(await promise), hit: false };
   } finally {
-    inflight.delete(key);
+    if (inflight.get(key) === entry) inflight.delete(key);
   }
 }

@@ -24,7 +24,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { mediaDir, MEDIA_TYPES } from './media';
-import { getStoryHash, getStoryBySlug, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
+import { getHold, listHolds, releaseHold, getStoryHash, getStoryBySlug, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
 import { listUnpublishedSlugs } from './drafts';
 import { invalidateStories } from './public-cache';
 
@@ -153,6 +153,18 @@ async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, p
   return { position, kind: p.kind, path: rel, url: null, alt: p.alt, sha256: sha, bytes };
 }
 
+/** The marker of the build this server is running (also what holds are recorded against). */
+export async function computeBuildMarker(): Promise<string> {
+  const { getStories } = await import('./stories');
+  const clientDir = builtClientDir();
+  const referenced: string[] = [];
+  for (const entry of await getStories()) for (const src of [entry.data.image, ...entry.data.photos]) {
+    const f = src ? builtPhotoFile(clientDir, src) : null;
+    if (f) referenced.push(f);
+  }
+  return buildMarker(clientDir, referenced);
+}
+
 /** One pass. Exported so tests and tools can call it; the server uses ensureStorySync(). */
 export async function syncStoriesFromBuild(): Promise<SyncResult> {
   const { getStories } = await import('./stories');
@@ -187,7 +199,11 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
       const photoRows: StoryPhoto[] = [];
       for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], markerChanged, result));
       // Read the dashboard's unpublish list right before the write, so one made during this pass is not missed.
-      const status = listUnpublishedSlugs().has(slug) ? 'unpublished' : 'live';
+      // A story unpublished and then published again in the dashboard stays hidden while the build that still has its old
+      // text is running (a hold, migration 012); the first sync of a different build drops the hold and shows the new text.
+      const hold = getHold(slug);
+      if (hold !== undefined && hold !== marker) releaseHold(slug);
+      const status = listUnpublishedSlugs().has(slug) || hold === marker ? 'unpublished' : 'live';
 
       const base = {
         slug, title: d.title, dek: d.dek, section: d.section, area: d.area, column: d.column, author: d.author, authorTitle: d.authorTitle,
@@ -212,6 +228,7 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   for (const slug of slugsBySource('git', 'live')) {
     if (!seen.has(slug) && unpublishStory(slug)) result.unpublished++;
   }
+  for (const [slug, m] of listHolds()) if (m !== marker) releaseHold(slug); // holds of an older build
   // Record the build as verified only when every story was mirrored.
   if (result.skipped === 0 && markerChanged) {
     try {

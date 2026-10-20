@@ -71,22 +71,23 @@ you to review the current branch against `origin/main`.
      text is in it, and no submitter address is ever logged or put in a
      response, a story file or an error message;
    - public pages from the database (epic #25 step 2): `src/pages/index.astro`, `stories/[slug].astro`,
-    `[section]/index.astro`, `[section]/[area].astro`, `stories.json.ts`, `rss.xml.ts` and
-    `images/stories/[...path].ts` are the public routes that set `prerender = false`. They read through
-    `src/lib/public-stories.ts`, which reads the `stories` table only once `storySyncDone()` and otherwise the
-    built collection (minus dashboard-unpublished slugs), so a fresh start never shows a missing or empty page;
-    markup, URLs, SEO/OG tags, the `/stories.json` shape and `version` are unchanged; story bodies go through
-    `renderMarkdownSafe` (no `set:html` of submitted text except that rendered output); unknown and unpublished
-    slugs, sections and areas are a real 404 with `no-store`; the page cache (`src/lib/public-cache.ts`) is
-    bounded (300 entries, 10 minute TTL, 1 MB per entry), keyed only by `publicCacheKey` (so random URLs can't
-    fill it), never stores a non-200, is cleared by `invalidateStories()` from every `story-store.ts` write and
-    from the dashboard unpublish and republish handlers, and does not store a render that began before an
-    invalidation; the public `Cache-Control` is `public, max-age=60, stale-while-revalidate=300`; the
-    middleware still returns straight from `next()` for every non-`/admin` path except the cache lookup for
-    those few GET paths (no database, cookies or session); `/images/stories/*` redirects to `/media/` only when
-    the static file is missing; the Pagefind source pages under `src/pages/search-source/` are pruned from
-    `dist/client` by `npm run build`;
-  - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/confirm.ts`, `src/pages/media/[...path].ts`, the public story pages and feeds listed above, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
+     `[section]/index.astro`, `[section]/[area].astro`, `stories.json.ts`, `rss.xml.ts` and
+     `images/stories/[...path].ts` are the public routes that set `prerender = false`. They read through
+     `src/lib/public-stories.ts`, which reads the `stories` table only once `storySyncDone()` and otherwise the
+     built collection (minus dashboard-unpublished slugs), so a fresh start never shows a missing or empty page;
+     markup, URLs, SEO/OG tags, the `/stories.json` shape and `version` are unchanged; story bodies go through
+     `renderMarkdownSafe` (no `set:html` of submitted text except that rendered output); unknown and unpublished
+     slugs, sections and areas are a real 404 with `no-store`; the page cache (`src/lib/public-cache.ts`) is
+     bounded (300 entries, 10 minute TTL, 1 MB per entry), keyed only by `publicCacheKey` (so random URLs can't
+     fill it), never stores a non-200, is cleared by `invalidateStories()` from every `story-store.ts` write and
+     from the dashboard unpublish and republish handlers, and does not store a render that began before an
+     invalidation; the public `Cache-Control` is `public, max-age=60, stale-while-revalidate=300`; the
+     middleware still returns straight from `next()` for every non-`/admin` path except the in-memory cache lookup,
+     which must touch only the GET paths `publicCacheKey()` accepts and never `/admin` or `/api/admin` (no database,
+     cookies or session); the dashboard unpublish records a hold and republish never revives the old text; `/images/stories/*` redirects to `/media/` only when
+     the static file is missing; the Pagefind source pages under `src/pages/search-source/` are pruned from
+     `dist/client` by `npm run build`;
+   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/confirm.ts`, `src/pages/media/[...path].ts`, the public story pages and feeds listed above, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
    - editor sign-in (`src/lib/auth/`, `src/pages/admin/`, `src/middleware.ts`): `AUTH_SECRET` required at 32+
      characters (503 otherwise); passwords scrypt-hashed and compared with `timingSafeEqual`; unknown email,
      wrong password and disabled account give one message and one cost (dummy scrypt); TOTP secrets

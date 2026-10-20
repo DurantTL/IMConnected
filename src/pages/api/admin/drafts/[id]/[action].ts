@@ -5,7 +5,6 @@ import {
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
 import { buildDraftFiles, publishMessage } from '../../../../../lib/draft-publish';
-import { republishStory } from '../../../../../lib/story-store';
 import { invalidateStories } from '../../../../../lib/public-cache';
 import { commitToBase } from '../../../../../lib/github';
 import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages';
@@ -142,14 +141,9 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       console.error('[drafts] published but could not record it', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
       return redirectTo(page, { e: 'live_not_recorded' });
     }
-    // A story that was unpublished comes back on the database-rendered pages right away (its text there is the last
-    // build's until the next deploy). A failure here must not read as "not recorded".
-    try {
-      republishStory(built.slug);
-      invalidateStories();
-    } catch (err) {
-      console.error('[stories] could not restore the republished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    }
+    // A story that was unpublished stays hidden on the database-rendered pages (a hold, see unpublish.ts): the server's
+    // build and mirror still have its old text, and the new text arrives with the next deploy, like any new publish.
+    invalidateStories();
     // Housekeeping after the story is recorded: a failure here must never read as "not recorded".
     try {
       audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: built.slug, commit: sha, newerEditsNotLive: r.stale }, ip });

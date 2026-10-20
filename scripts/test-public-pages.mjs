@@ -104,6 +104,7 @@ async function startServer(dataDir, extra = {}) {
   await waitFor(BASE + '/submit/');
 }
 const stopServer = async () => { await stop(server); server = undefined; };
+const restartMain = async () => { await stopServer(); await startServer(dirs.main); await get('/'); return until(synced, 20000); };
 const synced = () => serverLog.some((l) => l.includes('[stories] mirrored the build'));
 
 // ---- fetch helpers ----
@@ -180,6 +181,22 @@ const baselineHtml = (urlPath) => fs.readFileSync(path.join(BASELINE, urlPath ==
   const miss = () => pc.cachedPage('/gone', async () => { n404++; await sleep(20); return { response: new Response(null, { status: 404 }) }; });
   const r404 = await Promise.all([miss(), miss()]);
   check('a 404 is not cached and not shared', n404 === 2 && r404.every((r) => r.response?.status === 404) && pc.cacheSize() >= 1 && !pc.cacheGet('/gone'));
+  // a request after an invalidation does not join a render that began before it
+  pc.invalidateStories();
+  let rel2;
+  const gate2 = new Promise((r) => (rel2 = r));
+  const older = pc.cachedPage('/race', async () => { await gate2; return { page: { body: 'before', type: 't' } }; });
+  pc.invalidateStories();
+  const newer = await pc.cachedPage('/race', async () => ({ page: { body: 'after', type: 't' } }));
+  rel2();
+  await older;
+  check('a request after an invalidation renders afresh instead of joining an older render', newer.page.body === 'after' && pc.cacheGet('/race')?.body === 'after');
+  // one failing render does not fail the requests waiting for it
+  pc.invalidateStories();
+  let calls = 0;
+  const flaky = () => pc.cachedPage('/flaky', async () => { if (calls++ === 0) { await sleep(30); throw new Error('boom'); } return { page: { body: 'ok', type: 't' } }; });
+  const [f1, f2] = await Promise.allSettled([flaky(), flaky()]);
+  check('a render that throws rejects only its own request; a waiting request renders on its own', f1.status === 'rejected' && f2.status === 'fulfilled' && f2.value.page.body === 'ok', JSON.stringify([f1.status, f2.status]));
   const keys = {
     '/': '/', '/news/': '/news', '/news': '/news', '/news/churches/': '/news/churches', '/stories/some-slug/': '/stories/some-slug', '/stories.json': '/stories.json', '/rss.xml': '/rss.xml',
   };
@@ -281,6 +298,13 @@ try {
   check('/news and /news/ are the same page, with the same canonical link', (await get('/news')).text === hit1.text && /rel="canonical" href="[^"]*\/news\/"/.test(hit1.text));
 
   // ---- the dashboard unpublishes a story while the mirror is still filling ----
+  let oldSnippets = [];
+  /** True when no page or feed shows the story's old text or links to it. */
+  const noOldText = async () => {
+    const urls = ['/', `/${feedBase.stories.find((x) => x.id === slug).section}/`, `/stories/${slug}/`, '/stories.json', '/rss.xml'];
+    for (const u of urls) { const r = await get(u); if (r.text.includes(`/stories/${slug}`) || oldSnippets.some((sn) => r.text.includes(sn.replace(/’/g, '&#39;')) || r.text.includes(sn))) return false; }
+    return true;
+  };
   let slug = null;
   let draftId = null;
   const cookie = signedInEditor();
@@ -303,6 +327,14 @@ try {
     check('mirror still empty: the unpublished story is a real 404 straight away (page cache invalidated)', pending() && after.status === 404 && after.text.includes('We couldn’t find that page') && after.headers.get('cache-control') === 'no-store', `${after.status}`);
     const lists = [await get('/'), await get(`/${target.section}/`), await get('/stories.json'), await get('/rss.xml')];
     check('...and it is gone from the home page, its section page and both feeds', lists.every((r) => !r.text.includes(`/stories/${slug}`)), lists.map((r) => r.text.includes(`/stories/${slug}`)).join());
+    // The editor fixes the text and publishes again. The running build still has the OLD text, so the story must stay hidden.
+    const base = baselineHtml(`/stories/${slug}/`);
+    oldSnippets = [...new Set([target.dek, visibleText(base).match(/[A-Z][^.]{40,}\./)?.[0]?.slice(0, 60)].filter(Boolean))];
+    const d0 = q('SELECT updated_at, status FROM drafts WHERE slug = ?', slug)[0];
+    check('the unpublished draft is back in review', d0?.status === 'in_review', JSON.stringify(d0));
+    const rp0 = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: d0.updated_at });
+    check('the dashboard publishes it again', /^published/.test(rp0.params.get('n') ?? ''), rp0.loc);
+    check('mirror still empty: after publishing again it stays hidden (the old built text must not come back)', pending() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText(), `${await get(`/stories/${slug}/`).then((r) => r.status)}`);
   } else skip('dashboard unpublish while the mirror is empty');
 
   // ---- the first import finishes ----
@@ -316,13 +348,10 @@ try {
     check('after the import the unpublished story is still a 404', r.status === 404);
     const home = await get('/');
     check('after the import pages come from the table (photos are /media links, cache invalidated)', home.text.includes('/media/stories/') && !home.text.includes('/images/stories/'), home.text.match(/src="[^"]*stories[^"]*"/)?.[0]);
-    // republish through the dashboard: the draft is back in review after the unpublish
-    const d = q('SELECT id, updated_at, status FROM drafts WHERE slug = ?', slug)[0];
-    check('the unpublished draft is back in review', d?.status === 'in_review', JSON.stringify(d));
-    const rp = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: d.updated_at });
-    check('the dashboard republish succeeds', /^published/.test(rp.params.get('n') ?? ''), rp.loc);
-    const back = await get(`/stories/${slug}/`);
-    check('the republished story is live again on the page right away', back.status === 200 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'live', `${back.status}`);
+    check('after the import the story published again is still hidden, with a hold for this build', q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished' && q('SELECT build_marker FROM story_holds WHERE slug = ?', slug).length === 1 && await noOldText());
+    check('a restart of the same build keeps it hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
+    run("UPDATE story_holds SET build_marker = 'an-older-build' WHERE slug = ?", slug);
+    check('a start of a different build drops the hold and shows the story again', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'live');
   }
 
   // ================= part 2: equivalence with the prerendered site, served from the table =================
@@ -341,8 +370,10 @@ try {
     check('...and from its section page', !section.text.includes(`/stories/${slug}`));
     const d = q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0];
     await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: d.updated_at });
-    check('republishing restores the page and the lists right away', (await get(`/stories/${slug}/`)).status === 200 && (await get('/stories.json')).text.includes(slug) && (await get('/')).text.includes(`/stories/${slug}`));
-    if (BASELINE) await comparePages('after unpublish and republish', true);
+    check('publishing it again does not bring it back (mirror complete): 404, row unpublished, old text nowhere', (await get(`/stories/${slug}/`)).status === 404 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished' && await noOldText());
+    run("UPDATE story_holds SET build_marker = 'an-older-build' WHERE slug = ?", slug);
+    check('...and the next build shows it', await restartMain() && (await get(`/stories/${slug}/`)).status === 200);
+    if (BASELINE) await comparePages('after unpublish, publish again and a new build', true);
   }
 
   // ---- a story row edited in the database shows on the page right away, through the cache invalidation ----

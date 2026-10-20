@@ -10,8 +10,8 @@
 //     cached pages so the next request is served from the table.
 // Both sources return the same PublicStory shape, newest first (date, then slug), so the markup is identical.
 import { getStories, type PublicStory } from './stories';
-import { getStoryBySlug, listStories, LIST_MAX, type Story } from './story-store';
-import { ensureStorySync, storySyncDone } from './story-sync';
+import { getStoryBySlug, listHolds, listStories, LIST_MAX, type Story } from './story-store';
+import { computeBuildMarker, ensureStorySync, storySyncDone } from './story-sync';
 import { listUnpublishedSlugs } from './drafts';
 import { cacheGeneration, TTL_MS } from './public-cache';
 import { renderMarkdownSafe } from './markdown';
@@ -56,10 +56,18 @@ function listLiveFromDb(): PublicStory[] {
   }
 }
 
+let buildMarker: Promise<string> | undefined;
+
 async function listFromBuild(): Promise<PublicStory[]> {
   let hidden = new Set<string>();
   try {
     hidden = listUnpublishedSlugs();
+    // Held stories (unpublished, then published again; the running build still has the old text) stay hidden too.
+    const holds = listHolds();
+    if (holds.size) {
+      const marker = await (buildMarker ??= computeBuildMarker());
+      for (const [slug, m] of holds) if (m === marker) hidden.add(slug);
+    }
   } catch (err) {
     console.error('[stories] could not read the unpublished list:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
   }

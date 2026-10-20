@@ -125,7 +125,7 @@ try {
       users: db.prepare('SELECT * FROM users').all(), drafts: db.prepare('SELECT * FROM drafts').all(), photos: db.prepare('SELECT * FROM draft_photos').all(),
     });
     const a = JSON.stringify(snap());
-    const applied = runMigrations(db, all);
+    const applied = runMigrations(db, all.filter((m) => m.name < '012'));
     check('migration 011 applies on a database with drafts and accounts', applied.join() === '011_stories.sql', applied.join());
     check('migration 011 loses no account, draft or draft photo', JSON.stringify(snap()) === a);
     const tables = db.prepare("SELECT name, strict FROM pragma_table_list WHERE name IN ('stories', 'story_photos')").all();
