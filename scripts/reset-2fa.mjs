@@ -8,7 +8,7 @@
 // sign-in they enroll a new authenticator and get new recovery codes.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDatabase, runMigrations, readMigrationsFromDir } from '../src/lib/db/db-core.mjs';
+import { openDatabase, runMigrations, readMigrationsFromDir, resetTwoFactor } from '../src/lib/db/db-core.mjs';
 
 const email = (process.argv[2] || '').trim().toLowerCase();
 if (!email || process.argv.length > 3) {
@@ -28,16 +28,12 @@ if (!user) {
 
 db.exec('BEGIN IMMEDIATE');
 try {
-  const t = db.prepare('DELETE FROM totp_credentials WHERE user_id = ?').run(user.id);
-  const k = db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(user.id);
-  db.prepare('DELETE FROM webauthn_challenges WHERE user_id = ?').run(user.id);
-  const r = db.prepare('DELETE FROM recovery_codes WHERE user_id = ?').run(user.id);
-  const s = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  const n = resetTwoFactor(db, user.id);
   db.prepare('INSERT INTO audit_log (at, user_id, action, target, detail, ip) VALUES (?, NULL, ?, ?, ?, NULL)').run(
-    Date.now(), 'admin.reset_2fa', `user:${user.id}`, JSON.stringify({ authenticators: Number(t.changes), passkeys: Number(k.changes), recoveryCodes: Number(r.changes), sessions: Number(s.changes) }),
+    Date.now(), 'admin.reset_2fa', `user:${user.id}`, JSON.stringify(n),
   );
   db.exec('COMMIT');
-  console.log(`Reset two-factor for user ${user.id}: removed ${t.changes} authenticator, ${k.changes} passkeys, ${r.changes} recovery codes, ${s.changes} sessions. They enroll a new authenticator or passkey at their next sign-in.`);
+  console.log(`Reset two-factor for user ${user.id}: removed ${n.authenticators} authenticator, ${n.passkeys} passkeys, ${n.recoveryCodes} recovery codes, ${n.sessions} sessions. They enroll a new authenticator or passkey at their next sign-in.`);
 } catch (err) {
   db.exec('ROLLBACK');
   throw err;

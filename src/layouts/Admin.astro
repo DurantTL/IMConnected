@@ -22,7 +22,7 @@ if (user && Astro.locals.session?.mfaPassed) {
 const nav = [
   { key: 'drafts', href: '/admin', label: 'Drafts' },
   { key: 'published', href: '/admin/published', label: 'Published' },
-  ...(user?.role === 'admin' ? [{ key: 'editors', href: '/admin/editors', label: 'Editors' }] : []),
+  { key: 'editors', href: '/admin/editors', label: 'Editors' },
   { key: 'account', href: '/admin/account', label: 'My account' },
 ];
 ---

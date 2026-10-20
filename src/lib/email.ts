@@ -161,3 +161,25 @@ export function buildSubmissionNotice(title: string, church: string, link: strin
 </body></html>`;
   return { subject: `New story submission: ${t}`, text, html };
 }
+
+/** The invite email to a new editor: only the inviter's name, the site name and the link (all escaped in the HTML). */
+export function buildInviteEmail(inviterName: string, link: string) {
+  const who = oneLine(inviterName) || 'An administrator';
+  const text = [
+    `${who} invited you to help edit stories on ${SITE.name}.`,
+    '',
+    'Open the link below to choose a password and set up two-step sign-in. The link works for 7 days.',
+    '',
+    link,
+    '',
+    `If you weren't expecting this, you can ignore this message.`,
+  ].join('\n');
+  const html = `<!doctype html><html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1d2433;max-width:560px;margin:0 auto;padding:24px;line-height:1.5">
+<p>${escHtml(who)} invited you to help edit stories on ${escHtml(SITE.name)}.</p>
+<p>Open the link to choose a password and set up two-step sign-in. The link works for 7 days.</p>
+<p style="margin:28px 0"><a href="${escHtml(link)}" style="background:#1f4e79;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;display:inline-block;font-weight:600">Accept the invite</a></p>
+<p style="font-size:14px;color:#555">Or paste this link into your browser:<br>${escHtml(link)}</p>
+<p style="font-size:14px;color:#555">If you weren&rsquo;t expecting this, you can ignore this message.</p>
+</body></html>`;
+  return { subject: `You're invited to the ${SITE.name} editors`, text, html };
+}
