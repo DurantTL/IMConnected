@@ -20,7 +20,10 @@ const published = q.get('n') === 'published';
 const notice = noticeText(q.get('n'));
 const error = errorText(q.get('e'));
 const liveUrl = draft?.slug ? `${siteUrl()}/stories/${draft.slug}/` : '';
-const hasSubmitter = !!draft && (draft.source !== 'editor' || !!(draft.submitterName || draft.submitterEmail || draft.submitterPhone || draft.submitterChurch));
+const isAgent = draft?.source === 'agent';
+// Only an http(s) address becomes a link (the API checks it too; this is the last line of defence).
+const originalPost = draft?.sourceUrl && /^https?:\/\//i.test(draft.sourceUrl) ? draft.sourceUrl : '';
+const hasSubmitter = !!draft && !isAgent && (draft.source !== 'editor' || !!(draft.submitterName || draft.submitterEmail || draft.submitterPhone || draft.submitterChurch));
 const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
 ---
 <Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current="drafts" wide>
@@ -37,7 +40,7 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
       </div>
       <div class="ad-meta">
         <span class={`ad-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : draft.status === 'new' ? 'warn' : ''}`}>{STATUS_LABEL[draft.status]}</span>
-        <span class="ad-badge">{SOURCE_LABEL[draft.source]}</span>
+        <span class="ad-badge">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span>
         <span>Created <time datetime={new Date(draft.createdAt).toISOString()} data-local>{fmtTime(draft.createdAt)}</time></span>
       </div>
 
@@ -79,6 +82,18 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
         </section>
       )}
 
+      {isAgent && (
+        <section class="ed-card ed-sub">
+          <h2>Submitter</h2>
+          <dl>
+            <dt>Name</dt><dd>AI agent</dd>
+            {draft.agentNote && <><dt>Agent's note</dt><dd style="white-space:pre-wrap">{draft.agentNote}</dd></>}
+            {originalPost && <><dt>Original post</dt><dd><a href={originalPost} rel="noopener noreferrer" target="_blank">View original post</a></dd></>}
+          </dl>
+          <p class="admin-note">This story was written by an AI agent from a public post. Check the facts, names and photos, and get permission where needed, before you publish.</p>
+        </section>
+      )}
+
       {hasSubmitter && (
         <section class="ed-card ed-sub">
           <h2>Submitter</h2>
@@ -110,6 +125,7 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
               </label>
               <label>Section
                 <select name="section" id="f-section">
+                  {!SECTIONS.some((s) => s.key === draft.section) && <option value="" selected>Choose a section</option>}
                   {SECTIONS.map((s) => <option value={s.key} selected={s.key === draft.section}>{s.label}</option>)}
                 </select>
               </label>

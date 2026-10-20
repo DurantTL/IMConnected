@@ -6,13 +6,14 @@ import { randomBytes } from 'node:crypto';
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
+import { validDate } from './storyfile';
 import { ERRORS, type ErrorCode } from './messages';
 
 export type DraftStatus = 'new' | 'in_review' | 'published' | 'rejected';
-export type DraftSource = 'form' | 'studio' | 'editor';
+export type DraftSource = 'form' | 'studio' | 'editor' | 'agent';
 export const STATUSES: DraftStatus[] = ['new', 'in_review', 'published', 'rejected'];
 export const STATUS_LABEL: Record<DraftStatus, string> = { new: 'New', in_review: 'In review', published: 'Published', rejected: 'Rejected' };
-export const SOURCE_LABEL: Record<DraftSource, string> = { form: 'Submit form', studio: 'Studio', editor: 'Editor' };
+export const SOURCE_LABEL: Record<DraftSource, string> = { form: 'Submit form', studio: 'Studio', editor: 'Editor', agent: 'AI agent' };
 
 /** Rejected drafts keep their photos this long. */
 export const REJECTED_PHOTO_DAYS = 30;
@@ -45,6 +46,9 @@ export interface Draft extends DraftFields {
   submitterPhone: string | null;
   submitterChurch: string | null;
   emailVerified: boolean;
+  /** Source `agent` only: the original post's URL (http or https) and the agent's note to the editors. */
+  sourceUrl: string | null;
+  agentNote: string | null;
   rejectNote: string | null;
   rejectedAt: number | null;
   createdAt: number;
@@ -119,6 +123,8 @@ function toDraft(r: Row): Draft {
     submitterPhone: sn(r.submitter_phone),
     submitterChurch: sn(r.submitter_church),
     emailVerified: n(r.email_verified) === 1,
+    sourceUrl: sn(r.source_url),
+    agentNote: sn(r.agent_note),
     rejectNote: sn(r.reject_note),
     rejectedAt: r.rejected_at == null ? null : n(r.rejected_at),
     createdAt: n(r.created_at),
@@ -164,6 +170,9 @@ export interface NewDraft {
   slug?: string | null;
   submitter?: { name?: string; email?: string; phone?: string; church?: string };
   emailVerified?: boolean;
+  /** Source `agent` only. */
+  sourceUrl?: string | null;
+  agentNote?: string | null;
 }
 
 /** Create a draft (also the entry point for the submit form and Studio in the next issue). */
@@ -175,13 +184,13 @@ export function createDraft(opts: NewDraft): number {
   const r = getDb()
     .prepare(
       `INSERT INTO drafts (status, source, title, dek, section, area, story_column, author, author_title, church, date, photo_credit, featured, body,
-         slug, submitter_name, submitter_email, submitter_phone, submitter_church, email_verified, created_at, created_by, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         slug, submitter_name, submitter_email, submitter_phone, submitter_church, email_verified, created_at, created_by, updated_at, updated_by, source_url, agent_note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       status, opts.source, f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.featured ? 1 : 0, f.body,
       opts.slug ?? null, sub.name ?? null, sub.email ?? null, sub.phone ?? null, sub.church ?? null, opts.emailVerified ? 1 : 0,
-      now, opts.userId ?? null, now, opts.userId ?? null,
+      now, opts.userId ?? null, now, opts.userId ?? null, opts.sourceUrl ?? null, opts.agentNote ?? null,
     );
   return Number(r.lastInsertRowid);
 }
@@ -216,7 +225,7 @@ export const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
 ];
 
-export function listDrafts(filter: { status: StatusFilter; section?: string }): DraftListItem[] {
+export function listDrafts(filter: { status: StatusFilter; section?: string; source?: DraftSource }): DraftListItem[] {
   const where: string[] = [];
   const args: (string | number)[] = [];
   if (filter.status === 'open') where.push("d.status IN ('new', 'in_review')");
@@ -227,6 +236,10 @@ export function listDrafts(filter: { status: StatusFilter; section?: string }): 
   if (filter.section) {
     where.push('d.section = ?');
     args.push(filter.section);
+  }
+  if (filter.source) {
+    where.push('d.source = ?');
+    args.push(filter.source);
   }
   const rows = getDb()
     .prepare(
@@ -285,7 +298,7 @@ const CONFLICT = fail('conflict', 'conflict');
 /** Validation common to saving (lenient) — publishing enforces the full rules. */
 export function checkFieldValues(f: DraftFields): ErrorCode | null {
   if (!getSection(f.section)) return 'bad_section';
-  if (f.date && !/^\d{4}-\d{2}-\d{2}$/.test(f.date)) return 'bad_date';
+  if (f.date && !validDate(f.date)) return 'bad_date';
   return null;
 }
 
@@ -676,4 +689,99 @@ export function recordStudioPublish(stories: StudioStory[], commit: string): { i
   });
   removeUploadFiles(oldUploads); // only a rejected draft's own uploads can be in here
   return { ids, overwrote };
+}
+
+export interface AgentDraftInput {
+  title: string;
+  dek: string;
+  /** Already safe Markdown. */
+  body: string;
+  section: string;
+  area: string;
+  author: string;
+  church: string;
+  /** '' = today on create, unchanged on update. */
+  date: string;
+  sourceUrl: string | null;
+  note: string;
+  /** null = leave an updated draft's photos alone. */
+  photos: { bytes: Uint8Array; ext: string; alt: string }[] | null;
+}
+
+export type AgentUpsertResult = { ok: true; id: number; status: 'created' | 'updated' } | { ok: false; id: number };
+
+/**
+ * An AI-agent story becomes a `new` draft (source agent, no author account). The same `sourceUrl` finds the same
+ * draft again, and it is updated only while no editor has touched it: still `new` and `updated_by` still NULL
+ * (every editor save, photo change or publish step sets it). Otherwise `{ ok: false }` and nothing changes.
+ * All or nothing, like createSubmissionDraft: on any failure the files written here are removed again.
+ */
+export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
+  const written: string[] = [];
+  let oldFiles: string[] = [];
+  try {
+    const res = tx((): AgentUpsertResult => {
+      const db = getDb();
+      const existing = input.sourceUrl
+        ? (db.prepare("SELECT id, status, updated_by FROM drafts WHERE source = 'agent' AND source_url = ?").get(input.sourceUrl) as { id: number; status: string; updated_by: number | null } | undefined)
+        : undefined;
+      let id: number;
+      let status: 'created' | 'updated';
+      if (existing) {
+        if (existing.status !== 'new' || existing.updated_by !== null) return { ok: false, id: Number(existing.id) };
+        id = Number(existing.id);
+        status = 'updated';
+        const now = Date.now();
+        const r = db
+          .prepare(
+            `UPDATE drafts SET title = ?, dek = ?, body = ?, section = ?, area = ?, author = ?, church = ?, agent_note = ?,
+               date = CASE WHEN ? = '' THEN date ELSE ? END, updated_at = MAX(?, updated_at + 1)
+             WHERE id = ? AND status = 'new' AND updated_by IS NULL`,
+          )
+          .run(input.title, input.dek, input.body, input.section, input.area, input.author, input.church, input.note || null, input.date, input.date, now, id);
+        if (Number(r.changes) !== 1) return { ok: false, id };
+        if (input.photos) {
+          oldFiles = listPhotos(id).map((p) => p.path).filter((p): p is string => !!p);
+          db.prepare('DELETE FROM draft_photos WHERE draft_id = ?').run(id);
+        }
+      } else {
+        status = 'created';
+        id = createDraft({
+          source: 'agent',
+          status: 'new',
+          fields: { title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.date ? { date: input.date } : {}) },
+          sourceUrl: input.sourceUrl,
+          agentNote: input.note || null,
+        });
+      }
+      if (input.photos) {
+        const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+        input.photos.forEach((p, i) => {
+          const rel = writeUpload(id, p.bytes, p.ext);
+          written.push(rel);
+          ins.run(id, rel, p.ext, p.alt, i, Date.now());
+        });
+      }
+      return { ok: true, id, status };
+    });
+    if (res.ok) removeUploadFiles(oldFiles);
+    else removeUploadFiles(written);
+    return res;
+  } catch (err) {
+    removeUploadFiles(written);
+    throw err;
+  }
+}
+
+/** The newest drafts still waiting for an editor (new or in review), for the Studio story list. */
+export function listOpenDraftsNewestFirst(limit: number, section?: string): { draft: Draft; photos: DraftPhoto[] }[] {
+  const rows = getDb()
+    .prepare(`SELECT id FROM drafts WHERE status IN ('new', 'in_review')${section ? ' AND section = ?' : ''} ORDER BY created_at DESC, id DESC LIMIT ?`)
+    .all(...(section ? [section, limit] : [limit])) as { id: number }[];
+  const out: { draft: Draft; photos: DraftPhoto[] }[] = [];
+  for (const r of rows) {
+    const draft = getDraft(Number(r.id));
+    if (draft) out.push({ draft, photos: listPhotos(draft.id) });
+  }
+  return out;
 }

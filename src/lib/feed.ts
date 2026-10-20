@@ -1,6 +1,6 @@
 // Story feed data shared by /stories.json and /rss.xml.
 // URLs are absolute so the items work outside the site (email, feed readers).
-import { getStories, storyUrl, type Story } from './stories';
+import { getStories, storyUrl } from './stories';
 import { getSection, areaLabel } from './site';
 
 /** How many of the newest stories the feeds include. */
@@ -30,7 +30,29 @@ export interface FeedItem {
   featured: boolean;
 }
 
-export function feedItem(story: Story, site: URL): FeedItem {
+/** What feedItem reads from a story: a content-collection entry, or the same fields built from a dashboard draft. */
+export interface FeedSource {
+  id: string;
+  data: {
+    title: string;
+    dek?: string;
+    section: string;
+    area?: string;
+    column?: string;
+    author: string;
+    authorTitle?: string;
+    church?: string;
+    date: Date;
+    image?: string;
+    imageAlt?: string;
+    photoCredit?: string;
+    photos: string[];
+    photoAlts: string[];
+    featured: boolean;
+  };
+}
+
+export function feedItem(story: FeedSource, site: URL): FeedItem {
   const d = story.data;
   const abs = (path: string) => new URL(path, site).href;
   return {

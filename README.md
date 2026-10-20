@@ -87,7 +87,7 @@ Every build publishes the 50 newest published stories in two formats:
 - **`/rss.xml`**: RSS 2.0 for feed readers and services that import RSS.
 - **`/stories.json`**: for the IMConnected Studio newsletter builder. Every story has `id`, `url`, `title`, `section`, `sectionLabel`, `author`, `date` (YYYY-MM-DD), `photos`, `photoAlts` (alt text for each photo in `photos`, same order; entries may be empty) and `featured`. `dek`, `area`, `areaLabel`, `column`, `authorTitle`, `church`, `image`, `imageAlt` and `photoCredit` appear only when the story has them. `FeedItem` in `src/lib/feed.ts` is the definitive list. All links and photo addresses are absolute, so they work inside an email.
 
-For a newsletter tool on another domain to fetch `/stories.json` directly in the browser, your reverse proxy has to add `Access-Control-Allow-Origin: https://tools.imsda.org` to that path. The site's container doesn't set the header itself. See `docs/STUDIO-IMPORT.md` for the newsletter builder plan.
+`/stories.json` is the public feed and is only the last build. IMConnected Studio's "Import from IMConnected" button doesn't use it: it reads the authenticated, CORS-enabled `GET /api/stories` (see "Story list for Studio" below), which also sees stories published since the last build and the drafts still waiting for an editor, so no proxy header is needed. See `docs/STUDIO-IMPORT.md` for the newsletter builder plan.
 
 ## Publishing from IMConnected Studio
 
@@ -110,6 +110,55 @@ The communication director builds each newsletter in IMConnected Studio. Clickin
 **Timing:** a story is live about 3-5 minutes after publishing, once the image builds and xCloud deploys. The URL returned by the API works from then on.
 
 **Testing locally:** run `node scripts/mock-github.mjs` and the server with `GITHUB_API_URL=http://localhost:4010`, `GITHUB_TOKEN=x`, `GITHUB_REPO=mock/repo`, a made-up `PUBLISH_TOKEN`, then `curl` the endpoint. Commits land in `.mock-prs/direct/<commit>/`. Never point tests at the real site.
+
+### Story list for Studio
+
+`GET /api/stories?limit=50&section=<key>` is what Studio's **Import from IMConnected** button reads. It uses the same bearer token and the same CORS rules as `/api/publish`: `Authorization: Bearer <PUBLISH_TOKEN>`, and only origins in `PUBLISH_ORIGINS` get CORS headers (the `OPTIONS` preflight included; other origins get none). 503 when `PUBLISH_TOKEN` is unset or short, 401 when wrong, 120 requests per IP per hour. `limit` is 1-100 (default 50); an unknown `section` is a 400.
+
+```json
+{ "ok": true, "version": 1, "site": "https://stories.imadventist.org/", "generated": "…",
+  "stories": [ { "id": "…", "url": "…", "title": "…", "…": "every /stories.json field", "status": "published", "source": "site" } ],
+  "drafts":  [ { "id": 12, "status": "new", "source": "agent", "title": "…", "…": "the same fields, no url" } ] }
+```
+
+- **`stories`** are the live stories, newest first, each with exactly the `/stories.json` fields (`feedItem` in `src/lib/feed.ts`) plus `status: "published"` and `source` (`site` for a story that came from git, otherwise the dashboard draft's source: `form`, `studio`, `editor` or `agent`). Nothing is renamed, so `/stories.json` stays the public contract.
+- **How "live" is read.** The built content collection is the base (the same data the site was built from), minus stories an editor unpublished, with the dashboard's `published` drafts laid over it. That's how `/admin/published` works too, and it means a story published a minute ago is in the list even though the site hasn't rebuilt yet. It needs no GitHub call, so it also works when GitHub is down. A draft that is being edited again keeps its live text (the built copy), never its unpublished edits. The one thing it can't see is a story committed straight to git by hand that hasn't been deployed yet.
+- **`drafts`** are the 20 newest `new` and `in_review` drafts (the same item shape, `id` is the draft id, no `url` because they aren't live), so Studio can show "not published yet". Only whitelisted fields are copied: a submitter's name, email, phone and church are never included, and neither are the agent's note or source link. A draft gets an `image` only when its lead photo is a file the site serves without a login (an `/images/...` path); photos uploaded to a draft live outside `public/` and are only served to signed-in editors, so they are left out.
+
+## AI agent API
+
+The communication director's AI agent finds stories on the conference's Facebook pages and writes them up. It sends them here; **they always land as drafts for a person to review and are never published by the agent.**
+
+**Setup:** set `AGENT_API_TOKEN` in `.env` (32+ random characters, `openssl rand -hex 32`, a different value from `PUBLISH_TOKEN`). Unset or short, the API answers 503. It is machine-to-machine: no CORS headers, no cookies, and nothing under `/api/admin`. Rate limit: 60 requests per hour per token (`429` with `Retry-After`).
+
+```bash
+# Which sections and areas are valid?
+curl -s https://<your-site>/api/agent/sections -H "Authorization: Bearer <AGENT_API_TOKEN>"
+
+# Send a story (up to 40 MB of JSON)
+curl -s -X POST https://<your-site>/api/agent/stories \
+  -H "Authorization: Bearer <AGENT_API_TOKEN>" -H "Content-Type: application/json" \
+  -d '{
+    "title": "<headline, up to 140 characters>",
+    "dek": "<one-sentence summary, optional, up to 240>",
+    "body": "<plain text or Markdown>",
+    "section": "news", "area": "churches",
+    "author": "<byline>", "church": "<optional>",
+    "date": "2026-10-19",
+    "sourceUrl": "https://www.facebook.com/<page>/posts/<id>",
+    "note": "<optional note to the editors, e.g. why you picked it>",
+    "photos": [ { "data": "data:image/jpeg;base64,<...>", "alt": "<describe the photo>" } ]
+  }'
+# 201 {"ok":true,"id":12,"status":"created","url":"https://<your-site>/admin/drafts/12"}
+```
+
+- **Fields.** `title` and `body` are required. `section` may be left out (the editor picks it); if sent it must exist, and `area` must belong to it. `date` is `YYYY-MM-DD` (default today). `body` is Markdown; every `<` is written as `&lt;` and control characters are removed from every text field, like a dashboard draft. `sourceUrl` must be an `http(s)` link. Up to 6 photos.
+- **Photos are `data:` URLs only** (JPG, PNG or WebP by file signature, 10 MB each). The site never downloads a remote link (Facebook CDN links expire, and fetching them would be an SSRF risk), so a URL is a `400`. They are stored under `DATA_DIR/uploads`, served only to signed-in editors.
+- **Idempotent by `sourceUrl`.** Posting the same `sourceUrl` again updates that draft (a re-post without `photos` keeps its photos; one with `photos` replaces them) but only while it is still `new` and no editor has touched it. After that it answers `409 {"ok":false,"error":"already_reviewed","id":12}` and changes nothing. It never makes a second draft. Re-posts don't email the editors again.
+- **Errors** are `400 {"ok":false,"error":"<code>","message":"…"}` (for example `title_required`, `bad_section`, `bad_area`, `photo_remote_url`, `photo_too_large`, `photo_not_image`, `too_many_photos`, `bad_source_url`, `invalid_json`, `too_large`), `401` for a wrong or missing token, `429` over the limit.
+- **In the dashboard** the draft has source `agent`: a "From AI agent" badge, the agent's note and a "View original post" link (http(s) only, `rel="noopener noreferrer"`) in the submitter panel, and a "Source: AI agent" filter in the inbox. The editors who have "Email me when a story is submitted" on get the usual email, which says it is from the AI agent. The audit log gets an `agent.story` entry (draft id only), and server logs carry only the draft id.
+- **What the agent can't do.** Publish, reject, or change any draft an editor has touched, or reach any `/api/admin` route. Publishing stays a person's action in `/admin`.
+- **Tests.** `npm run build`, then `SCRATCH=/tmp/imc-agent node scripts/test-agent-api.mjs` starts the mocks and four copies of the built server itself and checks the agent API, migration 010 on a database that already has drafts and photos, and `/api/stories`. Use made-up tokens; never call the real site.
 
 ## Reviewing submissions
 

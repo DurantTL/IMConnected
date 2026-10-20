@@ -8,7 +8,7 @@ export async function getStories(): Promise<Story[]> {
   return all.sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
 }
 
-export function storyUrl(story: Story): string {
+export function storyUrl(story: { id: string }): string {
   return `/stories/${story.id}/`;
 }
 
