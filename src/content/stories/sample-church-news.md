@@ -6,7 +6,7 @@ area: churches
 author: IMConnected Editorial Team
 date: 2026-10-15
 featured: true
-draft: false
+draft: true
 ---
 The first paragraph of a news story should answer five questions: **who** was involved, **what** happened, **when** and **where** it happened, and **why** it matters. A reader who stops after one paragraph should still know the story.
 
