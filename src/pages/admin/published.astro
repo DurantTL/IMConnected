@@ -31,30 +31,30 @@ const error = errorText(q.get('e'));
 const base = siteUrl();
 ---
 <Admin title="Published" current="published" wide>
-  <div class="ad-bar"><h1>Published stories</h1></div>
+  <div class="cms-bar"><h1>Published stories</h1></div>
   {notice && <p class="admin-ok" role="status">{notice}</p>}
   {error && <p class="admin-error" role="alert">{error}</p>}
   <p class="admin-note">Editing loads the story's current file from the live branch into a new draft. Publishing that draft overwrites the same story. Changes reach the public site in about 3–5 minutes.</p>
   {list.length === 0 ? (
     <p class="admin-note">No published stories yet.</p>
   ) : (
-    <ul class="ad-list">
+    <ul class="cms-list">
       {list.map((r) => (
-        <li class="ad-item">
+        <li class="cms-item">
           <a class="title" href={`${base}/stories/${r.slug}/`} rel="noopener">{r.title || r.slug}</a>
-          <div class="ad-meta">
+          <div class="cms-meta">
             <span>{sectionLabel(r.section, r.area)}</span>
             <span>{r.date}</span>
             {r.at && <span>Published <time datetime={new Date(r.at).toISOString()} data-local>{fmtTime(r.at)}</time>{r.by ? ` by ${r.by}` : ''}</span>}
           </div>
-          <div class="ad-actions">
+          <div class="cms-actions">
             <form method="post" action="/api/admin/stories/edit">
               <input type="hidden" name="slug" value={r.slug} />
-              <button class="ad-btn" type="submit">Edit</button>
+              <button class="cms-btn" type="submit">Edit</button>
             </form>
             <form method="post" action="/api/admin/stories/unpublish" data-confirm={`Unpublish "${r.title || r.slug}"? It will be hidden from the public site.`}>
               <input type="hidden" name="slug" value={r.slug} />
-              <button class="ad-btn danger" type="submit">Unpublish</button>
+              <button class="cms-btn danger" type="submit">Unpublish</button>
             </form>
           </div>
         </li>

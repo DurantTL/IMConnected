@@ -34,13 +34,13 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
     </>
   ) : (
     <div class="ed" data-draft={draft.id}>
-      <div class="ad-bar">
+      <div class="cms-bar">
         <h1>{draft.title || 'Untitled story'}</h1>
-        <a class="ad-btn secondary" href="/admin">All drafts</a>
+        <a class="cms-btn secondary" href="/admin">All drafts</a>
       </div>
-      <div class="ad-meta">
-        <span class={`ad-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : draft.status === 'new' ? 'warn' : ''}`}>{STATUS_LABEL[draft.status]}</span>
-        <span class="ad-badge">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span>
+      <div class="cms-meta">
+        <span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : draft.status === 'new' ? 'warn' : ''}`}>{STATUS_LABEL[draft.status]}</span>
+        <span class="cms-badge">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span>
         <span>Created <time datetime={new Date(draft.createdAt).toISOString()} data-local>{fmtTime(draft.createdAt)}</time></span>
       </div>
 
@@ -65,7 +65,7 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
           </p>
           <form method="post" action="/api/admin/stories/edit">
             <input type="hidden" name="slug" value={draft.slug ?? ''} />
-            <button class="ad-btn" type="submit">Edit this story</button>
+            <button class="cms-btn" type="submit">Edit this story</button>
           </form>
         </section>
       )}
@@ -77,7 +77,7 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
           <p class="admin-note">Photos are kept for 30 days after rejection, then deleted.</p>
           <form method="post" action={`/api/admin/drafts/${draft.id}/restore`} id="restore-form">
             <input type="hidden" name="version" value={draft.updatedAt} />
-            <button class="ad-btn" type="submit">Restore to In review</button>
+            <button class="cms-btn" type="submit">Restore to In review</button>
           </form>
         </section>
       )}
@@ -102,7 +102,7 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
             <dt>Email</dt>
             <dd>
               {draft.submitterEmail ? (looksLikeEmail(draft.submitterEmail) ? <a href={`mailto:${draft.submitterEmail}`}>{draft.submitterEmail}</a> : draft.submitterEmail) : '—'}
-              {draft.submitterEmail && (draft.emailVerified ? <span class="ad-badge ok"> Verified</span> : <span class="ad-badge warn"> Not verified</span>)}
+              {draft.submitterEmail && (draft.emailVerified ? <span class="cms-badge ok"> Verified</span> : <span class="cms-badge warn"> Not verified</span>)}
             </dd>
             <dt>Phone</dt><dd>{draft.submitterPhone || '—'}</dd>
             <dt>Church</dt><dd>{draft.submitterChurch || '—'}</dd>
@@ -215,13 +215,13 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
               <div class="ed-field">
                 <label for="f-upload">Add photos</label>
                 <input id="f-upload" type="file" name="photos" form="photo-form" accept="image/jpeg,image/png,image/webp" multiple />
-                <div><button type="submit" form="photo-form" name="op" value="upload" class="ad-btn secondary">Upload</button></div>
+                <div><button type="submit" form="photo-form" name="op" value="upload" class="cms-btn secondary">Upload</button></div>
               </div>
             )}
           </section>
 
           <div class="ed-savebar">
-            <button type="submit" class="ad-btn" id="save-btn">Save</button>
+            <button type="submit" class="cms-btn" id="save-btn">Save</button>
             <span class="ed-status" id="save-status" role="status" aria-live="polite">
               {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
             </span>
@@ -240,7 +240,7 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
           </p>
           <form id="publish-form" method="post" action={`/api/admin/drafts/${draft.id}/publish`}>
             <input type="hidden" name="version" value={draft.updatedAt} />
-            <button type="submit" class="ad-btn">{draft.slug ? 'Publish changes' : 'Publish'}</button>
+            <button type="submit" class="cms-btn">{draft.slug ? 'Publish changes' : 'Publish'}</button>
           </form>
           <details style="margin-top:12px">
             <summary>Reject this draft</summary>
@@ -249,7 +249,7 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
               <label class="ed-field">Internal note (optional, never published)
                 <textarea name="note" maxlength="500"></textarea>
               </label>
-              <p><button type="submit" class="ad-btn danger">Reject draft</button></p>
+              <p><button type="submit" class="cms-btn danger">Reject draft</button></p>
             </form>
           </details>
         </section>
