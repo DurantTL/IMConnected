@@ -51,7 +51,7 @@ async function startServer(extraEnv = {}) {
   log = [];
   server = spawn('node', ['dist/server/entry.mjs'], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DATA_DIR, PORT: String(PORT), HOST: '127.0.0.1', NODE_ENV: 'production', ...extraEnv },
+    env: { ...process.env, DATA_DIR, PORT: String(PORT), HOST: '127.0.0.1', NODE_ENV: 'production', STORY_SYNC_TEST: '1', ...extraEnv },
   });
   const sink = (d) => log.push(...String(d).split('\n').filter(Boolean));
   server.stdout.on('data', sink);
@@ -316,6 +316,42 @@ try {
   await sleep(800);
   check('a story that always fails is attempted exactly 5 passes, then no timer or request starts another', passes() === 5 && log.some((l) => l.includes('pass 5 of 5')), `passes=${passes()}`);
   check('...and the other stories were still mirrored', q('SELECT COUNT(*) AS n FROM stories WHERE slug != ? AND source = ?', failing, 'git')[0].n >= builtIds.length - 1);
+
+  // ================= part 5: a lead image outside images/stories is tracked by the build marker =================
+  // Needs a real build with one extra synthetic story; the extra files are removed and the site rebuilt afterwards.
+  await stopServer();
+  const { execFileSync } = await import('node:child_process');
+  const extraMd = path.join(ROOT, 'src/content/stories/zz-test-marker.md');
+  const extraPub = path.join(ROOT, 'public/images/zz-test-marker.png');
+  const extraDist = path.join(ROOT, 'dist/client/images/zz-test-marker.png');
+  const pngLike = (fill) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(56, fill)]);
+  try {
+    fs.writeFileSync(extraPub, pngLike(1));
+    fs.writeFileSync(extraMd, '---\ntitle: "Synthetic marker test story"\nsection: news\narea: churches\nauthor: "Test Author"\ndate: 2026-10-01\nimage: "/images/zz-test-marker.png"\nimageAlt: "A synthetic test image"\nphotos: []\nfeatured: false\ndraft: false\n---\nSynthetic text for the build marker test.\n');
+    execFileSync('npm', ['run', 'build'], { cwd: ROOT, stdio: 'ignore' });
+    await startServer();
+    await waitForSync();
+    const row = () => q("SELECT p.sha256, p.path FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = 'zz-test-marker'")[0];
+    check('a story whose lead image lives at /images/<name>.png (outside stories/) is mirrored', row()?.sha256 === sha(pngLike(1)), JSON.stringify(row()));
+    await stopServer();
+    const swapped = pngLike(2);
+    fs.writeFileSync(extraDist, swapped); // same size, different bytes, new mtime; the Markdown is untouched
+    const t = new Date(Date.now() + 300_000);
+    fs.utimesSync(extraDist, t, t);
+    await startServer();
+    const line5 = await waitForSync();
+    check('a same-size swap of that image is picked up after a new build', row()?.sha256 === sha(swapped) && /, [1-9]\d* copied/.test(line5), `${line5} ${JSON.stringify(row())}`);
+    const served = Buffer.from(await (await fetch(`${BASE}/media/${row().path}`)).arrayBuffer());
+    check('...and /media serves the new bytes with the png type', sha(served) === sha(swapped));
+    await stopServer();
+  } finally {
+    fs.rmSync(extraMd, { force: true });
+    fs.rmSync(extraPub, { force: true });
+    fs.rmSync(extraDist, { force: true });
+    execFileSync('npm', ['run', 'build'], { cwd: ROOT, stdio: 'ignore' }); // put dist/ back as it was
+  }
+  await startServer();
+  await waitForSync();
 
   const leaked = log.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|token/i.test(l));
   check('the server log has no contact details or secrets', leaked.length === 0, leaked.join(' | '));

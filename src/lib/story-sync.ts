@@ -12,8 +12,8 @@
 // happens BEFORE its database write, and each story is written in its own short transaction, so the sync never
 // holds the write lock while doing file I/O. A photo is reused WITHOUT being read only when its source path is the
 // one the stored row came from, its size matches (story_photos.bytes), its file is in the media folder, and the
-// build marker (DATA_DIR/media/.build-marker: a hash of the built data-layer chunk name and of the size and mtime of
-// every built story photo) is unchanged since the last fully successful pass. After a new build the marker differs,
+// build marker (DATA_DIR/media/.build-marker: a hash of the built data-layer chunk name and of the path, size and
+// mtime of exactly the built files the stories reference, wherever they live under /images) is unchanged since the last fully successful pass. After a new build the marker differs,
 // so each size-matching photo is stream-hashed read-only (async, yielding) and compared with the stored sha256;
 // it is copied only when the bytes really changed (a same-size replacement is therefore picked up).
 // A pass with a failed story (or a thrown error) is retried after about a minute, at most 5 passes per process.
@@ -57,20 +57,21 @@ export interface SyncResult { inserted: number; updated: number; unchanged: numb
 
 const markerFile = () => path.join(mediaDir(), '.build-marker');
 
-/** Cheap fingerprint of the current build: the data-layer chunk's name plus size and mtime of every built story photo. */
-async function buildMarker(clientDir: string | null): Promise<string> {
+/**
+ * Cheap fingerprint of the current build: the data-layer chunk's name plus the path, size and mtime of exactly the
+ * built files the stories reference (every image and photos entry under /images/, deduplicated and sorted). No
+ * folder is walked, so a photo anywhere under /images (not only /images/stories) is covered.
+ */
+async function buildMarker(clientDir: string | null, files: string[]): Promise<string> {
   const parts: string[] = [];
   if (clientDir) {
     try {
       for (const f of await fs.promises.readdir(path.join(clientDir, '..', 'server', 'chunks'))) if (f.startsWith('_astro_data-layer-content')) parts.push(f);
     } catch { /* no server folder next to the client folder */ }
-    try {
-      const root = path.join(clientDir, 'images', 'stories');
-      for (const rel of (await fs.promises.readdir(root, { recursive: true })).sort()) {
-        const st = await fs.promises.stat(path.join(root, rel)).catch(() => null);
-        if (st?.isFile()) parts.push(`${rel}:${st.size}:${Math.floor(st.mtimeMs)}`);
-      }
-    } catch { /* no story photos */ }
+  }
+  for (const file of [...new Set(files)].sort()) {
+    const st = await fs.promises.stat(file).catch(() => null);
+    parts.push(st?.isFile() ? `${path.relative(clientDir ?? '', file)}:${st.size}:${Math.floor(st.mtimeMs)}` : `${path.relative(clientDir ?? '', file)}:missing`);
   }
   return sha256Of(parts.join('\n'));
 }
@@ -82,8 +83,9 @@ async function hashFile(file: string): Promise<string> {
   return hash.digest('hex');
 }
 
-// Test hooks (the story-store test sets them; unset in production): fail one slug on purpose, shorten the retry wait.
-const failSlug = () => process.env.STORY_SYNC_TEST_FAIL_SLUG;
+// Test hooks (only honoured with STORY_SYNC_TEST=1, which the story-store test sets; unset in production): fail one slug on purpose, shorten the retry wait.
+const testHooks = process.env.STORY_SYNC_TEST === '1';
+const failSlug = () => (testHooks ? process.env.STORY_SYNC_TEST_FAIL_SLUG : undefined);
 
 /**
  * Copy one photo to DATA_DIR/media/stories/<slug>/<sha256>.<ext>, hashing it while it streams. The temp file has
@@ -129,6 +131,7 @@ async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, p
     console.error(`[stories] photo not found in the build for ${slug}: ${p.src}`);
     return remote();
   }
+  let verified = false;
   if (known?.path && known.sha256 && known.bytes === size && knownSrc === p.src && known.path.endsWith(`.${ext}`)) {
     const exists = await fs.promises.access(path.join(mediaDir(), known.path)).then(() => true, () => false);
     if (exists) {
@@ -137,9 +140,10 @@ async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, p
       // New build: same path and size can still be different bytes. Hash read-only; copy only on a mismatch.
       result.hashed++;
       if ((await hashFile(file)) === known.sha256) return reuse;
+      verified = true;
     }
   }
-  result.hashed++;
+  if (!verified) result.hashed++; // each photo is counted once, even when it was hashed to verify and then copied
   const { rel, sha, bytes } = await copyAndHash(file, slug, ext, result);
   return { position, kind: p.kind, path: rel, url: null, alt: p.alt, sha256: sha, bytes };
 }
@@ -149,7 +153,12 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   const { getStories } = await import('./stories');
   const built = await getStories();
   const clientDir = builtClientDir();
-  const marker = await buildMarker(clientDir);
+  const referenced: string[] = [];
+  for (const entry of built) for (const src of [entry.data.image, ...entry.data.photos]) {
+    const f = src ? builtPhotoFile(clientDir, src) : null;
+    if (f) referenced.push(f);
+  }
+  const marker = await buildMarker(clientDir, referenced);
   const markerChanged = (await fs.promises.readFile(markerFile(), 'utf8').catch(() => '')) !== marker;
   const result: SyncResult = { inserted: 0, updated: 0, unchanged: 0, unpublished: 0, skipped: 0, hashed: 0, copied: 0 };
   const seen = new Set<string>();
@@ -210,7 +219,7 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   return result;
 }
 
-const RETRY_MS = Number(process.env.STORY_SYNC_TEST_RETRY_MS) || 60_000;
+const RETRY_MS = (testHooks && Number(process.env.STORY_SYNC_TEST_RETRY_MS)) || 60_000;
 const MAX_PASSES = 5;
 let busy = false;
 let done = false;
