@@ -202,6 +202,14 @@ const baselineHtml = (urlPath) => fs.readFileSync(path.join(BASELINE, urlPath ==
   const flaky = () => pc.cachedPage('/flaky', async () => { if (calls++ === 0) { await sleep(30); throw new Error('boom'); } return { page: { body: 'ok', type: 't' } }; });
   const [f1, f2] = await Promise.allSettled([flaky(), flaky()]);
   check('a render that throws rejects only its own request; a waiting request renders on its own', f1.status === 'rejected' && f2.status === 'fulfilled' && f2.value.page.body === 'ok', JSON.stringify([f1.status, f2.status]));
+  {
+    const hh = await import(pathToFileURL(await (async () => { const o = path.join(SCRATCH, 'story-holds.mjs'); await build({ input: path.join(ROOT, 'src/lib/story-holds.ts'), output: { file: o, format: 'esm' }, platform: 'node', logLevel: 'silent' }); return o; })()).href);
+    const sha = (i) => createHash('sha1').update(String(i)).digest('hex');
+    check('a commit list that is empty or only whitespace means "no list"', hh.parseCommits('') === null && hh.parseCommits(' \n\n \r\n') === null);
+    check('a good list parses (sha + time, or the old sha-only format)', hh.parseCommits(`${sha(1)} 100\n${sha(2)} 200\n`).count === 2 && hh.parseCommits(`${sha(1)}\n${sha(2)}\n`).oldestMs === null);
+    check('a non-empty list with any malformed line, or a duplicate sha, is unusable (never "no list")',
+      ['garbage', `${sha(1)} 100\nnot-a-sha 5`, `${sha(1)} abc`, `${sha(1)} 100\n${sha(1)} 90`, `${sha(1)} 100 extra`, sha(1).slice(1)].every((t) => hh.parseCommits(t)?.unusable === true));
+  }
   const keys = {
     '/': '/', '/news/': '/news', '/news': '/news', '/news/churches/': '/news/churches', '/stories/some-slug/': '/stories/some-slug', '/stories.json': '/stories.json', '/rss.xml': '/rss.xml',
   };
@@ -369,7 +377,7 @@ try {
     check('Studio publishes the same slug again (mock GitHub)', studio.status === 200);
     check('...it stays hidden on the server until an image has the unpublish commit', (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
     writeList(60, 'newer-image', Math.floor(Date.now() / 1000), [x1]);
-    check('an image whose commit list has the unpublish commit drops the hold and shows the story (Studio path)', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'live');
+    check('an image whose commit list has the unpublish commit drops the hold and shows the story (Studio path)', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'live');
   }
 
   // ================= part 2: equivalence with the prerendered site, served from the table =================
@@ -392,8 +400,11 @@ try {
     const x2 = latestUnpublishSha();
     const nowSec = Math.floor(Date.now() / 1000);
     // the 200-commit safeguard: an unpublish older than the list's window is in the build
+    run('UPDATE story_holds SET unpublish_time = NULL WHERE slug = ?', slug);
     writeList(200, 'full-window-newer', nowSec + 86400);
-    check('a full 200-commit list whose oldest commit is newer than the unpublish (+10 min) releases the story: the unpublish is older than the window', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0);
+    check('a full newer 200-commit list does not release a hold that has no recorded commit time (no safeguard)', await restartMain() && (await get(`/stories/${slug}/`)).status === 404);
+    run('UPDATE story_holds SET unpublish_time = ? WHERE slug = ?', Date.now(), slug);
+    check('a full 200-commit list whose oldest commit is newer than the unpublish (+10 min) releases the story: the unpublish is older than the window', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 0);
     await post('/api/admin/stories/unpublish', cookie, { slug });
     const x3 = latestUnpublishSha();
     check('(a new unpublish records a new commit)', x3 !== x2 && q('SELECT unpublish_sha FROM story_holds WHERE slug = ?', slug)[0].unpublish_sha === x3);
@@ -409,6 +420,38 @@ try {
     check('a local build without a commit list releases the hold once its build marker differs', await restartMain() && (await get(`/stories/${slug}/`)).status === 200);
     if (BASELINE) await comparePages('after unpublish, publish again and a new build', true);
 
+    // ---- a commit list that can't be parsed keeps every hold active ----
+    await post('/api/admin/stories/unpublish', cookie, { slug });
+    await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
+    const xu = latestUnpublishSha();
+    fs.writeFileSync(COMMITS, `${xu} ${nowSec}\nthis line is not a commit\n`);
+    check('a malformed non-empty commit list (even one containing the unpublish commit) keeps the story hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
+    fs.writeFileSync(COMMITS, `${xu} ${nowSec}\n${xu} ${nowSec}\n`);
+    check('a commit list with a duplicate sha keeps it hidden too', await restartMain() && (await get(`/stories/${slug}/`)).status === 404);
+    fs.writeFileSync(COMMITS, `${xu} ${nowSec}\n`);
+    check('a good list with the unpublish commit releases it (hold kept as a released record)', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT released_at FROM story_holds WHERE slug = ?', slug)[0].released_at > 0);
+    fs.rmSync(COMMITS, { force: true });
+
+    // ---- the unpublish and its hold are written together, and publishing needs the hold ----
+    const mockTime = q('SELECT unpublish_time FROM story_holds WHERE slug = ?', slug)[0].unpublish_time;
+    check('the hold has GitHub\'s commit time, not just the server clock', Math.abs(mockTime - Date.now()) < 3600_000 && mockTime > 0, String(mockTime));
+    run("CREATE TRIGGER zz_fail_hold BEFORE INSERT ON story_holds BEGIN SELECT RAISE(ABORT, 'test: hold can not be written'); END");
+    const bad = await post('/api/admin/stories/unpublish', cookie, { slug });
+    run('DROP TRIGGER zz_fail_hold');
+    check('if the hold can\'t be written the editor gets a clear error and nothing is half-recorded (draft not marked unpublished)', bad.params.get('e') === 'unpublish_not_recorded' && q('SELECT unpublished_at FROM drafts WHERE slug = ?', slug)[0].unpublished_at === null, bad.loc);
+    await post('/api/admin/stories/unpublish', cookie, { slug });
+    run('DELETE FROM story_holds WHERE slug = ?', slug);
+    const refused = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
+    check('publishing a story that was unpublished but has no hold row is refused with a clear notice', refused.params.get('e') === 'hold_missing' && q('SELECT unpublished_at FROM drafts WHERE slug = ?', slug)[0].unpublished_at !== null, refused.loc);
+    await post('/api/admin/stories/unpublish', cookie, { slug }); // records the hold again
+    const xr = latestUnpublishSha();
+    writeList(20, 'r', nowSec, [xr]);
+    check('(a released hold)', await restartMain() && q('SELECT released_at FROM story_holds WHERE slug = ?', slug)[0].released_at > 0);
+    const afterRelease = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
+    check('...publishing after a released hold is accepted (the record of the hold is kept)', afterRelease.params.get('n') === 'published' && !afterRelease.params.get('e'), afterRelease.loc);
+    fs.rmSync(COMMITS, { force: true });
+    await restartMain();
+
     // ---- the build marker can't be worked out while unpublishing: the story must still stay hidden ----
     check('(restart with a failing build marker)', await restartMain({ STORY_SYNC_TEST_FAIL_MARKER: '1' }));
     await post('/api/admin/stories/unpublish', cookie, { slug });
@@ -419,9 +462,9 @@ try {
     const rp2 = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: dd.updated_at });
     check('republishing a held story tells the editor it returns with the next deploy', rp2.params.get('n') === 'published_held', rp2.loc);
     check('...and it stays hidden', (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
-    check('after a restart (no commit list, NULL marker) it is still hidden: a NULL marker never counts as a different build', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText() && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 1);
+    check('after a restart (no commit list, NULL marker) it is still hidden: a NULL marker never counts as a different build', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText() && q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 1);
     writeList(30, 'x', nowSec, [x4]);
-    check('an image that contains the unpublish commit shows it', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0);
+    check('an image that contains the unpublish commit shows it', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 0);
     fs.rmSync(COMMITS, { force: true });
   }
 

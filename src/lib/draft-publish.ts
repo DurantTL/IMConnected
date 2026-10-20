@@ -187,7 +187,7 @@ export async function loadStory(cfg: GitHubConfig, slug: string): Promise<Loaded
 }
 
 /** Commit `draft: true` to a live story. Returns its title, or null when the story file doesn't exist. */
-export async function unpublishStory(cfg: GitHubConfig, slug: string, editorName: string): Promise<{ title: string; sha: string } | null> {
+export async function unpublishStory(cfg: GitHubConfig, slug: string, editorName: string): Promise<{ title: string; sha: string; time?: number } | null> {
   if (!validSlug(slug)) throw new EditorError('slug_bad');
   const file = await readFileFromBase(cfg, storyPath(slug));
   if (!file) return null;
@@ -197,9 +197,9 @@ export async function unpublishStory(cfg: GitHubConfig, slug: string, editorName
   block = /^draft:.*$/m.test(block) ? block.replace(/^draft:.*$/m, 'draft: true') : `${block}\ndraft: true`;
   const next = m[1] + block + file.content.slice(m[1].length + m[2].length);
   const title = str((parseFrontmatter(file.content).frontmatter as Record<string, unknown>).title) || slug;
-  const { sha } = await commitToBase(cfg, {
+  const { sha, time } = await commitToBase(cfg, {
     files: [{ path: storyPath(slug), content: next, encoding: 'utf-8' }],
     message: `Unpublish "${oneLine(title)}" (by ${oneLine(editorName) || 'an editor'})`,
   });
-  return { title, sha };
+  return { title, sha, time };
 }

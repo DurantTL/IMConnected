@@ -120,6 +120,17 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     console.error('[drafts] GITHUB_TOKEN / GITHUB_REPO not configured');
     return refuse('no_github');
   }
+  // Fail closed: a story the editor unpublished must have its hold (a released one counts). Without it the old text
+  // could come back, so the editor is asked to unpublish again first.
+  if (draft.unpublishedAt !== null && draft.slug) {
+    let hold: ReturnType<typeof getHold>;
+    try {
+      hold = getHold(draft.slug);
+    } catch {
+      hold = undefined;
+    }
+    if (!hold) return refuse('hold_missing');
+  }
   if (publishing.has(draft.id)) return refuse('already_publishing');
   publishing.add(draft.id);
   let reserved: string | null = null;
@@ -146,7 +157,8 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     // that contains the unpublish commit runs: the server's build and mirror still have its old text.
     let held = false;
     try {
-      held = getHold(built.slug) !== undefined;
+      const h = getHold(built.slug);
+      held = h !== undefined && h.releasedAt === null;
     } catch (err) {
       console.error('[stories] could not read the hold', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
@@ -159,7 +171,7 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     } catch (err) {
       console.error('[drafts] published; cleanup afterwards failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
-    return redirectTo(page, { n: r.stale ? 'published_stale' : held ? 'published_held' : 'published' });
+    return redirectTo(page, { n: held ? 'published_held' : r.stale ? 'published_stale' : 'published' });
   } catch (err) {
     if (err instanceof EditorError) return redirectTo(page, { e: err.code });
     // Give the slug back only when GitHub definitely refused the commit (4xx). After a network error or a

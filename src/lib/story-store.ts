@@ -210,29 +210,40 @@ export function unpublishStory(slug: string, now = Date.now()): boolean {
   return Number(r.changes) > 0;
 }
 
-/** Keep a story off the public pages until an image that contains its unpublish commit runs (see story-holds.ts and migration 012). */
-export function holdStory(slug: string, buildMarker: string | null, unpublishSha: string | null, now = Date.now()): void {
-  getDb().prepare('INSERT OR REPLACE INTO story_holds (slug, build_marker, unpublish_sha, created_at) VALUES (?, ?, ?, ?)').run(slug, buildMarker, unpublishSha, now);
+/**
+ * Keep a story off the public pages until an image that contains its unpublish commit runs (see story-holds.ts and
+ * migration 012). Call it inside the same transaction as the unpublish itself; `unpublishTime` is GitHub's commit time (ms).
+ */
+export function holdStory(slug: string, unpublishSha: string, unpublishTime: number | null, now = Date.now()): void {
+  getDb().prepare('INSERT OR REPLACE INTO story_holds (slug, build_marker, unpublish_sha, unpublish_time, released_at, created_at) VALUES (?, NULL, ?, ?, NULL, ?)').run(slug, unpublishSha, unpublishTime, now);
   invalidateStories();
 }
 
-export interface StoredHold { marker: string | null; unpublishSha: string | null; createdAt: number }
+/** Fill in the build marker of a hold written by holdStory (only if it is still that unpublish's hold). */
+export function setHoldMarker(slug: string, unpublishSha: string, marker: string): void {
+  getDb().prepare('UPDATE story_holds SET build_marker = ? WHERE slug = ? AND unpublish_sha = ? AND released_at IS NULL').run(marker, slug, unpublishSha);
+}
 
-type HoldRow = { slug: string; build_marker: string | null; unpublish_sha: string | null; created_at: number };
-const toHold = (r: HoldRow): StoredHold => ({ marker: r.build_marker, unpublishSha: r.unpublish_sha, createdAt: Number(r.created_at) });
+export interface StoredHold { marker: string | null; unpublishSha: string | null; unpublishTime: number | null; releasedAt: number | null }
 
+type HoldRow = { slug: string; build_marker: string | null; unpublish_sha: string | null; unpublish_time: number | null; released_at: number | null };
+const toHold = (r: HoldRow): StoredHold => ({ marker: r.build_marker, unpublishSha: r.unpublish_sha, unpublishTime: r.unpublish_time === null ? null : Number(r.unpublish_time), releasedAt: r.released_at === null ? null : Number(r.released_at) });
+const HOLD_COLS = 'slug, build_marker, unpublish_sha, unpublish_time, released_at';
+
+/** The hold row of a story, released or not (a released one is kept as a record that the hold existed). */
 export function getHold(slug: string): StoredHold | undefined {
-  const r = getDb().prepare('SELECT slug, build_marker, unpublish_sha, created_at FROM story_holds WHERE slug = ?').get(slug) as HoldRow | undefined;
+  const r = getDb().prepare(`SELECT ${HOLD_COLS} FROM story_holds WHERE slug = ?`).get(slug) as HoldRow | undefined;
   return r ? toHold(r) : undefined;
 }
 
+/** The holds still in force (not released). */
 export function listHolds(): Map<string, StoredHold> {
-  const rows = getDb().prepare('SELECT slug, build_marker, unpublish_sha, created_at FROM story_holds').all() as HoldRow[];
+  const rows = getDb().prepare(`SELECT ${HOLD_COLS} FROM story_holds WHERE released_at IS NULL`).all() as HoldRow[];
   return new Map(rows.map((r) => [r.slug, toHold(r)]));
 }
 
-export function releaseHold(slug: string): void {
-  getDb().prepare('DELETE FROM story_holds WHERE slug = ?').run(slug);
+export function releaseHold(slug: string, now = Date.now()): void {
+  getDb().prepare('UPDATE story_holds SET released_at = ? WHERE slug = ? AND released_at IS NULL').run(now, slug);
 }
 
 /** Slugs of the stories of one source with a given status (the git sync uses this to find stories that left the build). */

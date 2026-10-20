@@ -58,6 +58,8 @@ export interface Draft extends DraftFields {
   publishedByName: string | null;
   /** Studio published over this story while this draft had unpublished edits (ms), else null. */
   studioOverwroteAt: number | null;
+  /** When an editor unpublished the story (the draft keeps its slug; cleared by a publish) */
+  unpublishedAt: number | null;
   /** True when this draft's story is live on the site (published and not unpublished since). */
   live: boolean;
 }
@@ -134,6 +136,7 @@ function toDraft(r: Row): Draft {
     // A Studio publish has no editor (published_by is NULL) and sets published_via_studio.
     publishedByName: n(r.published_via_studio) === 1 ? STUDIO_NAME : sn(r.published_by_name),
     studioOverwroteAt: r.studio_overwrote_at == null ? null : n(r.studio_overwrote_at),
+    unpublishedAt: r.unpublished_at == null ? null : n(r.unpublished_at),
     live: r.published_commit != null && r.slug != null && r.unpublished_at == null,
   };
 }

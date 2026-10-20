@@ -46,6 +46,8 @@ export const ERRORS = {
   load_failed: 'We could not load that story right now. Please try again.',
   unpublish_no_github: 'Unpublishing is not set up on this server.',
   unpublish_failed: 'We could not unpublish right now. Please try again in a few minutes.',
+  unpublish_not_recorded: 'The story is unpublished in git, but this server could not record that. Do not publish it again before the next deploy; ask the site administrator.',
+  hold_missing: 'This story was unpublished but its safety record is missing here. Unpublish it again, then publish.',
   no_frontmatter: 'That story file has no frontmatter, so it was left alone.',
   section_unknown: 'That story uses a section this editor does not know.',
   date_unreadable: "That story's date could not be read, so it was left alone. Fix it in the story file first.",

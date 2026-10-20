@@ -66,7 +66,7 @@ export async function openPullRequest(
 
   // 3. Tree + commit
   const newTree = await gh<{ sha: string }>(cfg, 'POST', '/git/trees', { base_tree: baseCommit.tree.sha, tree });
-  const commit = await gh<{ sha: string }>(cfg, 'POST', '/git/commits', {
+  const commit = await gh<{ sha: string; committer?: { date?: string } }>(cfg, 'POST', '/git/commits', {
     message: opts.commitMessage,
     tree: newTree.sha,
     parents: [baseSha],
@@ -156,7 +156,7 @@ export async function readFileFromBase(cfg: GitHubConfig, path: string): Promise
  * Blobs, tree on the current tip, commit, then a non-forced ref update. If the branch
  * moved in the meantime, the tree and commit are rebuilt on the new tip once.
  */
-export async function commitToBase(cfg: GitHubConfig, opts: { files: NewFile[]; message: string }): Promise<{ sha: string }> {
+export async function commitToBase(cfg: GitHubConfig, opts: { files: NewFile[]; message: string }): Promise<{ sha: string; time?: number }> {
   const entries = [];
   for (const f of opts.files) {
     const blob = await gh<{ sha: string }>(cfg, 'POST', '/git/blobs', { content: f.content, encoding: f.encoding });
@@ -176,7 +176,9 @@ export async function commitToBase(cfg: GitHubConfig, opts: { files: NewFile[]; 
         parents: [baseSha],
       });
       await gh(cfg, 'PATCH', `/git/refs/heads/${encodeURIComponent(cfg.baseBranch)}`, { sha: commit.sha, force: false });
-      return { sha: commit.sha };
+      // GitHub's own time for the commit (ms), not this server's clock; undefined when the response has none.
+      const time = Date.parse(commit.committer?.date ?? '');
+      return { sha: commit.sha, time: Number.isFinite(time) ? time : undefined };
     } catch (err) {
       lastError = err;
     }

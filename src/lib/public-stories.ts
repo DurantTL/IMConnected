@@ -69,7 +69,7 @@ async function listFromBuild(): Promise<PublicStory[]> {
   try {
     hidden = listUnpublishedSlugs();
     // Held stories (unpublished, then published again; the running build still has the old text) stay hidden until the
-    // image contains the republish commit. If that can't be worked out, every held story stays hidden.
+    // image contains the unpublish commit. If that can't be worked out, every held story stays hidden.
     const holds = listHolds();
     if (holds.size) {
       let marker: string | null = null;

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export interface Hold { marker: string | null; unpublishSha: string | null; createdAt: number }
+export interface Hold { marker: string | null; unpublishSha: string | null; unpublishTime: number | null }
 
 export interface BuildCommits {
   shas: Set<string>;
@@ -21,19 +21,29 @@ export const COMMIT_WINDOW = 200;
 /** Allowed gap between a hold's creation and the unpublish commit it describes (clock differences, commit order). */
 export const WINDOW_MARGIN_MS = 10 * 60 * 1000;
 
-let commits: BuildCommits | null | undefined;
+/** A commit list that exists but can't be trusted (a malformed line or a duplicate): every hold stays active. */
+export interface UnusableCommits { unusable: true }
+export type CommitList = BuildCommits | UnusableCommits | null;
 
-/** Parse a commit list: "<40 hex> <unix seconds>" per line (the old "<40 hex>" alone is accepted too, without a time). Other lines are ignored. */
-export function parseCommits(text: string): BuildCommits | null {
+let commits: CommitList | undefined;
+
+/**
+ * Parse a commit list: "<40 hex> <unix seconds>" per line (the old "<40 hex>" alone is accepted too, without a time).
+ * Null only for an empty or whitespace-only text. Any other non-blank line, or a duplicate sha, makes the whole list unusable.
+ */
+export function parseCommits(text: string): CommitList {
   const shas = new Set<string>();
   const times: number[] = [];
   let timed = true;
   let count = 0;
-  for (const line of text.split('\n')) {
-    const m = /^([0-9a-f]{40})(?: (\d{1,12}))?$/i.exec(line.trim());
-    if (!m) continue;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = /^([0-9a-f]{40})(?: (\d{1,12}))?$/i.exec(line);
+    const sha = m?.[1].toLowerCase();
+    if (!m || !sha || shas.has(sha)) return { unusable: true };
     count++;
-    shas.add(m[1].toLowerCase());
+    shas.add(sha);
     if (m[2] === undefined) timed = false;
     else times.push(Number(m[2]) * 1000);
   }
@@ -46,7 +56,7 @@ export function parseCommits(text: string): BuildCommits | null {
  * Dockerfile and docker.yml), or BUILD_COMMITS_FILE. Null when there is no such file or it is empty (a local or dev
  * build). Read once per process.
  */
-export function buildCommits(): BuildCommits | null {
+export function buildCommits(): CommitList {
   if (commits !== undefined) return commits;
   const candidates: string[] = [];
   if (process.env.BUILD_COMMITS_FILE) candidates.push(path.resolve(process.env.BUILD_COMMITS_FILE));
@@ -62,6 +72,7 @@ export function buildCommits(): BuildCommits | null {
     try {
       const parsed = parseCommits(fs.readFileSync(file, 'utf8'));
       if (parsed) { commits = parsed; break; }
+      // an empty file: try the next candidate
     } catch { /* try the next */ }
   }
   return commits;
@@ -71,17 +82,20 @@ export function buildCommits(): BuildCommits | null {
  * True while the story must stay hidden. `currentMarker` is the running build's marker, or null when it could not
  * be worked out (only used by builds without a commit list). Fails safe: anything unclear means hidden.
  *  - no unpublish commit recorded: hidden;
- *  - the image's commit list has it: released;
+ *  - a commit list that can't be parsed: hidden;
+ *  - the image's commit list has the unpublish commit: released;
  *  - a list without it: hidden, unless the list is a full window (200) whose oldest commit is more than 10 minutes
- *    newer than the hold, which means the unpublish is older than the window and so is in the build: released;
+ *    newer than GitHub's time for the unpublish commit, which means the unpublish is older than the window and so is
+ *    in the build: released (no recorded commit time: no safeguard, hidden);
  *  - no list (local build): released only when the marker is known and differs from the hold's.
  */
 export function holdActive(hold: Hold, currentMarker: string | null): boolean {
   if (!hold.unpublishSha) return true;
   const built = buildCommits();
+  if (built && 'unusable' in built) return true;
   if (built) {
     if (built.shas.has(hold.unpublishSha.toLowerCase())) return false;
-    return !(built.count >= COMMIT_WINDOW && built.oldestMs !== null && built.oldestMs > hold.createdAt + WINDOW_MARGIN_MS);
+    return !(built.count >= COMMIT_WINDOW && built.oldestMs !== null && hold.unpublishTime !== null && built.oldestMs > hold.unpublishTime + WINDOW_MARGIN_MS);
   }
   if (hold.marker === null || currentMarker === null) return true;
   return hold.marker === currentMarker;

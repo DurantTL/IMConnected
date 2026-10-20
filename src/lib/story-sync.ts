@@ -202,10 +202,10 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
       for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], markerChanged, result));
       // Read the dashboard's unpublish list right before the write, so one made during this pass is not missed.
       // A story unpublished and then published again in the dashboard stays hidden while a hold is active (migration 012,
-      // story-holds.ts): until the running image contains the republish commit. A released hold is dropped here.
+      // story-holds.ts): until the running image contains the unpublish commit. A released hold is marked released here.
       const hold = getHold(slug);
-      const held = hold !== undefined && holdActive(hold, marker);
-      if (hold !== undefined && !held) releaseHold(slug);
+      const held = hold !== undefined && hold.releasedAt === null && holdActive(hold, marker);
+      if (hold !== undefined && hold.releasedAt === null && !held) releaseHold(slug);
       const status = listUnpublishedSlugs().has(slug) || held ? 'unpublished' : 'live';
 
       const base = {

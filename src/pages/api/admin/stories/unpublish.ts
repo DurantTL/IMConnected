@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
-import { markUnpublished } from '../../../../lib/drafts';
+import { markUnpublished, tx } from '../../../../lib/drafts';
 import { unpublishStory, validSlug } from '../../../../lib/draft-publish';
-import { holdStory, unpublishStory as hideStory } from '../../../../lib/story-store';
+import { holdStory, setHoldMarker, unpublishStory as hideStory } from '../../../../lib/story-store';
 import { computeBuildMarker } from '../../../../lib/story-sync';
 import { invalidateStories } from '../../../../lib/public-cache';
 import { EditorError } from '../../../../lib/messages';
@@ -24,26 +24,25 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
   try {
     const out = await unpublishStory(cfg, slug, user.name);
     if (!out) return redirectTo(back, { e: 'story_missing' });
-    markUnpublished(slug, user.id);
-    // Take it off the database-rendered pages right away (the commit above only reaches the build on the next deploy).
-    // The page cache is cleared even when there is no row, because pages read the unpublished list while the mirror is still filling.
+    // Straight after the commit, with no await in between: the draft's unpublished state, the hold (with the commit and
+    // GitHub's time for it) and the table row change together or not at all. Without the hold a later publish could bring
+    // the old text back, so if this fails the editor is told not to publish before the next deploy.
     try {
-      hideStory(slug);
+      tx(() => {
+        markUnpublished(slug, user.id);
+        holdStory(slug, out.sha, out.time ?? null);
+        hideStory(slug);
+      });
     } catch (err) {
-      console.error('[stories] could not hide the unpublished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      console.error('[stories] could not record the unpublish', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      audit('draft.unpublish', { userId: user.id, target: `story:${slug}`, detail: { slug, commit: out.sha, recorded: false }, ip: clientIp(request, clientAddress) });
+      return redirectTo(back, { e: 'unpublish_not_recorded' });
     }
-    // Publishing it again later must not bring the old text back: hold it. The image that contains this commit (out.sha)
-    // releases it. Failing to work out the build marker must not lose the hold (a NULL marker never counts as a different build).
-    let marker: string | null = null;
+    // The build marker (used only by local builds without a commit list) is filled in afterwards; a failure is harmless.
     try {
-      marker = await computeBuildMarker();
+      setHoldMarker(slug, out.sha, await computeBuildMarker());
     } catch (err) {
       console.error('[stories] could not work out the build marker', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    }
-    try {
-      holdStory(slug, marker, out.sha);
-    } catch (err) {
-      console.error('[stories] could not hold the unpublished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
     invalidateStories();
     audit('draft.unpublish', { userId: user.id, target: `story:${slug}`, detail: { slug, commit: out.sha }, ip: clientIp(request, clientAddress) });
