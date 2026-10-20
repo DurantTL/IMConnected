@@ -60,7 +60,7 @@ const enc = encodeURIComponent;
 
       {d.photos.length > 0 && (
         <section class="gallery" aria-label="Photos">
-          {d.photos.map((p, i) => <a href={p}><img src={p} alt={`Photo ${i + 2} from “${d.title}”`} loading="lazy" /></a>)}
+          {d.photos.map((p, i) => <a href={p}><img src={p} alt={d.photoAlts[i] || `Photo ${i + 2} from “${d.title}”`} loading="lazy" /></a>)}
         </section>
       )}
 

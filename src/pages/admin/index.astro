@@ -1,9 +1,63 @@
 ---
 import Admin from '../../layouts/Admin.astro';
+import { SECTIONS } from '../../lib/site';
+import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, type StatusFilter } from '../../lib/drafts';
+import { fmtTime, sectionLabel } from '../../lib/admin-ui';
 export const prerender = false;
-const user = Astro.locals.user;
+
+cleanupRejectedPhotos();
+const q = Astro.url.searchParams;
+const wanted = q.get('status') ?? 'open';
+const status = (STATUS_FILTERS.some((f) => f.value === wanted) ? wanted : 'open') as StatusFilter;
+const section = SECTIONS.some((s) => s.key === q.get('section')) ? (q.get('section') as string) : '';
+const drafts = listDrafts({ status, section: section || undefined });
+const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
 ---
-<Admin title="Dashboard" current="dashboard">
-  <h1>Dashboard</h1>
-  <p class="admin-note">Welcome{user ? `, ${user.name}` : ''}. Drafts and publishing will appear here.</p>
+<Admin title="Drafts" current="drafts" wide>
+  <div class="ad-bar">
+    <h1>Drafts</h1>
+    <form method="post" action="/api/admin/drafts/new"><button class="ad-btn" type="submit">New story</button></form>
+  </div>
+
+  <form class="ad-filters" method="get" action="/admin">
+    <label>Status
+      <select name="status">
+        {STATUS_FILTERS.map((f) => <option value={f.value} selected={f.value === status}>{f.label}</option>)}
+      </select>
+    </label>
+    <label>Section
+      <select name="section">
+        <option value="">All sections</option>
+        {SECTIONS.map((s) => <option value={s.key} selected={s.key === section}>{s.label}</option>)}
+      </select>
+    </label>
+    <button class="ad-btn secondary" type="submit">Filter</button>
+  </form>
+
+  {drafts.length === 0 ? (
+    <p class="admin-note">No drafts match. Stories sent through the submit form and stories you start here will show up in this list.</p>
+  ) : (
+    <ul class="ad-list">
+      {drafts.map((d) => (
+        <li class="ad-item">
+          <a class="title" href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
+          <div class="ad-meta">
+            <span class={`ad-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
+            <span class="ad-badge">{SOURCE_LABEL[d.source]}</span>
+            <span>{sectionLabel(d.section)}</span>
+            {d.church && <span>{d.church}</span>}
+            {d.source !== 'editor' && (d.emailVerified ? <span class="ad-badge ok">Email verified</span> : <span class="ad-badge warn">Email not verified</span>)}
+            <span>{d.photoCount} {d.photoCount === 1 ? 'photo' : 'photos'}</span>
+            <span>Received <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time></span>
+          </div>
+        </li>
+      ))}
+    </ul>
+  )}
 </Admin>
+<script is:inline>
+  document.querySelectorAll('time[data-local]').forEach(function (t) {
+    var d = new Date(t.getAttribute('datetime'));
+    if (!isNaN(d)) t.textContent = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  });
+</script>

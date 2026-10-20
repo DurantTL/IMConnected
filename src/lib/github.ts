@@ -125,6 +125,33 @@ export async function fileExistsOnBase(cfg: GitHubConfig, path: string): Promise
 }
 
 /**
+ * A text file from the base branch through the contents API, or null when it doesn't exist.
+ * Any other answer is an error. Files over 1 MB come back without content and are refused.
+ */
+export async function readFileFromBase(cfg: GitHubConfig, path: string): Promise<{ content: string; sha: string } | null> {
+  const url = `${cfg.apiUrl}/repos/${cfg.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(cfg.baseBranch)}`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'imconnected-submissions',
+    },
+  });
+  if (res.status === 404) {
+    await res.arrayBuffer().catch(() => {});
+    return null;
+  }
+  if (res.status !== 200) {
+    await res.arrayBuffer().catch(() => {});
+    throw new Error(`GitHub GET contents → ${res.status}`);
+  }
+  const data = (await res.json()) as { type?: string; encoding?: string; content?: string; sha?: string };
+  if (data.type !== 'file' || data.encoding !== 'base64' || typeof data.content !== 'string') throw new Error('GitHub GET contents → not a readable file');
+  return { content: Buffer.from(data.content.replace(/\s+/g, ''), 'base64').toString('utf8'), sha: data.sha ?? '' };
+}
+
+/**
  * Commits files straight to the base branch in one commit (no pull request).
  * Blobs, tree on the current tip, commit, then a non-forced ref update. If the branch
  * moved in the meantime, the tree and commit are rebuilt on the new tip once.

@@ -82,7 +82,7 @@ Go to [app.pagescms.org](https://app.pagescms.org), sign in with GitHub and open
 Every build publishes the 50 newest published stories in two formats:
 
 - **`/rss.xml`**: RSS 2.0 for feed readers and services that import RSS.
-- **`/stories.json`**: for the IMConnected Studio newsletter builder. Every story has `id`, `url`, `title`, `section`, `sectionLabel`, `author`, `date` (YYYY-MM-DD), `photos` and `featured`. `dek`, `area`, `areaLabel`, `column`, `authorTitle`, `church`, `image`, `imageAlt` and `photoCredit` appear only when the story has them. `FeedItem` in `src/lib/feed.ts` is the definitive list. All links and photo addresses are absolute, so they work inside an email.
+- **`/stories.json`**: for the IMConnected Studio newsletter builder. Every story has `id`, `url`, `title`, `section`, `sectionLabel`, `author`, `date` (YYYY-MM-DD), `photos`, `photoAlts` (alt text for each photo in `photos`, same order; entries may be empty) and `featured`. `dek`, `area`, `areaLabel`, `column`, `authorTitle`, `church`, `image`, `imageAlt` and `photoCredit` appear only when the story has them. `FeedItem` in `src/lib/feed.ts` is the definitive list. All links and photo addresses are absolute, so they work inside an email.
 
 For a newsletter tool on another domain to fetch `/stories.json` directly in the browser, your reverse proxy has to add `Access-Control-Allow-Origin: https://tools.imsda.org` to that path. The site's container doesn't set the header itself. See `docs/STUDIO-IMPORT.md` for the newsletter builder plan.
 
@@ -99,7 +99,7 @@ The communication director builds each newsletter in IMConnected Studio. Clickin
 **API** (JSON, `Authorization: Bearer <PUBLISH_TOKEN>`)
 
 - `GET /api/publish` returns `{ok, site, sections}` for a connection test and the section list.
-- `POST /api/publish` takes `{newsletter:{name,issueDate}, stories:[{ref,title,section,area,author,dek,body,quote,attribution,photos:[{url,alt,caption}]}]}` (1-12 stories, up to 6 photos each, 40 MB total). Photos are `https://` links (stored as-is, never downloaded) or `data:` JPG/PNG/WebP images (committed under `public/images/stories/<slug>/`).
+- `POST /api/publish` takes `{newsletter:{name,issueDate}, stories:[{ref,title,section,area,author,dek,body,quote,attribution,photos:[{url,alt,caption}]}]}` (1-12 stories, up to 6 photos each, 40 MB total). Each photo's `alt` is published (the first as `imageAlt`, the rest as `photoAlts`). Photos are `https://` links (stored as-is, never downloaded) or `data:` JPG/PNG/WebP images (committed under `public/images/stories/<slug>/`).
 - Slugs are `<issueDate>-<title>`, so publishing the same issue again updates its stories (`status: "updated"`) instead of duplicating them. If any story is invalid the response is `400` with a `ref` and nothing is written.
 - Publishing the same newsletter again overwrites those stories on the site, including any edits made to them on GitHub and their `featured` setting.
 - All text goes through the same escaping as the submit form. Never HTML.
@@ -136,6 +136,7 @@ image: /images/stories/my-story/photo-1.jpg   # file lives in public/images/stor
 imageAlt: "Caption"
 photoCredit: "Photographer"
 photos: []               # extra gallery images
+photoAlts: []            # alt text for each of `photos`, same order (optional)
 featured: false
 draft: false             # true hides it
 ---
@@ -209,3 +210,10 @@ Editors sign in at `/admin` with email + password and a required second factor (
 - Submitter email addresses appear only in the PR description. They are never logged.
 - The GitHub token never reaches the browser and can only touch this one repo.
 - Photos are stored in git. Over a few years that's fine. If the repo eventually gets large, move `public/images` to object storage (R2/S3) and store URLs instead.
+
+### Drafts inbox and story editor
+
+- **`/admin`** is the drafts inbox (new and in-review drafts, newest first; filter by status and section; "New story" starts an editor draft). `/admin/drafts/<id>` is the editor: story fields, a Markdown body with a toolbar and a preview rendered on the server with the site's own Markdown processor, photos (upload, reorder, lead image, alt text, delete; the lead photo's alt text becomes `imageAlt`, the others go to `photoAlts`), autosave every 20 seconds, and a submitter panel (name, email, phone, church, verified) for signed-in editors only. `/admin/published` lists live stories with Edit (loads the current `.md` from `main` into a draft linked to its slug) and Unpublish (commits `draft: true`).
+- **Publishing** checks the draft against the content schema, builds the same `.md` and photo files as `/api/publish` (shared code in `src/lib/storyfile.ts`), and commits to `main` with the message `Publish "<title>" (edited by <editor>)`. It needs `GITHUB_TOKEN` and `GITHUB_REPO` like the submit form. The story is live after the site rebuilds (about 3-5 minutes). Publishing a draft that is linked to a live story overwrites the same slug.
+- **Safety.** Raw HTML is never committed: every `<` in the body is written as `&lt;` (also in code), and `<` and `>` in frontmatter text are written as the YAML escapes `\u003c` and `\u003e`. Links must be http(s), mailto or tel. The preview is shown in a sandboxed frame with no scripts. Uploaded photos live in `DATA_DIR/uploads/<draft>/` under random names (type sniffed, never under `public/`) and are served only to signed-in editors by `/api/admin/photos/<id>`. Photos of rejected drafts are deleted 30 days after rejection (the cleanup runs when the inbox opens, at most once a day). Two editors saving the same draft: the later, stale save is refused ("reload to see changes"). Publishing locks the draft and reserves the slug before the commit, so edits made while it runs are not lost silently; the editor is told if newer edits are not live yet. After a publish the uploaded files are deleted (the photos are in the repo). Submitter contact details are never logged, audited or committed.
+- **Tests.** With the mock GitHub API running, `scripts/test-editor-drafts.mjs` covers all of this (see the header of the script for the commands).

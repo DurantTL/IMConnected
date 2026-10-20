@@ -1,0 +1,5 @@
+---
+export const prerender = false;
+// The inbox lives at /admin; keep /admin/drafts working.
+return Astro.redirect('/admin', 302);
+---

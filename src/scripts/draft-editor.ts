@@ -1,0 +1,178 @@
+// Behaviour for /admin/drafts/<id>: toolbar, server-side preview, autosave, conflict handling.
+// Everything the server renders works without it except the toolbar, the preview and autosave.
+
+const form = document.getElementById('draft-form') as HTMLFormElement | null;
+
+// Show times in the viewer's own time zone (also used by the inbox and published lists).
+for (const t of document.querySelectorAll<HTMLTimeElement>('time[data-local]')) {
+  const d = new Date(t.dateTime);
+  if (!Number.isNaN(d.getTime())) t.textContent = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+if (form) {
+  const body = document.getElementById('f-body') as HTMLTextAreaElement;
+  const statusEl = document.getElementById('save-status') as HTMLElement;
+  const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
+  const conflictEl = document.getElementById('conflict') as HTMLElement;
+  const preview = document.getElementById('preview') as HTMLIFrameElement;
+  const split = document.getElementById('split') as HTMLElement;
+  const section = document.getElementById('f-section') as HTMLSelectElement;
+  const area = document.getElementById('f-area') as HTMLSelectElement;
+  const columnWrap = document.getElementById('f-column-wrap') as HTMLElement;
+  const editable = !form.querySelector('fieldset')?.disabled;
+
+  let dirty = false;
+  let saving: Promise<boolean> | null = null;
+  let conflict = false;
+
+  const setVersion = (v: number | string) => {
+    for (const el of document.querySelectorAll<HTMLInputElement>('input[name="version"]')) el.value = String(v);
+  };
+  const say = (msg: string, bad = false) => {
+    statusEl.textContent = msg;
+    statusEl.style.color = bad ? '#8a1f11' : '';
+  };
+
+  // ---- save ----
+  async function save(): Promise<boolean> {
+    if (!editable || conflict) return !conflict;
+    if (saving) return saving;
+    if (!dirty) return true;
+    saving = (async () => {
+      say('Saving…');
+      dirty = false;
+      try {
+        const res = await fetch(form!.dataset.save!, { method: 'POST', body: new FormData(form!), credentials: 'same-origin', headers: { Accept: 'application/json' } });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          setVersion(data.updatedAt);
+          const t = new Date(data.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          say(`Last saved ${t} by ${data.savedBy}`);
+          return true;
+        }
+        dirty = true;
+        if (data.conflict) {
+          conflict = true;
+          conflictEl.hidden = false;
+          conflictEl.scrollIntoView({ block: 'center' });
+          say('Not saved. Reload to see the other changes.', true);
+        } else {
+          say(data.error || 'Could not save. Try again.', true);
+        }
+        return false;
+      } catch {
+        dirty = true;
+        say('Could not save. Check your connection.', true);
+        return false;
+      } finally {
+        saving = null;
+      }
+    })();
+    return saving;
+  }
+
+  form.addEventListener('input', () => {
+    dirty = true;
+    schedulePreview();
+  });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    dirty = true; // an explicit Save always saves
+    void save();
+  });
+  setInterval(() => {
+    if (dirty && !saving && !conflict) void save();
+  }, 20000);
+  window.addEventListener('beforeunload', (e) => {
+    if (dirty && !conflict) e.preventDefault();
+  });
+
+  // Photo, publish, reject and restore are ordinary form posts; save pending edits first.
+  for (const other of document.querySelectorAll<HTMLFormElement>('#photo-form, #publish-form, #reject-form')) {
+    let resubmitting = false;
+    other.addEventListener('submit', (e) => {
+      if (resubmitting) return;
+      if (!dirty && !saving) return;
+      e.preventDefault();
+      const submitter = (e as SubmitEvent).submitter as HTMLElement | null;
+      void save().then((ok) => {
+        if (!ok) return;
+        resubmitting = true;
+        other.requestSubmit(submitter ?? undefined);
+      });
+    });
+  }
+
+  // ---- toolbar ----
+  const wrap = (before: string, after: string, placeholder: string) => {
+    const { selectionStart: a, selectionEnd: b, value } = body;
+    const sel = value.slice(a, b) || placeholder;
+    body.setRangeText(before + sel + after, a, b, 'end');
+    body.setSelectionRange(a + before.length, a + before.length + sel.length);
+  };
+  const prefixLines = (prefix: string) => {
+    const { selectionStart: a, selectionEnd: b, value } = body;
+    const start = value.lastIndexOf('\n', a - 1) + 1;
+    const chunk = value.slice(start, b) || 'text';
+    body.setRangeText(chunk.split('\n').map((l) => prefix + l).join('\n'), start, b, 'end');
+  };
+  const actions: Record<string, () => void> = {
+    bold: () => wrap('**', '**', 'bold text'),
+    italic: () => wrap('*', '*', 'italic text'),
+    heading: () => prefixLines('## '),
+    quote: () => prefixLines('> '),
+    list: () => prefixLines('- '),
+    link: () => {
+      const url = window.prompt('Link address (https://…)', 'https://');
+      if (url && /^(https?:\/\/|mailto:)/i.test(url.trim())) wrap('[', `](${url.trim()})`, 'link text');
+    },
+  };
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-md]')) {
+    btn.addEventListener('click', () => {
+      body.focus();
+      actions[btn.dataset.md!]?.();
+      dirty = true;
+      schedulePreview();
+    });
+  }
+
+  // ---- preview (rendered on the server; shown in a sandboxed frame that cannot run scripts) ----
+  let previewTimer: number | undefined;
+  let previewSeq = 0;
+  async function renderPreview() {
+    const seq = ++previewSeq;
+    try {
+      const res = await fetch(form!.dataset.preview!, { method: 'POST', body: new FormData(form!), credentials: 'same-origin', headers: { Accept: 'application/json' } });
+      const data = await res.json();
+      if (seq === previewSeq && data.ok) preview.srcdoc = data.doc;
+    } catch {
+      /* the preview is a convenience */
+    }
+  }
+  function schedulePreview() {
+    window.clearTimeout(previewTimer);
+    previewTimer = window.setTimeout(renderPreview, 600);
+  }
+  void renderPreview();
+
+  for (const tab of document.querySelectorAll<HTMLButtonElement>('.ed-tabs [data-view]')) {
+    tab.addEventListener('click', () => {
+      split.dataset.view = tab.dataset.view;
+      for (const t of document.querySelectorAll<HTMLButtonElement>('.ed-tabs [data-view]')) t.setAttribute('aria-pressed', String(t === tab));
+      if (tab.dataset.view === 'preview') void renderPreview();
+    });
+  }
+
+  // ---- section decides which categories and the column field are offered ----
+  function syncSection() {
+    const hasAreas = Array.from(area.options).some((o) => o.value !== '' && o.dataset.section === section.value);
+    for (const opt of Array.from(area.options)) opt.hidden = opt.value === '' ? hasAreas : opt.dataset.section !== section.value;
+    if (area.selectedOptions[0]?.hidden) {
+      const first = Array.from(area.options).find((o) => !o.hidden);
+      if (first) area.value = first.value;
+    }
+    columnWrap.hidden = section.value !== 'columns';
+  }
+  section.addEventListener('change', syncSection);
+  syncSection();
+}

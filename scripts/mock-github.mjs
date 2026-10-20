@@ -1,7 +1,8 @@
 // Local stand-in for the GitHub API, for testing the submit form without a real repo.
 // Usage: node scripts/mock-github.mjs   (then set GITHUB_API_URL=http://localhost:4010)
 // Writes each "pull request" into ./.mock-prs/<branch>/ so you can inspect the files.
-// Direct commits to the base branch (/api/publish) go to ./.mock-prs/direct/<commit>/.
+// Direct commits to the base branch (/api/publish and the /admin editor) go to ./.mock-prs/direct/<commit>/,
+// and GET /contents/<path> returns the newest committed version of a file (404 if never committed).
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -12,8 +13,10 @@ const blobs = new Map();
 const trees = new Map();
 const commits = new Map();
 const prs = new Map(); // PR number -> { head, labels:Set }
-const directFiles = new Set(); // paths committed straight to the base branch
+const directFiles = new Map(); // path -> Buffer, files committed straight to the base branch (newest wins)
 let tip = 'base';
+let failStatus = 0; // POST /__mock/fail {"status":422} makes every final ref update answer with that status until set to 0
+let delayMs = 0; // POST /__mock/delay {"ms":1500} slows the final ref update, to test edits made while a publish is in flight
 let n = 0;
 const id = () => (++n).toString(16).padStart(40, '0');
 
@@ -26,13 +29,20 @@ createServer(async (req, res) => {
   console.log(req.method, p);
 
   if (!req.headers.authorization?.startsWith('Bearer ')) return send(401, { message: 'Bad credentials' });
+  if (req.method === 'POST' && p === '/__mock/fail') { failStatus = Number(body.status) || 0; return send(200, { ok: true }); }
+  if (req.method === 'POST' && p === '/__mock/delay') { delayMs = Number(body.ms) || 0; return send(200, { ok: true }); }
   if (req.method === 'GET' && p.startsWith('/git/ref/heads/')) return send(200, { object: { sha: tip } });
   if (req.method === 'GET' && p.startsWith('/git/commits/')) return send(200, { tree: { sha: commits.get(p.split('/').pop())?.tree ?? 'basetree' } });
   if (req.method === 'GET' && p.startsWith('/contents/')) {
-    return directFiles.has(decodeURIComponent(p.slice('/contents/'.length))) ? send(200, { type: 'file' }) : send(404, { message: 'Not Found' });
+    const file = directFiles.get(decodeURIComponent(p.slice('/contents/'.length)));
+    return file
+      ? send(200, { type: 'file', encoding: 'base64', content: file.toString('base64'), sha: `blob${file.length}` })
+      : send(404, { message: 'Not Found' });
   }
   if (req.method === 'PATCH' && p.startsWith('/git/refs/heads/')) {
     // Direct commit to the base branch (the publish API). Mirrors GitHub: non-fast-forward is refused.
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+    if (failStatus) return send(failStatus, { message: 'Mock failure' });
     const commit = commits.get(body.sha);
     if (!commit || commit.parents?.[0] !== tip) return send(422, { message: 'Update is not a fast forward' });
     const dir = join(OUT, 'direct', body.sha);
@@ -40,8 +50,9 @@ createServer(async (req, res) => {
       const b = blobs.get(entry.sha);
       const file = join(dir, entry.path);
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, Buffer.from(b.content, b.encoding === 'base64' ? 'base64' : 'utf8'));
-      directFiles.add(entry.path);
+      const bytes = Buffer.from(b.content, b.encoding === 'base64' ? 'base64' : 'utf8');
+      writeFileSync(file, bytes);
+      directFiles.set(entry.path, bytes);
     }
     writeFileSync(join(dir, 'COMMIT_MESSAGE.txt'), commit.message);
     tip = body.sha;
