@@ -1,6 +1,6 @@
 // What IMConnected Studio's two calls share: /api/publish and /api/stories use the same bearer token
 // (PUBLISH_TOKEN) and the same browser-origin allowlist (PUBLISH_ORIGINS).
-import { bearerStatus } from './bearer';
+import { bearerStatus, tokensShared } from './bearer';
 
 export function studioCors(request: Request): Record<string, string> {
   const h: Record<string, string> = { Vary: 'Origin' };
@@ -24,6 +24,7 @@ export function studioJson(request: Request, status: number, payload: unknown, e
 
 /** null = fine; otherwise the response to send. */
 export function studioAuth(request: Request): Response | null {
+  if (tokensShared()) return studioJson(request, 503, { ok: false, error: 'Publishing is not configured.' });
   const s = bearerStatus(request, process.env.PUBLISH_TOKEN);
   if (s === 'unconfigured') return studioJson(request, 503, { ok: false, error: 'Publishing is not configured.' });
   if (s === 'unauthorized') return studioJson(request, 401, { ok: false, error: 'Unauthorized.' });

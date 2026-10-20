@@ -5,6 +5,7 @@ import { getSection, isValidArea } from './site';
 import { LIMITS } from './limits';
 import { sniffImage } from './submission';
 import { clean, escapeHtmlInMarkdown, validDate } from './storyfile';
+import { takeSlot } from './rate-window';
 
 export class AgentError extends Error {
   constructor(public code: string, message: string) {
@@ -126,10 +127,8 @@ export function parseAgentStory(input: unknown): AgentStory {
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----
 const WINDOW_MS = 60 * 60 * 1000;
-let hits: number[] = [];
+const hits: number[] = [];
 /** True when this request is over the limit. */
 export function agentRateLimited(now = Date.now()): boolean {
-  hits = hits.filter((t) => now - t < WINDOW_MS);
-  hits.push(now);
-  return hits.length > AGENT_LIMITS.perHour;
+  return !takeSlot(hits, now, AGENT_LIMITS.perHour, WINDOW_MS);
 }

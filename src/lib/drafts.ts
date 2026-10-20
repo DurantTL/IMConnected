@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
+import { validDate } from './storyfile';
 import { ERRORS, type ErrorCode } from './messages';
 
 export type DraftStatus = 'new' | 'in_review' | 'published' | 'rejected';
@@ -297,7 +298,7 @@ const CONFLICT = fail('conflict', 'conflict');
 /** Validation common to saving (lenient) — publishing enforces the full rules. */
 export function checkFieldValues(f: DraftFields): ErrorCode | null {
   if (!getSection(f.section)) return 'bad_section';
-  if (f.date && !/^\d{4}-\d{2}-\d{2}$/.test(f.date)) return 'bad_date';
+  if (f.date && !validDate(f.date)) return 'bad_date';
   return null;
 }
 

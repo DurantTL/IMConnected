@@ -17,6 +17,19 @@ export function bearerStatus(request: Request, secret: string | undefined): 'ok'
   return timingSafeEqual(sha(given), sha(secret)) ? 'ok' : 'unauthorized';
 }
 
+/**
+ * True when AGENT_API_TOKEN and PUBLISH_TOKEN are both set and equal. The AI agent must never hold the token that
+ * lets Studio commit straight to main, so both APIs answer 503 until the operator uses two different secrets.
+ * Logs only that it happened, never a value.
+ */
+export function tokensShared(env = process.env): boolean {
+  const a = env.AGENT_API_TOKEN;
+  const p = env.PUBLISH_TOKEN;
+  if (!a || !p || a !== p) return false;
+  console.error('[auth] AGENT_API_TOKEN and PUBLISH_TOKEN are the same value; /api/agent and the Studio APIs are disabled until they differ.');
+  return true;
+}
+
 /** Reads a request body up to `max` bytes. null = too large. */
 export async function readLimited(request: Request, max: number): Promise<string | null> {
   const declared = Number(request.headers.get('content-length') || 0);

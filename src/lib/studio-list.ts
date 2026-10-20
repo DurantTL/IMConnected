@@ -12,6 +12,7 @@
 // fields are copied: submitter name, email, phone and church never leave the database through this list.
 import { feedItem, type FeedItem, type FeedSource } from './feed';
 import { getStories } from './stories';
+import { validDate } from './storyfile';
 import { listLiveDrafts, listOpenDraftsNewestFirst, listPhotos as listPhotosOf, listUnpublishedSlugs, type Draft, type DraftPhoto, type DraftSource } from './drafts';
 
 export const STUDIO_LIST_MAX = 100;
@@ -36,7 +37,8 @@ function draftAsFeedSource(slugOrId: string, d: Draft, photos: DraftPhoto[]): Fe
   // Only a lead photo that is public counts as the lead; a gallery photo is never promoted to lead.
   const lead = photos[0] && publicPhoto(photos[0]) ? photos[0] : undefined;
   const rest = lead ? photos.slice(1).filter(publicPhoto) : [];
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(d.date) ? new Date(`${d.date}T00:00:00Z`) : new Date(d.createdAt);
+  // A stored date that isn't a real calendar day (older drafts were saved with a loose check) must not break the whole list.
+  const date = validDate(d.date) ? new Date(`${d.date}T00:00:00Z`) : new Date(d.createdAt);
   return {
     id: slugOrId,
     data: {

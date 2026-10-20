@@ -34,7 +34,7 @@ fs.mkdirSync(SCRATCH, { recursive: true });
 const DATA_DIR = path.join(SCRATCH, 'data');
 const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 const MOCK_OUT = path.join(SCRATCH, 'mock-prs');
-const P = { gh: 4510, mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524 };
+const P = { gh: 4510, mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -56,7 +56,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { gh: [], mail: [], a: [], b: [], c: [], d: [] };
+const logs = { gh: [], mail: [], a: [], b: [], c: [], d: [], e: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -157,7 +157,8 @@ start('a', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.a), DA
 start('b', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.b), DATA_DIR: path.join(SCRATCH, 'data-b'), SITE_URL: `http://localhost:${P.b}`, PUBLISH_TOKEN: '' }); // no agent token, no publish token
 start('c', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.c), DATA_DIR: path.join(SCRATCH, 'data-c'), SITE_URL: `http://localhost:${P.c}`, AGENT_API_TOKEN: 'too-short-token' });
 start('d', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.d), DATA_DIR: path.join(SCRATCH, 'data-d'), SITE_URL: `http://localhost:${P.d}`, AGENT_API_TOKEN: AGENT_TOKEN });
-for (const port of [P.gh, P.a, P.b, P.c, P.d]) await waitFor(`http://localhost:${port}/`);
+start('e', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.e), DATA_DIR: path.join(SCRATCH, 'data-e'), SITE_URL: `http://localhost:${P.e}`, AGENT_API_TOKEN: PUBLISH_TOKEN }); // the agent token reuses the publish token
+for (const port of [P.gh, P.a, P.b, P.c, P.d, P.e]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -226,6 +227,36 @@ try {
 
     r = await call(BASE, 'GET', '/api/agent/stories', { token: AGENT_TOKEN });
     check('GET on /api/agent/stories: 405', r.status === 405);
+  }
+
+  // ================= the agent token must differ from the publish token =================
+  {
+    const E = `http://localhost:${P.e}`;
+    const story1 = story({ photos: [] });
+    let r = await call(E, 'POST', '/api/agent/stories', { token: PUBLISH_TOKEN, json: story1 });
+    check('AGENT_API_TOKEN equal to PUBLISH_TOKEN: the agent route answers 503, even with that token', r.status === 503 && r.data.error === 'not_configured', `${r.status} ${r.text.slice(0, 100)}`);
+    r = await call(E, 'GET', '/api/agent/sections', { token: PUBLISH_TOKEN });
+    check('...also /api/agent/sections', r.status === 503);
+    r = await call(E, 'POST', '/api/publish', { token: PUBLISH_TOKEN, json: { newsletter: { name: 'x', issueDate: '2026-10-19' }, stories: [] } });
+    check('...and /api/publish (the agent cannot commit to main with the shared secret)', r.status === 503);
+    r = await call(E, 'GET', '/api/stories', { token: PUBLISH_TOKEN });
+    check('...and /api/stories', r.status === 503);
+    check('...nothing reached GitHub from it', !logs.gh.some((l) => /^(POST|PUT|PATCH) /.test(l)));
+    check('...the log says so without naming a value', logs.e.some((l) => l.includes('AGENT_API_TOKEN and PUBLISH_TOKEN are the same')) && !logs.e.join('\n').includes(PUBLISH_TOKEN));
+  }
+
+  // ================= rate-limit window =================
+  {
+    const { takeSlot } = await import(path.join(ROOT, 'src/lib/rate-window.ts'));
+    const hits = [];
+    const H = 3600_000;
+    const t0 = 1_000_000;
+    const first = Array.from({ length: 60 }, (_, i) => takeSlot(hits, t0 + i, 60, H));
+    check('limiter: 60 requests in the window are allowed', first.every(Boolean) && hits.length === 60);
+    const retries = Array.from({ length: 200 }, (_, i) => takeSlot(hits, t0 + 100 + i, 60, H));
+    check('limiter: further requests are refused and NOT recorded (the list does not grow)', retries.every((x) => !x) && hits.length === 60);
+    check('limiter: after the first hits age out, a request succeeds again even though the client kept retrying', takeSlot(hits, t0 + H + 10, 60, H) === true && hits.length === 60 - 11 + 1);
+    check('limiter: a client that stops waiting for the whole window starts fresh', takeSlot(hits, t0 + 3 * H, 60, H) === true && hits.length === 1);
   }
 
   // ================= sections =================
@@ -545,6 +576,14 @@ try {
     check('...limit=1 returns one story', r.data.stories.length === 1);
     r = await S('/api/stories?limit=abc', { token: PUBLISH_TOKEN });
     check('...a junk limit falls back to the default', r.status === 200 && r.data.stories.length >= 6);
+
+    // a draft with a stored date that is not a real day must not take the other drafts down with it
+    run("INSERT INTO drafts (status, source, title, section, author, date, created_at, updated_at) VALUES ('new', 'form', 'Bad Date Draft', 'columns', 'Sample Author', '2026-13-40', ?, ?)", now + 9500, now + 9500);
+    r = await S('/api/stories', { token: PUBLISH_TOKEN });
+    const bd = (r.data.drafts || []).find((x) => x.title === 'Bad Date Draft');
+    check('a stored bad-date draft still lists, with its created date, next to the others', r.status === 200 && r.data.drafts.length === 20 && !!bd && bd.date === new Date(now + 9500).toISOString().slice(0, 10) && r.data.drafts.some((x) => x.title === 'Bulk draft 21'), r.text.slice(0, 200));
+    const cal = await adminForm(`/api/admin/drafts/${urlDraft}/save`, E1, { version: String(q('SELECT updated_at FROM drafts WHERE id = ?', urlDraft)[0].updated_at), title: 'Cal', section: 'features', date: '2026-02-31', body: 'x' });
+    check('saving a draft with a date that is not a real day (2026-02-31) is refused', cal.status === 400 && cal.data.ok === false, `${cal.status} ${cal.text.slice(0, 100)}`);
 
     // privacy
     const whole = (await S('/api/stories?limit=100', { token: PUBLISH_TOKEN })).text;

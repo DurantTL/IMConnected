@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { takeSlot } from '../../lib/rate-window';
 import { clientIp } from '../../lib/request';
 import { studioAuth, studioCors, studioJson } from '../../lib/studio-api';
 import { STUDIO_LIST_MAX, listDraftsForStudio, listPublishedForStudio } from '../../lib/studio-list';
@@ -15,11 +16,11 @@ const MAX_PER_WINDOW = 120;
 const hits = new Map<string, number[]>();
 function rateLimited(ip: string): boolean {
   const now = Date.now();
-  const list = (hits.get(ip) ?? []).filter((t) => now - t < WINDOW_MS);
-  list.push(now);
+  const list = hits.get(ip) ?? [];
+  const allowed = takeSlot(list, now, MAX_PER_WINDOW, WINDOW_MS);
   hits.set(ip, list);
   if (hits.size > 5000) hits.clear();
-  return list.length > MAX_PER_WINDOW;
+  return !allowed;
 }
 
 export const OPTIONS: APIRoute = ({ request }) => new Response(null, { status: 204, headers: studioCors(request) });
