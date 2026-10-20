@@ -6,14 +6,20 @@
 // and body) into the server bundle, which is what getStories() reads and what /api/stories already relies on.
 // Photos come from dist/client/images/stories/..., the build's copy of public/images/stories/....
 //
-// Runs once per start, lazily: the first database open (getDb) or the first /media request kicks it off in the
-// background. It never throws into a request, and a failure is logged and retried at most once a minute.
+// How it runs: getDb() calls ensureStorySync() on every use (a cheap check once it has finished) and /media does
+// too. The pass runs in the background and never throws into a request. It is polite to the event loop: photos
+// are read with async streams, and it yields between stories. All file reading, hashing and copying for a story
+// happens BEFORE its database write, and each story is written in its own short transaction, so the sync never
+// holds the write lock while doing file I/O. An unchanged photo is recognised by its size (kept in
+// story_photos.bytes) plus the file already being in the media folder, so it is not read again. A pass with a
+// failed story (or a thrown error) is retried after about a minute, at most 5 passes per process.
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { mediaDir, MEDIA_TYPES } from './media';
-import { getStoryHash, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
+import { getStoryHash, getStoryBySlug, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
 import { listUnpublishedSlugs } from './drafts';
 
 /** The built site's static files (dist/client): next to the server bundle, else ./dist/client, or BUILT_CLIENT_DIR. */
@@ -29,8 +35,9 @@ export function builtClientDir(): string | null {
 }
 
 const SAFE_SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
-const sha256Of = (buf: Buffer) => createHash('sha256').update(buf).digest('hex');
+const sha256Of = (text: string) => createHash('sha256').update(text).digest('hex');
 const extOf = (p: string) => { const e = path.extname(p).slice(1).toLowerCase(); return e === 'jpeg' ? 'jpg' : e; };
+const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
 
 /** A built photo path (/images/...) to its file inside dist/client, or null. */
 function builtPhotoFile(clientDir: string | null, src: string): string | null {
@@ -42,39 +49,57 @@ function builtPhotoFile(clientDir: string | null, src: string): string | null {
 
 interface Located { src: string; kind: 'lead' | 'gallery'; alt: string }
 
-/** Copy one photo into DATA_DIR/media/stories/<slug>/<sha256>.<ext> unless it is already there. */
-function mirrorPhoto(clientDir: string | null, slug: string, p: Located, position: number): StoryPhoto {
-  const remote = (): StoryPhoto => ({ position, kind: p.kind, path: null, url: p.src, alt: p.alt, sha256: null });
+export interface SyncResult { inserted: number; updated: number; unchanged: number; unpublished: number; skipped: number; hashed: number }
+
+/**
+ * Copy one photo to DATA_DIR/media/stories/<slug>/<sha256>.<ext>, hashing it while it streams. The temp file has
+ * a random name and is opened exclusively (two containers can share a PID), and is removed on any failure.
+ */
+async function copyAndHash(file: string, slug: string, ext: string): Promise<{ rel: string; sha: string; bytes: number }> {
+  const dir = path.join(mediaDir(), 'stories', slug);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `.${randomBytes(6).toString('hex')}.tmp`);
+  const hash = createHash('sha256');
+  let bytes = 0;
+  try {
+    await pipeline(
+      fs.createReadStream(file),
+      async function* (src: AsyncIterable<Buffer>) { for await (const chunk of src) { hash.update(chunk); bytes += chunk.length; yield chunk; } },
+      fs.createWriteStream(tmp, { flags: 'wx' }),
+    );
+    const sha = hash.digest('hex');
+    const rel = `stories/${slug}/${sha}.${ext}`;
+    const dest = path.join(mediaDir(), rel);
+    if (fs.existsSync(dest)) await fs.promises.rm(tmp, { force: true });
+    else await fs.promises.rename(tmp, dest);
+    return { rel, sha, bytes };
+  } catch (err) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+/** Resolve one photo to its row. Reuses the stored sha when the size matches and the media file is there. */
+async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, position: number, known: StoryPhoto | undefined, result: SyncResult): Promise<StoryPhoto> {
+  const remote = (): StoryPhoto => ({ position, kind: p.kind, path: null, url: p.src, alt: p.alt, sha256: null, bytes: null });
   const file = builtPhotoFile(clientDir, p.src);
   const ext = extOf(p.src);
   if (!file || !MEDIA_TYPES[ext] || !SAFE_SLUG.test(slug)) return remote();
-  let data: Buffer;
+  let size: number;
   try {
-    data = fs.readFileSync(file);
+    size = (await fs.promises.stat(file)).size;
   } catch {
     console.error(`[stories] photo not found in the build for ${slug}: ${p.src}`);
     return remote();
   }
-  const sha = sha256Of(data);
-  const rel = `stories/${slug}/${sha}.${ext}`;
-  const dest = path.join(mediaDir(), rel);
-  if (!fs.existsSync(dest)) {
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    const tmp = `${dest}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, data);
-    fs.renameSync(tmp, dest);
+  if (known?.path && known.sha256 && known.bytes === size && known.path.endsWith(`.${ext}`)) {
+    const exists = await fs.promises.access(path.join(mediaDir(), known.path)).then(() => true, () => false);
+    if (exists) return { position, kind: p.kind, path: known.path, url: null, alt: p.alt, sha256: known.sha256, bytes: size };
   }
-  return { position, kind: p.kind, path: rel, url: null, alt: p.alt, sha256: sha };
+  result.hashed++;
+  const { rel, sha, bytes } = await copyAndHash(file, slug, ext);
+  return { position, kind: p.kind, path: rel, url: null, alt: p.alt, sha256: sha, bytes };
 }
-
-/** Cheap fingerprint of a built photo (size and mtime), so an unchanged story needs no file reads. */
-function fingerprint(clientDir: string | null, src: string): string {
-  const file = builtPhotoFile(clientDir, src);
-  try { if (file) { const st = fs.statSync(file); return `${st.size}:${Math.floor(st.mtimeMs)}`; } } catch { /* missing */ }
-  return 'none';
-}
-
-export interface SyncResult { inserted: number; updated: number; unchanged: number; unpublished: number; skipped: number }
 
 /** One pass. Exported so tests and tools can call it; the server uses ensureStorySync(). */
 export async function syncStoriesFromBuild(): Promise<SyncResult> {
@@ -82,10 +107,11 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   const built = await getStories();
   const clientDir = builtClientDir();
   const editorUnpublished = listUnpublishedSlugs();
-  const result: SyncResult = { inserted: 0, updated: 0, unchanged: 0, unpublished: 0, skipped: 0 };
+  const result: SyncResult = { inserted: 0, updated: 0, unchanged: 0, unpublished: 0, skipped: 0, hashed: 0 };
   const seen = new Set<string>();
 
   for (const entry of built) {
+    await yieldToLoop();
     const slug = entry.id;
     const d = entry.data;
     seen.add(slug);
@@ -95,18 +121,23 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
       d.photos.forEach((src, i) => located.push({ src, kind: 'gallery', alt: d.photoAlts[i] ?? '' }));
       const status = editorUnpublished.has(slug) ? 'unpublished' : 'live';
       const date = d.date.toISOString().slice(0, 10);
+
+      // 1. Files first: stat, hash and copy with no transaction open.
+      const known = getStoryBySlug(slug, { includeUnpublished: true })?.photoRows ?? [];
+      const photoRows: StoryPhoto[] = [];
+      for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), result));
+
       const base = {
         slug, title: d.title, dek: d.dek, section: d.section, area: d.area, column: d.column, author: d.author, authorTitle: d.authorTitle,
         church: d.church, date, image: d.image, imageAlt: d.imageAlt, photoCredit: d.photoCredit, photos: d.photos, photoAlts: d.photoAlts,
         featured: d.featured, draft: d.draft, body: entry.body ?? '',
       };
-      const contentHash = sha256Of(Buffer.from(JSON.stringify([base, located.map((p) => fingerprint(clientDir, p.src))])));
-      const story: StoryInput = {
-        ...base, status, source: 'git', publishedAt: Date.parse(date), contentHash,
-        photoRows: [],
-      };
-      // Photo files are only read and copied when the story is new or changed (the hash check comes first).
-      const outcome = upsertIfChanged(story, () => located.map((p, i) => mirrorPhoto(clientDir, slug, p, i)));
+      const contentHash = sha256Of(JSON.stringify([base, photoRows]));
+      const story: StoryInput = { ...base, status, source: 'git', publishedAt: Date.parse(date), contentHash, photoRows };
+
+      // 2. Then one short write for this story (a no-op when nothing changed).
+      const cur = getStoryHash(slug);
+      const outcome = cur && cur.hash === contentHash && cur.status === status && cur.source === 'git' ? 'unchanged' : upsertStory(story);
       result[outcome]++;
       if (status === 'unpublished' && outcome !== 'unchanged') result.unpublished++;
     } catch (err) {
@@ -122,37 +153,40 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   return result;
 }
 
-function upsertIfChanged(story: StoryInput, photos: () => StoryPhoto[]): 'inserted' | 'updated' | 'unchanged' {
-  const cur = getStoryHash(story.slug);
-  if (cur && cur.hash === story.contentHash && cur.status === story.status && cur.source === story.source) return 'unchanged';
-  story.photoRows = photos();
-  return upsertStory(story);
+const RETRY_MS = 60_000;
+const MAX_PASSES = 5;
+let busy = false;
+let done = false;
+let passes = 0;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleRetry(): void {
+  if (retryTimer || passes >= MAX_PASSES) return;
+  retryTimer = setTimeout(() => { retryTimer = undefined; ensureStorySync(); }, RETRY_MS);
+  retryTimer.unref?.();
 }
 
-let running: Promise<void> | undefined;
-let done = false;
-let lastFailure = 0;
-const RETRY_MS = 60_000;
-
 /**
- * Kick off the import once per start, in the background. Safe to call on every request: after the first
- * success it is a boolean check. Never throws, and public pages never wait for it.
+ * Start the import in the background if it has not finished. Safe on every call: a boolean check once done, and
+ * it does nothing while a pass runs or a retry is waiting. Never throws; public pages never wait for it. A pass
+ * that fails, or in which a story could not be mirrored, is retried after a minute, up to 5 passes per process.
  */
 export function ensureStorySync(): void {
-  if (done || running) return;
-  if (lastFailure && Date.now() - lastFailure < RETRY_MS) return;
-  running = (async () => {
-    // Let the caller (usually getDb, still assigning its connection) finish first.
-    await new Promise((r) => setTimeout(r, 0));
+  if (done || busy || retryTimer || passes >= MAX_PASSES) return;
+  busy = true;
+  passes++;
+  void (async () => {
+    await yieldToLoop(); // let the caller (usually getDb) finish first
     try {
       const r = await syncStoriesFromBuild();
-      done = true;
-      console.log(`[stories] mirrored the build: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged, ${r.unpublished} unpublished, ${r.skipped} skipped`);
+      console.log(`[stories] mirrored the build: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged, ${r.unpublished} unpublished, ${r.skipped} skipped, ${r.hashed} photos hashed`);
+      if (r.skipped === 0) done = true;
+      else { console.error(`[stories] ${r.skipped} stories could not be mirrored; pass ${passes} of ${MAX_PASSES}`); scheduleRetry(); }
     } catch (err) {
-      lastFailure = Date.now();
       console.error('[stories] sync failed:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      scheduleRetry();
     } finally {
-      running = undefined;
+      busy = false;
     }
   })();
 }

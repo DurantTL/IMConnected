@@ -70,7 +70,7 @@ you to review the current branch against `origin/main`.
    - the confirmation email: the title is HTML-escaped, no other submitted
      text is in it, and no submitter address is ever logged or put in a
      response, a story file or an error message;
-   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/confirm.ts`, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
+   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/confirm.ts`, `src/pages/media/[...path].ts`, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
    - editor sign-in (`src/lib/auth/`, `src/pages/admin/`, `src/middleware.ts`): `AUTH_SECRET` required at 32+
      characters (503 otherwise); passwords scrypt-hashed and compared with `timingSafeEqual`; unknown email,
      wrong password and disabled account give one message and one cost (dummy scrypt); TOTP secrets

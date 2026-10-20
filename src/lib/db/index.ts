@@ -25,9 +25,9 @@ export function getDb(): DatabaseSync {
     }
     if (applied.length) console.log(`[db] applied migrations: ${applied.join(', ')}`);
     db = conn;
-    // TEMPORARY (epic #25, until step 4): mirror the built stories into the database in the background.
-    // Never throws and never blocks the caller.
-    ensureStorySync();
   }
+  // TEMPORARY (epic #25, until step 4): mirror the built stories into the database in the background.
+  // A cheap check after the first pass; never throws and never blocks the caller.
+  ensureStorySync();
   return db;
 }

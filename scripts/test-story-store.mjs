@@ -128,7 +128,7 @@ try {
 
   await startServer();
   const line1 = await waitForSync();
-  check('first start mirrored the build', /mirrored the build: \d+ new/.test(line1), line1);
+  check('first start mirrored the build and hashed its photos', /mirrored the build: \d+ new.* [1-9]\d* photos hashed/.test(line1), line1);
   const rows = q('SELECT * FROM stories ORDER BY slug');
   check('every built story is in stories', rows.length === builtIds.length && builtIds.every((s) => rows.some((r) => r.slug === s.id)), `${rows.length} vs ${builtIds.length}`);
 
@@ -234,9 +234,28 @@ try {
   await sleep(1100); // so a rewrite could not hide behind an equal timestamp
   await startServer();
   const line2 = await waitForSync();
-  check('second start: nothing new, updated or copied', /0 new, 0 updated, \d+ unchanged/.test(line2), line2);
+  check('second start: nothing new, updated, copied or hashed', /0 new, 0 updated, \d+ unchanged.* 0 photos hashed/.test(line2), line2);
   check('second start: the stories and story_photos tables are byte-identical (updated_at included)', dump() === dump1);
   check('second start: no photo file was copied again or touched', mediaState() === media1);
+
+  // photos touched (new mtimes, same bytes): nothing is hashed or rewritten
+  await stopServer();
+  const photoDir = path.join(ROOT, 'dist/client/images/stories');
+  const later = new Date(Date.now() + 60_000);
+  let touched = 0;
+  const touch = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) touch(p); else { fs.utimesSync(p, later, later); touched++; } } };
+  touch(photoDir);
+  await startServer();
+  const line2b = await waitForSync();
+  check(`third start after touching ${touched} built photos: 0 photos hashed, 0 updated`, /0 new, 0 updated, \d+ unchanged.* 0 photos hashed/.test(line2b), line2b);
+  check('...and the tables and media files are still identical', dump() === dump1 && mediaState() === media1);
+  // a media file that went missing is restored (and only that one is hashed again)
+  await stopServer();
+  const gone = q('SELECT path FROM story_photos ORDER BY id LIMIT 1')[0].path;
+  fs.rmSync(path.join(DATA_DIR, 'media', gone));
+  await startServer();
+  const line2c = await waitForSync();
+  check('a missing media file is copied back, hashing only that photo', /, 1 photos hashed/.test(line2c) && fs.existsSync(path.join(DATA_DIR, 'media', gone)), line2c);
 
   // ================= part 3: unpublished stories stay unpublished =================
   await stopServer();

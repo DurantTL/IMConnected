@@ -28,10 +28,10 @@ CREATE TABLE stories (
   body         TEXT NOT NULL DEFAULT '',
   status       TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'unpublished')),
   source       TEXT NOT NULL DEFAULT 'git' CHECK (source IN ('git', 'form', 'studio', 'editor', 'agent')),
-  draft_id     INTEGER REFERENCES drafts(id) ON DELETE SET NULL,
+  draft_id     INTEGER, -- the drafts row it came from; a plain column on purpose: rebuilding drafts (as migration 010 did) must not NULL it
   published_at INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL,
-  published_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  published_by INTEGER, -- the users row; plain for the same reason, the code checks it
   -- sha256 of what the row was built from; the git sync skips a story whose hash has not changed.
   content_hash TEXT
 ) STRICT;
@@ -52,6 +52,7 @@ CREATE TABLE story_photos (
   url      TEXT,
   alt      TEXT NOT NULL DEFAULT '',
   sha256   TEXT CHECK (sha256 IS NULL OR length(sha256) = 64),
+  bytes    INTEGER, -- size of the file, so the sync can tell an unchanged photo without reading it
   CHECK ((path IS NOT NULL AND url IS NULL AND sha256 IS NOT NULL) OR (path IS NULL AND url IS NOT NULL))
 ) STRICT;
 

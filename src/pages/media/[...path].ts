@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import { resolveMediaFile } from '../../lib/media';
 import { ensureStorySync } from '../../lib/story-sync';
 
@@ -10,7 +11,7 @@ export const prerender = false;
 
 const notFound = () => new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' } });
 
-async function serve(request: Request, head: boolean): Promise<Response> {
+function serve(request: Request, head: boolean): Response {
   // Make sure the first story import after a start has been kicked off (never waits, never throws).
   ensureStorySync();
   // Use the raw path, not the decoded route parameter, so encoded traversal can't be normalised away first.
@@ -18,21 +19,22 @@ async function serve(request: Request, head: boolean): Promise<Response> {
   if (!pathname.startsWith('/media/')) return notFound();
   const found = resolveMediaFile(pathname.slice('/media/'.length));
   if (!found) return notFound();
-  let body: Buffer;
+  let size: number;
   try {
-    body = fs.readFileSync(found.file);
+    size = fs.statSync(found.file).size;
   } catch {
     return notFound();
   }
-  return new Response(head ? null : body, {
-    status: 200,
-    headers: {
-      'Content-Type': found.type,
-      'Content-Length': String(body.length),
-      'Cache-Control': 'public, max-age=31536000, immutable',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
+  const headers = {
+    'Content-Type': found.type,
+    'Content-Length': String(size),
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+  };
+  if (head) return new Response(null, { status: 200, headers });
+  const stream = fs.createReadStream(found.file);
+  stream.on('error', () => stream.destroy());
+  return new Response(Readable.toWeb(stream) as ReadableStream, { status: 200, headers });
 }
 
 export const GET: APIRoute = ({ request }) => serve(request, false);

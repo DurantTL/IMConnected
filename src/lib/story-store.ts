@@ -15,6 +15,8 @@ export interface StoryPhoto {
   url: string | null;
   alt: string;
   sha256: string | null;
+  /** Size of the stored file; lets the sync skip re-hashing an unchanged photo. */
+  bytes: number | null;
 }
 
 /** The content schema's fields (src/content.config.ts) plus what the database adds. Optional fields are undefined when absent. */
@@ -90,7 +92,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
 }
 
 function photosOf(storyId: number): StoryPhoto[] {
-  const rows = getDb().prepare('SELECT position, kind, path, url, alt, sha256 FROM story_photos WHERE story_id = ? ORDER BY position').all(storyId) as Row[];
+  const rows = getDb().prepare('SELECT position, kind, path, url, alt, sha256, bytes FROM story_photos WHERE story_id = ? ORDER BY position').all(storyId) as Row[];
   return rows.map((p) => ({
     position: Number(p.position),
     kind: p.kind as 'lead' | 'gallery',
@@ -98,6 +100,7 @@ function photosOf(storyId: number): StoryPhoto[] {
     url: opt(p.url) ?? null,
     alt: String(p.alt),
     sha256: opt(p.sha256) ?? null,
+    bytes: optNum(p.bytes) ?? null,
   }));
 }
 
@@ -160,6 +163,10 @@ const nul = (v: string | undefined) => v ?? null;
  */
 export function upsertStory(s: StoryInput, now = Date.now()): 'inserted' | 'updated' | 'unchanged' {
   const db = getDb();
+  // draft_id and published_by are plain columns (no foreign keys, see migration 011), so check them here.
+  if (s.draftId !== undefined && !db.prepare('SELECT 1 FROM drafts WHERE id = ?').get(s.draftId)) throw new Error('upsertStory: unknown draft');
+  if (s.publishedBy !== undefined && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(s.publishedBy)) throw new Error('upsertStory: unknown user');
+  // Callers do all file reading and hashing before this: the write lock is held only for these few statements.
   db.exec('BEGIN IMMEDIATE');
   try {
     const cur = db.prepare('SELECT id, content_hash, status, source FROM stories WHERE slug = ?').get(s.slug) as
@@ -183,8 +190,8 @@ export function upsertStory(s: StoryInput, now = Date.now()): 'inserted' | 'upda
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, s.slug);
       id = Number(r.lastInsertRowid);
     }
-    const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256);
+    const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes);
     db.exec('COMMIT');
     return cur ? 'updated' : 'inserted';
   } catch (err) {

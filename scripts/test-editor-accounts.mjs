@@ -34,11 +34,11 @@ const check = (name, ok, extra = '') => {
   if (!ok) fails++;
 };
 const q = (sql, ...args) => {
-  const db = new DatabaseSync(DB_FILE);
+  const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000');
   try { return db.prepare(sql).all(...args); } finally { db.close(); }
 };
 const run = (sql, ...args) => {
-  const db = new DatabaseSync(DB_FILE);
+  const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000');
   try { return db.prepare(sql).run(...args); } finally { db.close(); }
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -472,7 +472,7 @@ try {
 
   // synthetic rows to page through, plus hostile text that must be escaped
   {
-    const db = new DatabaseSync(DB_FILE);
+    const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000');
     const ins = db.prepare('INSERT INTO audit_log (at, user_id, action, target, ip) VALUES (?, ?, ?, ?, ?)');
     for (let i = 0; i < 120; i++) ins.run(Date.now() - 1000 * i - 5000, adminId, 'test.synthetic', 'item:' + i, '203.0.113.5');
     ins.run(Date.now() - 1, null, 'x<script>alert(1)</script>', '<img src=x onerror=alert(2)>', '<b>9.9.9.9</b>');
