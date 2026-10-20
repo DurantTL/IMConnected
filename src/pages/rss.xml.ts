@@ -1,4 +1,4 @@
-// RSS 2.0 feed of the newest stories. Prerendered at build time.
+// RSS 2.0 feed of the newest stories. Rendered on the server from the stories table (epic #25, step 2); the middleware caches the result.
 import type { APIRoute } from 'astro';
 import { getFeedItems } from '../lib/feed';
 import { SITE } from '../lib/site';
@@ -8,6 +8,8 @@ const xml = (v: string) =>
   v
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+
+export const prerender = false;
 
 export const GET: APIRoute = async ({ site }) => {
   const base = site ?? new URL('https://stories.imadventist.org');

@@ -207,9 +207,9 @@ try {
   const head = await fetch(`${BASE}/media/${q('SELECT path FROM story_photos LIMIT 1')[0].path}`, { method: 'HEAD' });
   check('HEAD works and has no body', head.status === 200 && head.headers.get('content-type') === 'image/jpeg' && (await head.text()) === '');
 
-  // public pages still come from the build
+  // public pages now read the table once the mirror has finished (step 2; scripts/test-public-pages.mjs compares them with the old prerendered pages)
   const home = await (await fetch(BASE + '/')).text();
-  check('public pages are unchanged (still the build, no /media links)', home.includes('/images/stories/') && !home.includes('/media/'));
+  check('public pages are served from the table after the import (/media photo links, no /images links)', home.includes('/media/stories/') && !home.includes('/images/stories/'));
 
   // ---- traversal and other refusals ----
   const bad = [

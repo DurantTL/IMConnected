@@ -21,8 +21,15 @@ import Base from '../layouts/Base.astro';
         '<p class="empty-state">Search index not found. Run <code>npm run build</code> to generate it.</p>';
       return;
     }
+    // Story pages are indexed from build-time copies under /search-source/ (see src/pages/search-source/); link to the real pages.
+    const fixUrl = (r) => {
+      const fix = (u) => u.replace(/^\/search-source\//, '/stories/');
+      r.url = fix(r.url);
+      (r.sub_results || []).forEach((s) => { s.url = fix(s.url); });
+      return r;
+    };
     const params = new URLSearchParams(location.search);
-    const ui = new PagefindUI({ element: '#search', showSubResults: true, showImages: false, resetStyles: false });
+    const ui = new PagefindUI({ element: '#search', showSubResults: true, showImages: false, resetStyles: false, processResult: fixUrl });
     if (params.get('q')) ui.triggerSearch(params.get('q'));
   });
 </script>

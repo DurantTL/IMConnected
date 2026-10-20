@@ -1,0 +1,17 @@
+---
+// Build-time only: a copy of each story page for Pagefind to index while stories are no longer prerendered
+// (epic #25, step 2). scripts/prune-search-source.mjs deletes this folder from dist/client right after indexing,
+// and /search rewrites these result addresses back to /stories/<slug>/. Step 3 replaces Pagefind with SQLite FTS5.
+import { render } from 'astro:content';
+import StoryPage from '../../components/StoryPage.astro';
+import { getStories, type Story } from '../../lib/stories';
+
+export async function getStaticPaths() {
+  const stories = await getStories();
+  return stories.map((story) => ({ params: { slug: story.id }, props: { story } }));
+}
+
+const { story } = Astro.props as { story: Story };
+const { Content } = await render(story);
+---
+<StoryPage story={story} related={[]} noindex><Content /></StoryPage>

@@ -5,6 +5,8 @@ import {
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
 import { buildDraftFiles, publishMessage } from '../../../../../lib/draft-publish';
+import { republishStory } from '../../../../../lib/story-store';
+import { invalidateStories } from '../../../../../lib/public-cache';
 import { commitToBase } from '../../../../../lib/github';
 import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
@@ -139,6 +141,14 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     } catch (err) {
       console.error('[drafts] published but could not record it', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
       return redirectTo(page, { e: 'live_not_recorded' });
+    }
+    // A story that was unpublished comes back on the database-rendered pages right away (its text there is the last
+    // build's until the next deploy). A failure here must not read as "not recorded".
+    try {
+      republishStory(built.slug);
+      invalidateStories();
+    } catch (err) {
+      console.error('[stories] could not restore the republished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
     // Housekeeping after the story is recorded: a failure here must never read as "not recorded".
     try {

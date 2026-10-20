@@ -1,7 +1,9 @@
 // Stories and their photos in the database (epic #25, step 1). Every function is synchronous like the rest of
 // the db code and every query is parameterized. Until step 4, git is the source of truth and these rows are a
-// mirror of the built site (see story-sync.ts); public pages do not read them yet.
+// mirror of the built site (see story-sync.ts). Public pages read them through public-stories.ts once the mirror
+// is complete; every write below clears the page cache (invalidateStories) so the change shows on the next request.
 import { getDb } from './db';
+import { invalidateStories } from './public-cache';
 
 export type StoryStatus = 'live' | 'unpublished';
 export type StorySource = 'git' | 'form' | 'studio' | 'editor' | 'agent';
@@ -193,6 +195,7 @@ export function upsertStory(s: StoryInput, now = Date.now()): 'inserted' | 'upda
     const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes);
     db.exec('COMMIT');
+    invalidateStories();
     return cur ? 'updated' : 'inserted';
   } catch (err) {
     try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
@@ -203,6 +206,14 @@ export function upsertStory(s: StoryInput, now = Date.now()): 'inserted' | 'upda
 /** Take a story off the site (the row and its photos stay). True when a live story was changed. */
 export function unpublishStory(slug: string, now = Date.now()): boolean {
   const r = getDb().prepare("UPDATE stories SET status = 'unpublished', updated_at = ? WHERE slug = ? AND status = 'live'").run(now, slug);
+  if (Number(r.changes) > 0) invalidateStories();
+  return Number(r.changes) > 0;
+}
+
+/** Put an unpublished story back on the site (the reverse of unpublishStory). True when an unpublished story was changed. */
+export function republishStory(slug: string, now = Date.now()): boolean {
+  const r = getDb().prepare("UPDATE stories SET status = 'live', updated_at = ? WHERE slug = ? AND status = 'unpublished'").run(now, slug);
+  if (Number(r.changes) > 0) invalidateStories();
   return Number(r.changes) > 0;
 }
 

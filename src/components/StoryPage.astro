@@ -1,0 +1,104 @@
+---
+// The whole story page (shared by the server-rendered /stories/<slug>/ and the build-time search source page).
+// The default slot is the rendered story body.
+import Base from '../layouts/Base.astro';
+import StoryCard from './StoryCard.astro';
+import { getSection, areaLabel, formatDate, SITE } from '../lib/site';
+import type { PublicStory } from '../lib/stories';
+
+interface Props {
+  story: PublicStory;
+  related: PublicStory[];
+  noindex?: boolean;
+}
+const { story, related, noindex = false } = Astro.props;
+const d = story.data;
+const section = getSection(d.section)!;
+const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
+const subHref = d.area ? `/${d.section}/${d.area}/` : undefined;
+const url = new URL(`/stories/${story.id}/`, Astro.site).href;
+const enc = encodeURIComponent;
+---
+<Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section} noindex={noindex}>
+  <script type="application/ld+json" slot="head" set:html={JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'NewsArticle',
+    headline: d.title,
+    description: d.dek,
+    datePublished: d.date.toISOString(),
+    author: { '@type': 'Person', name: d.author },
+    publisher: { '@type': 'Organization', name: SITE.publisher, url: SITE.publisherUrl },
+    image: d.image ? new URL(d.image, Astro.site).href : undefined,
+  }).replace(/</g, '\\u003c')} />
+  <div class="wrap">
+    <article class="article" data-sec={d.section} data-pagefind-body>
+      <div data-pagefind-ignore>
+        <a class="kicker" href={`/${d.section}/`}>{section.label}</a>
+        {sub && (<><span class="kicker"><span class="sep">/</span></span>{subHref ? <a class="kicker" href={subHref}>{sub}</a> : <span class="kicker">{sub}</span>}</>)}
+      </div>
+      <h1 data-pagefind-meta="title">{d.title}</h1>
+      {d.dek && <p class="dek">{d.dek}</p>}
+      <div class="byline" data-pagefind-ignore>
+        <span>By <strong>{d.author}</strong>{d.authorTitle && `, ${d.authorTitle}`}</span>
+        {d.church && <span>{d.church}</span>}
+        <time datetime={d.date.toISOString()}>{formatDate(d.date)}</time>
+      </div>
+
+      {d.image && (
+        <figure>
+          <img src={d.image} alt={d.imageAlt ?? ''} loading="eager" data-pagefind-meta="image[src]" />
+          {(d.imageAlt || d.photoCredit) && (
+            <figcaption>{d.imageAlt}{d.photoCredit && ` Photo: ${d.photoCredit}`}</figcaption>
+          )}
+        </figure>
+      )}
+
+      <div class="prose">
+        <slot />
+      </div>
+
+      {d.photos.length > 0 && (
+        <section class="gallery" aria-label="Photos">
+          {d.photos.map((p, i) => <a href={p}><img src={p} alt={d.photoAlts[i] || `Photo ${i + 2} from “${d.title}”`} loading="lazy" /></a>)}
+        </section>
+      )}
+
+      <div class="share" data-pagefind-ignore>
+        <span>Share:</span>
+        <a href={`https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`} target="_blank" rel="noopener">Facebook</a>
+        <a href={`mailto:?subject=${enc(d.title)}&body=${enc(url)}`}>Email</a>
+        <button type="button" data-copy={url}>Copy link</button>
+      </div>
+    </article>
+
+    {related.length > 0 && (
+      <section class="block" data-sec={d.section} data-pagefind-ignore>
+        <div class="block-head">
+          <h2>More in {section.label}</h2>
+          <a class="more" href={`/${d.section}/`}>See all →</a>
+        </div>
+        <div class="grid cols-3">{related.map((s) => <StoryCard story={s} />)}</div>
+      </section>
+    )}
+
+    <section class="cta" aria-label="Submit a story" data-pagefind-ignore>
+      <div>
+        <h2>Have a story to share?</h2>
+        <p>We’d love to hear what God is doing in your church, school or club.</p>
+      </div>
+      <a class="btn accent" href="/submit/">Submit a Story</a>
+    </section>
+  </div>
+</Base>
+<script>
+  document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(b.dataset.copy!);
+        b.textContent = 'Link copied';
+      } catch {
+        b.textContent = 'Copy failed';
+      }
+    }),
+  );
+</script>

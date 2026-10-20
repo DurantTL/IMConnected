@@ -1,6 +1,7 @@
 // Story feed data shared by /stories.json and /rss.xml.
 // URLs are absolute so the items work outside the site (email, feed readers).
-import { getStories, storyUrl } from './stories';
+import { storyUrl } from './stories';
+import { getPublicStories } from './public-stories';
 import { getSection, areaLabel } from './site';
 
 /** How many of the newest stories the feeds include. */
@@ -79,6 +80,6 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
 }
 
 export async function getFeedItems(site: URL): Promise<FeedItem[]> {
-  const stories = await getStories();
+  const stories = await getPublicStories();
   return stories.slice(0, FEED_LIMIT).map((s) => feedItem(s, site));
 }
