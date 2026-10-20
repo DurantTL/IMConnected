@@ -10,3 +10,6 @@ dist
 .mock-prs
 *.log
 scripts/test-*
+# synthetic story written by scripts/test-story-store.mjs while it runs
+src/content/stories/zz-test-*
+public/images/zz-test-*

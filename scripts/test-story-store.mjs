@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -47,13 +47,14 @@ const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 // ---- server ----
 let server;
 let log = [];
+const allLog = []; // every server log line of every part (never reset), for the leak check
 async function startServer(extraEnv = {}) {
   log = [];
   server = spawn('node', ['dist/server/entry.mjs'], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, DATA_DIR, PORT: String(PORT), HOST: '127.0.0.1', NODE_ENV: 'production', STORY_SYNC_TEST: '1', ...extraEnv },
   });
-  const sink = (d) => log.push(...String(d).split('\n').filter(Boolean));
+  const sink = (d) => { const lines = String(d).split('\n').filter(Boolean); log.push(...lines); allLog.push(...lines); };
   server.stdout.on('data', sink);
   server.stderr.on('data', sink);
   for (let i = 0; i < 80; i++) { try { await fetch(BASE + '/'); return; } catch { await sleep(250); } }
@@ -76,11 +77,35 @@ async function waitForSync() {
   }
   return '';
 }
+// The synthetic story of part 5 (zz-test-*) must never survive a run: it would be committed and published.
+// Removes any such file from the sources and from dist; rebuilds the site when it may have been built in.
+const SYNTHETIC_DIRS = ['src/content/stories', 'public/images', 'dist/client/images'].map((d) => path.join(ROOT, d));
+function removeSynthetic() {
+  let sources = false, dist = false;
+  for (const dir of SYNTHETIC_DIRS) {
+    for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+      if (!f.startsWith('zz-test-')) continue;
+      fs.rmSync(path.join(dir, f), { force: true });
+      if (dir.includes(`${path.sep}dist${path.sep}`)) dist = true; else sources = true;
+    }
+  }
+  return { sources, dist };
+}
+function restoreSite() {
+  const { sources, dist } = removeSynthetic();
+  if (sources || dist) {
+    console.log('Removed leftover zz-test-* files; rebuilding the site so dist/ no longer has the synthetic story.');
+    execFileSync('npm', ['run', 'build'], { cwd: ROOT, stdio: 'ignore' });
+  }
+}
 async function cleanup() {
   await stopServer().catch(() => {});
+  try { restoreSite(); } catch (err) { console.error('Could not restore the site, run npm run build:', err.message); }
   if (!process.env.KEEP) fs.rmSync(SCRATCH, { recursive: true, force: true });
 }
-process.on('SIGINT', () => cleanup().finally(() => process.exit(130)));
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => cleanup().finally(() => process.exit(sig === 'SIGINT' ? 130 : 143)));
+
+restoreSite();
 
 try {
   // ================= part 0: migration 011 on a database that already has data =================
@@ -320,11 +345,11 @@ try {
   // ================= part 5: a lead image outside images/stories is tracked by the build marker =================
   // Needs a real build with one extra synthetic story; the extra files are removed and the site rebuilt afterwards.
   await stopServer();
-  const { execFileSync } = await import('node:child_process');
   const extraMd = path.join(ROOT, 'src/content/stories/zz-test-marker.md');
   const extraPub = path.join(ROOT, 'public/images/zz-test-marker.png');
   const extraDist = path.join(ROOT, 'dist/client/images/zz-test-marker.png');
   const pngLike = (fill) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(56, fill)]);
+  restoreSite(); // a stale synthetic story from an interrupted earlier run, in the sources or in dist
   try {
     fs.writeFileSync(extraPub, pngLike(1));
     fs.writeFileSync(extraMd, '---\ntitle: "Synthetic marker test story"\nsection: news\narea: churches\nauthor: "Test Author"\ndate: 2026-10-01\nimage: "/images/zz-test-marker.png"\nimageAlt: "A synthetic test image"\nphotos: []\nfeatured: false\ndraft: false\n---\nSynthetic text for the build marker test.\n');
@@ -345,16 +370,14 @@ try {
     check('...and /media serves the new bytes with the png type', sha(served) === sha(swapped));
     await stopServer();
   } finally {
-    fs.rmSync(extraMd, { force: true });
-    fs.rmSync(extraPub, { force: true });
-    fs.rmSync(extraDist, { force: true });
+    removeSynthetic();
     execFileSync('npm', ['run', 'build'], { cwd: ROOT, stdio: 'ignore' }); // put dist/ back as it was
   }
   await startServer();
   await waitForSync();
 
-  const leaked = log.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|token/i.test(l));
-  check('the server log has no contact details or secrets', leaked.length === 0, leaked.join(' | '));
+  const leaked = allLog.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|token/i.test(l));
+  check('no server log line of any part has contact details or secrets', leaked.length === 0, leaked.join(' | '));
 } catch (err) {
   console.error('ERROR', err);
   fails++;
