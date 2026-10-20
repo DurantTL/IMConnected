@@ -86,6 +86,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, so git can see that deploy is behind this commit and fast-forward it.
+          # A shallow clone can't tell, and refuses the push ("fetch first").
+          fetch-depth: 0
       - name: Move the deploy branch to this commit
         # A plain push only fast-forwards, so deploy can never be moved back to an older commit.
         run: git push origin "${GITHUB_SHA}:refs/heads/deploy"
