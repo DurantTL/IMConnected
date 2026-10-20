@@ -1,0 +1,268 @@
+#!/usr/bin/env node
+// End-to-end check of the story tables, the sync from the built site and GET /media (issue 26, epic 25 step 1).
+// It runs the BUILT server (dist/server/entry.mjs) twice against a throwaway data folder. Synthetic data only.
+//   npm run build
+//   SCRATCH=/tmp/imc-story-store node scripts/test-story-store.mjs        # run from the repo root
+// SCRATCH is created fresh (an existing folder is removed first) and deleted at the end unless KEEP=1.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+if (!process.env.SCRATCH) throw new Error('Set SCRATCH to a throwaway folder.');
+const SCRATCH = path.resolve(process.env.SCRATCH);
+// Refuse to wipe anything that is not clearly a throwaway folder (the Docker image's DATA_DIR is /data).
+function assertThrowaway(dir) {
+  const real = path.resolve(dir);
+  const roots = [os.tmpdir(), '/tmp'].map((r) => path.resolve(r) + path.sep);
+  if (real === '/data' || real.startsWith('/data' + path.sep) || !roots.some((r) => real.startsWith(r) && real.length > r.length)) {
+    throw new Error(`Refusing to delete ${real}: point this at a throwaway folder under ${os.tmpdir()}.`);
+  }
+}
+assertThrowaway(SCRATCH);
+fs.rmSync(SCRATCH, { recursive: true, force: true });
+fs.mkdirSync(SCRATCH, { recursive: true });
+const DATA_DIR = path.join(SCRATCH, 'data');
+const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
+const PORT = Number(process.env.PORT || 4531);
+const BASE = `http://localhost:${PORT}`;
+
+let fails = 0;
+const check = (name, ok, extra = '') => {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  ' + extra}`);
+  if (!ok) fails++;
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const q = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).run(...args); } finally { db.close(); } };
+const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+
+// ---- server ----
+let server;
+let log = [];
+async function startServer() {
+  log = [];
+  server = spawn('node', ['dist/server/entry.mjs'], {
+    cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, DATA_DIR, PORT: String(PORT), HOST: '127.0.0.1', NODE_ENV: 'production' },
+  });
+  const sink = (d) => log.push(...String(d).split('\n').filter(Boolean));
+  server.stdout.on('data', sink);
+  server.stderr.on('data', sink);
+  for (let i = 0; i < 80; i++) { try { await fetch(BASE + '/'); return; } catch { await sleep(250); } }
+  throw new Error('server did not start');
+}
+async function stopServer() {
+  if (!server) return;
+  const done = new Promise((r) => server.once('exit', r));
+  server.kill();
+  await done;
+  server = undefined;
+}
+/** The first /media request after a start kicks the import off; wait for its log line. */
+async function waitForSync() {
+  await fetch(BASE + '/media/stories/none/' + '0'.repeat(64) + '.jpg');
+  for (let i = 0; i < 80; i++) {
+    const line = log.find((l) => l.includes('[stories] mirrored the build') || l.includes('[stories] sync failed'));
+    if (line) return line;
+    await sleep(100);
+  }
+  return '';
+}
+async function cleanup() {
+  await stopServer().catch(() => {});
+  if (!process.env.KEEP) fs.rmSync(SCRATCH, { recursive: true, force: true });
+}
+process.on('SIGINT', () => cleanup().finally(() => process.exit(130)));
+
+try {
+  // ================= part 0: migration 011 on a database that already has data =================
+  {
+    const { openDatabase, runMigrations, readMigrationsFromDir } = await import(path.join(ROOT, 'src/lib/db/db-core.mjs'));
+    const all = readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations'));
+    const before = all.filter((m) => m.name < '011');
+    check('migrations 001-010 are present and 011 is the new one', before.length === 10 && all.some((m) => m.name === '011_stories.sql'));
+    const dir = path.join(SCRATCH, 'migrate');
+    const db = openDatabase(dir);
+    runMigrations(db, before);
+    const now = Date.now();
+    db.prepare("INSERT INTO users (id, email, name, role, status, created_at, updated_at) VALUES (1, 'old.editor@example.test', 'Old Editor', 'editor', 'active', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO drafts (id, status, source, title, section, body, created_at, updated_at) VALUES (7, 'new', 'form', 'Old draft', 'news', 'Body', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at) VALUES (7, 'draft-7/a.jpg', 'jpg', 'alt', 0, ?)").run(now);
+    const snap = () => ({
+      users: db.prepare('SELECT * FROM users').all(), drafts: db.prepare('SELECT * FROM drafts').all(), photos: db.prepare('SELECT * FROM draft_photos').all(),
+    });
+    const a = JSON.stringify(snap());
+    const applied = runMigrations(db, all);
+    check('migration 011 applies on a database with drafts and accounts', applied.join() === '011_stories.sql', applied.join());
+    check('migration 011 loses no account, draft or draft photo', JSON.stringify(snap()) === a);
+    const tables = db.prepare("SELECT name, strict FROM pragma_table_list WHERE name IN ('stories', 'story_photos')").all();
+    check('stories and story_photos are STRICT tables', tables.length === 2 && tables.every((t) => Number(t.strict) === 1), JSON.stringify(tables));
+    const idx = db.prepare("SELECT name, \"unique\" AS u FROM pragma_index_list('stories')").all();
+    check('unique index on slug and a (section, area, date) index exist', idx.some((i) => i.name === 'stories_slug' && Number(i.u) === 1) && idx.some((i) => i.name === 'stories_listing'), JSON.stringify(idx));
+    const cols = db.prepare("SELECT group_concat(name) AS c FROM pragma_index_info('stories_listing')").get().c;
+    check('listing index covers section, area, date', cols === 'section,area,date', cols);
+    let dup = false;
+    const ins = "INSERT INTO stories (slug, title, section, author, date, published_at, updated_at) VALUES ('dup', 't', 'news', 'a', '2026-01-01', 1, 1)";
+    db.exec(ins);
+    try { db.exec(ins); } catch { dup = true; }
+    check('a second story with the same slug is refused', dup);
+    db.close();
+  }
+
+  // ================= part 1: first start =================
+  const builtIds = fs.readdirSync(path.join(ROOT, 'src/content/stories')).filter((f) => f.endsWith('.md')).map((f) => {
+    const raw = fs.readFileSync(path.join(ROOT, 'src/content/stories', f), 'utf8');
+    const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
+    const fm = parseYaml(m[1]);
+    return { id: f.replace(/\.md$/, ''), fm, body: m[2] };
+  }).filter((s) => !s.fm.draft);
+  check('the repo has stories to mirror', builtIds.length > 0, String(builtIds.length));
+
+  await startServer();
+  const line1 = await waitForSync();
+  check('first start mirrored the build', /mirrored the build: \d+ new/.test(line1), line1);
+  const rows = q('SELECT * FROM stories ORDER BY slug');
+  check('every built story is in stories', rows.length === builtIds.length && builtIds.every((s) => rows.some((r) => r.slug === s.id)), `${rows.length} vs ${builtIds.length}`);
+
+  const dateOf = (d) => (d instanceof Date ? d.toISOString() : String(d)).slice(0, 10);
+  const nul = (v) => (v === undefined ? null : v);
+  let identical = true;
+  const diffs = [];
+  for (const s of builtIds) {
+    const r = rows.find((x) => x.slug === s.id);
+    if (!r) { identical = false; continue; }
+    const f = s.fm;
+    const want = {
+      title: f.title, dek: nul(f.dek), section: f.section, area: nul(f.area), story_column: nul(f.column), author: f.author, author_title: nul(f.authorTitle),
+      church: nul(f.church), date: dateOf(f.date), image: nul(f.image), image_alt: nul(f.imageAlt), photo_credit: nul(f.photoCredit),
+      photos: JSON.stringify(f.photos ?? []), photo_alts: JSON.stringify(f.photoAlts ?? []), featured: f.featured ? 1 : 0, draft: 0,
+      body: s.body.trim(), status: 'live', source: 'git',
+    };
+    for (const [k, v] of Object.entries(want)) {
+      const got = k === 'body' ? String(r[k]).trim() : r[k];
+      if (got !== v) { identical = false; diffs.push(`${s.id}.${k}: ${JSON.stringify(got)} != ${JSON.stringify(v)}`); }
+    }
+    if (r.draft_id !== null || r.published_by !== null) { identical = false; diffs.push(`${s.id}: draft_id/published_by not null`); }
+  }
+  check('every field of every story is identical to the Markdown', identical, diffs.slice(0, 3).join(' | '));
+
+  // photos: rows, files on disk, served with the right type and headers
+  let photosOk = true;
+  let photoCount = 0;
+  const why = [];
+  for (const s of builtIds) {
+    const wantSrc = [s.fm.image, ...(s.fm.photos ?? [])].filter(Boolean);
+    const r = rows.find((x) => x.slug === s.id);
+    const pr = q('SELECT * FROM story_photos WHERE story_id = ? ORDER BY position', r.id);
+    if (pr.length !== wantSrc.length) { photosOk = false; why.push(`${s.id}: ${pr.length} rows for ${wantSrc.length} photos`); continue; }
+    for (let i = 0; i < pr.length; i++) {
+      photoCount++;
+      const src = fs.readFileSync(path.join(ROOT, 'public', wantSrc[i]));
+      const p = pr[i];
+      if (p.path !== `stories/${s.id}/${sha(src)}.jpg` || p.sha256 !== sha(src) || p.position !== i || p.url !== null) { photosOk = false; why.push(`${s.id}#${i}: row ${p.path}`); continue; }
+      if (!fs.existsSync(path.join(DATA_DIR, 'media', p.path))) { photosOk = false; why.push(`${s.id}#${i}: file missing`); continue; }
+      const res = await fetch(`${BASE}/media/${p.path}`);
+      const body = Buffer.from(await res.arrayBuffer());
+      const ok = res.status === 200 && res.headers.get('content-type') === 'image/jpeg' &&
+        res.headers.get('cache-control') === 'public, max-age=31536000, immutable' && res.headers.get('x-content-type-options') === 'nosniff' && sha(body) === sha(src);
+      if (!ok) { photosOk = false; why.push(`${s.id}#${i}: ${res.status} ${res.headers.get('content-type')} ${res.headers.get('cache-control')}`); }
+    }
+    if (pr[0] && s.fm.image && pr[0].kind !== 'lead') { photosOk = false; why.push(`${s.id}: first photo is not the lead`); }
+    if (pr[0] && s.fm.image && pr[0].alt !== (s.fm.imageAlt ?? '')) { photosOk = false; why.push(`${s.id}: lead alt`); }
+  }
+  check(`all ${photoCount} photos are rows, files and served from /media with the right type and cache headers`, photosOk && photoCount > 0, why.slice(0, 3).join(' | '));
+  const head = await fetch(`${BASE}/media/${q('SELECT path FROM story_photos LIMIT 1')[0].path}`, { method: 'HEAD' });
+  check('HEAD works and has no body', head.status === 200 && head.headers.get('content-type') === 'image/jpeg' && (await head.text()) === '');
+
+  // public pages still come from the build
+  const home = await (await fetch(BASE + '/')).text();
+  check('public pages are unchanged (still the build, no /media links)', home.includes('/images/stories/') && !home.includes('/media/'));
+
+  // ---- traversal and other refusals ----
+  const bad = [
+    '/media/../imconnected.db', '/media/..%2fimconnected.db', '/media/%2e%2e/imconnected.db', '/media/%2E%2E%2Fimconnected.db', '/media/stories/../../imconnected.db',
+    '/media/stories/..%2f..%2fimconnected.db', '/media/stories/..%5c..%5cimconnected.db', '/media/..\\imconnected.db', '/media/%252e%252e/imconnected.db',
+    '/media//etc/passwd', '/media/%2fetc%2fpasswd', '/media/%00.jpg', '/media/imconnected.db', '/media/imconnected.db-wal', '/media/imconnected.jpg',
+    '/media/stories/', '/media/', '/media', '/media/stories/x.txt', '/media/.hidden.jpg', '/media/stories/%2e%2e/%2e%2e/etc/passwd.jpg',
+  ];
+  const odd = [];
+  for (const u of bad) {
+    const res = await fetch(BASE + u, { redirect: 'manual' }).catch(() => null);
+    const t = res ? await res.text() : '';
+    if (!res || res.status !== 404 || t.includes('SQLite format') || t.includes('root:')) odd.push(`${u} -> ${res?.status}`);
+  }
+  check('traversal attempts (plain, encoded, double-encoded, backslash, absolute) all return 404', odd.length === 0, odd.join(' | '));
+  // raw request lines the fetch client would normalise away
+  const raw = await new Promise((resolve) => {
+    import('node:net').then(({ default: net }) => {
+      const s = net.connect(PORT, '127.0.0.1', () => s.write('GET /media/../imconnected.db HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n'));
+      let out = '';
+      s.on('data', (d) => (out += d));
+      s.on('close', () => resolve(out));
+    });
+  });
+  check('an unnormalised /media/../imconnected.db request line does not return the database', /^HTTP\/1\.1 404/.test(raw) && !raw.includes('SQLite format'), raw.slice(0, 80));
+  // a non-image file placed inside the media folder (and a symlink out of it) is still refused
+  fs.writeFileSync(path.join(DATA_DIR, 'media', 'secret.txt'), 'nope');
+  fs.symlinkSync(DB_FILE, path.join(DATA_DIR, 'media', 'link.jpg'));
+  const t1 = await fetch(BASE + '/media/secret.txt');
+  const t2 = await fetch(BASE + '/media/link.jpg');
+  check('only jpg/png/webp are served, and a symlink out of the folder is refused', t1.status === 404 && t2.status === 404, `${t1.status} ${t2.status}`);
+  fs.rmSync(path.join(DATA_DIR, 'media', 'secret.txt'));
+  fs.rmSync(path.join(DATA_DIR, 'media', 'link.jpg'));
+  const post = await fetch(BASE + '/media/x.jpg', { method: 'POST' });
+  check('POST /media is not allowed', post.status === 404 || post.status === 405, String(post.status));
+
+  // ================= part 2: second start changes nothing =================
+  const dump = () => JSON.stringify([q('SELECT * FROM stories ORDER BY id'), q('SELECT * FROM story_photos ORDER BY id')]);
+  const mediaState = () => {
+    const out = [];
+    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else out.push(`${p}:${fs.statSync(p).mtimeMs}:${fs.statSync(p).size}`); } };
+    walk(path.join(DATA_DIR, 'media'));
+    return out.sort().join('\n');
+  };
+  const dump1 = dump(), media1 = mediaState();
+  await stopServer();
+  await sleep(1100); // so a rewrite could not hide behind an equal timestamp
+  await startServer();
+  const line2 = await waitForSync();
+  check('second start: nothing new, updated or copied', /0 new, 0 updated, \d+ unchanged/.test(line2), line2);
+  check('second start: the stories and story_photos tables are byte-identical (updated_at included)', dump() === dump1);
+  check('second start: no photo file was copied again or touched', mediaState() === media1);
+
+  // ================= part 3: unpublished stories stay unpublished =================
+  await stopServer();
+  const target = builtIds[0].id;
+  run("INSERT INTO drafts (status, source, title, section, slug, unpublished_at, created_at, updated_at) VALUES ('published', 'editor', 'x', 'news', ?, ?, 1, 1)", target, Date.now());
+  run("INSERT INTO stories (slug, title, section, author, date, source, published_at, updated_at) VALUES ('gone-from-build', 't', 'news', 'a', '2026-01-01', 'git', 1, 1)");
+  await startServer();
+  const line3 = await waitForSync();
+  const st = Object.fromEntries(q('SELECT slug, status FROM stories').map((r) => [r.slug, r.status]));
+  check('a story the dashboard unpublished is mirrored as unpublished', st[target] === 'unpublished', `${st[target]} :: ${line3}`);
+  check('a mirrored story that left the build becomes unpublished', st['gone-from-build'] === 'unpublished');
+  check('the other stories stay live', builtIds.slice(1).every((s) => st[s.id] === 'live'));
+  await stopServer();
+  run('UPDATE drafts SET unpublished_at = NULL WHERE slug = ?', target);
+  await startServer();
+  await waitForSync();
+  check('republishing in the dashboard brings the mirrored story back to live', q('SELECT status FROM stories WHERE slug = ?', target)[0].status === 'live');
+
+  const leaked = log.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|token/i.test(l));
+  check('the server log has no contact details or secrets', leaked.length === 0, leaked.join(' | '));
+} catch (err) {
+  console.error('ERROR', err);
+  fails++;
+} finally {
+  await cleanup();
+}
+
+console.log(fails ? `\n${fails} check(s) FAILED` : '\nAll checks passed');
+process.exit(fails ? 1 : 0);

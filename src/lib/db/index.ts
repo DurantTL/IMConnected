@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase, runMigrations, MIGRATION_NAME } from './db-core.mjs';
+import { ensureStorySync } from '../story-sync';
 
 // Migrations are bundled into the server build as raw strings.
 const files = import.meta.glob('./migrations/*.sql', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
@@ -24,6 +25,9 @@ export function getDb(): DatabaseSync {
     }
     if (applied.length) console.log(`[db] applied migrations: ${applied.join(', ')}`);
     db = conn;
+    // TEMPORARY (epic #25, until step 4): mirror the built stories into the database in the background.
+    // Never throws and never blocks the caller.
+    ensureStorySync();
   }
   return db;
 }

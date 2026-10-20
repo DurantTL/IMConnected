@@ -294,7 +294,7 @@ check('IP locked after 10 failures', locked3.status === 429 && locked3.error ===
 // 9. Nothing secret in the database files
 const needles = { password: PASSWORD, 'new password': NEW_PASSWORD, 'TOTP secret': secret, 'TOTP secret (grouped)': secret.match(/.{4}/g).join(' '), 'TOTP secret 2': secret2 };
 [...recovery, ...regenerated, ...recovery2].forEach((x, i) => { needles[`recovery code ${i}`] = x; needles[`recovery code ${i} (no dash)`] = x.replace('-', ''); });
-const files = fs.readdirSync(DATA_DIR).map((n) => path.join(DATA_DIR, n));
+const files = fs.readdirSync(DATA_DIR, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => path.join(DATA_DIR, e.name)); // the media/ and uploads/ folders hold photos, not secrets
 const blobs = files.map((p) => fs.readFileSync(p));
 const hit = (s) => blobs.some((b) => b.includes(Buffer.from(s)));
 check(`grep control: the DB files do contain the email (${files.map((p) => path.basename(p)).join(', ')})`, hit(EMAIL));

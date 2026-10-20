@@ -2,7 +2,7 @@
 
 A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission lands as a draft in the editor dashboard at `/admin`, where an editor edits and publishes it.
 
-- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The server code is `/api/submit`, `/api/publish`, `/api/confirm`, and the editor dashboard (`/admin*` and `/api/admin/*`).
+- **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The server code is `/api/submit`, `/api/publish`, `/api/confirm`, `/media/*` (photos from the data folder), and the editor dashboard (`/admin*` and `/api/admin/*`).
 - **Stories are Markdown files** in `src/content/stories/`. Accounts, sessions, drafts and the audit log for the editor dashboard live in a small SQLite file (see Editor dashboard); stories never do.
 - **Docker image**: on every push to `main`, an image is built and pushed to `ghcr.io/<owner>/imconnected`.
 - **Pagefind** builds a site search index at build time, so search needs no server.
@@ -159,6 +159,15 @@ curl -s -X POST https://<your-site>/api/agent/stories \
 - **In the dashboard** the draft has source `agent`: a "From AI agent" badge, the agent's note and a "View original post" link (http(s) only, `rel="noopener noreferrer"`) in the submitter panel, and a "Source: AI agent" filter in the inbox. The editors who have "Email me when a story is submitted" on get the usual email, which says it is from the AI agent. The audit log gets an `agent.story` entry (draft id only), and server logs carry only the draft id.
 - **What the agent can't do.** Publish, reject, or change any draft an editor has touched, or reach any `/api/admin` route. Publishing stays a person's action in `/admin`.
 - **Tests.** `npm run build`, then `SCRATCH=/tmp/imc-agent node scripts/test-agent-api.mjs` starts the mocks and four copies of the built server itself and checks the agent API, migration 010 on a database that already has drafts and photos, and `/api/stories`. Use made-up tokens; never call the real site.
+
+## Stories in the database (in progress)
+
+Epic #25 moves published stories and their photos from git into the site's SQLite database so that publishing no longer needs a build and deploy. **Step 1 (this change) only adds the tables; nothing changes for readers or editors yet, and git is still the source of truth.**
+
+- **Tables** (migration `011_stories.sql`, STRICT): `stories` has every field of the content schema (`src/content.config.ts`) plus the body, `slug` (unique), `status` (`live` or `unpublished`), `source`, `draft_id`, `published_at`, `updated_at` and `published_by`; `story_photos` has one row per photo (position, path or url, alt text, sha256). `src/lib/story-store.ts` has typed, synchronous functions: `getStoryBySlug`, `listStories` (section, area, featured, paging), `listRecent`, `listBySection`, `listFeatured`, `countStories`, `upsertStory` and `unpublishStory`.
+- **Mirror of the build.** The first time the server opens its database after a start (or serves its first `/media` file), `src/lib/story-sync.ts` imports every built story into `stories` (`source = 'git'`) and copies its photos from the build into `DATA_DIR/media/stories/<slug>/<sha256>.<ext>`. The stories come from the content collection that Astro bakes into the server bundle, so this works in the Docker image, where the Markdown files are not present. It runs in the background, inside try/catch (a failure is logged and retried after a minute, and never affects public pages), skips stories whose content hasn't changed and never copies a photo twice. Stories unpublished in the dashboard, or no longer in the build, are marked `unpublished`. This is temporary: step 4 makes the database the source of truth and removes the sync.
+- **`GET /media/<path>`** serves those photos (jpg, png and webp only) with `Cache-Control: public, max-age=31536000, immutable` and `X-Content-Type-Options: nosniff`. Paths with `..`, encoded dots or slashes, backslashes or an absolute form return 404, and so does anything that is not an image inside `DATA_DIR/media`.
+- **Tests.** `npm run build`, then `SCRATCH=/tmp/imc-story-store node scripts/test-story-store.mjs` checks migration 011 on a database that already has drafts and accounts, that every built story is mirrored with identical fields, that photos are served with the right type and cache headers, that a second start changes nothing, and that traversal attempts return 404.
 
 ## Reviewing submissions
 
