@@ -54,16 +54,22 @@ const toGithub = () => process.env.SUBMISSIONS_TO === 'github';
 const siteUrl = () => (process.env.SITE_URL || 'https://stories.imadventist.org').replace(/\/+$/, '');
 
 /** Neutralise Discord Markdown so a title can't format or link the ping. */
-const discordEsc = (v: string) => v.replace(/[\\*_~`|<>\[\]()]/g, (m) => '\\' + m).replace(/\s+/g, ' ');
+const discordEsc = (v: string) => v.replace(/[\\*_~`|<>\[\]()#-]/g, (m) => '\\' + m).replace(/\s+/g, ' ');
 
 async function notifyDiscord(text: string) {
   const url = process.env.DISCORD_WEBHOOK_URL;
   if (!url) return;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 5000);
   await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content: text.slice(0, 1900), allowed_mentions: { parse: [] } }),
-  }).catch((e) => console.error('[submit] discord notify failed', e));
+    signal: ctl.signal,
+  })
+    .then((res) => res.arrayBuffer().catch(() => {}))
+    .catch((e) => console.error('[submit] discord notify failed', e instanceof Error ? e.name : 'error'))
+    .finally(() => clearTimeout(timer));
 }
 
 export const POST: APIRoute = async ({ request, clientAddress }) => {
@@ -152,14 +158,12 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
       const mail = await sendConfirmationEmail({ to: sub.email, title: sub.title, id: draftId });
       if (mail.sent) console.log(`[submit] draft #${draftId}: confirmation email sent`);
       else console.warn(`[submit] draft #${draftId}: confirmation email not sent (${mail.reason})`);
-      // Editors who opted in hear about it; nothing here can fail the submission.
-      try {
-        const n = await notifyEditorsOfSubmission({ id: draftId, title: sub.title, church: sub.church });
-        console.log(`[submit] draft #${draftId}: editor notifications sent ${n.sent}, failed ${n.failed}`);
-      } catch {
-        console.warn(`[submit] draft #${draftId}: editor notifications failed`);
-      }
-      await notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${siteUrl()}/admin/drafts/${draftId}`);
+      // Editors who opted in, and the Discord channel, hear about it in the background: the visitor's response
+      // doesn't wait on them, and nothing here can fail the submission.
+      void notifyEditorsOfSubmission({ id: draftId, title: sub.title, church: sub.church })
+        .then((n) => console.log(`[submit] draft #${draftId}: editor notifications sent ${n.sent}, failed ${n.failed}`))
+        .catch(() => console.warn(`[submit] draft #${draftId}: editor notifications failed`));
+      void notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${siteUrl()}/admin/drafts/${draftId}`).catch(() => {});
       return respond(request, 200, { ok: true });
     }
 
@@ -181,7 +185,7 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     await updatePullRequestBody(cfg, pr.number, prBody(sub, slug, photoCount, mail.sent ? emailSent : emailNotSent(mail.reason))).catch((e) =>
       console.error(`[submit] PR #${pr.number}: could not update the email status`, e instanceof Error ? e.message : e),
     );
-    await notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${pr.url}`);
+    void notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${pr.url}`).catch(() => {});
     return respond(request, 200, { ok: true });
   } catch (err) {
     if (err instanceof ValidationError || err instanceof EmailCheckError) return respond(request, 400, { ok: false, error: err.message });

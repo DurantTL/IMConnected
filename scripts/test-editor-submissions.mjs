@@ -43,6 +43,7 @@ const check = (name, ok, extra = '') => {
 const q = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
 const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); try { return db.prepare(sql).run(...args); } finally { db.close(); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const until = async (cond, ms = 6000) => { const end = Date.now() + ms; while (Date.now() < end) { if (cond()) return true; await sleep(100); } return cond(); };
 
 // ---- processes ----
 const procs = [];
@@ -189,7 +190,9 @@ try {
     check('the photo files exist under DATA_DIR/uploads/<draft>/ with their bytes', photos.every((p) => p.path.startsWith(`${draftId}/`) && fs.existsSync(path.join(DATA_DIR, 'uploads', p.path))) && fs.readFileSync(path.join(DATA_DIR, 'uploads', photos[0].path)).equals(PNG_A));
     check('NO GitHub call and no pull request for a dashboard submission', ghCalls().length === ghBefore && dirs(MOCK_OUT).length === prBefore, ghCalls().slice(ghBefore).join(' | '));
 
-    await sleep(300);
+    // editor emails and the Discord ping are sent in the background, after the response
+    await until(() => batchLines().length >= 1 && discord.length >= 1);
+    await sleep(200);
     const sent = emails().slice(mailBefore);
     const conf = mailTo(sent, SUBMITTER.email);
     check('the submitter got exactly one confirmation email', conf.length === 1 && /confirm/i.test(conf[0].subject));
@@ -205,7 +208,7 @@ try {
     const everything = JSON.stringify(n);
     check('notification holds no submitter email, phone or name, and none of the story text', ![...PERSONAL, SUBMITTER.name, 'Harvest Day. ', 'annual Harvest', 'boxes'].some((s) => everything.includes(s)), everything.slice(0, 300));
 
-    await sleep(200);
+    await until(() => discord.length >= 1);
     const hook = discord.map((x) => { try { return JSON.parse(x).content; } catch { return ''; } });
     check('the Discord ping still fires, with the title, church and dashboard link only', hook.length === 1 && hook[0].includes('Harvest Day & \\<Music\\> at the Church') && !hook[0].includes('<Music>') && hook[0].includes(SUBMITTER.church) && hook[0].includes(`/admin/drafts/${draftId}`) && ![...PERSONAL, SUBMITTER.name].some((s) => hook[0].includes(s)), hook.join('|'));
 
@@ -214,13 +217,18 @@ try {
     const t0 = Date.now();
     const mailMark = emails().length;
     const limited = await postForm(BASE, '/api/submit', form({ title: 'Rate Limited Story' }));
-    const got = emails().slice(mailMark).filter((m) => /^New story submission: Rate Limited Story/.test(m.subject));
+    const limitedMs = Date.now() - t0;
+    const forLimited = () => emails().slice(mailMark).filter((m) => /^New story submission: Rate Limited Story/.test(m.subject));
+    await until(() => forLimited().length >= 3);
+    const got = forLimited();
+    check('the submit response did not wait for the 429 retry (background send)', limitedMs < 900, `${limitedMs} ms`);
     check('a 429 from the batch endpoint is retried once and all 3 editor emails still arrive', limited.status === 200 && logs.mail.some((l) => l.includes('rateLimited')) && got.length === 3 && Date.now() - t0 >= 900, `${got.length} emails`);
     run("DELETE FROM drafts WHERE title = 'Rate Limited Story'");
 
     // a failing email service never fails the submission
     await fetch(`http://localhost:${P.mail}/fail-on`);
     const failing = await postForm(BASE, '/api/submit', form({ title: 'Email Down Story' }));
+    await sleep(500);
     await fetch(`http://localhost:${P.mail}/fail-off`);
     check('the email service failing does not fail the submission (draft still saved)', failing.status === 200 && q("SELECT COUNT(*) n FROM drafts WHERE title = 'Email Down Story'")[0].n === 1, failing.text.slice(0, 200));
     run("DELETE FROM drafts WHERE title = 'Email Down Story'");
@@ -386,6 +394,41 @@ try {
     r = await studio(pay('Closed Story', '2026-10-22'));
     const b = q('SELECT * FROM drafts WHERE id = ?', idB)[0];
     check('a closed linked draft is updated in place with ALL content columns', r.status === 200 && b.title === 'Closed Story' && b.church === '' && b.author_title === '' && b.story_column === '' && b.featured === 0 && b.status === 'published' && b.published_by === null && b.published_commit === r.data.commit && q('SELECT COUNT(*) n FROM drafts WHERE slug = ?', slugB)[0].n === 1, JSON.stringify(b).slice(0, 300));
+    check('...and is credited to IMConnected Studio (flag set, no editor)', b.published_via_studio === 1 && b.published_by === null);
+    const pubTab = await adminGet('/admin/published', E1);
+    const rowB = pubTab.text.slice(pubTab.text.indexOf('Closed Story'), pubTab.text.indexOf('Closed Story') + 900);
+    check('...the Published tab and the draft page say Studio', /by IMConnected Studio/.test(rowB) && (await adminGet(`/admin/drafts/${idB}`, E1)).text.includes('published by IMConnected Studio'));
+
+    // Alice (E1) publishes from the dashboard, the story is reloaded, then Studio publishes over it
+    const idC = Number(run("INSERT INTO drafts (status, source, title, dek, section, area, author, date, body, created_at, updated_at) VALUES ('in_review', 'editor', 'Credit Story', '', 'news', 'conference', 'Alice Author', '2026-10-23', 'Credit story body text.', ?, ?)", now, now).lastInsertRowid);
+    let pr = await adminPost(`/api/admin/drafts/${idC}/publish`, E1, { version: q('SELECT updated_at u FROM drafts WHERE id = ?', idC)[0].u });
+    const c1 = q('SELECT * FROM drafts WHERE id = ?', idC)[0];
+    check('a dashboard publish credits the editor (published_by set, not Studio)', pr.status === 303 && c1.status === 'published' && c1.published_by === E1.id && c1.published_via_studio === 0, String(pr.status));
+    check('...the draft page says published by Test Editor', (await adminGet(`/admin/drafts/${idC}`, E1)).text.includes('published by Test Editor'));
+    await adminPost('/api/admin/stories/edit', E1, { slug: c1.slug });
+    check('reloading the story reopens the same draft in review', q('SELECT status FROM drafts WHERE id = ?', idC)[0].status === 'in_review');
+    r = await studio(pay('Credit Story', '2026-10-23'));
+    const c2 = q('SELECT * FROM drafts WHERE id = ?', idC)[0];
+    check('Studio then publishes the same slug: the in-progress draft is credited to Studio, not the editor', r.status === 200 && c2.published_via_studio === 1 && c2.published_by === null && c2.status === 'in_review' && c2.published_commit === r.data.commit, JSON.stringify(c2).slice(0, 300));
+    const pubTab2 = await adminGet('/admin/published', E1);
+    const rowC = pubTab2.text.slice(pubTab2.text.indexOf('Credit Story'), pubTab2.text.indexOf('Credit Story') + 900);
+    const homeC = await adminGet('/admin', E1);
+    const homeRow = homeC.text.slice(homeC.text.indexOf('id="home-pub"'));
+    check('...the Published tab and the inbox overview say Studio and never the editor', /by IMConnected Studio/.test(rowC) && !/by Test Editor/.test(rowC) && homeRow.includes('by IMConnected Studio'));
+    pr = await adminPost(`/api/admin/drafts/${idC}/publish`, E1, { version: c2.updated_at });
+    const c3 = q('SELECT * FROM drafts WHERE id = ?', idC)[0];
+    check('publishing again from the dashboard credits the editor again (flag cleared)', pr.status === 303 && c3.status === 'published' && c3.published_by === E1.id && c3.published_via_studio === 0 && (await adminGet(`/admin/drafts/${idC}`, E1)).text.includes('published by Test Editor'), String(pr.status));
+
+    // a rejected draft with uploads: its files are replaced/deleted when Studio publishes over its slug
+    const idD = Number(run("INSERT INTO drafts (status, source, title, slug, date, rejected_at, created_at, updated_at) VALUES ('rejected', 'editor', 'Rejected Story', '2026-10-24-rejected-story', '2026-10-24', ?, ?, ?)", now, now, now).lastInsertRowid);
+    fs.mkdirSync(path.join(DATA_DIR, 'uploads', String(idD)), { recursive: true });
+    const relD = `${idD}/${'cd'.repeat(16)}.png`;
+    fs.writeFileSync(path.join(DATA_DIR, 'uploads', relD), PNG_A);
+    run("INSERT INTO draft_photos (draft_id, path, ext, position, created_at) VALUES (?, ?, 'png', 0, ?)", idD, relD, now);
+    r = await studio(pay('Rejected Story', '2026-10-24'));
+    const d = q('SELECT * FROM drafts WHERE id = ?', idD)[0];
+    check('a rejected linked draft becomes published by Studio, and its upload rows and files are removed', r.status === 200 && d.status === 'published' && d.published_via_studio === 1 && q('SELECT COUNT(*) n FROM draft_photos WHERE draft_id = ?', idD)[0].n === 0 && !fs.existsSync(path.join(DATA_DIR, 'uploads', relD)));
+    check('...whereas the in-review draft from before still has its upload', fs.existsSync(path.join(DATA_DIR, 'uploads', relA)));
   }
 
   // ================= the database is unavailable =================
