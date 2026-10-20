@@ -117,6 +117,7 @@ try {
   const ghCalls = () => logs.gh.filter((l) => /^(GET|POST|PATCH|DELETE|PUT) /.test(l));
   const commits = () => (fs.existsSync(DIRECT) ? fs.readdirSync(DIRECT) : []);
   const dirs = (d) => (fs.existsSync(d) ? fs.readdirSync(d) : []);
+  const batchLines = () => logs.mail.filter((l) => l.startsWith('{"batchRequest"')).map((l) => JSON.parse(l).batchRequest);
   const mailTo = (list, addr) => list.filter((m) => m.to.includes(addr));
 
   async function postForm(base, url, fields, files = []) {
@@ -150,6 +151,8 @@ try {
   const E2 = mkUser('editor-two@e2e-mail.com', 'Second Editor');
   const E3 = mkUser('editor-three@e2e-mail.com', 'Disabled Editor', 'disabled');
   const E4 = mkUser('editor-four@e2e-mail.com', 'Invited Editor', 'invited');
+  const E5 = mkUser('editor-five@e2e-mail.com', 'Fifth Editor');
+  const E6 = mkUser('editor-six@e2e-mail.com', 'Sixth Editor');
   const adminGet = async (u, user, base = BASE) => { const r = await fetch(base + u, { headers: { Cookie: `__Host-imc_session=${user.token}` }, redirect: 'manual' }); return { status: r.status, text: await r.text() }; };
   const adminPost = async (u, user, fields) => {
     const r = await fetch(BASE + u, { method: 'POST', headers: { Cookie: `__Host-imc_session=${user.token}`, Origin: BASE, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields), redirect: 'manual' });
@@ -191,9 +194,11 @@ try {
     const conf = mailTo(sent, SUBMITTER.email);
     check('the submitter got exactly one confirmation email', conf.length === 1 && /confirm/i.test(conf[0].subject));
     const toEditors = sent.filter((m) => /^New story submission:/.test(m.subject));
-    check('exactly one notification per opted-in active editor (E1 only)', toEditors.length === 1 && toEditors[0].to.length === 1 && toEditors[0].to[0] === E1.email, JSON.stringify(toEditors.map((m) => m.to)));
+    const recips = toEditors.map((m) => m.to.join(',')).sort();
+    check('exactly one notification per opted-in active editor (E1, E5, E6), one recipient each (no BCC)', toEditors.length === 3 && toEditors.every((m) => m.to.length === 1) && recips.join('|') === [E1, E5, E6].map((e) => e.email).sort().join('|'), JSON.stringify(recips));
+    check('...sent as ONE batch request of 3 messages', batchLines().join(',') === '3', batchLines().join(','));
     check('opted-out (E2), disabled (E3) and invited (E4) editors got nothing', [E2, E3, E4].every((e) => mailTo(emails(), e.email).length === 0));
-    const n = toEditors[0] ?? { subject: '', text: '', html: '' };
+    const n = toEditors.find((m) => m.to[0] === E1.email) ?? { subject: '', text: '', html: '' };
     check('notification subject is "New story submission: <title>"', n.subject === `New story submission: ${TITLE}`, n.subject);
     check('notification links to /admin/drafts/<id> on SITE_URL', n.text.includes(`${BASE}/admin/drafts/${draftId}`) && n.html.includes(`${BASE}/admin/drafts/${draftId}`));
     check('notification HTML-escapes the title and shows the church', n.html.includes('Harvest Day &amp; &lt;Music&gt; at the Church') && !n.html.includes('<Music>') && n.html.includes(SUBMITTER.church));
@@ -202,7 +207,16 @@ try {
 
     await sleep(200);
     const hook = discord.map((x) => { try { return JSON.parse(x).content; } catch { return ''; } });
-    check('the Discord ping still fires, with the title, church and dashboard link only', hook.length === 1 && hook[0].includes(TITLE) && hook[0].includes(SUBMITTER.church) && hook[0].includes(`/admin/drafts/${draftId}`) && ![...PERSONAL, SUBMITTER.name].some((s) => hook[0].includes(s)), hook.join('|'));
+    check('the Discord ping still fires, with the title, church and dashboard link only', hook.length === 1 && hook[0].includes('Harvest Day & \\<Music\\> at the Church') && !hook[0].includes('<Music>') && hook[0].includes(SUBMITTER.church) && hook[0].includes(`/admin/drafts/${draftId}`) && ![...PERSONAL, SUBMITTER.name].some((s) => hook[0].includes(s)), hook.join('|'));
+
+    // Resend answering 429 once: retried after retry-after, and still delivered
+    await fetch(`http://localhost:${P.mail}/rate-limit-once`);
+    const t0 = Date.now();
+    const mailMark = emails().length;
+    const limited = await postForm(BASE, '/api/submit', form({ title: 'Rate Limited Story' }));
+    const got = emails().slice(mailMark).filter((m) => /^New story submission: Rate Limited Story/.test(m.subject));
+    check('a 429 from the batch endpoint is retried once and all 3 editor emails still arrive', limited.status === 200 && logs.mail.some((l) => l.includes('rateLimited')) && got.length === 3 && Date.now() - t0 >= 900, `${got.length} emails`);
+    run("DELETE FROM drafts WHERE title = 'Rate Limited Story'");
 
     // a failing email service never fails the submission
     await fetch(`http://localhost:${P.mail}/fail-on`);
@@ -286,7 +300,7 @@ try {
   {
     const open = q("SELECT COUNT(*) n FROM drafts WHERE status IN ('new','in_review')")[0].n;
     let r = await adminGet('/admin', E1);
-    const m = /nav-count[^>]*>(\d+)</.exec(r.text);
+    const m = /nav-count[^>]*><span aria-hidden="true">(\d+)</.exec(r.text);
     check('the Drafts nav item shows a count badge of new + in review', m && Number(m[1]) === open && open >= 1, `badge=${m?.[1]} open=${open}`);
     // more drafts so the "5 newest" limit shows
     const now = Date.now();
@@ -295,8 +309,9 @@ try {
     }
     run("UPDATE drafts SET status = 'in_review' WHERE id = ?", draftId);
     r = await adminGet('/admin', E1);
-    const m2 = /nav-count[^>]*>(\d+)</.exec(r.text);
+    const m2 = /nav-count[^>]*><span aria-hidden="true">(\d+)</.exec(r.text);
     const open2 = q("SELECT COUNT(*) n FROM drafts WHERE status IN ('new','in_review')")[0].n;
+    check('the visible badge number is aria-hidden and a visually hidden "drafts waiting" text follows', /nav-count[^>]*><span aria-hidden="true">\d+<\/span><span class="visually-hidden"> drafts? waiting/.test(r.text));
     check('the badge counts in-review drafts too', m2 && Number(m2[1]) === open2, `badge=${m2?.[1]} open=${open2}`);
     const sec = r.text.slice(r.text.indexOf('id="home-new"'), r.text.indexOf('id="home-pub"'));
     const items = sec.match(/<li>/g) || [];
@@ -341,6 +356,36 @@ try {
     check('...with the new commit and text, still published and not duplicated', one2.published_commit === sha2 && sha2 !== sha1 && /Second version/.test(one2.body) && q('SELECT COUNT(*) n FROM draft_photos WHERE draft_id = ?', one.id)[0].n === 1 && q("SELECT COUNT(*) n FROM drafts WHERE slug = '2026-10-19-studio-story-one'")[0].n === 1);
     const bad = await studio({ newsletter: { issueDate: 'nope' }, stories: [] });
     check('an invalid Studio request is still refused (400) and records nothing', bad.status === 400 && q("SELECT COUNT(*) n FROM drafts WHERE source = 'studio'")[0].n === 2);
+  }
+
+  // ================= Studio publishes over a story that has a linked draft =================
+  {
+    const studio = (body) => fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${PUBLISH_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+    const now = Date.now();
+    // (a) an editor draft still in review, with an uploaded photo, linked to the slug
+    const slugA = '2026-10-21-linked-story';
+    const idA = Number(run("INSERT INTO drafts (status, source, title, dek, church, author_title, featured, body, slug, date, created_at, updated_at) VALUES ('in_review', 'editor', 'My Unfinished Edits', 'Edited summary', 'Mine Church', 'Elder', 1, 'My unsaved-to-site words.', ?, '2026-10-21', ?, ?)", slugA, now, now).lastInsertRowid);
+    fs.mkdirSync(path.join(DATA_DIR, 'uploads', String(idA)), { recursive: true });
+    const relA = `${idA}/${'ab'.repeat(16)}.png`;
+    fs.writeFileSync(path.join(DATA_DIR, 'uploads', relA), PNG_B);
+    run("INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at) VALUES (?, ?, 'png', 'Mine', 0, ?)", idA, relA, now);
+    const versionA = q('SELECT updated_at u FROM drafts WHERE id = ?', idA)[0].u;
+    // (b) a closed (published) editor draft linked to another slug
+    const slugB = '2026-10-22-closed-story';
+    const idB = Number(run("INSERT INTO drafts (status, source, title, church, author_title, story_column, featured, body, slug, published_commit, published_at, date, created_at, updated_at) VALUES ('published', 'editor', 'Old Title', 'Old Church', 'Old Role', 'Old Col', 1, 'Old body.', ?, 'oldsha', ?, '2026-10-22', ?, ?)", slugB, now, now, now).lastInsertRowid);
+    const pay = (title, date) => ({ newsletter: { name: 'N', issueDate: date }, stories: [{ ref: 'x', title, section: 'news', area: 'conference', author: 'Studio Author', body: 'Studio text for the linked story.' }] });
+    let r = await studio(pay('Linked Story', '2026-10-21'));
+    check('Studio publish over a story whose linked draft is in review succeeds', r.status === 200 && r.data.ok, JSON.stringify(r.data).slice(0, 200));
+    const a = q('SELECT * FROM drafts WHERE id = ?', idA)[0];
+    check('...the in-review draft keeps its fields and status', a.status === 'in_review' && a.title === 'My Unfinished Edits' && a.dek === 'Edited summary' && a.church === 'Mine Church' && a.author_title === 'Elder' && a.featured === 1 && a.body === 'My unsaved-to-site words.' && a.updated_at === versionA, JSON.stringify(a).slice(0, 300));
+    check('...its uploaded photo row and file are untouched', q('SELECT path FROM draft_photos WHERE draft_id = ?', idA).length === 1 && fs.existsSync(path.join(DATA_DIR, 'uploads', relA)));
+    check('...only the live markers are set (commit, published_at) and no second row was made for the slug', a.published_commit === r.data.commit && a.published_at && a.studio_overwrote_at && q('SELECT COUNT(*) n FROM drafts WHERE slug = ?', slugA)[0].n === 1);
+    check('...an audit entry draft.studio_overwrote_live names the draft', q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.studio_overwrote_live' AND target = ?", `draft:${idA}`)[0].n === 1);
+    const pageA = await adminGet(`/admin/drafts/${idA}`, E1);
+    check('...the editor sees "IMConnected Studio published over this story on <date>; your saved edits here are not live."', /IMConnected Studio published over this story on[\s\S]*?; your saved edits here are not live\./.test(pageA.text));
+    r = await studio(pay('Closed Story', '2026-10-22'));
+    const b = q('SELECT * FROM drafts WHERE id = ?', idB)[0];
+    check('a closed linked draft is updated in place with ALL content columns', r.status === 200 && b.title === 'Closed Story' && b.church === '' && b.author_title === '' && b.story_column === '' && b.featured === 0 && b.status === 'published' && b.published_by === null && b.published_commit === r.data.commit && q('SELECT COUNT(*) n FROM drafts WHERE slug = ?', slugB)[0].n === 1, JSON.stringify(b).slice(0, 300));
   }
 
   // ================= the database is unavailable =================

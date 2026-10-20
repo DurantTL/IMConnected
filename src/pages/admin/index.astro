@@ -1,7 +1,7 @@
 ---
 import Admin from '../../layouts/Admin.astro';
 import { SECTIONS } from '../../lib/site';
-import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, listLiveDrafts, type StatusFilter } from '../../lib/drafts';
+import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, listRecentPublished, type StatusFilter } from '../../lib/drafts';
 import { fmtTime, sectionLabel } from '../../lib/admin-ui';
 import { siteUrl } from '../../lib/draft-http';
 export const prerender = false;
@@ -14,8 +14,8 @@ const section = SECTIONS.some((s) => s.key === q.get('section')) ? (q.get('secti
 const drafts = listDrafts({ status, section: section || undefined });
 // The overview is for the plain inbox; a filtered view shows only what was asked for.
 const showHome = !q.has('status') && !q.has('section');
-const newest = showHome ? listDrafts({ status: 'open' }).slice(0, 5) : [];
-const recentPublished = showHome ? listLiveDrafts().slice(0, 5) : [];
+const newest = showHome ? drafts.slice(0, 5) : [];
+const recentPublished = showHome ? listRecentPublished(5) : [];
 const base = siteUrl();
 const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
 ---

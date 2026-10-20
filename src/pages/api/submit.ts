@@ -53,6 +53,9 @@ const UNAVAILABLE = 'Submissions are temporarily unavailable. Please email us yo
 const toGithub = () => process.env.SUBMISSIONS_TO === 'github';
 const siteUrl = () => (process.env.SITE_URL || 'https://stories.imadventist.org').replace(/\/+$/, '');
 
+/** Neutralise Discord Markdown so a title can't format or link the ping. */
+const discordEsc = (v: string) => v.replace(/[\\*_~`|<>\[\]()]/g, (m) => '\\' + m).replace(/\s+/g, ' ');
+
 async function notifyDiscord(text: string) {
   const url = process.env.DISCORD_WEBHOOK_URL;
   if (!url) return;
@@ -156,7 +159,7 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
       } catch {
         console.warn(`[submit] draft #${draftId}: editor notifications failed`);
       }
-      await notifyDiscord(`📰 **New IMConnected story submission**\n**${sub.title}**\n${sub.church} · ${section}\n${siteUrl()}/admin/drafts/${draftId}`);
+      await notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${siteUrl()}/admin/drafts/${draftId}`);
       return respond(request, 200, { ok: true });
     }
 
@@ -178,7 +181,7 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     await updatePullRequestBody(cfg, pr.number, prBody(sub, slug, photoCount, mail.sent ? emailSent : emailNotSent(mail.reason))).catch((e) =>
       console.error(`[submit] PR #${pr.number}: could not update the email status`, e instanceof Error ? e.message : e),
     );
-    await notifyDiscord(`📰 **New IMConnected story submission**\n**${sub.title}**\n${sub.church} · ${section}\n${pr.url}`);
+    await notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${pr.url}`);
     return respond(request, 200, { ok: true });
   } catch (err) {
     if (err instanceof ValidationError || err instanceof EmailCheckError) return respond(request, 400, { ok: false, error: err.message });

@@ -91,7 +91,7 @@ For a newsletter tool on another domain to fetch `/stories.json` directly in the
 
 ## Publishing from IMConnected Studio
 
-The communication director builds each newsletter in IMConnected Studio. Clicking **Publish to IMConnected** sends the ticked stories to `POST /api/publish`, which commits them straight to `main` with no pull request. Studio then uses the returned story URLs in the email's "Read full story" buttons. Studio publishes are also recorded in the dashboard (a published draft with source Studio and publisher "IMConnected Studio"; publishing the same story again updates that row), so `/admin` shows the full history. If the database is unavailable the publish still succeeds.
+The communication director builds each newsletter in IMConnected Studio. Clicking **Publish to IMConnected** sends the ticked stories to `POST /api/publish`, which commits them straight to `main` with no pull request. Studio then uses the returned story URLs in the email's "Read full story" buttons. Studio publishes are also recorded in the dashboard (a published draft with source Studio, shown as published by "IMConnected Studio"; publishing the same story again updates that row). If an editor's draft for the same story is still new or in review, Studio never touches its text, status or photos: the draft only gets the live markers, an audit entry `draft.studio_overwrote_live`, and a notice on the draft ("IMConnected Studio published over this story on <date>; your saved edits here are not live."; migration 006). A closed linked draft (published or rejected) is updated in place, so `/admin` shows the full history. If the database is unavailable the publish still succeeds.
 
 **Setup**
 
@@ -177,7 +177,7 @@ SUBMISSIONS_TO=github GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http:/
 # submissions are written to ./.mock-prs/<branch>/, publishes to ./.mock-prs/direct/<commit>/
 ```
 
-For the dashboard flow, run the server with a throwaway `DATA_DIR` and `AUTH_SECRET`, and `scripts/mock-email.mjs` with `EMAIL_API_URL` to see the emails; `scripts/test-editor-submissions.mjs` does all of this for you.
+For the dashboard flow, run the server with a throwaway `DATA_DIR` and `AUTH_SECRET`, and `scripts/mock-email.mjs` (it also answers `/emails/batch`, and `GET /rate-limit-once` makes the next batch return 429) with `EMAIL_API_URL` to see the emails; `scripts/test-editor-submissions.mjs` does all of this for you.
 
 ## Editor dashboard
 
@@ -227,5 +227,5 @@ Editors sign in at `/admin` with email + password and a required second factor (
 
 - **`SUBMISSIONS_TO`** is `dashboard` (the default) or `github` (the old pull-request path, kept for one release). In dashboard mode `/api/submit` needs no GitHub settings. It keeps every check (Origin, honeypot, minimum fill time, rate limit, email checks, Turnstile, photo signatures) and then creates a `drafts` row (source `form`, status `new`) with its photos in `DATA_DIR/uploads`.
 - **Confirmation links** sign the draft id (`d:<id>`). Confirming sets `email_verified` on the draft. Links from emails sent while submissions were pull requests are still accepted (they label that PR) as long as `GITHUB_TOKEN` and `GITHUB_REPO` are set; otherwise they answer "This link isn't valid."
-- **Editor notifications** go through the same Resend settings as the confirmation email (`RESEND_API_KEY`, `EMAIL_FROM`): one email per active editor who has the setting on, subject "New story submission: <title>", a link to `/admin/drafts/<id>`, and only the escaped title and church in the body. A failure to send is logged (counts only) and never fails the submission. The optional Discord ping (`DISCORD_WEBHOOK_URL`) carries the title, church and dashboard link only.
+- **Editor notifications** go through the same Resend settings as the confirmation email (`RESEND_API_KEY`, `EMAIL_FROM`): one email per active editor who has the setting on (a single request to Resend's batch endpoint, `EMAIL_API_URL` + `/batch`, one message per recipient and no BCC; a 429 is retried once after `retry-after`, at most 5 s), subject "New story submission: <title>", a link to `/admin/drafts/<id>`, and only the escaped title and church in the body. A failure to send is logged (counts only) and never fails the submission. The optional Discord ping (`DISCORD_WEBHOOK_URL`) carries the title, church and dashboard link only, with Discord Markdown in the title and church escaped.
 - **Tests.** `npm run build`, then `SCRATCH=/tmp/imc-e2e node scripts/test-editor-submissions.mjs` starts the mocks and three copies of the built server itself (see the header) and checks all of the above, including Studio publishes and the database-unavailable behavior.

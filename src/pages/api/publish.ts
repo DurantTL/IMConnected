@@ -123,8 +123,8 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     console.log(`[publish] committed ${n} stories, ${built.files.length} files, ${commit.sha}`);
     // The story is live; also record it in the dashboard's history. Never fail the publish over this.
     try {
-      const ids = recordStudioPublish(built.stories.map((s) => ({ slug: s.slug, ...s.record })), commit.sha);
-      for (const id of ids) audit('draft.published_studio', { target: `draft:${id}`, detail: { commit: commit.sha } });
+      const { ids, overwrote } = recordStudioPublish(built.stories.map((s) => ({ slug: s.slug, ...s.record })), commit.sha);
+      for (const id of ids) audit(overwrote.includes(id) ? 'draft.studio_overwrote_live' : 'draft.published_studio', { target: `draft:${id}`, detail: { commit: commit.sha } });
     } catch (err) {
       console.error('[publish] could not record the stories in the dashboard', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }

@@ -9,3 +9,4 @@ dist
 /data/
 .mock-prs
 *.log
+scripts/test-*

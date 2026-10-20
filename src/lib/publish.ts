@@ -18,7 +18,7 @@ export interface PublishedStory {
   slug: string;
   path: string;
   /** What the dashboard records for the history (no personal data: Studio stories carry none). */
-  record: { title: string; dek: string; section: string; area?: string; author: string; date: string; body: string; photos: Photo[] };
+  record: { title: string; dek: string; section: string; area?: string; author: string; date: string; photoCredit: string; body: string; photos: Photo[] };
 }
 
 interface Photo {
@@ -145,7 +145,7 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
         ref,
         slug,
         path: `src/content/stories/${slug}.md`,
-        record: { title, dek, section, area, author, date: issueDate, body: md.slice(frontmatter.length), photos: photoPaths.map((url, i) => ({ url, alt: photoMeta[i].alt, caption: photoMeta[i].caption })) },
+        record: { title, dek, section, area, author, date: issueDate, photoCredit: lead?.credit ?? '', body: md.slice(frontmatter.length), photos: photoPaths.map((url, i) => ({ url, alt: photoMeta[i].alt, caption: photoMeta[i].caption })) },
       });
     }
 

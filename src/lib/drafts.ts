@@ -52,6 +52,8 @@ export interface Draft extends DraftFields {
   updatedByName: string | null;
   publishedAt: number | null;
   publishedByName: string | null;
+  /** Studio published over this story while this draft had unpublished edits (ms), else null. */
+  studioOverwroteAt: number | null;
   /** True when this draft's story is live on the site (published and not unpublished since). */
   live: boolean;
 }
@@ -123,8 +125,9 @@ function toDraft(r: Row): Draft {
     updatedAt: n(r.updated_at),
     updatedByName: sn(r.updated_by_name),
     publishedAt: r.published_at == null ? null : n(r.published_at),
-    // Studio publishes have no editor: published_by is NULL.
-    publishedByName: sn(r.published_by_name) ?? (r.published_at != null && r.published_by == null ? STUDIO_NAME : null),
+    // A Studio publish has no editor (published_by is NULL); its drafts have source 'studio'.
+    publishedByName: sn(r.published_by_name) ?? (r.source === 'studio' && r.published_at != null ? STUDIO_NAME : null),
+    studioOverwroteAt: r.studio_overwrote_at == null ? null : n(r.studio_overwrote_at),
     live: r.published_commit != null && r.slug != null && r.unpublished_at == null,
   };
 }
@@ -453,14 +456,14 @@ export function releaseSlug(id: number, slug: string): void {
 export function markPublished(id: number, info: { slug: string; commit: string; userId: number; lockedAt: number }): { stale: boolean; wasRejected: boolean } {
   const now = Date.now();
   const r = getDb()
-    .prepare("UPDATE drafts SET status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
+    .prepare("UPDATE drafts SET status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
     .run(info.slug, info.commit, now, info.userId, Math.max(now, info.lockedAt + 1), info.userId, id, info.lockedAt);
   if (Number(r.changes) === 1) return { stale: false, wasRejected: false };
   // Changed while the commit ran. The story is live either way. A draft rejected meanwhile goes back to
   // in review (its note stays) so it can be published again; the editor is told.
   const wasRejected = (getDb().prepare('SELECT status FROM drafts WHERE id = ?').get(id) as { status: DraftStatus } | undefined)?.status === 'rejected';
   getDb()
-    .prepare("UPDATE drafts SET slug = ?, published_commit = ?, published_at = ?, published_by = ?, unpublished_at = NULL, status = CASE WHEN status = 'rejected' THEN 'in_review' ELSE status END, rejected_at = NULL WHERE id = ?")
+    .prepare("UPDATE drafts SET slug = ?, published_commit = ?, published_at = ?, published_by = ?, unpublished_at = NULL, studio_overwrote_at = NULL, status = CASE WHEN status = 'rejected' THEN 'in_review' ELSE status END, rejected_at = NULL WHERE id = ?")
     .run(info.slug, info.commit, now, info.userId, id);
   return { stale: true, wasRejected };
 }
@@ -521,7 +524,7 @@ export function reloadDraftFromStory(id: number, userId: number, f: DraftFields,
     const now = Date.now();
     getDb()
       .prepare(
-        "UPDATE drafts SET status = 'in_review', rejected_at = NULL, title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, featured = ?, body = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE id = ?",
+        "UPDATE drafts SET status = 'in_review', rejected_at = NULL, studio_overwrote_at = NULL, title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, featured = ?, body = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE id = ?",
       )
       .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.featured ? 1 : 0, f.body, now, userId, id);
     old = replacePhotos(id, photos);
@@ -609,39 +612,65 @@ export interface StudioStory {
   area?: string;
   author: string;
   date: string;
+  photoCredit: string;
   /** The Markdown that was committed. */
   body: string;
   photos: { url: string; alt: string; caption: string }[];
 }
 
+/** Recent live stories for the inbox overview: only the columns it shows. */
+export function listRecentPublished(limit: number): { slug: string; title: string; publishedAt: number | null; publishedByName: string | null }[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT d.slug, d.title, d.published_at, d.source, u.name AS by_name FROM drafts d LEFT JOIN users u ON u.id = d.published_by
+       WHERE d.slug IS NOT NULL AND d.published_commit IS NOT NULL AND d.unpublished_at IS NULL ORDER BY d.published_at DESC LIMIT ?`,
+    )
+    .all(limit) as Row[];
+  return rows.map((r) => ({
+    slug: s(r.slug),
+    title: s(r.title),
+    publishedAt: r.published_at == null ? null : n(r.published_at),
+    publishedByName: sn(r.by_name) ?? (r.source === 'studio' ? STUDIO_NAME : null),
+  }));
+}
+
 /**
  * Record Studio publishes as `published` drafts (source studio, published_by NULL). A slug that already has a
- * draft updates that row instead of adding another. Call after the commit succeeded.
+ * draft is updated in place only when that draft is a Studio one or is closed (published / rejected). A linked
+ * draft that is still new / in review (it may hold an editor's unsaved-to-site work, or be mid-publish with the
+ * slug reserved) is never touched except for the live markers, and gets a notice. Call after the commit succeeded.
  */
-export function recordStudioPublish(stories: StudioStory[], commit: string): number[] {
+export function recordStudioPublish(stories: StudioStory[], commit: string): { ids: number[]; overwrote: number[] } {
   const ids: number[] = [];
-  let oldUploads: string[] = [];
+  const overwrote: number[] = [];
   tx(() => {
     const now = Date.now();
     for (const st of stories) {
-      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, body: st.body });
+      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, photoCredit: st.photoCredit, body: st.body });
       const cur = getDraftBySlug(st.slug);
       let id: number;
-      if (cur) {
+      if (cur && isEditable(cur)) {
         id = cur.id;
-        getDb()
-          .prepare(
-            "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, author = ?, date = ?, body = ?, published_commit = ?, published_at = ?, published_by = NULL, unpublished_at = NULL, rejected_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
-          )
-          .run(fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.body, commit, now, now, id);
+        getDb().prepare('UPDATE drafts SET published_commit = ?, published_at = ?, unpublished_at = NULL, studio_overwrote_at = ? WHERE id = ?').run(commit, now, now, id);
+        overwrote.push(id);
       } else {
-        id = createDraft({ source: 'studio', status: 'published', fields, slug: st.slug });
-        getDb().prepare('UPDATE drafts SET published_commit = ?, published_at = ? WHERE id = ?').run(commit, now, id);
+        if (cur) {
+          id = cur.id;
+          getDb()
+            .prepare(
+              "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, featured = 0, body = ?, published_commit = ?, published_at = ?, published_by = NULL, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
+            )
+            .run(fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.body, commit, now, now, id);
+        } else {
+          id = createDraft({ source: 'studio', status: 'published', fields, slug: st.slug });
+          getDb().prepare('UPDATE drafts SET published_commit = ?, published_at = ? WHERE id = ?').run(commit, now, id);
+        }
+        // Photos: only a Studio draft's own are replaced (it holds no uploads); another draft's uploaded files are never deleted.
+        const keepsUploads = cur && cur.source !== 'studio' && listPhotos(id).some((p) => p.path);
+        if (!keepsUploads) replacePhotos(id, st.photos);
       }
-      oldUploads = oldUploads.concat(replacePhotos(id, st.photos));
       ids.push(id);
     }
   });
-  removeUploadFiles(oldUploads);
-  return ids;
+  return { ids, overwrote };
 }

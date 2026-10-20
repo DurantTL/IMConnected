@@ -93,6 +93,49 @@ export async function postEmail(msg: { to: string; subject: string; text: string
   }
 }
 
+const BATCH_MAX = 100; // Resend's limit per batch request
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Sends one message per recipient through Resend's batch endpoint (POST <emails URL>/batch, a JSON array), 100 at a
+ * time. A 429 is retried once after its retry-after (capped at 5 s). Never throws; never logs addresses.
+ */
+export async function postEmailBatch(msgs: { to: string; subject: string; text: string; html: string }[], env = process.env): Promise<{ sent: number; failed: number }> {
+  if (!msgs.length) return { sent: 0, failed: 0 };
+  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) return { sent: 0, failed: msgs.length };
+  const url = (env.EMAIL_API_URL || RESEND_URL).replace(/\/+$/, '') + '/batch';
+  let sent = 0;
+  let failed = 0;
+  for (let i = 0; i < msgs.length; i += BATCH_MAX) {
+    const chunk = msgs.slice(i, i + BATCH_MAX);
+    const body = JSON.stringify(
+      chunk.map((m) => ({ from: env.EMAIL_FROM, to: [m.to], reply_to: env.EMAIL_REPLY_TO || SITE.contactEmail, subject: m.subject, text: m.text, html: m.html })),
+    );
+    let ok = false;
+    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+          body,
+          signal: AbortSignal.timeout(8000),
+        });
+        await res.arrayBuffer().catch(() => {});
+        if (res.ok) ok = true;
+        else if (res.status === 429 && attempt === 0) {
+          const wait = Number(res.headers.get('retry-after'));
+          await sleepMs(Math.min(5000, Number.isFinite(wait) && wait > 0 ? wait * 1000 : 1000));
+        } else break;
+      } catch {
+        break;
+      }
+    }
+    if (ok) sent += chunk.length;
+    else failed += chunk.length;
+  }
+  return { sent, failed };
+}
+
 /** Sends the confirmation email for a draft (kind 'pr': for the old pull-request path). Never throws; never logs the address. */
 export async function sendConfirmationEmail(opts: { to: string; title: string; id: number; kind?: 'draft' | 'pr' }, env = process.env): Promise<SendResult> {
   if (!env.RESEND_API_KEY) return { sent: false, reason: 'email sending is not configured' };

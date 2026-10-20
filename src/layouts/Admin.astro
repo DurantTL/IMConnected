@@ -42,7 +42,7 @@ const nav = [
       {user && (
         <nav aria-label="Editor navigation">
           {Astro.locals.session?.mfaPassed && nav.map((n) => (
-            <a href={n.href} aria-current={current === n.key ? 'page' : undefined}>{n.label}{n.key === 'drafts' && waiting > 0 && <span class="nav-count">{waiting}<span class="visually-hidden"> {waiting === 1 ? 'draft' : 'drafts'} waiting</span></span>}</a>
+            <a href={n.href} aria-current={current === n.key ? 'page' : undefined}>{n.label}{n.key === 'drafts' && waiting > 0 && <span class="nav-count"><span aria-hidden="true">{waiting}</span><span class="visually-hidden"> {waiting === 1 ? 'draft' : 'drafts'} waiting</span></span>}</a>
           ))}
           <form method="post" action="/api/admin/logout"><button type="submit">Sign out</button></form>
         </nav>
