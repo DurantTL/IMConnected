@@ -1,11 +1,12 @@
 import type { APIRoute } from 'astro';
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { githubConfigFromEnv, commitToBase, fileExistsOnBase } from '../../lib/github';
 import { buildPublish, PublishError, PUBLISH_LIMITS } from '../../lib/publish';
 import { SECTIONS } from '../../lib/site';
 import { clientIp } from '../../lib/request';
 import { recordStudioPublish } from '../../lib/drafts';
 import { audit } from '../../lib/auth/audit';
+import { readLimited } from '../../lib/bearer';
+import { studioAuth as checkAuth, studioCors as corsHeaders, studioJson as json } from '../../lib/studio-api';
 
 // Second server route (the other is /api/submit). Called by IMConnected Studio.
 export const prerender = false;
@@ -25,59 +26,6 @@ function rateLimited(ip: string): boolean {
 
 function siteUrl(): string {
   return (process.env.SITE_URL || 'https://stories.imadventist.org').replace(/\/+$/, '');
-}
-
-function corsHeaders(request: Request): Record<string, string> {
-  const h: Record<string, string> = { Vary: 'Origin' };
-  const origin = request.headers.get('origin');
-  const allowed = (process.env.PUBLISH_ORIGINS || 'https://tools.imsda.org').split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean);
-  if (origin && allowed.includes(origin)) {
-    h['Access-Control-Allow-Origin'] = origin;
-    h['Access-Control-Allow-Headers'] = 'Authorization, Content-Type';
-    h['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
-    h['Access-Control-Max-Age'] = '600';
-  }
-  return h;
-}
-
-function json(request: Request, status: number, payload: unknown) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...corsHeaders(request) },
-  });
-}
-
-const sha = (v: string) => createHash('sha256').update(v).digest();
-
-/** null = fine; otherwise the response to send. */
-function checkAuth(request: Request): Response | null {
-  const token = process.env.PUBLISH_TOKEN;
-  if (!token || token.length < 32) return json(request, 503, { ok: false, error: 'Publishing is not configured.' });
-  const m = /^Bearer\s+(.+)$/i.exec(request.headers.get('authorization') || '');
-  const given = m ? m[1].trim() : '';
-  // Hash both sides so the comparison is constant time whatever the length.
-  if (!timingSafeEqual(sha(given), sha(token))) return json(request, 401, { ok: false, error: 'Unauthorized.' });
-  return null;
-}
-
-async function readLimited(request: Request, max: number): Promise<string | null> {
-  const declared = Number(request.headers.get('content-length') || 0);
-  if (declared > max) return null;
-  if (!request.body) return '';
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.length;
-    if (total > max) {
-      await reader.cancel().catch(() => {});
-      return null;
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 export const OPTIONS: APIRoute = ({ request }) => new Response(null, { status: 204, headers: corsHeaders(request) });

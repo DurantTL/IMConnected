@@ -11,9 +11,10 @@ const q = Astro.url.searchParams;
 const wanted = q.get('status') ?? 'open';
 const status = (STATUS_FILTERS.some((f) => f.value === wanted) ? wanted : 'open') as StatusFilter;
 const section = SECTIONS.some((s) => s.key === q.get('section')) ? (q.get('section') as string) : '';
-const drafts = listDrafts({ status, section: section || undefined });
+const fromAgent = q.get('source') === 'agent';
+const drafts = listDrafts({ status, section: section || undefined, source: fromAgent ? 'agent' : undefined });
 // The overview is for the plain inbox; a filtered view shows only what was asked for.
-const showHome = !q.has('status') && !q.has('section');
+const showHome = !q.has('status') && !q.has('section') && !q.has('source');
 const newest = showHome ? drafts.slice(0, 5) : [];
 const recentPublished = showHome ? listRecentPublished(5) : [];
 const base = siteUrl();
@@ -36,6 +37,7 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
               <span class="ad-meta">
                 <span class={`ad-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
                 {d.source === 'form' && d.emailVerified && <span class="ad-badge ok">Email verified</span>}
+                {d.source === 'agent' && <span class="ad-badge">From AI agent</span>}
                 <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time>
               </span>
             </li>
@@ -73,6 +75,12 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
         {SECTIONS.map((s) => <option value={s.key} selected={s.key === section}>{s.label}</option>)}
       </select>
     </label>
+    <label>Source
+      <select name="source">
+        <option value="">All sources</option>
+        <option value="agent" selected={fromAgent}>Source: AI agent</option>
+      </select>
+    </label>
     <button class="ad-btn secondary" type="submit">Filter</button>
   </form>
 
@@ -85,10 +93,10 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
           <a class="title" href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
           <div class="ad-meta">
             <span class={`ad-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
-            <span class="ad-badge">{SOURCE_LABEL[d.source]}</span>
+            <span class="ad-badge">{d.source === 'agent' ? 'From AI agent' : SOURCE_LABEL[d.source]}</span>
             <span>{sectionLabel(d.section)}</span>
             {d.church && <span>{d.church}</span>}
-            {d.source !== 'editor' && (d.emailVerified ? <span class="ad-badge ok">Email verified</span> : <span class="ad-badge warn">Email not verified</span>)}
+            {d.source !== 'editor' && d.source !== 'agent' && (d.emailVerified ? <span class="ad-badge ok">Email verified</span> : <span class="ad-badge warn">Email not verified</span>)}
             <span>{d.photoCount} {d.photoCount === 1 ? 'photo' : 'photos'}</span>
             <span>Received <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time></span>
           </div>
