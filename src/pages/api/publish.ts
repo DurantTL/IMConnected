@@ -4,6 +4,8 @@ import { githubConfigFromEnv, commitToBase, fileExistsOnBase } from '../../lib/g
 import { buildPublish, PublishError, PUBLISH_LIMITS } from '../../lib/publish';
 import { SECTIONS } from '../../lib/site';
 import { clientIp } from '../../lib/request';
+import { recordStudioPublish } from '../../lib/drafts';
+import { audit } from '../../lib/auth/audit';
 
 // Second server route (the other is /api/submit). Called by IMConnected Studio.
 export const prerender = false;
@@ -119,6 +121,13 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
       message: `Publish ${n} ${n === 1 ? 'story' : 'stories'} from ${built.name} (${built.issueDate})`,
     });
     console.log(`[publish] committed ${n} stories, ${built.files.length} files, ${commit.sha}`);
+    // The story is live; also record it in the dashboard's history. Never fail the publish over this.
+    try {
+      const { ids, overwrote } = recordStudioPublish(built.stories.map((s) => ({ slug: s.slug, ...s.record })), commit.sha);
+      for (const id of ids) audit(overwrote.includes(id) ? 'draft.studio_overwrote_live' : 'draft.published_studio', { target: `draft:${id}`, detail: { commit: commit.sha } });
+    } catch (err) {
+      console.error('[publish] could not record the stories in the dashboard', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+    }
     const base = siteUrl();
     return json(request, 200, {
       ok: true,

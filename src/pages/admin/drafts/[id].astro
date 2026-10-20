@@ -48,6 +48,9 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
       )}
       {notice && !published && <p class="admin-ok" role="status">{notice}</p>}
       {error && <p class="admin-error" role="alert">{error}</p>}
+      {draft.studioOverwroteAt && (draft.status === 'new' || draft.status === 'in_review') && (
+        <p class="admin-error" role="status">IMConnected Studio published over this story on <time datetime={new Date(draft.studioOverwroteAt).toISOString()} data-local>{fmtTime(draft.studioOverwroteAt)}</time>; your saved edits here are not live.</p>
+      )}
       <p id="conflict" class="admin-error" role="alert" hidden>Someone else changed this draft, so your changes were not saved. <a href={`/admin/drafts/${draft.id}`}>Reload to see their changes</a>.</p>
 
       {draft.status === 'published' && (

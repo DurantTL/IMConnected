@@ -4,7 +4,11 @@ import { clientIp, originAllowed } from '../../lib/request';
 import { checkEmail, EmailCheckError } from '../../lib/email-check';
 import { verifyTurnstile } from '../../lib/turnstile';
 import { sendConfirmationEmail } from '../../lib/email';
-import { parseSubmission, buildFiles, prBody, emailSent, emailNotSent, ValidationError } from '../../lib/submission';
+import { parseSubmission, buildFiles, prBody, emailSent, emailNotSent, textToMarkdown, sniffImage, ValidationError } from '../../lib/submission';
+import { getDb } from '../../lib/db';
+import { createSubmissionDraft } from '../../lib/drafts';
+import { notifyEditorsOfSubmission } from '../../lib/notify';
+import { audit } from '../../lib/auth/audit';
 import { getSection } from '../../lib/site';
 
 export const prerender = false;
@@ -44,14 +48,28 @@ function respond(request: Request, status: number, payload: { ok: boolean; error
   );
 }
 
+const UNAVAILABLE = 'Submissions are temporarily unavailable. Please email us your story.';
+/** SUBMISSIONS_TO=github keeps the old pull-request path for one release; anything else is the dashboard. */
+const toGithub = () => process.env.SUBMISSIONS_TO === 'github';
+const siteUrl = () => (process.env.SITE_URL || 'https://stories.imadventist.org').replace(/\/+$/, '');
+
+/** Neutralise Discord Markdown so a title can't format or link the ping. */
+const discordEsc = (v: string) => v.replace(/[\\*_~`|<>\[\]()#-]/g, (m) => '\\' + m).replace(/\s+/g, ' ');
+
 async function notifyDiscord(text: string) {
   const url = process.env.DISCORD_WEBHOOK_URL;
   if (!url) return;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 5000);
   await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content: text.slice(0, 1900), allowed_mentions: { parse: [] } }),
-  }).catch((e) => console.error('[submit] discord notify failed', e));
+    signal: ctl.signal,
+  })
+    .then((res) => res.arrayBuffer().catch(() => {}))
+    .catch((e) => console.error('[submit] discord notify failed', e instanceof Error ? e.name : 'error'))
+    .finally(() => clearTimeout(timer));
 }
 
 export const POST: APIRoute = async ({ request, clientAddress }) => {
@@ -60,10 +78,20 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
   const ip = clientIp(request, clientAddress);
   if (rateLimited(ip)) return respond(request, 429, { ok: false, error: 'Too many submissions. Please try again later.' });
 
-  const cfg = githubConfigFromEnv();
-  if (!cfg) {
+  const github = toGithub();
+  const cfg = github ? githubConfigFromEnv() : null;
+  if (github && !cfg) {
     console.error('[submit] GITHUB_TOKEN / GITHUB_REPO not configured');
-    return respond(request, 503, { ok: false, error: 'Submissions are temporarily unavailable. Please email us your story.' });
+    return respond(request, 503, { ok: false, error: UNAVAILABLE });
+  }
+  if (!github) {
+    // The story must never be lost: with no database, say so before the visitor spends time on the form.
+    try {
+      getDb();
+    } catch (err) {
+      console.error('[submit] the database is unavailable:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      return respond(request, 503, { ok: false, error: UNAVAILABLE });
+    }
   }
 
   let fd: FormData;
@@ -82,7 +110,17 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
 
   try {
     const sub = parseSubmission(fd);
-    const { slug, files, photoCount } = await buildFiles(sub);
+    const built = cfg ? await buildFiles(sub) : null;
+    // Photos are checked by file signature, never by the browser's MIME type.
+    const photos: { bytes: Uint8Array; ext: string }[] = [];
+    if (!cfg) {
+      for (const p of sub.photos) {
+        const bytes = new Uint8Array(await p.arrayBuffer());
+        const ext = sniffImage(bytes);
+        if (!ext) throw new ValidationError(`"${p.name}" isn't a JPG, PNG or WebP image.`);
+        photos.push({ bytes, ext });
+      }
+    }
 
     // Checks that need no GitHub call. Email first: a refusal here doesn't use up the Turnstile token.
     await checkEmail(sub.email);
@@ -90,6 +128,46 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     if (security === 'fail') return respond(request, 400, { ok: false, error: 'Please complete the security check and try again.' });
     if (security === 'unreachable') return respond(request, 503, { ok: false, error: 'Please try again in a minute.' });
 
+    const section = getSection(sub.section)?.label;
+    if (!cfg) {
+      let draftId: number;
+      try {
+        draftId = createSubmissionDraft({
+          title: sub.title,
+          dek: sub.dek,
+          section: sub.section,
+          area: sub.area,
+          body: textToMarkdown(sub.body),
+          church: sub.church,
+          photoCredit: sub.photoCredit,
+          caption: sub.caption,
+          submitter: { name: sub.name, email: sub.email, phone: sub.phone, church: sub.church },
+          photos,
+        });
+      } catch (err) {
+        console.error('[submit] could not save the draft', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+        return respond(request, 503, { ok: false, error: UNAVAILABLE });
+      }
+      console.log(`[submit] saved draft #${draftId}`);
+      try {
+        audit('submission.received', { target: `draft:${draftId}`, ip });
+      } catch {
+        /* the audit entry is a convenience */
+      }
+
+      const mail = await sendConfirmationEmail({ to: sub.email, title: sub.title, id: draftId });
+      if (mail.sent) console.log(`[submit] draft #${draftId}: confirmation email sent`);
+      else console.warn(`[submit] draft #${draftId}: confirmation email not sent (${mail.reason})`);
+      // Editors who opted in, and the Discord channel, hear about it in the background: the visitor's response
+      // doesn't wait on them, and nothing here can fail the submission.
+      void notifyEditorsOfSubmission({ id: draftId, title: sub.title, church: sub.church })
+        .then((n) => console.log(`[submit] draft #${draftId}: editor notifications sent ${n.sent}, failed ${n.failed}`))
+        .catch(() => console.warn(`[submit] draft #${draftId}: editor notifications failed`));
+      void notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${siteUrl()}/admin/drafts/${draftId}`).catch(() => {});
+      return respond(request, 200, { ok: true });
+    }
+
+    const { slug, files, photoCount } = built!;
     const pr = await openPullRequest(cfg, {
       branch: `submission/${slug}`,
       files,
@@ -101,14 +179,13 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
 
     // Mark the PR unverified, then email the submitter a confirmation link and record the outcome in the PR body.
     await addLabels(cfg, pr.number, ['email-unverified']).catch((e) => console.error(`[submit] PR #${pr.number}: could not add email-unverified label`, e instanceof Error ? e.message : e));
-    const mail = await sendConfirmationEmail({ to: sub.email, title: sub.title, prNumber: pr.number });
+    const mail = await sendConfirmationEmail({ to: sub.email, title: sub.title, id: pr.number, kind: 'pr' });
     if (mail.sent) console.log(`[submit] PR #${pr.number}: confirmation email sent`);
     else console.warn(`[submit] PR #${pr.number}: confirmation email not sent (${mail.reason})`);
     await updatePullRequestBody(cfg, pr.number, prBody(sub, slug, photoCount, mail.sent ? emailSent : emailNotSent(mail.reason))).catch((e) =>
       console.error(`[submit] PR #${pr.number}: could not update the email status`, e instanceof Error ? e.message : e),
     );
-    const section = getSection(sub.section)?.label;
-    await notifyDiscord(`📰 **New IMConnected story submission**\n**${sub.title}**\n${sub.name} · ${sub.church} · ${section}\n${pr.url}`);
+    void notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${pr.url}`).catch(() => {});
     return respond(request, 200, { ok: true });
   } catch (err) {
     if (err instanceof ValidationError || err instanceof EmailCheckError) return respond(request, 400, { ok: false, error: err.message });

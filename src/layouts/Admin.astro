@@ -1,6 +1,7 @@
 ---
 import '../styles/global.css';
 import { SITE } from '../lib/site';
+import { countOpenDrafts } from '../lib/drafts';
 
 interface Props {
   title: string;
@@ -10,6 +11,14 @@ interface Props {
 }
 const { title, current, wide } = Astro.props;
 const user = Astro.locals.user;
+let waiting = 0;
+if (user && Astro.locals.session?.mfaPassed) {
+  try {
+    waiting = countOpenDrafts();
+  } catch {
+    /* the badge is a convenience */
+  }
+}
 const nav = [
   { key: 'drafts', href: '/admin', label: 'Drafts' },
   { key: 'published', href: '/admin/published', label: 'Published' },
@@ -33,7 +42,7 @@ const nav = [
       {user && (
         <nav aria-label="Editor navigation">
           {Astro.locals.session?.mfaPassed && nav.map((n) => (
-            <a href={n.href} aria-current={current === n.key ? 'page' : undefined}>{n.label}</a>
+            <a href={n.href} aria-current={current === n.key ? 'page' : undefined}>{n.label}{n.key === 'drafts' && waiting > 0 && <span class="nav-count"><span aria-hidden="true">{waiting}</span><span class="visually-hidden"> {waiting === 1 ? 'draft' : 'drafts'} waiting</span></span>}</a>
           ))}
           <form method="post" action="/api/admin/logout"><button type="submit">Sign out</button></form>
         </nav>
@@ -52,6 +61,9 @@ const nav = [
   .admin-bar nav a, .admin-bar nav button { color: inherit; font: inherit; background: none; border: 0; padding: 6px 2px; cursor: pointer; text-decoration: none; border-bottom: 2px solid transparent; }
   .admin-bar nav a:hover, .admin-bar nav button:hover, .admin-bar nav a[aria-current] { border-bottom-color: currentColor; }
   .admin-bar form { margin: 0; }
+  .nav-count { display: inline-block; margin-left: 6px; min-width: 1.5em; padding: 0 6px; border-radius: 999px; background: var(--brand-ink); color: var(--brand); font-size: .78rem; font-weight: 700; text-align: center; line-height: 1.5; }
+  .notify-check { display: flex !important; gap: 10px; align-items: center; min-height: 44px; }
+  .notify-check input { width: 22px; height: 22px; }
   .admin-main { max-width: 760px; margin: 0 auto; padding: 32px var(--gutter) 64px; }
   .admin-main.wide { max-width: 1080px; }
   .admin-main h1 { font-family: var(--serif); margin-top: 0; }
@@ -104,6 +116,11 @@ const nav = [
   .ad-badge.bad { color: #8a1f11; background: #fdecea; border-color: #e5a39b; }
   .ad-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
   .ad-actions form { margin: 0; }
+  .ad-home { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 24px; }
+  .ad-home h2 { margin: 0 0 8px; }
+  .ad-home ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .ad-home li { display: grid; gap: 2px; overflow-wrap: anywhere; }
+  @media (min-width: 760px) { .ad-home { grid-template-columns: 1fr 1fr; } }
 
   .ed { display: grid; gap: 20px; }
   .ed-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-width: 0; }
