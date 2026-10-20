@@ -20,6 +20,8 @@ export interface Session {
   mfaPassed: boolean;
   expiresAt: number;
   lastSeenAt: number;
+  /** When a second factor was last proved in this session (ms); 0 = never. */
+  freshAt: number;
 }
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
@@ -34,9 +36,9 @@ export function createSession(
   const expiresAt = now + ABSOLUTE_MS;
   getDb()
     .prepare(
-      'INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, ip, user_agent, mfa_passed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, ip, user_agent, mfa_passed, fresh_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
-    .run(hashToken(token), userId, now, now, expiresAt, opts.ip ?? null, (opts.userAgent ?? '').slice(0, 300) || null, opts.mfaPassed ? 1 : 0);
+    .run(hashToken(token), userId, now, now, expiresAt, opts.ip ?? null, (opts.userAgent ?? '').slice(0, 300) || null, opts.mfaPassed ? 1 : 0, opts.mfaPassed ? now : 0);
   return { token, expiresAt };
 }
 
@@ -47,12 +49,12 @@ export function readSession(token: string | undefined): { session: Session; user
   const id = hashToken(token);
   const row = db
     .prepare(
-      `SELECT s.id, s.user_id, s.mfa_passed, s.expires_at, s.last_seen_at,
+      `SELECT s.id, s.user_id, s.mfa_passed, s.expires_at, s.last_seen_at, s.fresh_at,
               u.email, u.name, u.role, u.status
          FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?`,
     )
     .get(id) as
-    | { id: string; user_id: number; mfa_passed: number; expires_at: number; last_seen_at: number; email: string; name: string; role: Role; status: string }
+    | { id: string; user_id: number; mfa_passed: number; expires_at: number; last_seen_at: number; fresh_at: number; email: string; name: string; role: Role; status: string }
     | undefined;
   if (!row) return null;
   const now = Date.now();
@@ -61,7 +63,7 @@ export function readSession(token: string | undefined): { session: Session; user
     return null;
   }
   return {
-    session: { id: row.id, userId: row.user_id, mfaPassed: row.mfa_passed === 1, expiresAt: row.expires_at, lastSeenAt: row.last_seen_at },
+    session: { id: row.id, userId: row.user_id, mfaPassed: row.mfa_passed === 1, expiresAt: row.expires_at, lastSeenAt: row.last_seen_at, freshAt: row.fresh_at },
     user: { id: row.user_id, email: row.email, name: row.name, role: row.role },
   };
 }
@@ -91,11 +93,11 @@ export function rotateSession(oldId: string, opts: { mfaPassed: boolean; cookies
   try {
     const old = db
       .prepare(
-        `SELECT s.user_id, s.created_at, s.expires_at, s.last_seen_at, s.ip, s.user_agent, u.status
+        `SELECT s.user_id, s.created_at, s.expires_at, s.last_seen_at, s.fresh_at, s.ip, s.user_agent, u.status
            FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?`,
       )
       .get(oldId) as
-      | { user_id: number; created_at: number; expires_at: number; last_seen_at: number; ip: string | null; user_agent: string | null; status: string }
+      | { user_id: number; created_at: number; expires_at: number; last_seen_at: number; fresh_at: number; ip: string | null; user_agent: string | null; status: string }
       | undefined;
     // Same checks as readSession: absolute limit, idle limit, and the user must still be active.
     if (!old || old.expires_at <= now || old.last_seen_at + IDLE_MS <= now || old.status !== 'active') {
@@ -104,15 +106,17 @@ export function rotateSession(oldId: string, opts: { mfaPassed: boolean; cookies
       return null;
     }
     db.prepare('DELETE FROM sessions WHERE id = ?').run(oldId);
+    // Rotating into an MFA-passed session always follows a factor just proved (2FA, enrollment, fresh code).
+    const freshAt = opts.mfaPassed ? now : old.fresh_at;
     db.prepare(
-      'INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, ip, user_agent, mfa_passed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(id, old.user_id, old.created_at, now, old.expires_at, old.ip, old.user_agent, opts.mfaPassed ? 1 : 0);
+      'INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, ip, user_agent, mfa_passed, fresh_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, old.user_id, old.created_at, now, old.expires_at, old.ip, old.user_agent, opts.mfaPassed ? 1 : 0, freshAt);
     db.exec('COMMIT');
     expiresAt = old.expires_at;
     setSessionCookie(opts.cookies, token);
     return {
       token,
-      session: { id, userId: old.user_id, mfaPassed: opts.mfaPassed, expiresAt, lastSeenAt: now },
+      session: { id, userId: old.user_id, mfaPassed: opts.mfaPassed, expiresAt, lastSeenAt: now, freshAt },
     };
   } catch (err) {
     try { db.exec('ROLLBACK'); } catch { /* already closed */ }

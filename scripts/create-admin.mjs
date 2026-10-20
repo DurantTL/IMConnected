@@ -6,7 +6,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDatabase, runMigrations, readMigrationsFromDir } from '../src/lib/db/db-core.mjs';
+import { openDatabase, runMigrations, readMigrationsFromDir, allocateUserId } from '../src/lib/db/db-core.mjs';
 
 const [emailArg, ...nameParts] = process.argv.slice(2);
 const email = (emailArg || '').trim().toLowerCase();
@@ -38,9 +38,8 @@ try {
     db.prepare("UPDATE users SET name = ?, role = 'admin', updated_at = ? WHERE id = ?").run(name, now, userId);
     db.prepare('DELETE FROM invites WHERE user_id = ? AND used_at IS NULL').run(userId); // old links stop working
   } else {
-    userId = Number(
-      db.prepare("INSERT INTO users (email, name, role, status, created_at, updated_at) VALUES (?, ?, 'admin', 'invited', ?, ?)").run(email, name, now, now).lastInsertRowid,
-    );
+    userId = allocateUserId(db); // never reuses an id (migration 009)
+    db.prepare("INSERT INTO users (id, email, name, role, status, created_at, updated_at) VALUES (?, ?, ?, 'admin', 'invited', ?, ?)").run(userId, email, name, now, now);
   }
   db.prepare('INSERT INTO invites (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(tokenHash, userId, now + 24 * 60 * 60 * 1000);
   db.prepare('INSERT INTO audit_log (at, user_id, action, target, detail, ip) VALUES (?, NULL, ?, ?, NULL, NULL)').run(now, 'admin.bootstrap', `user:${userId}`);

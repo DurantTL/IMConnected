@@ -1,0 +1,10 @@
+---
+// The "prove a second factor" field for sensitive admin forms. Shown only when the session has no
+// second factor from the last 10 minutes; the server checks again either way. The form needs
+// data-fresh-form (and data-has-passkeys when the user has a passkey) plus a hidden name="assertion".
+interface Props { id: string; hasPasskeys: boolean }
+const { id, hasPasskeys } = Astro.props;
+---
+<label for={id}>Authenticator or recovery code{hasPasskeys ? ' (leave empty to confirm with a passkey)' : ''}</label>
+<input id={id} name="code" type="text" autocomplete="one-time-code" inputmode="text" required={!hasPasskeys} maxlength="40" />
+<p class="admin-error" role="alert" data-passkey-error hidden></p>

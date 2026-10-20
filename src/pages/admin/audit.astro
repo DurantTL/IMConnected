@@ -1,0 +1,113 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { getDb } from '../../lib/db';
+import { fmtTime } from '../../lib/admin-ui';
+export const prerender = false;
+
+// Administrators only (the middleware answers 403 first; this is the second check).
+if (Astro.locals.user?.role !== 'admin') {
+  return new Response('Administrators only.', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+const PER_PAGE = 50;
+const db = getDb();
+const q = Astro.url.searchParams;
+const users = db.prepare('SELECT id, name FROM users ORDER BY lower(name)').all() as { id: number; name: string }[];
+// Only plain action names are offered as filters (ours are like admin.reset_2fa); anything else still shows, escaped, in the list.
+const actions = (db.prepare('SELECT DISTINCT action FROM audit_log ORDER BY action').all() as { action: string }[]).map((r) => r.action).filter((a) => /^[\w.:-]{1,80}$/.test(a));
+const userParam = Number(q.get('user'));
+const userId = Number.isInteger(userParam) && users.some((u) => u.id === userParam) ? userParam : 0;
+const actionParam = q.get('action') ?? '';
+const action = actions.includes(actionParam) ? actionParam : '';
+const where = ['(? = 0 OR a.user_id = ?)', "(? = '' OR a.action = ?)"];
+const args = [userId, userId, action, action];
+const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM audit_log a WHERE ${where.join(' AND ')}`).get(...args) as { n: number }).n);
+const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+const pageParam = Number(q.get('page'));
+const page = Number.isInteger(pageParam) && pageParam >= 1 ? Math.min(pageParam, pages) : 1;
+const rows = db
+  .prepare(
+    `SELECT a.id, a.at, a.action, a.target, a.detail, a.ip, a.user_id, u.name AS actor, tu.name AS target_name
+       FROM audit_log a
+       LEFT JOIN users u ON u.id = a.user_id
+       LEFT JOIN users tu ON a.target = 'user:' || tu.id
+      WHERE ${where.join(' AND ')}
+      ORDER BY a.at DESC, a.id DESC LIMIT ? OFFSET ?`,
+  )
+  .all(...args, PER_PAGE, (page - 1) * PER_PAGE) as { id: number; at: number; action: string; target: string | null; detail: string | null; ip: string | null; user_id: number | null; actor: string | null; target_name: string | null }[];
+
+const link = (p: number) => {
+  const s = new URLSearchParams();
+  if (userId) s.set('user', String(userId));
+  if (action) s.set('action', action);
+  if (p > 1) s.set('page', String(p));
+  const qs = s.toString();
+  return `/admin/audit${qs ? `?${qs}` : ''}`;
+};
+const targetText = (r: (typeof rows)[number]) => (r.target_name ? `${r.target_name} (${r.target})` : r.target ?? '');
+---
+<Admin title="Audit log" current="editors" wide>
+  <div class="ad-bar">
+    <h1>Audit log</h1>
+    <a class="ad-btn secondary" href="/admin/editors">Editors</a>
+  </div>
+  <p class="admin-note">Sign-ins, two-step changes, account changes, publishes and rejections. Entries older than 2 years are deleted. Times are shown in your time zone.</p>
+  <form class="ad-filters" method="get" action="/admin/audit">
+    <label>Person
+      <select name="user">
+        <option value="">Everyone</option>
+        {users.map((u) => <option value={u.id} selected={u.id === userId}>{u.name}</option>)}
+      </select>
+    </label>
+    <label>Action
+      <select name="action">
+        <option value="">All actions</option>
+        {actions.map((a) => <option value={a} selected={a === action}>{a}</option>)}
+      </select>
+    </label>
+    <button class="ad-btn secondary" type="submit">Filter</button>
+  </form>
+  <p class="admin-note" role="status">{total} {total === 1 ? 'entry' : 'entries'} · page {page} of {pages}</p>
+
+  {rows.length === 0 ? <p class="admin-note">No entries match.</p> : (
+    <ul class="ad-list au-list">
+      {rows.map((r) => (
+        <li class="ad-item au-item">
+          <div class="au-main">
+            <strong class="au-action">{r.action}</strong>
+            <time datetime={new Date(r.at).toISOString()} data-local>{fmtTime(r.at)}</time>
+          </div>
+          <dl class="au-meta">
+            <div><dt>By</dt><dd>{r.actor ?? (r.user_id ? 'Removed account' : 'Not signed in / system')}</dd></div>
+            <div><dt>Target</dt><dd>{targetText(r) || '–'}</dd></div>
+            <div><dt>IP</dt><dd>{r.ip ?? '–'}</dd></div>
+            {r.detail && <div><dt>Detail</dt><dd><code>{r.detail}</code></dd></div>}
+          </dl>
+        </li>
+      ))}
+    </ul>
+  )}
+
+  {pages > 1 && (
+    <nav class="au-pager" aria-label="Pages">
+      {page > 1 ? <a class="ad-btn secondary" href={link(page - 1)} rel="prev">Newer</a> : <span></span>}
+      {page < pages ? <a class="ad-btn secondary" href={link(page + 1)} rel="next">Older</a> : <span></span>}
+    </nav>
+  )}
+</Admin>
+<style is:global>
+  .au-main { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; }
+  .au-action { overflow-wrap: anywhere; }
+  .au-meta { display: grid; grid-template-columns: 1fr; gap: 4px; margin: 0; font-size: .9rem; }
+  .au-meta div { display: flex; flex-wrap: wrap; gap: 0 8px; }
+  .au-meta dt { font-weight: 600; min-width: 4.5em; color: var(--ink-2); }
+  .au-meta dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+  .au-meta code { font-size: .82rem; word-break: break-all; }
+  .au-pager { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; }
+  @media (min-width: 760px) { .au-meta { grid-template-columns: 1fr 1fr; } }
+</style>
+<script is:inline>
+  document.querySelectorAll('time[data-local]').forEach(function (t) {
+    var d = new Date(t.getAttribute('datetime'));
+    if (!isNaN(d)) t.textContent = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  });
+</script>

@@ -1,0 +1,268 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import FreshField from '../../components/FreshField.astro';
+import { listEditors, inviteEditor, resendInvite, changeRole, checkInviteInput, disableUser, enableUser, resetUserTwoFactor, revokeInvite, userExists, type InviteResult } from '../../lib/editors';
+import { isFresh, requireFresh } from '../../lib/auth/fresh';
+import { hasPasskey, passkeysEnabled } from '../../lib/auth/passkeys';
+import { field, readForm } from '../../lib/auth/form';
+import { fmtTime } from '../../lib/admin-ui';
+import { clientIp } from '../../lib/request';
+export const prerender = false;
+
+const user = Astro.locals.user!;
+let session = Astro.locals.session!;
+const isAdmin = user.role === 'admin';
+const ip = clientIp(Astro.request, Astro.clientAddress);
+
+let message = '';
+let error = '';
+let shownLink = '';
+
+// Server-side role check (the middleware does it too): editors never reach the actions.
+if (Astro.request.method === 'POST' && !isAdmin) {
+  return new Response('Administrators only.', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+
+function showInvite(r: InviteResult, verb: string) {
+  if (!r.ok) {
+    error = r.error;
+    Astro.response.status = 400;
+    return;
+  }
+  if (r.emailed) message = `${verb}. The invite email was sent.`;
+  else {
+    message = `${verb}. ${r.emailError && r.emailError !== 'email sending is not configured' ? 'The email could not be sent, so ' : 'Email is not set up, so '}copy the link below and send it yourself. It is shown only once.`;
+    shownLink = r.link;
+  }
+}
+
+if (Astro.request.method === 'POST') {
+  const form = await readForm(Astro.request);
+  const action = form ? field(form, 'action', 40) : '';
+  const targetId = form ? Number(field(form, 'id', 12)) : 0;
+  const ACTIONS = ['invite', 'resend', 'role', 'disable', 'enable', 'reset2fa', 'revoke'];
+  // Everything that can be checked without a factor is checked first, so a bad POST never burns a recovery code or counts toward a lockout.
+  let bad = '';
+  if (!form) bad = 'The form could not be read.';
+  else if (!ACTIONS.includes(action)) bad = 'That action is not recognized.';
+  else if (action === 'invite') {
+    const c = checkInviteInput({ email: field(form, 'email', 300), name: field(form, 'name', 300), role: field(form, 'role', 20) });
+    if (!c.ok) bad = c.error;
+  } else if (!/^[1-9]\d{0,9}$/.test(field(form, 'id', 12)) || !userExists(targetId)) bad = 'That person was not found.';
+  else if (action === 'role' && !['admin', 'editor'].includes(field(form, 'role', 20))) bad = 'Choose a role.';
+  if (bad) {
+    error = bad;
+    Astro.response.status = 400;
+  } else {
+    const fresh = await requireFresh(user, session, form!, ip, Astro.cookies);
+    if (!fresh.ok) {
+      if (fresh.expired) return Astro.redirect('/admin/login', 303);
+      error = fresh.error;
+      Astro.response.status = fresh.status;
+    } else {
+      session = fresh.session; // rotated when a factor was just proved; the old cookie no longer works
+      if (action === 'invite') {
+        showInvite(await inviteEditor(user, { email: field(form!, 'email', 300), name: field(form!, 'name', 300), role: field(form!, 'role', 20) }, ip), 'Invite created');
+      } else if (action === 'resend') {
+        showInvite(await resendInvite(user, targetId, ip), 'New invite created; the old link no longer works');
+      } else {
+        const r =
+          action === 'role' ? changeRole(user, targetId, field(form!, 'role', 20), ip)
+          : action === 'disable' ? disableUser(user, targetId, ip)
+          : action === 'enable' ? enableUser(user, targetId, ip)
+          : action === 'revoke' ? revokeInvite(user, targetId, ip)
+          : resetUserTwoFactor(user, targetId, ip);
+        if (r.ok) {
+          // Own account: don't render the admin view for someone who may no longer be an admin or signed in.
+          if (targetId === user.id && action === 'disable') return Astro.redirect('/admin/login', 303);
+          if (targetId === user.id && action === 'role' && field(form!, 'role', 20) !== 'admin') return Astro.redirect('/admin/editors', 303);
+          message = action === 'role' ? 'Role changed.' : action === 'disable' ? 'Account disabled and signed out everywhere.' : action === 'enable' ? 'Account re-enabled.' : action === 'revoke' ? 'Invite revoked. The link no longer works.' : 'Two-step sign-in reset. They set it up again at their next sign-in.';
+        } else {
+          error = r.error;
+          Astro.response.status = r.status;
+        }
+      }
+    }
+  }
+}
+
+const people = listEditors();
+const needFresh = isAdmin && !isFresh(session);
+const hasPk = hasPasskey(user.id) && passkeysEnabled();
+const freshAttrs: Record<string, string> = needFresh ? { 'data-fresh-form': '', ...(hasPk ? { 'data-has-passkeys': '' } : {}) } : {};
+const roleLabel = (r: string) => (r === 'admin' ? 'Administrator' : 'Editor');
+const statusBadge = (s: string) => (s === 'active' ? 'ok' : s === 'disabled' ? 'bad' : 'warn');
+const statusLabel = (s: string) => (s === 'active' ? 'Active' : s === 'disabled' ? 'Disabled' : 'Invited');
+const twoFa = (p: (typeof people)[number]) => {
+  const parts = [p.totp ? 'Authenticator app' : '', p.passkeys ? `${p.passkeys} ${p.passkeys === 1 ? 'passkey' : 'passkeys'}` : ''].filter(Boolean);
+  return parts.length ? `${parts.join(' + ')} · ${p.recoveryCodes} recovery ${p.recoveryCodes === 1 ? 'code' : 'codes'} left` : 'Not set up';
+};
+---
+<Admin title="Editors" current="editors">
+  <div class="ad-bar">
+    <h1>Editors</h1>
+    {isAdmin && <a class="ad-btn secondary" href="/admin/audit">Audit log</a>}
+  </div>
+  {message && <p class="admin-ok" role="status">{message}</p>}
+  {error && <p class="admin-error" role="alert">{error}</p>}
+
+  {isAdmin ? (
+    <>
+      {shownLink && (
+        <section class="admin-card ec-link" aria-labelledby="ec-link-h">
+          <h2 id="ec-link-h">Invite link</h2>
+          <p class="admin-note">Valid for 7 days. Anyone with this link can set up that account, so send it only to the person invited. It will not be shown again.</p>
+          <label for="invite-link">Invite link</label>
+          <input id="invite-link" type="text" readonly value={shownLink} />
+          <button type="button" data-copy="invite-link">Copy link</button>
+          <span class="admin-note" role="status" data-copied hidden> Copied.</span>
+        </section>
+      )}
+
+      <section class="admin-card" aria-labelledby="ec-invite">
+        <h2 id="ec-invite">Invite someone</h2>
+        <form method="post" action="/admin/editors" {...freshAttrs}>
+          <input type="hidden" name="action" value="invite" />
+          <input type="hidden" name="assertion" value="" />
+          <label for="inv-name">Name</label>
+          <input id="inv-name" name="name" type="text" required maxlength="200" autocomplete="off" />
+          <label for="inv-email">Email</label>
+          <input id="inv-email" name="email" type="email" required maxlength="254" autocomplete="off" />
+          <label for="inv-role">Role</label>
+          <select id="inv-role" name="role">
+            <option value="editor">Editor (drafts and publishing)</option>
+            <option value="admin">Administrator (also manages editors)</option>
+          </select>
+          {needFresh && <FreshField id="inv-code" hasPasskeys={hasPk} />}
+          {!needFresh && <p class="admin-note">Your recent two-step sign-in covers this for 10 minutes.</p>}
+          <button type="submit">Send invite</button>
+        </form>
+      </section>
+
+      <ul class="ad-list ec-list">
+        {people.map((p) => (
+          <li class="ad-item">
+            <div class="ec-head">
+              <strong class="title">{p.name}</strong>
+              <span class={`ad-badge ${statusBadge(p.status)}`}>{statusLabel(p.status)}</span>
+              <span class="ad-badge">{roleLabel(p.role)}</span>
+              {p.id === user.id && <span class="ad-badge">You</span>}
+            </div>
+            <div class="ad-meta">
+              <span>{p.email}</span>
+              <span>Two-step: {twoFa(p)}</span>
+              <span>{p.lastSignIn ? <>Last sign-in <time datetime={new Date(p.lastSignIn).toISOString()} data-local>{fmtTime(p.lastSignIn)}</time></> : 'Never signed in'}</span>
+              {p.status === 'invited' && p.inviteExpiresAt && <span>Invite expires <time datetime={new Date(p.inviteExpiresAt).toISOString()} data-local>{fmtTime(p.inviteExpiresAt)}</time></span>}
+              {p.status === 'invited' && !p.inviteExpiresAt && <span>Invite expired</span>}
+            </div>
+            <details class="ec-manage">
+              <summary>Manage {p.name}</summary>
+              <div class="ec-forms">
+                <form method="post" action="/admin/editors" class="ec-form" {...freshAttrs}>
+                  <input type="hidden" name="action" value="role" />
+                  <input type="hidden" name="id" value={p.id} />
+                  <input type="hidden" name="assertion" value="" />
+                  <label for={`role-${p.id}`}>Role</label>
+                  <select id={`role-${p.id}`} name="role">
+                    <option value="editor" selected={p.role === 'editor'}>Editor</option>
+                    <option value="admin" selected={p.role === 'admin'}>Administrator</option>
+                  </select>
+                  {needFresh && <FreshField id={`role-code-${p.id}`} hasPasskeys={hasPk} />}
+                  <button type="submit" class="ad-btn secondary">Change role</button>
+                </form>
+                {p.status === 'invited' && (
+                  <form method="post" action="/admin/editors" class="ec-form" {...freshAttrs}>
+                    <input type="hidden" name="action" value="resend" />
+                    <input type="hidden" name="id" value={p.id} />
+                    <input type="hidden" name="assertion" value="" />
+                    {needFresh && <FreshField id={`resend-code-${p.id}`} hasPasskeys={hasPk} />}
+                    <button type="submit" class="ad-btn secondary">Send a new invite</button>
+                  </form>
+                )}
+                {p.status === 'invited' && (
+                  <form method="post" action="/admin/editors" class="ec-form" {...freshAttrs}>
+                    <input type="hidden" name="action" value="revoke" />
+                    <input type="hidden" name="id" value={p.id} />
+                    <input type="hidden" name="assertion" value="" />
+                    <p class="admin-note">Cancels the invite and removes this pending account, for example after a typo. You can invite the address again.</p>
+                    {needFresh && <FreshField id={`rev-code-${p.id}`} hasPasskeys={hasPk} />}
+                    <button type="submit" class="ad-btn danger">Revoke invite</button>
+                  </form>
+                )}
+                {p.status === 'active' && (
+                  <form method="post" action="/admin/editors" class="ec-form" {...freshAttrs}>
+                    <input type="hidden" name="action" value="disable" />
+                    <input type="hidden" name="id" value={p.id} />
+                    <input type="hidden" name="assertion" value="" />
+                    {needFresh && <FreshField id={`dis-code-${p.id}`} hasPasskeys={hasPk} />}
+                    <button type="submit" class="ad-btn danger">Disable and sign out</button>
+                  </form>
+                )}
+                {p.status === 'disabled' && (
+                  <form method="post" action="/admin/editors" class="ec-form" {...freshAttrs}>
+                    <input type="hidden" name="action" value="enable" />
+                    <input type="hidden" name="id" value={p.id} />
+                    <input type="hidden" name="assertion" value="" />
+                    {needFresh && <FreshField id={`en-code-${p.id}`} hasPasskeys={hasPk} />}
+                    <button type="submit" class="ad-btn secondary">Re-enable</button>
+                  </form>
+                )}
+                {p.id !== user.id && p.status !== 'invited' && (
+                  <form method="post" action="/admin/editors" class="ec-form" {...freshAttrs}>
+                    <input type="hidden" name="action" value="reset2fa" />
+                    <input type="hidden" name="id" value={p.id} />
+                    <input type="hidden" name="assertion" value="" />
+                    <p class="admin-note">For someone who lost their devices and recovery codes. Confirm who they are first. Removes their authenticator, passkeys and recovery codes and signs them out; they set up two-step sign-in again next time.</p>
+                    {needFresh && <FreshField id={`rst-code-${p.id}`} hasPasskeys={hasPk} />}
+                    <button type="submit" class="ad-btn danger">Reset two-step sign-in</button>
+                  </form>
+                )}
+              </div>
+            </details>
+          </li>
+        ))}
+      </ul>
+    </>
+  ) : (
+    <>
+      <p class="admin-note">The people who edit stories for IMConnected. Administrators manage accounts.</p>
+      <ul class="ad-list ec-list">
+        {people.filter((p) => p.status === 'active').map((p) => (
+          <li class="ad-item"><strong class="title">{p.name}</strong></li>
+        ))}
+      </ul>
+    </>
+  )}
+</Admin>
+<style is:global>
+  .ec-head { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+  .ec-head .title { font-family: var(--serif); font-size: 1.1rem; overflow-wrap: anywhere; }
+  .ec-list { margin-top: 24px; }
+  .ad-meta span { overflow-wrap: anywhere; }
+  .ec-manage summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+  .ec-forms { display: grid; gap: 20px; padding: 4px 0 12px; }
+  .ec-form { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .ec-form label, .admin-card label { display: block; font-weight: 600; margin: 8px 0 4px; }
+  .ec-form input[type=text], .ec-form select, .admin-card select { width: 100%; min-height: 44px; padding: 10px 12px; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+  .ec-form .ad-btn { margin-top: 8px; justify-self: start; }
+  .admin-card input, .admin-card button { min-height: 44px; }
+  .ec-link input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
+</style>
+<script>import '../../scripts/passkeys';</script>
+<script is:inline>
+  document.querySelectorAll('time[data-local]').forEach(function (t) {
+    var d = new Date(t.getAttribute('datetime'));
+    if (!isNaN(d)) t.textContent = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  });
+  document.querySelectorAll('button[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var input = document.getElementById(b.getAttribute('data-copy'));
+      if (!input) return;
+      input.focus();
+      input.select();
+      var done = function () { var n = document.querySelector('[data-copied]'); if (n) n.hidden = false; };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(input.value).then(done, function () { try { document.execCommand('copy'); done(); } catch (e) {} });
+      else { try { document.execCommand('copy'); done(); } catch (e) {} }
+    });
+  });
+</script>

@@ -1,5 +1,6 @@
 import { defineMiddleware } from 'astro:middleware';
 import { getDb } from './lib/db';
+import { ensureRetention } from './lib/retention';
 import { authSecretOk } from './lib/auth/secret';
 import { SESSION_COOKIE, readSession, touchSession, clearSessionCookie } from './lib/auth/session';
 
@@ -79,6 +80,14 @@ function harden(res: Response): Response {
   }
 }
 
+// Admin-only: the audit log, and every state-changing request to the Editors page. Editors may read
+// /admin/editors (names only). The pages and the actions check the role again.
+const adminOnly = (path: string, method: string) =>
+  path === '/admin/audit' ||
+  path === '/api/admin/audit' ||
+  path === '/api/admin/editors' || path.startsWith('/api/admin/editors/') ||
+  (!SAFE_METHODS.has(method) && path === '/admin/editors');
+
 const redirect = (to: string) => harden(new Response(null, { status: 302, headers: { Location: to } }));
 const json = (status: number, error: string) =>
   harden(new Response(JSON.stringify({ ok: false, error }), { status, headers: { 'Content-Type': 'application/json' } }));
@@ -105,6 +114,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
   // A broken database must only take /admin down, never the public site.
   try {
     getDb();
+    ensureRetention();
   } catch (err) {
     console.error('[db] unavailable:', err instanceof Error ? err.message : err);
     return kind === 'api'
@@ -135,6 +145,16 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   if (!found.session.mfaPassed && !mfaPending(kind, path)) {
     return kind === 'page' ? redirect('/admin/2fa') : json(403, 'Two-factor verification required.');
+  }
+  if (context.locals.user?.role !== 'admin' && adminOnly(path, request.method)) {
+    return kind === 'api'
+      ? json(403, 'Administrators only.')
+      : harden(
+          new Response(
+            '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Not allowed</title><body style="font-family:system-ui;max-width:640px;margin:48px auto;padding:0 16px"><h1>Administrators only</h1><p>This page is for administrators. <a href="/admin">Back to the drafts</a>.</p></body>',
+            { status: 403, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+          ),
+        );
   }
   return harden(await next());
 });

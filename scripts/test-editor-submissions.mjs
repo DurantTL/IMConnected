@@ -7,6 +7,7 @@
 //   SCRATCH=/tmp/imc-e2e node scripts/test-editor-submissions.mjs     # run from the repo root
 // SCRATCH is created fresh (an existing folder is removed first) and deleted at the end unless KEEP=1.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import http from 'node:http';
@@ -18,6 +19,15 @@ const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite');
 if (!process.env.SCRATCH) throw new Error('Set SCRATCH to a throwaway folder.');
 const SCRATCH = path.resolve(process.env.SCRATCH);
+// Refuse to wipe anything that is not clearly a throwaway folder (the Docker image's DATA_DIR is /data).
+function assertThrowaway(dir) {
+  const real = path.resolve(dir);
+  const roots = [os.tmpdir(), '/tmp'].map((r) => path.resolve(r) + path.sep);
+  if (real === '/data' || real.startsWith('/data' + path.sep) || !roots.some((r) => real.startsWith(r) && real.length > r.length)) {
+    throw new Error(`Refusing to delete ${real}: point this at a throwaway folder under ${os.tmpdir()}.`);
+  }
+}
+assertThrowaway(SCRATCH);
 fs.rmSync(SCRATCH, { recursive: true, force: true });
 fs.mkdirSync(SCRATCH, { recursive: true });
 const DATA_DIR = path.join(SCRATCH, 'data');
