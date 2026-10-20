@@ -5,7 +5,7 @@ import {
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
 import { buildDraftFiles, publishMessage } from '../../../../../lib/draft-publish';
-import { setHoldRepublishSha } from '../../../../../lib/story-store';
+import { getHold } from '../../../../../lib/story-store';
 import { invalidateStories } from '../../../../../lib/public-cache';
 import { commitToBase } from '../../../../../lib/github';
 import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages';
@@ -142,13 +142,13 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       console.error('[drafts] published but could not record it', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
       return redirectTo(page, { e: 'live_not_recorded' });
     }
-    // A story that was unpublished stays hidden on the database-rendered pages (a hold, see unpublish.ts) until a deploy
-    // that contains this commit: the server's build and mirror still have its old text. Failing to record it keeps it hidden.
+    // A story that was unpublished stays hidden on the database-rendered pages (a hold, see unpublish.ts) until an image
+    // that contains the unpublish commit runs: the server's build and mirror still have its old text.
     let held = false;
     try {
-      held = setHoldRepublishSha(built.slug, sha);
+      held = getHold(built.slug) !== undefined;
     } catch (err) {
-      console.error('[stories] could not record the republish', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      console.error('[stories] could not read the hold', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
     invalidateStories();
     // Housekeeping after the story is recorded: a failure here must never read as "not recorded".
@@ -159,7 +159,7 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     } catch (err) {
       console.error('[drafts] published; cleanup afterwards failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
-    return redirectTo(page, { n: held ? 'republished' : r.stale ? 'published_stale' : 'published' });
+    return redirectTo(page, { n: r.stale ? 'published_stale' : held ? 'published_held' : 'published' });
   } catch (err) {
     if (err instanceof EditorError) return redirectTo(page, { e: err.code });
     // Give the slug back only when GitHub definitely refused the commit (4xx). After a network error or a

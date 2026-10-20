@@ -67,7 +67,7 @@ jobs:
         run: echo "IMAGE=${IMAGE,,}" >> "$GITHUB_ENV"
       - name: List the commits in this image
         if: steps.target.outputs.publish == 'true'
-        run: git log -200 --format=%H > .build-commits
+        run: git log -200 --format='%H %ct' > .build-commits
       - uses: docker/build-push-action@v6
         if: steps.target.outputs.publish == 'true'
         with:

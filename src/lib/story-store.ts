@@ -210,29 +210,25 @@ export function unpublishStory(slug: string, now = Date.now()): boolean {
   return Number(r.changes) > 0;
 }
 
-/** Keep a story off the public pages until a build that has its republish commit runs (see story-holds.ts and migration 012). */
-export function holdStory(slug: string, buildMarker: string | null, now = Date.now()): void {
-  getDb().prepare('INSERT OR REPLACE INTO story_holds (slug, build_marker, republish_sha, created_at) VALUES (?, ?, NULL, ?)').run(slug, buildMarker, now);
+/** Keep a story off the public pages until an image that contains its unpublish commit runs (see story-holds.ts and migration 012). */
+export function holdStory(slug: string, buildMarker: string | null, unpublishSha: string | null, now = Date.now()): void {
+  getDb().prepare('INSERT OR REPLACE INTO story_holds (slug, build_marker, unpublish_sha, created_at) VALUES (?, ?, ?, ?)').run(slug, buildMarker, unpublishSha, now);
   invalidateStories();
 }
 
-/** Record the commit that republished a held story. True when the story is held. */
-export function setHoldRepublishSha(slug: string, sha: string): boolean {
-  const r = getDb().prepare('UPDATE story_holds SET republish_sha = ? WHERE slug = ?').run(sha, slug);
-  invalidateStories();
-  return Number(r.changes) > 0;
-}
+export interface StoredHold { marker: string | null; unpublishSha: string | null; createdAt: number }
 
-export interface StoredHold { marker: string | null; republishSha: string | null }
+type HoldRow = { slug: string; build_marker: string | null; unpublish_sha: string | null; created_at: number };
+const toHold = (r: HoldRow): StoredHold => ({ marker: r.build_marker, unpublishSha: r.unpublish_sha, createdAt: Number(r.created_at) });
 
 export function getHold(slug: string): StoredHold | undefined {
-  const r = getDb().prepare('SELECT build_marker, republish_sha FROM story_holds WHERE slug = ?').get(slug) as { build_marker: string | null; republish_sha: string | null } | undefined;
-  return r ? { marker: r.build_marker, republishSha: r.republish_sha } : undefined;
+  const r = getDb().prepare('SELECT slug, build_marker, unpublish_sha, created_at FROM story_holds WHERE slug = ?').get(slug) as HoldRow | undefined;
+  return r ? toHold(r) : undefined;
 }
 
 export function listHolds(): Map<string, StoredHold> {
-  const rows = getDb().prepare('SELECT slug, build_marker, republish_sha FROM story_holds').all() as { slug: string; build_marker: string | null; republish_sha: string | null }[];
-  return new Map(rows.map((r) => [r.slug, { marker: r.build_marker, republishSha: r.republish_sha }]));
+  const rows = getDb().prepare('SELECT slug, build_marker, unpublish_sha, created_at FROM story_holds').all() as HoldRow[];
+  return new Map(rows.map((r) => [r.slug, toHold(r)]));
 }
 
 export function releaseHold(slug: string): void {

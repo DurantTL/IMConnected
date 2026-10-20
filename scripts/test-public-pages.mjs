@@ -106,6 +106,9 @@ async function startServer(dataDir, extra = {}) {
 const stopServer = async () => { await stop(server); server = undefined; };
 const COMMITS = path.join(SCRATCH, 'build-commits.txt'); // the image's commit list (BUILD_COMMITS_FILE); absent = a local build
 const fakeShas = (n, seed) => Array.from({ length: n }, (_, i) => createHash('sha1').update(`${seed}-${i}`).digest('hex'));
+/** Write the image's commit list the way docker.yml does ("<sha> <unix seconds>", newest first); times are spread from `newestSec` back. */
+const writeList = (n, seed, newestSec, extra = []) => fs.writeFileSync(COMMITS, [...extra, ...fakeShas(n - extra.length, seed)].map((sha, i) => `${sha} ${newestSec - i * 60}`).join('\n') + '\n');
+const latestUnpublishSha = () => JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'draft.unpublish' ORDER BY id DESC LIMIT 1")[0].detail).commit;
 const restartMain = async (extra = {}) => { await stopServer(); await startServer(dirs.main, extra); await get('/'); return until(synced, 20000); };
 const synced = () => serverLog.some((l) => l.includes('[stories] mirrored the build'));
 
@@ -327,6 +330,7 @@ try {
     check('the dashboard unpublish succeeds', un.params.get('n') === 'unpublished', un.loc);
     const after = await get(`/stories/${slug}/`);
     check('mirror still empty: the unpublished story is a real 404 straight away (page cache invalidated)', pending() && after.status === 404 && after.text.includes('We couldn’t find that page') && after.headers.get('cache-control') === 'no-store', `${after.status}`);
+    check('the unpublish recorded a hold with the unpublish commit', q('SELECT unpublish_sha FROM story_holds WHERE slug = ?', slug)[0]?.unpublish_sha === latestUnpublishSha() && /^[0-9a-f]{40}$/.test(latestUnpublishSha()));
     const lists = [await get('/'), await get(`/${target.section}/`), await get('/stories.json'), await get('/rss.xml')];
     check('...and it is gone from the home page, its section page and both feeds', lists.every((r) => !r.text.includes(`/stories/${slug}`)), lists.map((r) => r.text.includes(`/stories/${slug}`)).join());
     // The editor fixes the text and publishes again. The running build still has the OLD text, so the story must stay hidden.
@@ -335,7 +339,7 @@ try {
     const d0 = q('SELECT updated_at, status FROM drafts WHERE slug = ?', slug)[0];
     check('the unpublished draft is back in review', d0?.status === 'in_review', JSON.stringify(d0));
     const rp0 = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: d0.updated_at });
-    check('the dashboard publishes it again (the editor is told it returns with the next deploy)', rp0.params.get('n') === 'republished', rp0.loc);
+    check('the dashboard publishes it again (the editor is told it returns with the next deploy)', rp0.params.get('n') === 'published_held', rp0.loc);
     check('mirror still empty: after publishing again it stays hidden (the old built text must not come back)', pending() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText(), `${await get(`/stories/${slug}/`).then((r) => r.status)}`);
   } else skip('dashboard unpublish while the mirror is empty');
 
@@ -350,16 +354,22 @@ try {
     check('after the import the unpublished story is still a 404', r.status === 404);
     const home = await get('/');
     check('after the import pages come from the table (photos are /media links, cache invalidated)', home.text.includes('/media/stories/') && !home.text.includes('/images/stories/'), home.text.match(/src="[^"]*stories[^"]*"/)?.[0]);
-    const holdRow = () => q('SELECT build_marker, republish_sha FROM story_holds WHERE slug = ?', slug)[0];
-    const x2 = q('SELECT published_commit FROM drafts WHERE slug = ?', slug)[0].published_commit;
-    check('after the import the story published again is still hidden; its hold has the republish commit and the build marker', q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished' && holdRow()?.republish_sha === x2 && !!holdRow().build_marker && await noOldText(), JSON.stringify(holdRow()));
+    const holdRow = () => q('SELECT build_marker, unpublish_sha FROM story_holds WHERE slug = ?', slug)[0];
+    const x1 = latestUnpublishSha();
+    check('after the import the story published again is still hidden; its hold has the unpublish commit and the build marker', q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished' && holdRow()?.unpublish_sha === x1 && !!holdRow().build_marker && await noOldText(), JSON.stringify(holdRow()));
     check('a restart of the same image (no commit list, same build marker) keeps it hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
-    // an image built before the republish (for example finishing after it): a different build, but its commits lack the republish
-    fs.writeFileSync(COMMITS, fakeShas(40, 'older-image').join('\n') + '\n');
+    // an image built before the unpublish (for example finishing after it): a different build, but its commits lack the unpublish
+    writeList(60, 'older-image', Math.floor(Date.now() / 1000));
     run("UPDATE story_holds SET build_marker = 'an-older-build' WHERE slug = ?", slug);
-    check('an image whose commit list lacks the republish commit keeps it hidden, even though the build differs; the old text stays away', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && !!holdRow() && await noOldText());
-    fs.writeFileSync(COMMITS, [...fakeShas(40, 'newer-image'), x2].join('\n') + '\n');
-    check('an image whose commit list has the republish commit drops the hold and shows the story', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'live');
+    check('an image whose commit list lacks the unpublish commit keeps it hidden, even though the build differs; the old text stays away', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && !!holdRow() && await noOldText());
+    // Studio publishes the same story (same slug) while it is held: still hidden until an image has the unpublish
+    const target0 = feedBase.stories.find((x) => x.id === slug);
+    const studio = await fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${PUBLISH_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ newsletter: { name: 'E2E Issue', issueDate: slug.slice(0, 10) }, stories: [{ ref: 'a', title: target0.title, section: target0.section, area: target0.area, author: 'Studio Author', body: 'A made-up corrected body from Studio.', photos: [] }] }) });
+    await studio.arrayBuffer();
+    check('Studio publishes the same slug again (mock GitHub)', studio.status === 200);
+    check('...it stays hidden on the server until an image has the unpublish commit', (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
+    writeList(60, 'newer-image', Math.floor(Date.now() / 1000), [x1]);
+    check('an image whose commit list has the unpublish commit drops the hold and shows the story (Studio path)', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'live');
   }
 
   // ================= part 2: equivalence with the prerendered site, served from the table =================
@@ -379,6 +389,21 @@ try {
     const d = q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0];
     await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: d.updated_at });
     check('publishing it again does not bring it back (mirror complete): 404, row unpublished, old text nowhere', (await get(`/stories/${slug}/`)).status === 404 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished' && await noOldText());
+    const x2 = latestUnpublishSha();
+    const nowSec = Math.floor(Date.now() / 1000);
+    // the 200-commit safeguard: an unpublish older than the list's window is in the build
+    writeList(200, 'full-window-newer', nowSec + 86400);
+    check('a full 200-commit list whose oldest commit is newer than the unpublish (+10 min) releases the story: the unpublish is older than the window', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0);
+    await post('/api/admin/stories/unpublish', cookie, { slug });
+    const x3 = latestUnpublishSha();
+    check('(a new unpublish records a new commit)', x3 !== x2 && q('SELECT unpublish_sha FROM story_holds WHERE slug = ?', slug)[0].unpublish_sha === x3);
+    await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at }); // published again
+    writeList(200, 'full-window-older', nowSec - 7 * 86400);
+    check('a full list whose oldest commit is older than the unpublish keeps it hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
+    writeList(199, 'short-newer', nowSec + 86400);
+    check('a list with fewer than 200 commits has no window safeguard: hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404);
+    fs.writeFileSync(COMMITS, fakeShas(5, 'old-format').join('\n') + '\n');
+    check('the old sha-only list format is accepted (no times, so no safeguard): hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404);
     fs.rmSync(COMMITS, { force: true });
     run("UPDATE story_holds SET build_marker = 'an-older-build' WHERE slug = ?", slug);
     check('a local build without a commit list releases the hold once its build marker differs', await restartMain() && (await get(`/stories/${slug}/`)).status === 200);
@@ -387,16 +412,16 @@ try {
     // ---- the build marker can't be worked out while unpublishing: the story must still stay hidden ----
     check('(restart with a failing build marker)', await restartMain({ STORY_SYNC_TEST_FAIL_MARKER: '1' }));
     await post('/api/admin/stories/unpublish', cookie, { slug });
-    const h1 = q('SELECT build_marker, republish_sha FROM story_holds WHERE slug = ?', slug)[0];
-    check('a failed build marker still records the hold (marker NULL)', h1 && h1.build_marker === null && h1.republish_sha === null, JSON.stringify(h1));
+    const h1 = q('SELECT build_marker, unpublish_sha FROM story_holds WHERE slug = ?', slug)[0];
+    const x4 = latestUnpublishSha();
+    check('a failed build marker still records the hold (marker NULL, unpublish commit set)', h1 && h1.build_marker === null && h1.unpublish_sha === x4, JSON.stringify(h1));
     const dd = q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0];
     const rp2 = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: dd.updated_at });
-    check('republishing a held story tells the editor it goes back with the next deploy', rp2.params.get('n') === 'republished', rp2.loc);
+    check('republishing a held story tells the editor it returns with the next deploy', rp2.params.get('n') === 'published_held', rp2.loc);
     check('...and it stays hidden', (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
     check('after a restart (no commit list, NULL marker) it is still hidden: a NULL marker never counts as a different build', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText() && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 1);
-    const x3 = q('SELECT published_commit FROM drafts WHERE slug = ?', slug)[0].published_commit;
-    fs.writeFileSync(COMMITS, [x3, ...fakeShas(10, 'x')].join('\n') + '\n');
-    check('an image that contains the republish commit shows it', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0);
+    writeList(30, 'x', nowSec, [x4]);
+    check('an image that contains the unpublish commit shows it', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0);
     fs.rmSync(COMMITS, { force: true });
   }
 

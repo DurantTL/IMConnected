@@ -145,8 +145,8 @@ try {
     const applied12 = runMigrations(db, all);
     check('migration 012 applies on a database with stories, drafts and accounts, and loses nothing', applied12.join() === '012_story_holds.sql' && snapDb() === before12, applied12.join());
     const cols12 = db.prepare("SELECT group_concat(name || ':' || \"notnull\") AS c FROM pragma_table_info('story_holds')").get().c;
-    check('story_holds has slug (primary key), a nullable build_marker, a nullable republish_sha and created_at', /slug:0|slug:1/.test(cols12) && cols12.includes('build_marker:0') && cols12.includes('republish_sha:0') && cols12.includes('created_at:1'), cols12);
-    db.prepare("INSERT INTO story_holds (slug, build_marker, republish_sha, created_at) VALUES ('s', NULL, NULL, 1)").run();
+    check('story_holds has slug (primary key), a nullable build_marker, a nullable unpublish_sha and created_at', /slug:0|slug:1/.test(cols12) && cols12.includes('build_marker:0') && cols12.includes('unpublish_sha:0') && cols12.includes('created_at:1'), cols12);
+    db.prepare("INSERT INTO story_holds (slug, build_marker, unpublish_sha, created_at) VALUES ('s', NULL, NULL, 1)").run();
     let dupHold = false;
     try { db.prepare("INSERT INTO story_holds (slug, created_at) VALUES ('s', 2)").run(); } catch { dupHold = true; }
     check('a story can have only one hold', dupHold);

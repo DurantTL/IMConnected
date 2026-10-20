@@ -32,8 +32,8 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
     } catch (err) {
       console.error('[stories] could not hide the unpublished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
-    // Publishing it again later must not bring the old text back: hold it. Failing to work out the build marker must not
-    // lose the hold (a NULL marker never counts as a different build).
+    // Publishing it again later must not bring the old text back: hold it. The image that contains this commit (out.sha)
+    // releases it. Failing to work out the build marker must not lose the hold (a NULL marker never counts as a different build).
     let marker: string | null = null;
     try {
       marker = await computeBuildMarker();
@@ -41,7 +41,7 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
       console.error('[stories] could not work out the build marker', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
     try {
-      holdStory(slug, marker);
+      holdStory(slug, marker, out.sha);
     } catch (err) {
       console.error('[stories] could not hold the unpublished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
