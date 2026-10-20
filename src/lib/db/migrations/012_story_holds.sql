@@ -19,3 +19,10 @@ CREATE TABLE story_holds (
   released_at    INTEGER,
   created_at     INTEGER NOT NULL
 ) STRICT;
+
+-- Stories unpublished before this migration need no hold: the image that runs it already has draft: true for them.
+-- Record a RELEASED hold for each so the dashboard can still publish them again (it refuses an unpublished draft that
+-- has no hold row at all).
+INSERT INTO story_holds (slug, build_marker, unpublish_sha, unpublish_time, released_at, created_at)
+SELECT slug, NULL, NULL, NULL, MAX(unpublished_at), MAX(unpublished_at)
+FROM drafts WHERE slug IS NOT NULL AND unpublished_at IS NOT NULL GROUP BY slug;

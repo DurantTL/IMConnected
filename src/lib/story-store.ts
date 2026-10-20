@@ -242,8 +242,9 @@ export function listHolds(): Map<string, StoredHold> {
   return new Map(rows.map((r) => [r.slug, toHold(r)]));
 }
 
-export function releaseHold(slug: string, now = Date.now()): void {
-  getDb().prepare('UPDATE story_holds SET released_at = ? WHERE slug = ? AND released_at IS NULL').run(now, slug);
+/** Mark the hold released, but only the hold that was evaluated (same unpublish commit), never a newer one. */
+export function releaseHold(slug: string, unpublishSha: string | null, now = Date.now()): void {
+  getDb().prepare('UPDATE story_holds SET released_at = ? WHERE slug = ? AND unpublish_sha IS ? AND released_at IS NULL').run(now, slug, unpublishSha);
 }
 
 /** Slugs of the stories of one source with a given status (the git sync uses this to find stories that left the build). */

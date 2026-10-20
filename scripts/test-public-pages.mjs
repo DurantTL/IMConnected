@@ -45,7 +45,7 @@ const GH_PORT = Number(process.env.MOCK_PORT || 4542);
 const BASE = `http://127.0.0.1:${PORT}`;
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
 const MOCK_OUT = path.join(SCRATCH, 'mock-prs'); // never the repo's .mock-prs
-const dirs = { main: path.join(SCRATCH, 'data-main'), partial: path.join(SCRATCH, 'data-partial') };
+const dirs = { legacy: path.join(SCRATCH, 'data-legacy'), main: path.join(SCRATCH, 'data-main'), partial: path.join(SCRATCH, 'data-partial') };
 const dbFile = (dir) => path.join(dir, 'imconnected.db');
 
 let fails = 0;
@@ -568,6 +568,26 @@ try {
       }
     }
   }
+
+  // ================= part 4b: a story unpublished before migration 012 can still be published from the dashboard =================
+  await stopServer();
+  if (BASELINE) {
+    const { openDatabase, runMigrations, readMigrationsFromDir } = await import(pathToFileURL(path.join(ROOT, 'src/lib/db/db-core.mjs')).href);
+    const legacyDir = path.join(SCRATCH, 'data-legacy');
+    const ldb = openDatabase(legacyDir);
+    runMigrations(ldb, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')).filter((m) => m.name < '012'));
+    const tgt = feedBase.stories[1];
+    const nowL = Date.now();
+    ldb.prepare("INSERT INTO drafts (status, source, title, dek, section, area, author, date, body, slug, published_commit, published_at, unpublished_at, created_at, updated_at) VALUES ('in_review', 'editor', ?, '', ?, ?, 'Legacy Author', ?, 'A made-up body.', ?, 'abc', ?, ?, ?, ?)").run(tgt.title, tgt.section, tgt.area ?? '', tgt.date, tgt.id, nowL - 9000, nowL - 5000, nowL - 9000, nowL - 5000);
+    ldb.close();
+    fs.rmSync(COMMITS, { force: true });
+    await startServer(dirs.legacy);
+    const cookieL = signedInEditor();
+    const dl = q('SELECT id, updated_at FROM drafts WHERE slug = ?', tgt.id)[0];
+    const seededL = await post(`/api/admin/drafts/${dl.id}/publish`, cookieL, { version: dl.updated_at });
+    check('migration 012 seeded a released hold, so a draft unpublished before it can be published (no hold_missing)', !seededL.params.get('e') && /^published/.test(seededL.params.get('n') ?? '') && q('SELECT released_at FROM story_holds WHERE slug = ?', tgt.id)[0]?.released_at > 0, `${seededL.status} ${seededL.loc}`);
+    await stopServer();
+  } else skip('legacy unpublished draft');
 
   // ================= part 5: a partial mirror never shows a missing story =================
   await stopServer();

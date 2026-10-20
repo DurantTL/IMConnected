@@ -205,7 +205,7 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
       // story-holds.ts): until the running image contains the unpublish commit. A released hold is marked released here.
       const hold = getHold(slug);
       const held = hold !== undefined && hold.releasedAt === null && holdActive(hold, marker);
-      if (hold !== undefined && hold.releasedAt === null && !held) releaseHold(slug);
+      if (hold !== undefined && hold.releasedAt === null && !held) releaseHold(slug, hold.unpublishSha);
       const status = listUnpublishedSlugs().has(slug) || held ? 'unpublished' : 'live';
 
       const base = {
@@ -231,7 +231,7 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   for (const slug of slugsBySource('git', 'live')) {
     if (!seen.has(slug) && unpublishStory(slug)) result.unpublished++;
   }
-  for (const [slug, h] of listHolds()) if (!holdActive(h, marker)) releaseHold(slug); // only released holds
+  for (const [slug, h] of listHolds()) if (!holdActive(h, marker)) releaseHold(slug, h.unpublishSha); // only released holds
   // Record the build as verified only when every story was mirrored.
   if (result.skipped === 0 && markerChanged) {
     try {

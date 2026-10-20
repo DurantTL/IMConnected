@@ -141,12 +141,16 @@ try {
     check('a second story with the same slug is refused', dup);
     // migration 012 (story holds) on a database that already has stories, drafts and accounts
     const snapDb = () => JSON.stringify([db.prepare('SELECT * FROM users').all(), db.prepare('SELECT * FROM drafts').all(), db.prepare('SELECT slug, title FROM stories').all()]);
+    db.prepare("INSERT INTO drafts (id, status, source, title, section, body, slug, published_commit, unpublished_at, created_at, updated_at) VALUES (8, 'in_review', 'editor', 'Unpublished long ago', 'news', 'Body', 'old-unpublished', 'abc', 5000, ?, ?)").run(now, now);
+    db.prepare("INSERT INTO drafts (id, status, source, title, section, body, slug, published_commit, created_at, updated_at) VALUES (9, 'published', 'editor', 'Live one', 'news', 'Body', 'still-live', 'abc', ?, ?)").run(now, now);
     const before12 = snapDb();
     const applied12 = runMigrations(db, all);
     check('migration 012 applies on a database with stories, drafts and accounts, and loses nothing', applied12.join() === '012_story_holds.sql' && snapDb() === before12, applied12.join());
     const cols12 = db.prepare("SELECT group_concat(name || ':' || \"notnull\") AS c FROM pragma_table_info('story_holds')").get().c;
     check('story_holds has slug (primary key), a nullable build_marker, a nullable unpublish_sha and created_at', /slug:0|slug:1/.test(cols12) && cols12.includes('build_marker:0') && cols12.includes('unpublish_sha:0') && cols12.includes('created_at:1'), cols12);
     db.prepare("INSERT INTO story_holds (slug, build_marker, unpublish_sha, created_at) VALUES ('s', NULL, NULL, 1)").run();
+    const seeded = db.prepare('SELECT slug, unpublish_sha, released_at FROM story_holds ORDER BY slug').all();
+    check('migration 012 seeds a released hold for a draft unpublished before it (and none for a live one)', seeded.some((r) => r.slug === 'old-unpublished' && r.unpublish_sha === null && Number(r.released_at) === 5000) && !seeded.some((r) => r.slug === 'still-live'), JSON.stringify(seeded));
     let dupHold = false;
     try { db.prepare("INSERT INTO story_holds (slug, created_at) VALUES ('s', 2)").run(); } catch { dupHold = true; }
     check('a story can have only one hold', dupHold);
