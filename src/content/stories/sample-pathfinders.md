@@ -6,6 +6,7 @@ area: pathfinders
 author: "IMConnected Editorial Team"
 date: 2026-10-12
 featured: true
+draft: true
 ---
 
 **SAMPLE STORY — replace or delete before launch.**
