@@ -14,6 +14,7 @@ import { getStoryBySlug, listHolds, listStories, LIST_MAX, type Story } from './
 import { computeBuildMarker, ensureStorySync, storySyncDone } from './story-sync';
 import { listUnpublishedSlugs } from './drafts';
 import { cacheGeneration, TTL_MS } from './public-cache';
+import { buildCommits, holdActive } from './story-holds';
 import { renderMarkdownSafe } from './markdown';
 
 /** The /media address of a photo we hold, else the photo's own address. */
@@ -57,16 +58,29 @@ function listLiveFromDb(): PublicStory[] {
 }
 
 let buildMarker: Promise<string> | undefined;
+/** The running build's marker; a failure is not remembered. */
+function currentMarker(): Promise<string> {
+  buildMarker ??= computeBuildMarker().catch((err) => { buildMarker = undefined; throw err; });
+  return buildMarker;
+}
 
 async function listFromBuild(): Promise<PublicStory[]> {
   let hidden = new Set<string>();
   try {
     hidden = listUnpublishedSlugs();
-    // Held stories (unpublished, then published again; the running build still has the old text) stay hidden too.
+    // Held stories (unpublished, then published again; the running build still has the old text) stay hidden until the
+    // image contains the republish commit. If that can't be worked out, every held story stays hidden.
     const holds = listHolds();
     if (holds.size) {
-      const marker = await (buildMarker ??= computeBuildMarker());
-      for (const [slug, m] of holds) if (m === marker) hidden.add(slug);
+      let marker: string | null = null;
+      try {
+        if (buildCommits() === null) marker = await currentMarker();
+      } catch { marker = null; }
+      for (const [slug, h] of holds) {
+        let active = true;
+        try { active = holdActive(h, marker); } catch { active = true; }
+        if (active) hidden.add(slug);
+      }
     }
   } catch (err) {
     console.error('[stories] could not read the unpublished list:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');

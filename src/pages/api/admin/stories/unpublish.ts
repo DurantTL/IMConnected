@@ -29,10 +29,21 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
     // The page cache is cleared even when there is no row, because pages read the unpublished list while the mirror is still filling.
     try {
       hideStory(slug);
-      // Publishing it again later must not bring the old built text back: hold it until a different build runs.
-      holdStory(slug, await computeBuildMarker());
     } catch (err) {
       console.error('[stories] could not hide the unpublished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+    }
+    // Publishing it again later must not bring the old text back: hold it. Failing to work out the build marker must not
+    // lose the hold (a NULL marker never counts as a different build).
+    let marker: string | null = null;
+    try {
+      marker = await computeBuildMarker();
+    } catch (err) {
+      console.error('[stories] could not work out the build marker', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+    }
+    try {
+      holdStory(slug, marker);
+    } catch (err) {
+      console.error('[stories] could not hold the unpublished story', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
     invalidateStories();
     audit('draft.unpublish', { userId: user.id, target: `story:${slug}`, detail: { slug, commit: out.sha }, ip: clientIp(request, clientAddress) });

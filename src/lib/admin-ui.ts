@@ -20,6 +20,7 @@ export const NOTICES: Record<string, string> = {
   uploaded: 'Photos uploaded.',
   photos: 'Photos updated.',
   published_stale: 'Published and live in about 3–5 minutes, but edits saved while it was publishing are not live yet. Publish again to include them.',
+  republished: 'Republished. It goes back on the site with the next deploy (about 3–5 minutes after GitHub finishes building).',
   unpublished: 'Story unpublished. It will disappear from the site in about 3–5 minutes.',
 };
 

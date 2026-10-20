@@ -84,7 +84,7 @@ you to review the current branch against `origin/main`.
      invalidation; the public `Cache-Control` is `public, max-age=60, stale-while-revalidate=300`; the
      middleware still returns straight from `next()` for every non-`/admin` path except the in-memory cache lookup,
      which must touch only the GET paths `publicCacheKey()` accepts and never `/admin` or `/api/admin` (no database,
-     cookies or session); the dashboard unpublish records a hold and republish never revives the old text; `/images/stories/*` redirects to `/media/` only when
+     cookies or session); the dashboard unpublish records a hold (marker NULL if it can't be computed) and republish only records its commit in the hold, never reviving the old text; `src/lib/story-holds.ts` (`holdActive`) is the one rule shared by the sync and the fallback: no republish sha means hidden, a sha in the image's `.build-commits` (docker.yml `git log -200`, Dockerfile copy) releases, a non-empty list without it keeps it hidden, no list falls back to the marker, and every failure keeps it hidden; `/images/stories/*` redirects to `/media/` only when
      the static file is missing; the Pagefind source pages under `src/pages/search-source/` are pruned from
      `dist/client` by `npm run build`;
    - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/confirm.ts`, `src/pages/media/[...path].ts`, the public story pages and feeds listed above, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
