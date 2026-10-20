@@ -32,7 +32,7 @@ export function listEditors(): EditorRow[] {
               EXISTS (SELECT 1 FROM totp_credentials t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL) AS totp,
               (SELECT COUNT(*) FROM passkeys p WHERE p.user_id = u.id) AS passkeys,
               (SELECT COUNT(*) FROM recovery_codes r WHERE r.user_id = u.id AND r.used_at IS NULL) AS recovery,
-              (SELECT MAX(a.at) FROM audit_log a WHERE a.user_id = u.id AND a.action = 'auth.login') AS last_sign_in,
+              u.last_login_at AS last_sign_in,
               (SELECT MAX(i.expires_at) FROM invites i WHERE i.user_id = u.id AND i.used_at IS NULL AND i.expires_at > ?) AS invite_expires
          FROM users u ORDER BY (u.status = 'disabled'), u.role, lower(u.name)`,
     )
@@ -67,14 +67,23 @@ async function deliver(actorName: string, to: string, token: string): Promise<{ 
   return res.sent ? { link, emailed: true } : { link, emailed: false, emailError: res.reason };
 }
 
-/** Create an invited user (or re-invite one still waiting) and send or hand back the link. */
-export async function inviteEditor(actor: { id: number; name: string }, input: { email: string; name: string; role: string }, ip: string): Promise<InviteResult> {
+/** Check invite fields without touching anything (the page calls this before asking for a fresh factor). */
+export function checkInviteInput(input: { email: string; name: string; role: string }): { ok: true; email: string; name: string; role: Role } | { ok: false; error: string } {
   const email = input.email.trim().toLowerCase();
   const name = input.name.replace(/\s+/g, ' ').trim().slice(0, 200);
   if (!EMAIL_RE.test(email) || email.length > 254) return { ok: false, error: 'Enter a valid email address.' };
   if (!name) return { ok: false, error: 'Enter the person’s name.' };
   if (input.role !== 'admin' && input.role !== 'editor') return { ok: false, error: 'Choose a role.' };
-  const role = input.role as Role;
+  return { ok: true, email, name, role: input.role as Role };
+}
+
+export const userExists = (id: number): boolean => Number.isInteger(id) && id > 0 && getDb().prepare('SELECT 1 FROM users WHERE id = ?').get(id) !== undefined;
+
+/** Create an invited user (or re-invite one still waiting) and send or hand back the link. */
+export async function inviteEditor(actor: { id: number; name: string }, input: { email: string; name: string; role: string }, ip: string): Promise<InviteResult> {
+  const checked = checkInviteInput(input);
+  if (!checked.ok) return checked;
+  const { email, name, role } = checked;
   const db = getDb();
   const now = Date.now();
   let userId = 0;
@@ -190,6 +199,31 @@ export function resetUserTwoFactor(actor: { id: number }, targetId: number, ip: 
     }
     const n = resetTwoFactor(db, targetId);
     audit('admin.reset_2fa', { userId: actor.id, target: `user:${targetId}`, ip, detail: n });
+    db.exec('COMMIT');
+    return { ok: true };
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* already closed */ }
+    throw err;
+  }
+}
+
+/**
+ * Cancel an invite that was never accepted: in one transaction the unused invites and the never-activated
+ * user row are deleted (the address can then be invited again, e.g. after a typo). Accepted accounts are
+ * disabled instead, never deleted.
+ */
+export function revokeInvite(actor: { id: number }, targetId: number, ip: string): ChangeResult {
+  const db = getDb();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const t = db.prepare("SELECT role FROM users WHERE id = ? AND status = 'invited'").get(targetId) as { role: Role } | undefined;
+    if (!t) {
+      db.exec('ROLLBACK');
+      return { ok: false, error: 'That person has already accepted, or does not exist.', status: 400 };
+    }
+    db.prepare('DELETE FROM invites WHERE user_id = ?').run(targetId);
+    db.prepare("DELETE FROM users WHERE id = ? AND status = 'invited'").run(targetId);
+    audit('admin.invite_revoked', { userId: actor.id, target: `user:${targetId}`, ip, detail: { role: t.role } });
     db.exec('COMMIT');
     return { ok: true };
   } catch (err) {

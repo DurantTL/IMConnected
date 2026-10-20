@@ -1,7 +1,7 @@
 ---
 import Admin from '../../layouts/Admin.astro';
 import FreshField from '../../components/FreshField.astro';
-import { listEditors, inviteEditor, resendInvite, changeRole, disableUser, enableUser, resetUserTwoFactor, type InviteResult } from '../../lib/editors';
+import { listEditors, inviteEditor, resendInvite, changeRole, checkInviteInput, disableUser, enableUser, resetUserTwoFactor, revokeInvite, userExists, type InviteResult } from '../../lib/editors';
 import { isFresh, requireFresh } from '../../lib/auth/fresh';
 import { hasPasskey, passkeysEnabled } from '../../lib/auth/passkeys';
 import { field, readForm } from '../../lib/auth/form';
@@ -10,7 +10,7 @@ import { clientIp } from '../../lib/request';
 export const prerender = false;
 
 const user = Astro.locals.user!;
-const session = Astro.locals.session!;
+let session = Astro.locals.session!;
 const isAdmin = user.role === 'admin';
 const ip = clientIp(Astro.request, Astro.clientAddress);
 
@@ -40,33 +40,48 @@ if (Astro.request.method === 'POST') {
   const form = await readForm(Astro.request);
   const action = form ? field(form, 'action', 40) : '';
   const targetId = form ? Number(field(form, 'id', 12)) : 0;
-  if (!form) {
-    error = 'The form could not be read.';
+  const ACTIONS = ['invite', 'resend', 'role', 'disable', 'enable', 'reset2fa', 'revoke'];
+  // Everything that can be checked without a factor is checked first, so a bad POST never burns a recovery code or counts toward a lockout.
+  let bad = '';
+  if (!form) bad = 'The form could not be read.';
+  else if (!ACTIONS.includes(action)) bad = 'That action is not recognized.';
+  else if (action === 'invite') {
+    const c = checkInviteInput({ email: field(form, 'email', 300), name: field(form, 'name', 300), role: field(form, 'role', 20) });
+    if (!c.ok) bad = c.error;
+  } else if (!/^[1-9]\d{0,9}$/.test(field(form, 'id', 12)) || !userExists(targetId)) bad = 'That person was not found.';
+  else if (action === 'role' && !['admin', 'editor'].includes(field(form, 'role', 20))) bad = 'Choose a role.';
+  if (bad) {
+    error = bad;
     Astro.response.status = 400;
   } else {
-    const fresh = await requireFresh(user, session, form, ip);
+    const fresh = await requireFresh(user, session, form!, ip, Astro.cookies);
     if (!fresh.ok) {
+      if (fresh.expired) return Astro.redirect('/admin/login', 303);
       error = fresh.error;
       Astro.response.status = fresh.status;
-    } else if (action === 'invite') {
-      showInvite(await inviteEditor(user, { email: field(form, 'email', 300), name: field(form, 'name', 300), role: field(form, 'role', 20) }, ip), 'Invite created');
-    } else if (action === 'resend') {
-      showInvite(await resendInvite(user, targetId, ip), 'New invite created; the old link no longer works');
-    } else if (action === 'role' || action === 'disable' || action === 'enable' || action === 'reset2fa') {
-      const r =
-        action === 'role' ? changeRole(user, targetId, field(form, 'role', 20), ip)
-        : action === 'disable' ? disableUser(user, targetId, ip)
-        : action === 'enable' ? enableUser(user, targetId, ip)
-        : resetUserTwoFactor(user, targetId, ip);
-      if (r.ok) {
-        message = action === 'role' ? 'Role changed.' : action === 'disable' ? 'Account disabled and signed out everywhere.' : action === 'enable' ? 'Account re-enabled.' : 'Two-step sign-in reset. They set it up again at their next sign-in.';
-      } else {
-        error = r.error;
-        Astro.response.status = r.status;
-      }
     } else {
-      error = 'That action is not recognized.';
-      Astro.response.status = 400;
+      session = fresh.session; // rotated when a factor was just proved; the old cookie no longer works
+      if (action === 'invite') {
+        showInvite(await inviteEditor(user, { email: field(form!, 'email', 300), name: field(form!, 'name', 300), role: field(form!, 'role', 20) }, ip), 'Invite created');
+      } else if (action === 'resend') {
+        showInvite(await resendInvite(user, targetId, ip), 'New invite created; the old link no longer works');
+      } else {
+        const r =
+          action === 'role' ? changeRole(user, targetId, field(form!, 'role', 20), ip)
+          : action === 'disable' ? disableUser(user, targetId, ip)
+          : action === 'enable' ? enableUser(user, targetId, ip)
+          : action === 'revoke' ? revokeInvite(user, targetId, ip)
+          : resetUserTwoFactor(user, targetId, ip);
+        if (r.ok) {
+          // Own account: don't render the admin view for someone who may no longer be an admin or signed in.
+          if (targetId === user.id && action === 'disable') return Astro.redirect('/admin/login', 303);
+          if (targetId === user.id && action === 'role' && field(form!, 'role', 20) !== 'admin') return Astro.redirect('/admin/editors', 303);
+          message = action === 'role' ? 'Role changed.' : action === 'disable' ? 'Account disabled and signed out everywhere.' : action === 'enable' ? 'Account re-enabled.' : action === 'revoke' ? 'Invite revoked. The link no longer works.' : 'Two-step sign-in reset. They set it up again at their next sign-in.';
+        } else {
+          error = r.error;
+          Astro.response.status = r.status;
+        }
+      }
     }
   }
 }
@@ -162,6 +177,16 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="assertion" value="" />
                     {needFresh && <FreshField id={`resend-code-${p.id}`} hasPasskeys={hasPk} />}
                     <button type="submit" class="ad-btn secondary">Send a new invite</button>
+                  </form>
+                )}
+                {p.status === 'invited' && (
+                  <form method="post" action="/admin/editors" class="ec-form" {...freshAttrs}>
+                    <input type="hidden" name="action" value="revoke" />
+                    <input type="hidden" name="id" value={p.id} />
+                    <input type="hidden" name="assertion" value="" />
+                    <p class="admin-note">Cancels the invite and removes this pending account, for example after a typo. You can invite the address again.</p>
+                    {needFresh && <FreshField id={`rev-code-${p.id}`} hasPasskeys={hasPk} />}
+                    <button type="submit" class="ad-btn danger">Revoke invite</button>
                   </form>
                 )}
                 {p.status === 'active' && (

@@ -9,6 +9,7 @@
 // Synthetic data only; the site's real email is never contacted (EMAIL_API_URL points at the mock).
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { TOTP, Secret } from 'otpauth';
@@ -91,6 +92,15 @@ function start(cmd, args, env, onLine) {
 const stopAll = () => { for (const c of children) { try { c.kill('SIGTERM'); } catch { /* gone */ } } };
 process.on('exit', stopAll);
 
+// Refuse to wipe anything that is not clearly a throwaway folder (the Docker image's DATA_DIR is /data).
+function assertThrowaway(dir) {
+  const real = path.resolve(dir);
+  const roots = [os.tmpdir(), '/tmp'].map((r) => path.resolve(r) + path.sep);
+  if (real === '/data' || real.startsWith('/data' + path.sep) || !roots.some((r) => real.startsWith(r) && real.length > r.length)) {
+    throw new Error(`Refusing to delete ${real}: point this at a throwaway folder under ${os.tmpdir()}.`);
+  }
+}
+assertThrowaway(DATA_DIR);
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -209,6 +219,25 @@ try {
   r = await E.get('/admin');
   check('editor reaches the dashboard', r.status === 200 && r.text.includes('New story'));
 
+  // ======= 4b. Revoke a pending invite =======
+  r = await A.post('/admin/editors', { action: 'invite', name: 'Ivy Typo', email: 'ivy.tpyo@example.test', role: 'admin' });
+  await waitMails(mails.length);
+  const typoMail = mails.find((m) => m.to[0] === 'ivy.tpyo@example.test');
+  const typoLink = typoMail && linkOf(typoMail);
+  const ivyId = q("SELECT id FROM users WHERE email = 'ivy.tpyo@example.test'")[0]?.id;
+  check('a mistyped invite exists and its link opens', !!typoLink && !!ivyId && (await new Client('10.7.9.5').get(new URL(typoLink).pathname)).status === 200);
+  r = await A.post('/admin/editors', { action: 'revoke', id: String(ivyId) });
+  check('admin revokes the pending invite', r.status === 200 && /Invite revoked/.test(r.ok), `${r.status} ${r.ok} ${r.error}`);
+  check('...the link no longer works, the pending account and its invites are gone',
+    (await new Client('10.7.9.6').get(new URL(typoLink).pathname)).status === 404 && count("SELECT COUNT(*) n FROM users WHERE email = 'ivy.tpyo@example.test'") === 0 && count('SELECT COUNT(*) n FROM invites WHERE user_id = ?', ivyId) === 0);
+  check('...audited as admin.invite_revoked with target user:<id>', count("SELECT COUNT(*) n FROM audit_log WHERE action = 'admin.invite_revoked' AND target = ? AND user_id = ?", `user:${ivyId}`, adminId) === 1);
+  r = await A.post('/admin/editors', { action: 'revoke', id: String(eddie.id) });
+  check('an account that already accepted cannot be revoked (400, still active)', r.status === 400 && q('SELECT status FROM users WHERE id = ?', eddie.id)[0].status === 'active', `${r.status}`);
+  r = await A.post('/admin/editors', { action: 'invite', name: 'Ivy Typo', email: 'ivy.typo@example.test', role: 'editor' });
+  check('the corrected address can be invited', r.status === 200 && /Invite created/.test(r.ok));
+  r = await A.get('/admin/editors');
+  check('Editors page: pending users show "Never signed in" and a Revoke invite button', r.text.includes('Revoke invite') && r.text.includes('Never signed in'));
+
   // ======= 5. Editor view and 403s =======
   r = await E.get('/admin/editors');
   check('editor sees the editors list, names only', r.status === 200 && r.text.includes('Eddie Editor') && r.text.includes('Alice &lt;Admin&gt; &amp; Co') && !r.text.includes('@example.test'));
@@ -244,6 +273,26 @@ try {
   r = await A.get('/admin/editors');
   check('with a stale session the page asks for a code in the forms', r.text.includes('name="code"') && r.text.includes('Authenticator or recovery code'));
   const usersN = count('SELECT COUNT(*) n FROM users');
+  {
+    const usedBefore = count('SELECT COUNT(*) n FROM recovery_codes WHERE user_id = ? AND used_at IS NOT NULL', adminId);
+    const attemptsBefore = count('SELECT COUNT(*) n FROM login_attempts');
+    const unusedCode = ADMIN.recovery[9]; // never submitted successfully below
+    const bad = [
+      ['unknown action', { action: 'explode', id: '1', code: unusedCode }],
+      ['missing id', { action: 'disable', code: unusedCode }],
+      ['non-numeric id', { action: 'disable', id: 'abc', code: unusedCode }],
+      ['negative id', { action: 'disable', id: '-3', code: unusedCode }],
+      ['id of nobody', { action: 'reset2fa', id: '99999', code: unusedCode }],
+      ['unknown role', { action: 'role', id: String(eddie.id), role: 'owner', code: unusedCode }],
+      ['invalid invite email', { action: 'invite', name: 'Bad', email: 'nope', role: 'editor', code: unusedCode }],
+    ];
+    for (const [name, form] of bad) {
+      const res = await A.post('/admin/editors', form);
+      check(`bad request (${name}) is refused with 400 before any factor is checked`, res.status === 400, `${res.status} ${res.error}`);
+    }
+    check('...no recovery code was used up and no failed attempt was recorded',
+      count('SELECT COUNT(*) n FROM recovery_codes WHERE user_id = ? AND used_at IS NOT NULL', adminId) === usedBefore && count('SELECT COUNT(*) n FROM login_attempts') === attemptsBefore);
+  }
   const noCode = [
     ['invite', { action: 'invite', name: 'Gina Guest', email: 'gina.guest@example.test', role: 'editor' }],
     ['role', { action: 'role', id: String(eddie.id), role: 'admin' }],
@@ -251,6 +300,7 @@ try {
     ['enable', { action: 'enable', id: String(eddie.id) }],
     ['reset2fa', { action: 'reset2fa', id: String(eddie.id) }],
     ['resend', { action: 'resend', id: String(q('SELECT id FROM users WHERE email = ?', FRAN.email)[0].id) }],
+    ['revoke', { action: 'revoke', id: String(q('SELECT id FROM users WHERE email = ?', FRAN.email)[0].id) }],
   ];
   for (const [name, form] of noCode) {
     const res = await A.post('/admin/editors', form);
@@ -260,10 +310,21 @@ try {
   r = await A.post('/admin/editors', { action: 'role', id: String(eddie.id), role: 'admin', code: '000000' });
   check('stale session, wrong code: refused (401)', r.status === 401 && q('SELECT role FROM users WHERE id = ?', eddie.id)[0].role === 'editor', `${r.status}`);
   const totpNow = totp(ADMIN.secret, 1);
+  const cookieBeforeFresh = A.cookie;
   r = await A.post('/admin/editors', { action: 'invite', name: 'Gina Guest', email: 'gina.guest@example.test', role: 'editor', code: totpNow });
   check('stale session, a fresh authenticator code: accepted', r.status === 200 && /Invite created/.test(r.ok) && count("SELECT COUNT(*) n FROM users WHERE email = 'gina.guest@example.test'") === 1, `${r.status} ${r.ok} ${r.error}`);
-  stale();
-  r = await A.post('/admin/editors', { action: 'resend', id: String(q('SELECT id FROM users WHERE email = ?', 'gina.guest@example.test')[0].id), code: recovery(ADMIN) });
+  {
+    const old = new Client('10.7.0.9'); old.cookie = cookieBeforeFresh;
+    const oldRes = await old.get('/admin/editors');
+    check('after a fresh code the session id is rotated: the old cookie is rejected, the new one works',
+      A.cookie !== cookieBeforeFresh && oldRes.status === 302 && oldRes.loc === '/admin/login' && (await A.get('/admin/editors')).status === 200, `${oldRes.status} ${oldRes.loc}`);
+    const copied = A.cookie; // a copy of the cookie taken while the window is open still shares nothing after the next fresh code
+    stale();
+    const before2 = A.cookie;
+    r = await A.post('/admin/editors', { action: 'resend', id: String(q('SELECT id FROM users WHERE email = ?', 'gina.guest@example.test')[0].id), code: recovery(ADMIN) });
+    const dup = new Client('10.7.0.8'); dup.cookie = copied;
+    check('a recovery code also rotates the session (the copied cookie from before is rejected)', before2 === copied && A.cookie !== copied && (await dup.get('/admin/editors')).status === 302 && r.status === 200, `${r.status}`);
+  }
   check('stale session, a recovery code: accepted (and used up)', r.status === 200 && /New invite created/.test(r.ok) && count('SELECT COUNT(*) n FROM recovery_codes WHERE user_id = ? AND used_at IS NOT NULL', adminId) === 1, `${r.status} ${r.error}`);
   r = await A.post('/admin/editors', { action: 'resend', id: String(q('SELECT id FROM users WHERE email = ?', 'gina.guest@example.test')[0].id) });
   check('...and the factor then covers the next 10 minutes (no code needed)', r.status === 200 && /New invite created/.test(r.ok), `${r.status} ${r.error}`);
@@ -291,7 +352,7 @@ try {
   check('a disabled editor cannot sign in', r.status !== 303 && !E3.cookie, `${r.status}`);
   r = await A.post('/admin/editors', { action: 'enable', id: String(eddie.id) });
   check('admin re-enables the editor', r.status === 200 && /re-enabled/.test(r.ok) && q('SELECT status FROM users WHERE id = ?', eddie.id)[0].status === 'active');
-  const E4 = new Client('10.7.1.4');
+  let E4 = new Client('10.7.1.4');
   await E4.post('/admin/login', { email: EDITOR.email, password: EDITOR.password });
   r = await E4.post('/admin/2fa', { code: recovery(EDITOR) });
   check('...and the editor can sign in again', r.status === 303 && r.loc === '/admin' && (await E4.get('/admin')).status === 200);
@@ -307,12 +368,21 @@ try {
   check('admin promotes the editor to admin', r.status === 200 && /Role changed/.test(r.ok) && q('SELECT role FROM users WHERE id = ?', eddie.id)[0].role === 'admin');
   check('...their open session sees the new role at once (audit log now 200)', (await E4.get('/admin/audit')).status === 200 && (await E4.get('/admin/editors')).text.includes('Invite someone'));
   r = await A.post('/admin/editors', { action: 'role', id: String(adminId), role: 'editor' });
-  check('with another active admin, the first admin can demote themselves', r.status === 200 && q('SELECT role FROM users WHERE id = ?', adminId)[0].role === 'editor', `${r.status} ${r.error}`);
+  check('with another active admin, the first admin can demote themselves (303 back to the Editors page, no admin view rendered)', r.status === 303 && r.loc === '/admin/editors' && !r.text.includes('@example.test') && q('SELECT role FROM users WHERE id = ?', adminId)[0].role === 'editor', `${r.status} ${r.error}`);
   check('...and is an editor immediately (audit 403, POST 403)', (await A.get('/admin/audit')).status === 403 && (await A.post('/admin/editors', { action: 'invite', name: 'N', email: 'n@example.test', role: 'editor', code: '1' })).status === 403);
   r = await E4.post('/admin/editors', { action: 'disable', id: String(eddie.id) });
   check('the remaining admin is now the last one: cannot disable themselves', r.status === 409 && q('SELECT status FROM users WHERE id = ?', eddie.id)[0].status === 'active', `${r.status} ${r.error}`);
   r = await E4.post('/admin/editors', { action: 'role', id: String(adminId), role: 'admin' });
   check('...promotes the first admin back', r.status === 200 && q('SELECT role FROM users WHERE id = ?', adminId)[0].role === 'admin', `${r.status} ${r.error}`);
+  r = await E4.post('/admin/editors', { action: 'disable', id: String(eddie.id) });
+  check('an admin who disables themselves (another admin exists) gets a 303 to the login page', r.status === 303 && r.loc === '/admin/login' && !r.text.includes('@example.test') && q('SELECT status FROM users WHERE id = ?', eddie.id)[0].status === 'disabled', `${r.status} ${r.loc}`);
+  check('...and their session is gone', (await E4.get('/admin')).status === 302);
+  r = await A.post('/admin/editors', { action: 'enable', id: String(eddie.id) });
+  E4 = new Client('10.7.1.7');
+  await E4.post('/admin/login', { email: EDITOR.email, password: EDITOR.password });
+  check('...re-enabled by the other admin, who signs in again', r.status === 200 && (await E4.post('/admin/2fa', { code: recovery(EDITOR) })).status === 303);
+  check('last sign-in comes from users.last_login_at (set at sign-in, independent of the audit log)',
+    q('SELECT last_login_at FROM users WHERE id = ?', eddie.id)[0].last_login_at > Date.now() - 600000 && /Last sign-in/.test((await A.get('/admin/editors')).text));
   r = await A.post('/admin/editors', { action: 'role', id: String(eddie.id), role: 'editor' });
   check('...and the first admin makes them an editor again', r.status === 200 && q('SELECT role FROM users WHERE id = ?', eddie.id)[0].role === 'editor', `${r.status} ${r.error}`);
   check('...E4 is an editor again (403 on the audit log)', (await E4.get('/admin/audit')).status === 403);
