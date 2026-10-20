@@ -47,11 +47,11 @@ const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 // ---- server ----
 let server;
 let log = [];
-async function startServer() {
+async function startServer(extraEnv = {}) {
   log = [];
   server = spawn('node', ['dist/server/entry.mjs'], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DATA_DIR, PORT: String(PORT), HOST: '127.0.0.1', NODE_ENV: 'production' },
+    env: { ...process.env, DATA_DIR, PORT: String(PORT), HOST: '127.0.0.1', NODE_ENV: 'production', ...extraEnv },
   });
   const sink = (d) => log.push(...String(d).split('\n').filter(Boolean));
   server.stdout.on('data', sink);
@@ -128,7 +128,7 @@ try {
 
   await startServer();
   const line1 = await waitForSync();
-  check('first start mirrored the build and hashed its photos', /mirrored the build: \d+ new.* [1-9]\d* photos hashed/.test(line1), line1);
+  check('first start mirrored the build and hashed its photos', /mirrored the build: \d+ new.* [1-9]\d* photos hashed, [1-9]\d* copied/.test(line1), line1);
   const rows = q('SELECT * FROM stories ORDER BY slug');
   check('every built story is in stories', rows.length === builtIds.length && builtIds.every((s) => rows.some((r) => r.slug === s.id)), `${rows.length} vs ${builtIds.length}`);
 
@@ -225,7 +225,7 @@ try {
   const dump = () => JSON.stringify([q('SELECT * FROM stories ORDER BY id'), q('SELECT * FROM story_photos ORDER BY id')]);
   const mediaState = () => {
     const out = [];
-    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else out.push(`${p}:${fs.statSync(p).mtimeMs}:${fs.statSync(p).size}`); } };
+    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (!e.name.startsWith('.')) out.push(`${p}:${fs.statSync(p).mtimeMs}:${fs.statSync(p).size}`); } };
     walk(path.join(DATA_DIR, 'media'));
     return out.sort().join('\n');
   };
@@ -234,7 +234,7 @@ try {
   await sleep(1100); // so a rewrite could not hide behind an equal timestamp
   await startServer();
   const line2 = await waitForSync();
-  check('second start: nothing new, updated, copied or hashed', /0 new, 0 updated, \d+ unchanged.* 0 photos hashed/.test(line2), line2);
+  check('second start: nothing new, updated, copied or hashed', /0 new, 0 updated, \d+ unchanged.* 0 photos hashed, 0 copied/.test(line2), line2);
   check('second start: the stories and story_photos tables are byte-identical (updated_at included)', dump() === dump1);
   check('second start: no photo file was copied again or touched', mediaState() === media1);
 
@@ -247,7 +247,7 @@ try {
   touch(photoDir);
   await startServer();
   const line2b = await waitForSync();
-  check(`third start after touching ${touched} built photos: 0 photos hashed, 0 updated`, /0 new, 0 updated, \d+ unchanged.* 0 photos hashed/.test(line2b), line2b);
+  check(`start after touching ${touched} built photos (new build marker): photos are re-hashed read-only, none copied, nothing updated`, /0 new, 0 updated, \d+ unchanged.* [1-9]\d* photos hashed, 0 copied/.test(line2b), line2b);
   check('...and the tables and media files are still identical', dump() === dump1 && mediaState() === media1);
   // a media file that went missing is restored (and only that one is hashed again)
   await stopServer();
@@ -255,7 +255,37 @@ try {
   fs.rmSync(path.join(DATA_DIR, 'media', gone));
   await startServer();
   const line2c = await waitForSync();
-  check('a missing media file is copied back, hashing only that photo', /, 1 photos hashed/.test(line2c) && fs.existsSync(path.join(DATA_DIR, 'media', gone)), line2c);
+  check('a missing media file is copied back, hashing only that photo (marker unchanged)', /, 1 photos hashed, 1 copied/.test(line2c) && fs.existsSync(path.join(DATA_DIR, 'media', gone)), line2c);
+
+  // same-size, different-content replacement at the same path, after a new build
+  await stopServer();
+  const lead = q("SELECT s.slug, s.image, p.path, p.sha256 FROM stories s JOIN story_photos p ON p.story_id = s.id WHERE p.position = 0 AND p.kind = 'lead' ORDER BY s.slug LIMIT 1")[0];
+  const builtFile = path.join(ROOT, 'dist/client', lead.image);
+  const original = fs.readFileSync(builtFile);
+  try {
+    const swapped = Buffer.from(original);
+    swapped[Math.floor(swapped.length / 2)] ^= 0xff; // same size, different bytes
+    fs.writeFileSync(builtFile, swapped);
+    fs.utimesSync(builtFile, new Date(Date.now() + 120_000), new Date(Date.now() + 120_000)); // a "new build": the marker changes
+    await startServer();
+    const line2d = await waitForSync();
+    const after = q('SELECT sha256, path FROM story_photos WHERE path LIKE ? AND position = 0', `stories/${lead.slug}/%`)[0];
+    check('same-size replacement at the same path is picked up after a new build', after.sha256 === sha(swapped) && /[1-9]\d* updated/.test(line2d) && /[1-9]\d* copied/.test(line2d), `${line2d} ${after.sha256}`);
+    const served = Buffer.from(await (await fetch(`${BASE}/media/${after.path}`)).arrayBuffer());
+    check('...and /media serves the new bytes', sha(served) === sha(swapped));
+    await stopServer();
+    fs.writeFileSync(builtFile, original);
+    fs.utimesSync(builtFile, new Date(Date.now() + 240_000), new Date(Date.now() + 240_000));
+    await startServer();
+    const line2e = await waitForSync();
+    check('swapping the original back is picked up too', q('SELECT sha256 FROM story_photos WHERE path LIKE ? AND position = 0', `stories/${lead.slug}/%`)[0].sha256 === lead.sha256, line2e);
+    await stopServer();
+    await startServer();
+    const line2f = await waitForSync();
+    check('same path, size and marker: nothing hashed, copied or updated', /0 new, 0 updated, \d+ unchanged.* 0 photos hashed, 0 copied/.test(line2f), line2f);
+  } finally {
+    fs.writeFileSync(builtFile, original);
+  }
 
   // ================= part 3: unpublished stories stay unpublished =================
   await stopServer();
@@ -273,6 +303,19 @@ try {
   await startServer();
   await waitForSync();
   check('republishing in the dashboard brings the mirrored story back to live', q('SELECT status FROM stories WHERE slug = ?', target)[0].status === 'live');
+
+  // ================= part 4: a story that always fails stops after 5 passes =================
+  await stopServer();
+  const failing = builtIds[builtIds.length - 1].id;
+  await startServer({ STORY_SYNC_TEST_FAIL_SLUG: failing, STORY_SYNC_TEST_RETRY_MS: '300' });
+  await fetch(BASE + '/media/stories/none/' + '0'.repeat(64) + '.jpg');
+  const passes = () => log.filter((l) => l.includes('[stories] mirrored the build')).length;
+  for (let i = 0; i < 100 && passes() < 5; i++) await sleep(100);
+  await sleep(1500); // longer than several retry waits
+  for (let i = 0; i < 5; i++) await fetch(BASE + '/media/stories/none/' + '0'.repeat(64) + '.jpg'); // every call re-checks the sync
+  await sleep(800);
+  check('a story that always fails is attempted exactly 5 passes, then no timer or request starts another', passes() === 5 && log.some((l) => l.includes('pass 5 of 5')), `passes=${passes()}`);
+  check('...and the other stories were still mirrored', q('SELECT COUNT(*) AS n FROM stories WHERE slug != ? AND source = ?', failing, 'git')[0].n >= builtIds.length - 1);
 
   const leaked = log.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|token/i.test(l));
   check('the server log has no contact details or secrets', leaked.length === 0, leaked.join(' | '));

@@ -10,9 +10,13 @@
 // too. The pass runs in the background and never throws into a request. It is polite to the event loop: photos
 // are read with async streams, and it yields between stories. All file reading, hashing and copying for a story
 // happens BEFORE its database write, and each story is written in its own short transaction, so the sync never
-// holds the write lock while doing file I/O. An unchanged photo is recognised by its size (kept in
-// story_photos.bytes) plus the file already being in the media folder, so it is not read again. A pass with a
-// failed story (or a thrown error) is retried after about a minute, at most 5 passes per process.
+// holds the write lock while doing file I/O. A photo is reused WITHOUT being read only when its source path is the
+// one the stored row came from, its size matches (story_photos.bytes), its file is in the media folder, and the
+// build marker (DATA_DIR/media/.build-marker: a hash of the built data-layer chunk name and of the size and mtime of
+// every built story photo) is unchanged since the last fully successful pass. After a new build the marker differs,
+// so each size-matching photo is stream-hashed read-only (async, yielding) and compared with the stored sha256;
+// it is copied only when the bytes really changed (a same-size replacement is therefore picked up).
+// A pass with a failed story (or a thrown error) is retried after about a minute, at most 5 passes per process.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -49,13 +53,43 @@ function builtPhotoFile(clientDir: string | null, src: string): string | null {
 
 interface Located { src: string; kind: 'lead' | 'gallery'; alt: string }
 
-export interface SyncResult { inserted: number; updated: number; unchanged: number; unpublished: number; skipped: number; hashed: number }
+export interface SyncResult { inserted: number; updated: number; unchanged: number; unpublished: number; skipped: number; hashed: number; copied: number }
+
+const markerFile = () => path.join(mediaDir(), '.build-marker');
+
+/** Cheap fingerprint of the current build: the data-layer chunk's name plus size and mtime of every built story photo. */
+async function buildMarker(clientDir: string | null): Promise<string> {
+  const parts: string[] = [];
+  if (clientDir) {
+    try {
+      for (const f of await fs.promises.readdir(path.join(clientDir, '..', 'server', 'chunks'))) if (f.startsWith('_astro_data-layer-content')) parts.push(f);
+    } catch { /* no server folder next to the client folder */ }
+    try {
+      const root = path.join(clientDir, 'images', 'stories');
+      for (const rel of (await fs.promises.readdir(root, { recursive: true })).sort()) {
+        const st = await fs.promises.stat(path.join(root, rel)).catch(() => null);
+        if (st?.isFile()) parts.push(`${rel}:${st.size}:${Math.floor(st.mtimeMs)}`);
+      }
+    } catch { /* no story photos */ }
+  }
+  return sha256Of(parts.join('\n'));
+}
+
+/** Stream-hash a file read-only. */
+async function hashFile(file: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk as Buffer);
+  return hash.digest('hex');
+}
+
+// Test hooks (the story-store test sets them; unset in production): fail one slug on purpose, shorten the retry wait.
+const failSlug = () => process.env.STORY_SYNC_TEST_FAIL_SLUG;
 
 /**
  * Copy one photo to DATA_DIR/media/stories/<slug>/<sha256>.<ext>, hashing it while it streams. The temp file has
  * a random name and is opened exclusively (two containers can share a PID), and is removed on any failure.
  */
-async function copyAndHash(file: string, slug: string, ext: string): Promise<{ rel: string; sha: string; bytes: number }> {
+async function copyAndHash(file: string, slug: string, ext: string, result: SyncResult): Promise<{ rel: string; sha: string; bytes: number }> {
   const dir = path.join(mediaDir(), 'stories', slug);
   await fs.promises.mkdir(dir, { recursive: true });
   const tmp = path.join(dir, `.${randomBytes(6).toString('hex')}.tmp`);
@@ -71,7 +105,7 @@ async function copyAndHash(file: string, slug: string, ext: string): Promise<{ r
     const rel = `stories/${slug}/${sha}.${ext}`;
     const dest = path.join(mediaDir(), rel);
     if (fs.existsSync(dest)) await fs.promises.rm(tmp, { force: true });
-    else await fs.promises.rename(tmp, dest);
+    else { await fs.promises.rename(tmp, dest); result.copied++; }
     return { rel, sha, bytes };
   } catch (err) {
     await fs.promises.rm(tmp, { force: true }).catch(() => {});
@@ -79,8 +113,11 @@ async function copyAndHash(file: string, slug: string, ext: string): Promise<{ r
   }
 }
 
-/** Resolve one photo to its row. Reuses the stored sha when the size matches and the media file is there. */
-async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, position: number, known: StoryPhoto | undefined, result: SyncResult): Promise<StoryPhoto> {
+/**
+ * Resolve one photo to its row. `known` is the stored row at this position and `knownSrc` the source path it came from.
+ * `markerChanged` is true after a new build (or when no verified pass has been recorded).
+ */
+async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, position: number, known: StoryPhoto | undefined, knownSrc: string | undefined, markerChanged: boolean, result: SyncResult): Promise<StoryPhoto> {
   const remote = (): StoryPhoto => ({ position, kind: p.kind, path: null, url: p.src, alt: p.alt, sha256: null, bytes: null });
   const file = builtPhotoFile(clientDir, p.src);
   const ext = extOf(p.src);
@@ -92,12 +129,18 @@ async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, p
     console.error(`[stories] photo not found in the build for ${slug}: ${p.src}`);
     return remote();
   }
-  if (known?.path && known.sha256 && known.bytes === size && known.path.endsWith(`.${ext}`)) {
+  if (known?.path && known.sha256 && known.bytes === size && knownSrc === p.src && known.path.endsWith(`.${ext}`)) {
     const exists = await fs.promises.access(path.join(mediaDir(), known.path)).then(() => true, () => false);
-    if (exists) return { position, kind: p.kind, path: known.path, url: null, alt: p.alt, sha256: known.sha256, bytes: size };
+    if (exists) {
+      const reuse = { position, kind: p.kind, path: known.path, url: null, alt: p.alt, sha256: known.sha256, bytes: size };
+      if (!markerChanged) return reuse;
+      // New build: same path and size can still be different bytes. Hash read-only; copy only on a mismatch.
+      result.hashed++;
+      if ((await hashFile(file)) === known.sha256) return reuse;
+    }
   }
   result.hashed++;
-  const { rel, sha, bytes } = await copyAndHash(file, slug, ext);
+  const { rel, sha, bytes } = await copyAndHash(file, slug, ext, result);
   return { position, kind: p.kind, path: rel, url: null, alt: p.alt, sha256: sha, bytes };
 }
 
@@ -106,8 +149,9 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   const { getStories } = await import('./stories');
   const built = await getStories();
   const clientDir = builtClientDir();
-  const editorUnpublished = listUnpublishedSlugs();
-  const result: SyncResult = { inserted: 0, updated: 0, unchanged: 0, unpublished: 0, skipped: 0, hashed: 0 };
+  const marker = await buildMarker(clientDir);
+  const markerChanged = (await fs.promises.readFile(markerFile(), 'utf8').catch(() => '')) !== marker;
+  const result: SyncResult = { inserted: 0, updated: 0, unchanged: 0, unpublished: 0, skipped: 0, hashed: 0, copied: 0 };
   const seen = new Set<string>();
 
   for (const entry of built) {
@@ -119,13 +163,17 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
       const located: Located[] = [];
       if (d.image) located.push({ src: d.image, kind: 'lead', alt: d.imageAlt ?? '' });
       d.photos.forEach((src, i) => located.push({ src, kind: 'gallery', alt: d.photoAlts[i] ?? '' }));
-      const status = editorUnpublished.has(slug) ? 'unpublished' : 'live';
       const date = d.date.toISOString().slice(0, 10);
 
       // 1. Files first: stat, hash and copy with no transaction open.
-      const known = getStoryBySlug(slug, { includeUnpublished: true })?.photoRows ?? [];
+      if (failSlug() === slug) throw new Error('test failure');
+      const prev = getStoryBySlug(slug, { includeUnpublished: true });
+      const known = prev?.photoRows ?? [];
+      const prevSrc = prev ? [...(prev.image ? [prev.image] : []), ...prev.photos] : [];
       const photoRows: StoryPhoto[] = [];
-      for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), result));
+      for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], markerChanged, result));
+      // Read the dashboard's unpublish list right before the write, so one made during this pass is not missed.
+      const status = listUnpublishedSlugs().has(slug) ? 'unpublished' : 'live';
 
       const base = {
         slug, title: d.title, dek: d.dek, section: d.section, area: d.area, column: d.column, author: d.author, authorTitle: d.authorTitle,
@@ -150,10 +198,19 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   for (const slug of slugsBySource('git', 'live')) {
     if (!seen.has(slug) && unpublishStory(slug)) result.unpublished++;
   }
+  // Record the build as verified only when every story was mirrored.
+  if (result.skipped === 0 && markerChanged) {
+    try {
+      await fs.promises.mkdir(mediaDir(), { recursive: true });
+      await fs.promises.writeFile(markerFile(), marker);
+    } catch (err) {
+      console.error('[stories] could not record the build marker:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+    }
+  }
   return result;
 }
 
-const RETRY_MS = 60_000;
+const RETRY_MS = Number(process.env.STORY_SYNC_TEST_RETRY_MS) || 60_000;
 const MAX_PASSES = 5;
 let busy = false;
 let done = false;
@@ -179,7 +236,7 @@ export function ensureStorySync(): void {
     await yieldToLoop(); // let the caller (usually getDb) finish first
     try {
       const r = await syncStoriesFromBuild();
-      console.log(`[stories] mirrored the build: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged, ${r.unpublished} unpublished, ${r.skipped} skipped, ${r.hashed} photos hashed`);
+      console.log(`[stories] mirrored the build: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged, ${r.unpublished} unpublished, ${r.skipped} skipped, ${r.hashed} photos hashed, ${r.copied} copied`);
       if (r.skipped === 0) done = true;
       else { console.error(`[stories] ${r.skipped} stories could not be mirrored; pass ${passes} of ${MAX_PASSES}`); scheduleRetry(); }
     } catch (err) {

@@ -11,7 +11,7 @@ export const prerender = false;
 
 const notFound = () => new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' } });
 
-function serve(request: Request, head: boolean): Response {
+async function serve(request: Request, head: boolean): Promise<Response> {
   // Make sure the first story import after a start has been kicked off (never waits, never throws).
   ensureStorySync();
   // Use the raw path, not the decoded route parameter, so encoded traversal can't be normalised away first.
@@ -19,10 +19,20 @@ function serve(request: Request, head: boolean): Response {
   if (!pathname.startsWith('/media/')) return notFound();
   const found = resolveMediaFile(pathname.slice('/media/'.length));
   if (!found) return notFound();
+  // Open first and stat the open handle, so a file removed meanwhile is a 404, never a 200 with a broken body.
+  let fh: fs.promises.FileHandle;
+  try {
+    fh = await fs.promises.open(found.file, 'r');
+  } catch {
+    return notFound();
+  }
   let size: number;
   try {
-    size = fs.statSync(found.file).size;
+    const st = await fh.stat();
+    if (!st.isFile()) { await fh.close(); return notFound(); }
+    size = st.size;
   } catch {
+    await fh.close().catch(() => {});
     return notFound();
   }
   const headers = {
@@ -31,10 +41,11 @@ function serve(request: Request, head: boolean): Response {
     'Cache-Control': 'public, max-age=31536000, immutable',
     'X-Content-Type-Options': 'nosniff',
   };
-  if (head) return new Response(null, { status: 200, headers });
-  const stream = fs.createReadStream(found.file);
-  stream.on('error', () => stream.destroy());
-  return new Response(Readable.toWeb(stream) as ReadableStream, { status: 200, headers });
+  if (head) {
+    await fh.close();
+    return new Response(null, { status: 200, headers });
+  }
+  return new Response(Readable.toWeb(fh.createReadStream()) as ReadableStream, { status: 200, headers });
 }
 
 export const GET: APIRoute = ({ request }) => serve(request, false);
