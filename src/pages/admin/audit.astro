@@ -46,12 +46,12 @@ const link = (p: number) => {
 const targetText = (r: (typeof rows)[number]) => (r.target_name ? `${r.target_name} (${r.target})` : r.target ?? '');
 ---
 <Admin title="Audit log" current="editors" wide>
-  <div class="ad-bar">
+  <div class="cms-bar">
     <h1>Audit log</h1>
-    <a class="ad-btn secondary" href="/admin/editors">Editors</a>
+    <a class="cms-btn secondary" href="/admin/editors">Editors</a>
   </div>
   <p class="admin-note">Sign-ins, two-step changes, account changes, publishes and rejections. Entries older than 2 years are deleted. Times are shown in your time zone.</p>
-  <form class="ad-filters" method="get" action="/admin/audit">
+  <form class="cms-filters" method="get" action="/admin/audit">
     <label>Person
       <select name="user">
         <option value="">Everyone</option>
@@ -64,14 +64,14 @@ const targetText = (r: (typeof rows)[number]) => (r.target_name ? `${r.target_na
         {actions.map((a) => <option value={a} selected={a === action}>{a}</option>)}
       </select>
     </label>
-    <button class="ad-btn secondary" type="submit">Filter</button>
+    <button class="cms-btn secondary" type="submit">Filter</button>
   </form>
   <p class="admin-note" role="status">{total} {total === 1 ? 'entry' : 'entries'} · page {page} of {pages}</p>
 
   {rows.length === 0 ? <p class="admin-note">No entries match.</p> : (
-    <ul class="ad-list au-list">
+    <ul class="cms-list au-list">
       {rows.map((r) => (
-        <li class="ad-item au-item">
+        <li class="cms-item au-item">
           <div class="au-main">
             <strong class="au-action">{r.action}</strong>
             <time datetime={new Date(r.at).toISOString()} data-local>{fmtTime(r.at)}</time>
@@ -89,8 +89,8 @@ const targetText = (r: (typeof rows)[number]) => (r.target_name ? `${r.target_na
 
   {pages > 1 && (
     <nav class="au-pager" aria-label="Pages">
-      {page > 1 ? <a class="ad-btn secondary" href={link(page - 1)} rel="prev">Newer</a> : <span></span>}
-      {page < pages ? <a class="ad-btn secondary" href={link(page + 1)} rel="next">Older</a> : <span></span>}
+      {page > 1 ? <a class="cms-btn secondary" href={link(page - 1)} rel="prev">Newer</a> : <span></span>}
+      {page < pages ? <a class="cms-btn secondary" href={link(page + 1)} rel="next">Older</a> : <span></span>}
     </nav>
   )}
 </Admin>

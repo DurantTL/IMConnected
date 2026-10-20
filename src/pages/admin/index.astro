@@ -21,12 +21,12 @@ const base = siteUrl();
 const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
 ---
 <Admin title="Drafts" current="drafts" wide>
-  <div class="ad-bar">
+  <div class="cms-bar">
     <h1>Drafts</h1>
-    <form method="post" action="/api/admin/drafts/new"><button class="ad-btn" type="submit">New story</button></form>
+    <form method="post" action="/api/admin/drafts/new"><button class="cms-btn" type="submit">New story</button></form>
   </div>
 
-  {showHome && <div class="ad-home">
+  {showHome && <div class="cms-home">
     <section class="admin-card" aria-labelledby="home-new">
       <h2 id="home-new">Newest drafts</h2>
       {newest.length === 0 ? <p class="admin-note">Nothing waiting.</p> : (
@@ -34,10 +34,10 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
           {newest.map((d) => (
             <li>
               <a href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
-              <span class="ad-meta">
-                <span class={`ad-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
-                {d.source === 'form' && d.emailVerified && <span class="ad-badge ok">Email verified</span>}
-                {d.source === 'agent' && <span class="ad-badge">From AI agent</span>}
+              <span class="cms-meta">
+                <span class={`cms-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
+                {d.source === 'form' && d.emailVerified && <span class="cms-badge ok">Email verified</span>}
+                {d.source === 'agent' && <span class="cms-badge">From AI agent</span>}
                 <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time>
               </span>
             </li>
@@ -52,7 +52,7 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
           {recentPublished.map((d) => (
             <li>
               <a href={`${base}/stories/${d.slug}/`} rel="noopener">{d.title || d.slug}</a>
-              <span class="ad-meta">
+              <span class="cms-meta">
                 {d.publishedAt && <time datetime={new Date(d.publishedAt).toISOString()} data-local>{fmtTime(d.publishedAt)}</time>}
                 {d.publishedByName && <span>by {d.publishedByName}</span>}
               </span>
@@ -63,7 +63,7 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
     </section>
   </div>}
 
-  <form class="ad-filters" method="get" action="/admin">
+  <form class="cms-filters" method="get" action="/admin">
     <label>Status
       <select name="status">
         {STATUS_FILTERS.map((f) => <option value={f.value} selected={f.value === status}>{f.label}</option>)}
@@ -81,22 +81,22 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
         <option value="agent" selected={fromAgent}>Source: AI agent</option>
       </select>
     </label>
-    <button class="ad-btn secondary" type="submit">Filter</button>
+    <button class="cms-btn secondary" type="submit">Filter</button>
   </form>
 
   {drafts.length === 0 ? (
     <p class="admin-note">No drafts match. Stories sent through the submit form and stories you start here will show up in this list.</p>
   ) : (
-    <ul class="ad-list">
+    <ul class="cms-list">
       {drafts.map((d) => (
-        <li class="ad-item">
+        <li class="cms-item">
           <a class="title" href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
-          <div class="ad-meta">
-            <span class={`ad-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
-            <span class="ad-badge">{d.source === 'agent' ? 'From AI agent' : SOURCE_LABEL[d.source]}</span>
+          <div class="cms-meta">
+            <span class={`cms-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
+            <span class="cms-badge">{d.source === 'agent' ? 'From AI agent' : SOURCE_LABEL[d.source]}</span>
             <span>{sectionLabel(d.section)}</span>
             {d.church && <span>{d.church}</span>}
-            {d.source !== 'editor' && d.source !== 'agent' && (d.emailVerified ? <span class="ad-badge ok">Email verified</span> : <span class="ad-badge warn">Email not verified</span>)}
+            {d.source !== 'editor' && d.source !== 'agent' && (d.emailVerified ? <span class="cms-badge ok">Email verified</span> : <span class="cms-badge warn">Email not verified</span>)}
             <span>{d.photoCount} {d.photoCount === 1 ? 'photo' : 'photos'}</span>
             <span>Received <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time></span>
           </div>

@@ -483,7 +483,7 @@ try {
   check('audit page lists entries with actor name, action, target, time and IP', r.status === 200 && r.text.includes('admin.reset_2fa') && r.text.includes('Eddie Editor (user:' + eddie.id + ')') && r.text.includes('Alice &lt;Admin&gt; &amp; Co') && /<time datetime=/.test(r.text) && r.text.includes('10.7.0.1'));
   check('everything is escaped (no raw script, img or b tags from log text)', !r.text.includes('<script>alert') && !r.text.includes('<img src=x') && !r.text.includes('<b>9.9.9.9') && r.text.includes('x&lt;script&gt;'), JSON.stringify([r.text.includes('<script>alert'), r.text.includes('<img src=x'), r.text.includes('<b>9.9.9.9'), r.text.includes('x&lt;script&gt;'), (r.text.match(/.{80}<script>alert.{20}/s)||[])[0]]));
   r = await A.get('/admin/audit?action=test.synthetic');
-  const items = (t) => (t.match(/class="ad-item au-item"/g) || []).length;
+  const items = (t) => (t.match(/class="cms-item au-item"/g) || []).length;
   check('filter by action + pagination: page 1 has 50 of 120, "Older" link, no "Newer"', items(r.text) === 50 && /page 1 of 3/.test(r.text) && r.text.includes('rel="next"') && !r.text.includes('rel="prev"'));
   const p2 = await A.get('/admin/audit?action=test.synthetic&page=2');
   const p3 = await A.get('/admin/audit?action=test.synthetic&page=3');
@@ -517,7 +517,7 @@ try {
   await mp.locator('details.ec-manage summary').first().click();
   await mp.screenshot({ path: path.join(SHOTS, 'editors-390-manage-open.png'), fullPage: true });
   await noOverflow('editors page with a manage panel open');
-  const small = await mp.evaluate(() => [...document.querySelectorAll('main button, main a.ad-btn, main summary, main input:not([type=hidden]), main select')].filter((e) => e.offsetParent && e.getBoundingClientRect().height < 40).map((e) => e.tagName + ':' + (e.name || e.textContent.trim().slice(0, 20))));
+  const small = await mp.evaluate(() => [...document.querySelectorAll('main button, main a.cms-btn, main summary, main input:not([type=hidden]), main select')].filter((e) => e.offsetParent && e.getBoundingClientRect().height < 40).map((e) => e.tagName + ':' + (e.name || e.textContent.trim().slice(0, 20))));
   check('390px: buttons, inputs and selects are at least 40px tall', small.length === 0, small.join(', '));
   await mp.goto(BASE + '/admin/audit');
   await mp.screenshot({ path: path.join(SHOTS, 'audit-390.png'), fullPage: false });

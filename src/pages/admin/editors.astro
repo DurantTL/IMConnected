@@ -99,9 +99,9 @@ const twoFa = (p: (typeof people)[number]) => {
 };
 ---
 <Admin title="Editors" current="editors">
-  <div class="ad-bar">
+  <div class="cms-bar">
     <h1>Editors</h1>
-    {isAdmin && <a class="ad-btn secondary" href="/admin/audit">Audit log</a>}
+    {isAdmin && <a class="cms-btn secondary" href="/admin/audit">Audit log</a>}
   </div>
   {message && <p class="admin-ok" role="status">{message}</p>}
   {error && <p class="admin-error" role="alert">{error}</p>}
@@ -139,16 +139,16 @@ const twoFa = (p: (typeof people)[number]) => {
         </form>
       </section>
 
-      <ul class="ad-list ec-list">
+      <ul class="cms-list ec-list">
         {people.map((p) => (
-          <li class="ad-item">
+          <li class="cms-item">
             <div class="ec-head">
               <strong class="title">{p.name}</strong>
-              <span class={`ad-badge ${statusBadge(p.status)}`}>{statusLabel(p.status)}</span>
-              <span class="ad-badge">{roleLabel(p.role)}</span>
-              {p.id === user.id && <span class="ad-badge">You</span>}
+              <span class={`cms-badge ${statusBadge(p.status)}`}>{statusLabel(p.status)}</span>
+              <span class="cms-badge">{roleLabel(p.role)}</span>
+              {p.id === user.id && <span class="cms-badge">You</span>}
             </div>
-            <div class="ad-meta">
+            <div class="cms-meta">
               <span>{p.email}</span>
               <span>Two-step: {twoFa(p)}</span>
               <span>{p.lastSignIn ? <>Last sign-in <time datetime={new Date(p.lastSignIn).toISOString()} data-local>{fmtTime(p.lastSignIn)}</time></> : 'Never signed in'}</span>
@@ -168,7 +168,7 @@ const twoFa = (p: (typeof people)[number]) => {
                     <option value="admin" selected={p.role === 'admin'}>Administrator</option>
                   </select>
                   {needFresh && <FreshField id={`role-code-${p.id}`} hasPasskeys={hasPk} />}
-                  <button type="submit" class="ad-btn secondary">Change role</button>
+                  <button type="submit" class="cms-btn secondary">Change role</button>
                 </form>
                 {p.status === 'invited' && (
                   <form method="post" action="/admin/editors" class="ec-form" {...freshAttrs}>
@@ -176,7 +176,7 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="id" value={p.id} />
                     <input type="hidden" name="assertion" value="" />
                     {needFresh && <FreshField id={`resend-code-${p.id}`} hasPasskeys={hasPk} />}
-                    <button type="submit" class="ad-btn secondary">Send a new invite</button>
+                    <button type="submit" class="cms-btn secondary">Send a new invite</button>
                   </form>
                 )}
                 {p.status === 'invited' && (
@@ -186,7 +186,7 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="assertion" value="" />
                     <p class="admin-note">Cancels the invite and removes this pending account, for example after a typo. You can invite the address again.</p>
                     {needFresh && <FreshField id={`rev-code-${p.id}`} hasPasskeys={hasPk} />}
-                    <button type="submit" class="ad-btn danger">Revoke invite</button>
+                    <button type="submit" class="cms-btn danger">Revoke invite</button>
                   </form>
                 )}
                 {p.status === 'active' && (
@@ -195,7 +195,7 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="id" value={p.id} />
                     <input type="hidden" name="assertion" value="" />
                     {needFresh && <FreshField id={`dis-code-${p.id}`} hasPasskeys={hasPk} />}
-                    <button type="submit" class="ad-btn danger">Disable and sign out</button>
+                    <button type="submit" class="cms-btn danger">Disable and sign out</button>
                   </form>
                 )}
                 {p.status === 'disabled' && (
@@ -204,7 +204,7 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="id" value={p.id} />
                     <input type="hidden" name="assertion" value="" />
                     {needFresh && <FreshField id={`en-code-${p.id}`} hasPasskeys={hasPk} />}
-                    <button type="submit" class="ad-btn secondary">Re-enable</button>
+                    <button type="submit" class="cms-btn secondary">Re-enable</button>
                   </form>
                 )}
                 {p.id !== user.id && p.status !== 'invited' && (
@@ -214,7 +214,7 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="assertion" value="" />
                     <p class="admin-note">For someone who lost their devices and recovery codes. Confirm who they are first. Removes their authenticator, passkeys and recovery codes and signs them out; they set up two-step sign-in again next time.</p>
                     {needFresh && <FreshField id={`rst-code-${p.id}`} hasPasskeys={hasPk} />}
-                    <button type="submit" class="ad-btn danger">Reset two-step sign-in</button>
+                    <button type="submit" class="cms-btn danger">Reset two-step sign-in</button>
                   </form>
                 )}
               </div>
@@ -226,9 +226,9 @@ const twoFa = (p: (typeof people)[number]) => {
   ) : (
     <>
       <p class="admin-note">The people who edit stories for IMConnected. Administrators manage accounts.</p>
-      <ul class="ad-list ec-list">
+      <ul class="cms-list ec-list">
         {people.filter((p) => p.status === 'active').map((p) => (
-          <li class="ad-item"><strong class="title">{p.name}</strong></li>
+          <li class="cms-item"><strong class="title">{p.name}</strong></li>
         ))}
       </ul>
     </>
@@ -238,13 +238,13 @@ const twoFa = (p: (typeof people)[number]) => {
   .ec-head { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
   .ec-head .title { font-family: var(--serif); font-size: 1.1rem; overflow-wrap: anywhere; }
   .ec-list { margin-top: 24px; }
-  .ad-meta span { overflow-wrap: anywhere; }
+  .cms-meta span { overflow-wrap: anywhere; }
   .ec-manage summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
   .ec-forms { display: grid; gap: 20px; padding: 4px 0 12px; }
   .ec-form { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
   .ec-form label, .admin-card label { display: block; font-weight: 600; margin: 8px 0 4px; }
   .ec-form input[type=text], .ec-form select, .admin-card select { width: 100%; min-height: 44px; padding: 10px 12px; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
-  .ec-form .ad-btn { margin-top: 8px; justify-self: start; }
+  .ec-form .cms-btn { margin-top: 8px; justify-self: start; }
   .admin-card input, .admin-card button { min-height: 44px; }
   .ec-link input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
 </style>
