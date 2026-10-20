@@ -53,6 +53,7 @@ if (Astro.request.method === 'POST') {
         recordSuccess(user.email);
         audit('auth.passkey_registered', { userId: user.id, ip, detail: { step: 'enroll' } });
         audit('auth.recovery_codes_generated', { userId: user.id, ip });
+        audit('auth.login', { userId: user.id, ip, detail: { method: 'enrollment' } }); // finishing setup is a full sign-in
       }
     }
   } else if (isLocked(ip, user.email)) {
@@ -70,6 +71,7 @@ if (Astro.request.method === 'POST') {
     recordSuccess(user.email);
     audit('auth.totp_enrolled', { userId: user.id, ip });
     audit('auth.recovery_codes_generated', { userId: user.id, ip });
+    audit('auth.login', { userId: user.id, ip, detail: { method: 'enrollment' } }); // finishing setup is a full sign-in
   }
 }
 

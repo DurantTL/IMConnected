@@ -30,6 +30,7 @@ export async function requireFresh(user: SessionUser, session: Session, form: Fo
   const r = await checkFreshFactor(user, form, ip);
   if (r === 'locked') return { ok: false, status: 429, error: LOCKED_MESSAGE };
   if (r === 'invalid') return { ok: false, status: 401, error: 'That code or passkey is not valid. Enter a fresh authenticator or recovery code, or confirm with a passkey.' };
+  // A recovery code is used up by the check above; if the session expired in between it is lost. That fails closed.
   const rotated = rotateSession(session.id, { mfaPassed: true, cookies }); // sets fresh_at = now
   if (!rotated) return { ok: false, status: 401, error: 'Your session ended. Please sign in again.', expired: true };
   audit('auth.fresh_verified', { userId: user.id, ip, detail: { method: r } });

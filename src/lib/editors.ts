@@ -4,7 +4,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { getDb } from './db';
 import { audit } from './auth/audit';
-import { resetTwoFactor } from './db/db-core.mjs';
+import { allocateUserId, resetTwoFactor } from './db/db-core.mjs';
 import { buildInviteEmail, postEmail } from './email';
 import { siteUrl } from './draft-http';
 import type { Role } from './auth/session';
@@ -101,7 +101,8 @@ export async function inviteEditor(actor: { id: number; name: string }, input: {
       resent = true;
       db.prepare('UPDATE users SET name = ?, role = ?, updated_at = ? WHERE id = ?').run(name, role, now, userId);
     } else {
-      userId = Number(db.prepare("INSERT INTO users (email, name, role, status, created_at, updated_at) VALUES (?, ?, ?, 'invited', ?, ?)").run(email, name, role, now, now).lastInsertRowid);
+      userId = allocateUserId(db); // ids are never reused, even after a revoked invite
+      db.prepare("INSERT INTO users (id, email, name, role, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'invited', ?, ?)").run(userId, email, name, role, now, now);
     }
     token = replaceInvite(userId);
     db.exec('COMMIT');

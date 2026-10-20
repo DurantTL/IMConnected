@@ -157,6 +157,7 @@ try {
   const a1 = await accept(A, adminInvitePath, ADMIN);
   check('first admin accepted the invite and enrolled (10 recovery codes)', a1.codes?.length === 10);
   const adminId = q('SELECT id FROM users WHERE email = ?', ADMIN.email)[0].id;
+  check('finishing 2FA setup counts as a sign-in (last_login_at set, auth.login audited)', q('SELECT last_login_at FROM users WHERE id = ?', adminId)[0].last_login_at > 0 && count("SELECT COUNT(*) n FROM audit_log WHERE action = 'auth.login' AND user_id = ?", adminId) === 1);
 
   let r = await A.get('/admin/editors');
   check('admin sees the Editors page with the invite form and the user list',
@@ -235,6 +236,8 @@ try {
   check('an account that already accepted cannot be revoked (400, still active)', r.status === 400 && q('SELECT status FROM users WHERE id = ?', eddie.id)[0].status === 'active', `${r.status}`);
   r = await A.post('/admin/editors', { action: 'invite', name: 'Ivy Typo', email: 'ivy.typo@example.test', role: 'editor' });
   check('the corrected address can be invited', r.status === 200 && /Invite created/.test(r.ok));
+  const ivy2 = q("SELECT id FROM users WHERE email = 'ivy.typo@example.test'")[0].id;
+  check('...and gets a NEW id: ids of revoked invites are never reused, so audit targets stay unambiguous', ivy2 !== ivyId && ivy2 > ivyId && count('SELECT last_id n FROM user_id_mark') >= ivy2 && count("SELECT COUNT(*) n FROM audit_log WHERE target = ?", `user:${ivy2}`) >= 1 && count("SELECT COUNT(*) n FROM audit_log WHERE action = 'admin.invite_revoked' AND target = ?", `user:${ivy2}`) === 0, `${ivyId} ${ivy2}`);
   r = await A.get('/admin/editors');
   check('Editors page: pending users show "Never signed in" and a Revoke invite button', r.text.includes('Revoke invite') && r.text.includes('Never signed in'));
 

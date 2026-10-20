@@ -90,3 +90,15 @@ export function resetTwoFactor(db, userId) {
   const s = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
   return { authenticators: Number(t.changes), passkeys: Number(k.changes), recoveryCodes: Number(r.changes), sessions: Number(s.changes) };
 }
+
+/**
+ * The next user id, never reused (see migration 009). Call inside the transaction that inserts the user
+ * and insert with this explicit id. Every place that inserts into users must use it.
+ */
+export function allocateUserId(db) {
+  const mark = db.prepare('SELECT last_id FROM user_id_mark WHERE id = 1').get();
+  const top = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM users').get().m;
+  const id = Math.max(Number(mark?.last_id ?? 0), Number(top)) + 1;
+  db.prepare('INSERT INTO user_id_mark (id, last_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET last_id = excluded.last_id').run(id);
+  return id;
+}
