@@ -109,7 +109,7 @@ const dataUrl = (bytes, mime = 'image/png') => `data:${mime};base64,${Buffer.fro
   ph.run(31, 7, '7/aa.png', null, 'png', 'one', 0, now);
   ph.run(32, 7, '7/bb.png', null, 'png', 'two', 1, now);
   ph.run(40, 9, null, '/images/stories/x/photo-1.jpg', null, 'studio', 0, now);
-  const applied = runMigrations(db, all);
+  const applied = runMigrations(db, all.filter((m) => m.name <= '010_agent_drafts.sql'));
   check('migration 010 applies on a database with drafts and photos', applied.length === 1 && applied[0].startsWith('010_'), JSON.stringify(applied));
   const rows = db.prepare('SELECT id, status, source, title, slug, submitter_email, published_via_studio pvs, studio_overwrote_at so FROM drafts ORDER BY id').all();
   check('...every draft row is kept with its id and values', rows.length === 3 && rows[0].id === 7 && rows[0].submitter_email === 'x@e2e-mail.com' && rows[1].slug === '2026-10-19-studio' && rows[1].pvs === 1 && rows[1].so === 123 && rows[2].source === 'editor', JSON.stringify(rows));

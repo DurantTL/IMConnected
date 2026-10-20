@@ -148,7 +148,7 @@ r = await d.post('/admin/2fa', { code: usedCode });
 check('replayed TOTP (same step) rejected on a new sign-in', r.status === 401);
 
 // 5. canEnrollWithoutMfa: a password-only session cannot enroll for a user who already has a factor
-const dbBefore = new DatabaseSync(path.join(DATA_DIR, 'imconnected.db'));
+const dbBefore = new DatabaseSync(path.join(DATA_DIR, 'imconnected.db')); dbBefore.exec('PRAGMA busy_timeout = 5000');
 const credBefore = JSON.stringify(dbBefore.prepare('SELECT * FROM totp_credentials').all());
 r = await d.get('/admin/2fa/setup');
 check('password-only session: setup page refused', r.status === 403, String(r.status));
@@ -222,7 +222,7 @@ check('after the reset the old session no longer works', r.status === 302 && r.l
 r = await f2.get('/admin');
 check('after the reset the other old session no longer works', r.status === 302 && r.loc === '/admin/login');
 {
-  const q = new DatabaseSync(path.join(DATA_DIR, 'imconnected.db'));
+  const q = new DatabaseSync(path.join(DATA_DIR, 'imconnected.db')); q.exec('PRAGMA busy_timeout = 5000');
   const n = (t) => Number(q.prepare(`SELECT COUNT(*) n FROM ${t} WHERE user_id = (SELECT id FROM users WHERE email = ?)`).get(EMAIL).n);
   check('reset removed the authenticator, recovery codes and sessions', n('totp_credentials') === 0 && n('recovery_codes') === 0 && n('sessions') === 0);
   const a2 = q.prepare("SELECT target FROM audit_log WHERE action = 'admin.reset_2fa'").all();
@@ -294,13 +294,13 @@ check('IP locked after 10 failures', locked3.status === 429 && locked3.error ===
 // 9. Nothing secret in the database files
 const needles = { password: PASSWORD, 'new password': NEW_PASSWORD, 'TOTP secret': secret, 'TOTP secret (grouped)': secret.match(/.{4}/g).join(' '), 'TOTP secret 2': secret2 };
 [...recovery, ...regenerated, ...recovery2].forEach((x, i) => { needles[`recovery code ${i}`] = x; needles[`recovery code ${i} (no dash)`] = x.replace('-', ''); });
-const files = fs.readdirSync(DATA_DIR).map((n) => path.join(DATA_DIR, n));
+const files = fs.readdirSync(DATA_DIR, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => path.join(DATA_DIR, e.name)); // the media/ and uploads/ folders hold photos, not secrets
 const blobs = files.map((p) => fs.readFileSync(p));
 const hit = (s) => blobs.some((b) => b.includes(Buffer.from(s)));
 check(`grep control: the DB files do contain the email (${files.map((p) => path.basename(p)).join(', ')})`, hit(EMAIL));
 const leaked = Object.entries(needles).filter(([, v]) => hit(v)).map(([k]) => k);
 check(`no plain password, TOTP secret or recovery code in the database files (${Object.keys(needles).length} values checked)`, leaked.length === 0, leaked.join(', '));
-const dbf = new DatabaseSync(path.join(DATA_DIR, 'imconnected.db'));
+const dbf = new DatabaseSync(path.join(DATA_DIR, 'imconnected.db')); dbf.exec('PRAGMA busy_timeout = 5000');
 const audit = dbf.prepare('SELECT action, COUNT(*) n FROM audit_log GROUP BY action ORDER BY action').all().map((x) => `${x.action}=${x.n}`).join(' ');
 console.log('audit actions:', audit);
 const auditText = JSON.stringify(dbf.prepare('SELECT * FROM audit_log').all());

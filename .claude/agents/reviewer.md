@@ -44,6 +44,13 @@ you to review the current branch against `origin/main`.
      `/stories.json` stays the contract, drafts copied by whitelist (never submitter name, email, phone or
      church), no `url` for drafts, draft photos only when they are files the site serves without a login
      (never `/api/admin/photos/`), unpublished stories dropped and edits in review never shown as live text;
+   - `GET /media/*` (`src/pages/media/[...path].ts`, `src/lib/media.ts`): the only route serving `DATA_DIR/media`;
+     path traversal refused in every form (plain, `%2e%2e`, `%2f`, double-encoded, backslash, NUL, absolute path,
+     symlink out of the folder), only jpg/png/webp with correct types, `Cache-Control: public, max-age=31536000,
+     immutable` and `X-Content-Type-Options: nosniff`, the middleware is not involved (the path is outside
+     `/admin`), and nothing else (the database, WAL files) can be reached; `story-sync.ts` runs lazily in the
+     background inside try/catch so a failure never takes public pages down, is idempotent, and reads photos only
+     from inside `dist/client/images`; `stories` stays a mirror of git until step 4 of epic #25;
    - `/api/publish` still commits first and records the Studio draft second,
      and a database error there never fails the publish;
    - schema drift between `src/content.config.ts`, `.pages.yml`,
@@ -63,7 +70,7 @@ you to review the current branch against `origin/main`.
    - the confirmation email: the title is HTML-escaped, no other submitted
      text is in it, and no submitter address is ever logged or put in a
      response, a story file or an error message;
-   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/confirm.ts`, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
+   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/confirm.ts`, `src/pages/media/[...path].ts`, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
    - editor sign-in (`src/lib/auth/`, `src/pages/admin/`, `src/middleware.ts`): `AUTH_SECRET` required at 32+
      characters (503 otherwise); passwords scrypt-hashed and compared with `timingSafeEqual`; unknown email,
      wrong password and disabled account give one message and one cost (dummy scrypt); TOTP secrets

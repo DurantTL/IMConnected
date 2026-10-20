@@ -27,11 +27,11 @@ const check = (name, ok, extra = '') => {
   if (!ok) fails++;
 };
 const q = (sql, ...args) => {
-  const db = new DatabaseSync(DB_FILE);
+  const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000');
   try { return db.prepare(sql).all(...args); } finally { db.close(); }
 };
 const run = (sql, ...args) => {
-  const db = new DatabaseSync(DB_FILE);
+  const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000');
   try { return db.prepare(sql).run(...args); } finally { db.close(); }
 };
 const uid = () => q('SELECT id FROM users WHERE email = ?', EMAIL)[0].id;

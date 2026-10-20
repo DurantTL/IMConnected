@@ -50,8 +50,8 @@ const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  ' + extra}`);
   if (!ok) fails++;
 };
-const q = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
-const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); try { return db.prepare(sql).run(...args); } finally { db.close(); } };
+const q = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).run(...args); } finally { db.close(); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (cond, ms = 6000) => { const end = Date.now() + ms; while (Date.now() < end) { if (cond()) return true; await sleep(100); } return cond(); };
 
