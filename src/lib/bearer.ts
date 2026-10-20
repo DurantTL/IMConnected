@@ -20,13 +20,18 @@ export function bearerStatus(request: Request, secret: string | undefined): 'ok'
 /**
  * True when AGENT_API_TOKEN and PUBLISH_TOKEN are both set and equal. The AI agent must never hold the token that
  * lets Studio commit straight to main, so both APIs answer 503 until the operator uses two different secrets.
- * Logs only that it happened, never a value.
+ * Logs only that it happened, never a value, and only once per process: it runs before auth, so anyone could
+ * otherwise fill the logs.
  */
+let sharedWarned = false;
 export function tokensShared(env = process.env): boolean {
   const a = env.AGENT_API_TOKEN;
   const p = env.PUBLISH_TOKEN;
   if (!a || !p || a !== p) return false;
-  console.error('[auth] AGENT_API_TOKEN and PUBLISH_TOKEN are the same value; /api/agent and the Studio APIs are disabled until they differ.');
+  if (!sharedWarned) {
+    sharedWarned = true;
+    console.error('[auth] AGENT_API_TOKEN and PUBLISH_TOKEN are the same value; /api/agent and the Studio APIs are disabled until they differ.');
+  }
   return true;
 }
 
