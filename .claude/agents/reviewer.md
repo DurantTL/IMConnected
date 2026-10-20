@@ -19,8 +19,18 @@ you to review the current branch against `origin/main`.
    - photos: still checked by file signature, size and count limits;
    - `/api/submit`: origin check, honeypot, minimum fill time and rate limit
      still apply; the GitHub token never reaches the browser or logs;
-   - submitter email and phone appear only in the PR description, never in
-     the story file, the built site, or logs;
+   - submitter email and phone appear only in the `drafts` row, the editor-only
+     submitter panel (and the PR description on the `SUBMISSIONS_TO=github`
+     path), never in the story file, the built site, logs, the audit log, the
+     Discord ping or the editor notification emails (title and church only,
+     HTML-escaped);
+   - `/api/submit` in dashboard mode: still no GitHub call, the draft and its
+     photos are saved all-or-nothing, a missing database gives 503 and the
+     story is not silently dropped, and a failed email never fails the
+     submission; confirm tokens sign `d:<draft id>` and old PR tokens are only
+     honoured when GitHub is configured;
+   - `/api/publish` still commits first and records the Studio draft second,
+     and a database error there never fails the publish;
    - schema drift between `src/content.config.ts`, `.pages.yml`,
      `src/lib/submission.ts`, `src/lib/site.ts` and the README example;
    - `/api/publish`: the bearer token is compared in constant time, 503 when
@@ -47,7 +57,8 @@ you to review the current branch against `origin/main`.
      rotated after each factor and callers use the returned session; `canEnrollWithoutMfa` is true only
      with no confirmed second factor; new middleware allowlist entries are exact paths; passwords, codes,
      secrets and tokens never reach logs, the audit log or the database in plain text;
-   - human-only gates in `AGENTS.md` that the change might cross.
+   - human-only gates in `AGENTS.md` that the change might cross (publishing
+     or rejecting a draft is a person's action).
 3. Report only actionable findings, most severe first, each with `path:line`,
    what is wrong, a concrete failure scenario, and a suggested fix. List
    verification gaps separately. Say plainly when you found nothing.

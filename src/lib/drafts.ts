@@ -87,6 +87,9 @@ const s = (v: unknown) => (typeof v === 'string' ? v : '');
 const sn = (v: unknown) => (typeof v === 'string' ? v : null);
 const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0));
 
+/** Shown as the publisher of a story that Studio published. */
+export const STUDIO_NAME = 'IMConnected Studio';
+
 const DRAFT_SELECT = `SELECT d.*, u.name AS updated_by_name, p.name AS published_by_name
   FROM drafts d LEFT JOIN users u ON u.id = d.updated_by LEFT JOIN users p ON p.id = d.published_by`;
 
@@ -120,7 +123,8 @@ function toDraft(r: Row): Draft {
     updatedAt: n(r.updated_at),
     updatedByName: sn(r.updated_by_name),
     publishedAt: r.published_at == null ? null : n(r.published_at),
-    publishedByName: sn(r.published_by_name),
+    // Studio publishes have no editor: published_by is NULL.
+    publishedByName: sn(r.published_by_name) ?? (r.published_at != null && r.published_by == null ? STUDIO_NAME : null),
     live: r.published_commit != null && r.slug != null && r.unpublished_at == null,
   };
 }
@@ -541,4 +545,103 @@ export function saveAuditDue(userId: number, draftId: number): boolean {
     .prepare('SELECT MAX(at) AS at FROM audit_log WHERE action = ? AND user_id = ? AND target = ?')
     .get('draft.save', userId, `draft:${draftId}`) as { at: number | null };
   return !r.at || Date.now() - r.at > AUDIT_SAVE_EVERY_MS;
+}
+
+/** New plus in-review drafts (the badge on the Drafts nav item). */
+export function countOpenDrafts(): number {
+  return Number((getDb().prepare("SELECT COUNT(*) AS c FROM drafts WHERE status IN ('new', 'in_review')").get() as { c: number }).c);
+}
+
+export interface SubmissionInput {
+  title: string;
+  dek: string;
+  section: string;
+  area?: string;
+  /** Already safe Markdown (textToMarkdown). */
+  body: string;
+  church: string;
+  photoCredit: string;
+  caption: string;
+  submitter: { name: string; email: string; phone: string; church: string };
+  /** Validated image bytes with their sniffed extension. */
+  photos: { bytes: Uint8Array; ext: string }[];
+}
+
+/**
+ * A public submission becomes a `new` draft (source form), with its photos saved under DATA_DIR/uploads.
+ * All or nothing: if anything fails the row and the files are removed again and the error is rethrown.
+ */
+export function createSubmissionDraft(sub: SubmissionInput): number {
+  const written: string[] = [];
+  try {
+    return tx(() => {
+      const id = createDraft({
+        source: 'form',
+        status: 'new',
+        fields: { title: sub.title, dek: sub.dek, section: sub.section, area: sub.area ?? '', author: sub.submitter.name, church: sub.church, photoCredit: sub.photoCredit, body: sub.body },
+        submitter: sub.submitter,
+      });
+      const ins = getDb().prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+      sub.photos.forEach((p, i) => {
+        const rel = writeUpload(id, p.bytes, p.ext);
+        written.push(rel);
+        ins.run(id, rel, p.ext, i === 0 ? sub.caption : '', i, Date.now());
+      });
+      return id;
+    });
+  } catch (err) {
+    removeUploadFiles(written);
+    throw err;
+  }
+}
+
+/** The submitter confirmed their address. Does not move the draft's version (an editor may be mid-edit). */
+export function markEmailVerified(draftId: number): boolean {
+  const r = getDb().prepare('UPDATE drafts SET email_verified = 1 WHERE id = ? AND source = ? AND submitter_email IS NOT NULL').run(draftId, 'form');
+  return Number(r.changes) === 1;
+}
+
+export interface StudioStory {
+  slug: string;
+  title: string;
+  dek: string;
+  section: string;
+  area?: string;
+  author: string;
+  date: string;
+  /** The Markdown that was committed. */
+  body: string;
+  photos: { url: string; alt: string; caption: string }[];
+}
+
+/**
+ * Record Studio publishes as `published` drafts (source studio, published_by NULL). A slug that already has a
+ * draft updates that row instead of adding another. Call after the commit succeeded.
+ */
+export function recordStudioPublish(stories: StudioStory[], commit: string): number[] {
+  const ids: number[] = [];
+  let oldUploads: string[] = [];
+  tx(() => {
+    const now = Date.now();
+    for (const st of stories) {
+      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, body: st.body });
+      const cur = getDraftBySlug(st.slug);
+      let id: number;
+      if (cur) {
+        id = cur.id;
+        getDb()
+          .prepare(
+            "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, author = ?, date = ?, body = ?, published_commit = ?, published_at = ?, published_by = NULL, unpublished_at = NULL, rejected_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
+          )
+          .run(fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.body, commit, now, now, id);
+      } else {
+        id = createDraft({ source: 'studio', status: 'published', fields, slug: st.slug });
+        getDb().prepare('UPDATE drafts SET published_commit = ?, published_at = ? WHERE id = ?').run(commit, now, id);
+      }
+      oldUploads = oldUploads.concat(replacePhotos(id, st.photos));
+      ids.push(id);
+    }
+  });
+  removeUploadFiles(oldUploads);
+  return ids;
 }

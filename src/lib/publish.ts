@@ -17,6 +17,8 @@ export interface PublishedStory {
   ref: string;
   slug: string;
   path: string;
+  /** What the dashboard records for the history (no personal data: Studio stories carry none). */
+  record: { title: string; dek: string; section: string; area?: string; author: string; date: string; body: string; photos: Photo[] };
 }
 
 interface Photo {
@@ -139,7 +141,12 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
         md += '\n\n' + lines.join('\n');
       }
       files.push({ path: `src/content/stories/${slug}.md`, content: md + '\n', encoding: 'utf-8' });
-      stories.push({ ref, slug, path: `src/content/stories/${slug}.md` });
+      stories.push({
+        ref,
+        slug,
+        path: `src/content/stories/${slug}.md`,
+        record: { title, dek, section, area, author, date: issueDate, body: md.slice(frontmatter.length), photos: photoPaths.map((url, i) => ({ url, alt: photoMeta[i].alt, caption: photoMeta[i].caption })) },
+      });
     }
 
     const statuses = await Promise.all(stories.map((s) => existing(s.path)));
@@ -147,7 +154,7 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
       name,
       issueDate,
       files,
-      stories: stories.map((s, i) => ({ ref: s.ref, slug: s.slug, status: statuses[i] ? ('updated' as const) : ('created' as const) })),
+      stories: stories.map((s, i) => ({ ref: s.ref, slug: s.slug, record: s.record, status: statuses[i] ? ('updated' as const) : ('created' as const) })),
     };
   })();
 }

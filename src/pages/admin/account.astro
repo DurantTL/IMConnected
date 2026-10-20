@@ -126,6 +126,11 @@ if (Astro.request.method === 'POST') {
       audit('auth.session_revoked', { userId: user.id, ip });
       message = 'Session signed out.';
     }
+  } else if (action === 'notify') {
+    const on = field(form, 'notify', 4) === '1';
+    db.prepare('UPDATE users SET notify_submissions = ? WHERE id = ?').run(on ? 1 : 0, user.id);
+    audit('account.notify_submissions', { userId: user.id, ip, detail: { enabled: on } });
+    message = on ? 'You will get an email when a story is submitted.' : 'You will not get emails about new submissions.';
   } else if (action === 'revoke-others') {
     revokeAllForUser(user.id, session.id);
     audit('auth.sessions_revoked', { userId: user.id, ip, detail: { scope: 'others' } });
@@ -136,6 +141,7 @@ if (Astro.request.method === 'POST') {
 const sessions = db
   .prepare('SELECT id, created_at, last_seen_at, ip, user_agent FROM sessions WHERE user_id = ? ORDER BY last_seen_at DESC')
   .all(user.id) as { id: string; created_at: number; last_seen_at: number; ip: string | null; user_agent: string | null }[];
+const notifyOn = (db.prepare('SELECT notify_submissions AS n FROM users WHERE id = ?').get(user.id) as { n: number } | undefined)?.n !== 0;
 const remaining = remainingRecoveryCodes(user.id);
 const passkeyList = listPasskeys(user.id);
 const passkeysOn = passkeysEnabled();
@@ -155,6 +161,16 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
       <ol class="recovery-codes">{codes.map((c) => <li><code>{c}</code></li>)}</ol>
     </section>
   )}
+
+  <section class="admin-card" aria-labelledby="nt">
+    <h2 id="nt">Notifications</h2>
+    <form method="post" action="/admin/account">
+      <input type="hidden" name="action" value="notify" />
+      <label class="notify-check"><input id="notify" name="notify" type="checkbox" value="1" checked={notifyOn} /> Email me when a story is submitted</label>
+      <p class="admin-note">The email names only the story title and church, with a link to the draft. Contact details stay in the dashboard.</p>
+      <button type="submit">Save</button>
+    </form>
+  </section>
 
   <section class="admin-card" aria-labelledby="pw">
     <h2 id="pw">Change password</h2>

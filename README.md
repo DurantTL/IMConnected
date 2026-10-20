@@ -1,6 +1,6 @@
 # IMConnected
 
-A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission becomes a GitHub pull request, and merging the pull request publishes the story.
+A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission lands as a draft in the editor dashboard at `/admin`, where an editor edits and publishes it.
 
 - **Astro 7**: every page is prerendered to static HTML, so the site is fast and works well for search engines. The server code is `/api/submit`, `/api/publish`, `/api/confirm`, and the editor dashboard (`/admin*` and `/api/admin/*`).
 - **Stories are Markdown files** in `src/content/stories/`. Accounts, sessions, drafts and the audit log for the editor dashboard live in a small SQLite file (see Editor dashboard); stories never do.
@@ -13,20 +13,23 @@ A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The
 ```
 Church member ──► /submit form ──► /api/submit (in the container)
                                          │  validates input, checks photos are real images, escapes HTML,
-                                         │  applies spam traps and a rate limit
+                                         │  applies spam traps, a rate limit, Turnstile and email checks
                                          ▼
-                           GitHub: new branch + commit + pull request
-                           (story .md + photos, labeled "story-submission")
+                 Draft in the dashboard database (status "new", source "form"),
+                 photos saved under DATA_DIR/uploads, no GitHub call
+                     │                              │
+   confirmation email to the submitter     email to each editor who opted in
+   (sets the draft's "verified" badge)     (title, church and a link; no contact details)
                                          │  optional Discord ping
                                          ▼
-        Editor reviews and edits on the PR branch (GitHub or Pages CMS)
+        An editor opens it in /admin, edits it, then Publishes or Rejects (a person's decision)
                                          │
-                       Merge = publish   │   Close = reject
+                      Publish = a commit to main (story .md + photos)
                                          ▼
           GitHub Action builds a new image ──► server pulls it ──► story is live
 ```
 
-On a pull request, the Action also runs a test build. If a submission's frontmatter is broken, the PR shows a red ❌ before you merge.
+Submissions no longer create pull requests: they appear under `/admin`. If the dashboard database can't be opened, `/api/submit` answers 503 ("Submissions are temporarily unavailable. Please email us your story.") instead of losing the story. Setting `SUBMISSIONS_TO=github` brings back the old behavior (a pull request per submission, merged by a person) for one release; it will be removed in a follow-up.
 
 ## Setup
 
@@ -37,16 +40,16 @@ git remote add origin git@github.com:DurantTL/imconnected.git
 git push -u origin main
 ```
 
-> **Make the repo private.** Pull request descriptions contain the submitter's email address and phone number. The Docker image can still be public.
+> **Make the repo private** if you ever use `SUBMISSIONS_TO=github`: pull request descriptions then contain the submitter's email address and phone number. With the default dashboard flow, contact details live only in the database. The Docker image can still be public.
 
-In the repo, create a label named **`story-submission`** (Issues → Labels).
+Only if you use `SUBMISSIONS_TO=github`, also create a label named **`story-submission`** (Issues → Labels).
 
-### 2. Create a token for the submit form
+### 2. Create a token for publishing
 
 GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate new token:
 
 - **Repository access:** only this repo
-- **Permissions:** *Contents*: Read and write, *Pull requests*: Read and write
+- **Permissions:** *Contents*: Read and write (publishing from `/admin` and Studio commits to `main`). *Pull requests*: Read and write is needed only for `SUBMISSIONS_TO=github`.
 
 ### 3. Image builds
 
@@ -88,7 +91,7 @@ For a newsletter tool on another domain to fetch `/stories.json` directly in the
 
 ## Publishing from IMConnected Studio
 
-The communication director builds each newsletter in IMConnected Studio. Clicking **Publish to IMConnected** sends the ticked stories to `POST /api/publish`, which commits them straight to `main` with no pull request. Studio then uses the returned story URLs in the email's "Read full story" buttons. Submitted-by-the-public stories still go through pull requests as above.
+The communication director builds each newsletter in IMConnected Studio. Clicking **Publish to IMConnected** sends the ticked stories to `POST /api/publish`, which commits them straight to `main` with no pull request. Studio then uses the returned story URLs in the email's "Read full story" buttons. Studio publishes are also recorded in the dashboard (a published draft with source Studio and publisher "IMConnected Studio"; publishing the same story again updates that row), so `/admin` shows the full history. If the database is unavailable the publish still succeeds.
 
 **Setup**
 
@@ -110,12 +113,12 @@ The communication director builds each newsletter in IMConnected Studio. Clickin
 
 ## Reviewing submissions
 
-1. Open the repo's **Pull requests** tab and filter by the `story-submission` label.
-2. The PR description shows who sent the story, their contact info, the section, word count and an editor checklist.
-3. Edit the story on the PR branch: ✏️ on the file in "Files changed", Pages CMS, or locally.
-   - Add a `dek` (summary), fix the headline and set `featured: true` to put it at the top of the home page.
-   - Submitted text is plain text with HTML escaped. Add Markdown formatting (headings, quotes, links) during review.
-4. **Merge** to publish, or **Close** to decline.
+1. Sign in at `/admin`. The **Drafts** link shows a count of new and in-review drafts, and the top of the inbox lists the 5 newest drafts and the 5 newest published stories.
+2. Open a draft. The editor-only panel shows who sent the story, their contact details and whether they confirmed their email (a "verified" badge appears in the inbox too).
+3. Edit it in the browser: headline, summary (`dek`), Markdown body, photos and alt text, and **Featured** to put it at the top of the home page. Submitted text is plain text with HTML escaped; add Markdown formatting (headings, quotes, links) during review.
+4. **Publish** commits it to `main`, or **Reject** declines it. Only a person does either.
+
+Each editor can turn "Email me when a story is submitted" on or off under **My account** (on by default). The email holds only the story title and church, with a link to the draft.
 
 ## Writing stories directly
 
@@ -166,19 +169,21 @@ npm run dev                # http://localhost:4321  (search only works after a b
 npm run build && npm start # production build + server
 ```
 
-To test the submit form without a real repo:
+To test the old pull-request path without a real repo (set `SUBMISSIONS_TO=github`; the default dashboard mode makes no GitHub call), and Studio publishes:
 
 ```bash
 node scripts/mock-github.mjs &                  # fake GitHub API on :4010
-GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http://localhost:4010 npm start
-# submissions are written to ./.mock-prs/<branch>/
+SUBMISSIONS_TO=github GITHUB_TOKEN=x GITHUB_REPO=test/test GITHUB_API_URL=http://localhost:4010 npm start
+# submissions are written to ./.mock-prs/<branch>/, publishes to ./.mock-prs/direct/<commit>/
 ```
+
+For the dashboard flow, run the server with a throwaway `DATA_DIR` and `AUTH_SECRET`, and `scripts/mock-email.mjs` with `EMAIL_API_URL` to see the emails; `scripts/test-editor-submissions.mjs` does all of this for you.
 
 ## Editor dashboard
 
 Editors sign in at `/admin` with email + password and a required second factor (invite-only; passkeys, Google and Microsoft arrive over the epic in issue #7). The pages are server-rendered, `noindex`, and never cached.
 
-- **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. Add that volume to your backups; stories themselves are safe in git. Migrations in `src/lib/db/migrations/` apply automatically, once each, the first time `/admin` is used. If the database can't be opened, only `/admin` answers 503 (and logs a line); the public pages and `/api/submit` keep working. `node scripts/migrate.mjs` applies them by hand. A bind mount instead of the named volume must be owned by uid 1000 (the `node` user).
+- **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. Add that volume to your backups; stories themselves are safe in git. Migrations in `src/lib/db/migrations/` apply automatically, once each, the first time `/admin` is used. If the database can't be opened, `/admin` answers 503 (and logs a line) and `/api/submit` answers 503 with "Submissions are temporarily unavailable. Please email us your story."; the public pages keep working, and Studio publishes still go live. `node scripts/migrate.mjs` applies them by hand. A bind mount instead of the named volume must be owned by uid 1000 (the `node` user).
 - **First admin.** Run once on the server (the email and name are yours; the output is a 24-hour, single-use invite link at `/admin/invite/<token>`):
 
   ```bash
@@ -207,7 +212,7 @@ Editors sign in at `/admin` with email + password and a required second factor (
 - Story text has HTML escaped and link syntax neutralized, because Astro renders raw HTML in `.md` files.
 - Photos are checked by file signature (JPG, PNG or WebP only), up to 6 photos at 10 MB each. The browser shrinks photos to a 2000 px long edge before upload, which keeps the repo small.
 - Spam protection: a hidden honeypot field, a minimum time to fill out the form, an Origin check, a per-IP hourly limit (`SUBMIT_RATE_LIMIT`), Cloudflare Turnstile, email domain checks and a confirmation email (see below).
-- Submitter email addresses appear only in the PR description. They are never logged.
+- Submitter email addresses and phone numbers live only in the dashboard database and the editor-only submitter panel (and, with `SUBMISSIONS_TO=github`, in the pull request description). They are never logged, never in story files or commits, and never in the editor notification emails.
 - The GitHub token never reaches the browser and can only touch this one repo.
 - Photos are stored in git. Over a few years that's fine. If the repo eventually gets large, move `public/images` to object storage (R2/S3) and store URLs instead.
 
@@ -217,3 +222,10 @@ Editors sign in at `/admin` with email + password and a required second factor (
 - **Publishing** checks the draft against the content schema, builds the same `.md` and photo files as `/api/publish` (shared code in `src/lib/storyfile.ts`), and commits to `main` with the message `Publish "<title>" (edited by <editor>)`. It needs `GITHUB_TOKEN` and `GITHUB_REPO` like the submit form. The story is live after the site rebuilds (about 3-5 minutes). Publishing a draft that is linked to a live story overwrites the same slug.
 - **Safety.** Raw HTML is never committed: every `<` in the body is written as `&lt;` (also in code), and `<` and `>` in frontmatter text are written as the YAML escapes `\u003c` and `\u003e`. Links must be http(s), mailto or tel. The preview is shown in a sandboxed frame with no scripts. Uploaded photos live in `DATA_DIR/uploads/<draft>/` under random names (type sniffed, never under `public/`) and are served only to signed-in editors by `/api/admin/photos/<id>`. Photos of rejected drafts are deleted 30 days after rejection (the cleanup runs when the inbox opens, at most once a day). Two editors saving the same draft: the later, stale save is refused ("reload to see changes"). Publishing locks the draft and reserves the slug before the commit, so edits made while it runs are not lost silently; the editor is told if newer edits are not live yet. After a publish the uploaded files are deleted (the photos are in the repo). Submitter contact details are never logged, audited or committed.
 - **Tests.** With the mock GitHub API running, `scripts/test-editor-drafts.mjs` covers all of this (see the header of the script for the commands).
+
+### Submissions and Studio in the dashboard
+
+- **`SUBMISSIONS_TO`** is `dashboard` (the default) or `github` (the old pull-request path, kept for one release). In dashboard mode `/api/submit` needs no GitHub settings. It keeps every check (Origin, honeypot, minimum fill time, rate limit, email checks, Turnstile, photo signatures) and then creates a `drafts` row (source `form`, status `new`) with its photos in `DATA_DIR/uploads`.
+- **Confirmation links** sign the draft id (`d:<id>`). Confirming sets `email_verified` on the draft. Links from emails sent while submissions were pull requests are still accepted (they label that PR) as long as `GITHUB_TOKEN` and `GITHUB_REPO` are set; otherwise they answer "This link isn't valid."
+- **Editor notifications** go through the same Resend settings as the confirmation email (`RESEND_API_KEY`, `EMAIL_FROM`): one email per active editor who has the setting on, subject "New story submission: <title>", a link to `/admin/drafts/<id>`, and only the escaped title and church in the body. A failure to send is logged (counts only) and never fails the submission. The optional Discord ping (`DISCORD_WEBHOOK_URL`) carries the title, church and dashboard link only.
+- **Tests.** `npm run build`, then `SCRATCH=/tmp/imc-e2e node scripts/test-editor-submissions.mjs` starts the mocks and three copies of the built server itself (see the header) and checks all of the above, including Studio publishes and the database-unavailable behavior.

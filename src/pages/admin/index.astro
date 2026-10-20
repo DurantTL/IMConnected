@@ -1,8 +1,9 @@
 ---
 import Admin from '../../layouts/Admin.astro';
 import { SECTIONS } from '../../lib/site';
-import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, type StatusFilter } from '../../lib/drafts';
+import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, listLiveDrafts, type StatusFilter } from '../../lib/drafts';
 import { fmtTime, sectionLabel } from '../../lib/admin-ui';
+import { siteUrl } from '../../lib/draft-http';
 export const prerender = false;
 
 cleanupRejectedPhotos();
@@ -11,6 +12,11 @@ const wanted = q.get('status') ?? 'open';
 const status = (STATUS_FILTERS.some((f) => f.value === wanted) ? wanted : 'open') as StatusFilter;
 const section = SECTIONS.some((s) => s.key === q.get('section')) ? (q.get('section') as string) : '';
 const drafts = listDrafts({ status, section: section || undefined });
+// The overview is for the plain inbox; a filtered view shows only what was asked for.
+const showHome = !q.has('status') && !q.has('section');
+const newest = showHome ? listDrafts({ status: 'open' }).slice(0, 5) : [];
+const recentPublished = showHome ? listLiveDrafts().slice(0, 5) : [];
+const base = siteUrl();
 const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
 ---
 <Admin title="Drafts" current="drafts" wide>
@@ -18,6 +24,42 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
     <h1>Drafts</h1>
     <form method="post" action="/api/admin/drafts/new"><button class="ad-btn" type="submit">New story</button></form>
   </div>
+
+  {showHome && <div class="ad-home">
+    <section class="admin-card" aria-labelledby="home-new">
+      <h2 id="home-new">Newest drafts</h2>
+      {newest.length === 0 ? <p class="admin-note">Nothing waiting.</p> : (
+        <ul>
+          {newest.map((d) => (
+            <li>
+              <a href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
+              <span class="ad-meta">
+                <span class={`ad-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
+                {d.source === 'form' && d.emailVerified && <span class="ad-badge ok">Email verified</span>}
+                <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+    <section class="admin-card" aria-labelledby="home-pub">
+      <h2 id="home-pub">Newest published</h2>
+      {recentPublished.length === 0 ? <p class="admin-note">Nothing published yet.</p> : (
+        <ul>
+          {recentPublished.map((d) => (
+            <li>
+              <a href={`${base}/stories/${d.slug}/`} rel="noopener">{d.title || d.slug}</a>
+              <span class="ad-meta">
+                {d.publishedAt && <time datetime={new Date(d.publishedAt).toISOString()} data-local>{fmtTime(d.publishedAt)}</time>}
+                {d.publishedByName && <span>by {d.publishedByName}</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  </div>}
 
   <form class="ad-filters" method="get" action="/admin">
     <label>Status
