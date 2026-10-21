@@ -188,7 +188,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
             {draft.body.includes('<') && (
               <p class="admin-error" role="alert">This text contains “&lt;”, so it may hold raw HTML. Raw HTML is not kept: after you publish, it is shown to readers as plain text. Rewrite it in Markdown if you need the formatting.</p>
             )}
-            <p class="sb-workspace-intro">Add a module, shape its content, and see your story come together.</p>
+            <p class="sb-workspace-intro">Compose in the canvas. Select a module to edit its content and settings.</p>
             <input type="hidden" name="storyBlocks" id="story-blocks" value={JSON.stringify(draft.storyBlocks ?? [])} />
             <div class="sb-controls" role="group" aria-label="Editor mode">
               <button class="cms-btn secondary" type="button" id="use-modules">Use modules</button>
@@ -203,10 +203,11 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
             <div class="ed-split" id="split" data-view="write">
               <div class="ed-write">
                 <div id="module-workspace" class="sb-modules" hidden>
-                  <aside class="sb-outline" aria-label="Story modules"><div class="sb-pane-heading"><span class="sb-step">01</span><div><h3>Story outline</h3><p>Arrange your content</p></div><span id="module-count" class="sb-count"></span></div>
-                    <p class="sb-drag-help">Drag a module to reorder. Move buttons also work with a keyboard.</p>
-                    <ol id="module-outline"></ol>
-                    <h3 class="sb-library-heading">Add a module</h3>
+                  <aside class="sb-outline" aria-label="Story modules"><details class="sb-library-disclosure" open><summary>Module library &amp; starter layouts</summary>
+                    <p class="sb-insert-help">Insert after the selected module. Existing content stays in place.</p>
+                    <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
+                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">7 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
+                    <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
                     <div class="sb-library" role="group" aria-label="Add content module">
                       <button type="button" data-add-module="text">Paragraph</button>
                       <button type="button" data-add-module="heading">Heading</button>
@@ -216,8 +217,17 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                       <button type="button" data-add-module="button">Button / link</button>
                       <button type="button" data-add-module="divider">Divider</button>
                     </div>
+                    <h3 class="sb-library-heading">Starter layouts</h3>
+                    <p class="sb-insert-help">Add an empty structure, then write your own story.</p>
+                    <div class="sb-starters" role="group" aria-label="Insert starter layout after selected module">
+                      <button type="button" data-insert-layout="news">News story <small>Paragraph · heading · paragraph · quote</small></button>
+                      <button type="button" data-insert-layout="recap">Event recap <small>Heading · paragraph · list · paragraph</small></button>
+                      <button type="button" data-insert-layout="announcement">Announcement <small>Heading · paragraph · list · divider</small></button>
+                    </div>
+                    </details><div class="sb-pane-heading"><span class="sb-step">01</span><div><h3>Story outline</h3><p>Arrange your content</p></div><span id="module-count" class="sb-count"></span></div>
+                    <p class="sb-drag-help">Drag a module to reorder. Move buttons also work with a keyboard.</p>
+                    <ol id="module-outline"></ol>
                   </aside>
-                  <div class="sb-properties"><div class="sb-pane-heading"><span class="sb-step">02</span><div><h3 id="module-title">Module settings</h3><p>Make it your own</p></div></div><div id="module-fields"></div></div>
                 </div>
                 <div id="markdown-workspace">
                 <div class="ed-toolbar" role="toolbar" aria-label="Formatting">
@@ -234,9 +244,10 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                 <p id="module-status" class="admin-note" role="status" aria-live="polite"></p>
               </div>
               <div class="ed-preview">
-                <div class="sb-preview-tools"><div class="sb-pane-heading"><span class="sb-step">03</span><div><strong>Reader preview</strong><p>Updates as you write</p></div></div><div role="group" aria-label="Preview width"><button type="button" data-preview-width="desktop" aria-pressed="true">Desktop</button><button type="button" data-preview-width="phone" aria-pressed="false">Phone</button></div></div>
+                <div class="sb-preview-tools"><div class="sb-pane-heading"><span class="sb-step">02</span><div><strong>Story canvas</strong><p>Private preview · select a module to edit</p></div></div><div role="group" aria-label="Preview width"><button type="button" data-preview-width="desktop" aria-pressed="true">Desktop</button><button type="button" data-preview-width="phone" aria-pressed="false">Phone</button></div></div>
                 <iframe id="preview" title="Story preview" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
               </div>
+              <div class="sb-properties" id="module-inspector" aria-label="Selected module settings" hidden><div class="sb-pane-heading"><span class="sb-step">03</span><div><h3 id="module-title">Module settings</h3><p>Make it your own</p></div></div><div id="module-fields"></div></div>
             </div>
           </section>
 

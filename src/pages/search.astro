@@ -1,27 +1,58 @@
 ---
 import Base from '../layouts/Base.astro';
 import { SECTIONS } from '../lib/site';
+import '../styles/story-search.css';
 ---
 <Base title="Search" description="Search IMConnected stories" current="search">
-  <div class="wrap">
-    <header class="page-head">
-      <span class="kicker">IMConnected</span>
-      <h1>Search stories</h1>
-      <p>Find news, features and stories from across Iowa and Missouri.</p>
+  <div class="wrap story-search">
+    <header class="page-head search-head">
+      <span class="kicker">The story archive</span>
+      <h1>Find a story.<br /><em>Stay connected.</em></h1>
+      <p>Explore news, voices and stories of faith from across Iowa and Missouri.</p>
     </header>
-    <form class="search-form" id="search-form" role="search" action="/search/" method="get">
-      <label class="sr-only" for="search-q">Search for</label>
-      <input id="search-q" name="q" type="search" maxlength="200" autocomplete="off" placeholder="Search stories" required />
-      <label class="sr-only" for="search-section">In section</label>
-      <select id="search-section" name="section">
-        <option value="">All sections</option>
-        {SECTIONS.map((s) => <option value={s.key}>{s.label}</option>)}
-      </select>
-      <button class="btn" type="submit">Search</button>
-    </form>
-    <p id="search-status" class="search-status" role="status" aria-live="polite"></p>
-    <ol id="search-results" class="search-results"></ol>
-    <noscript><p>Search needs JavaScript.</p></noscript>
+    <section class="search-panel" aria-label="Search stories">
+      <form class="search-form" id="search-form" role="search" action="/search/" method="get">
+        <div class="search-field">
+          <label for="search-q">Search stories</label>
+          <input id="search-q" name="q" type="search" maxlength="200" autocomplete="off" placeholder="A topic, church or person…" aria-describedby="search-tip" required />
+        </div>
+        <div class="search-field">
+          <label for="search-section">In section</label>
+          <select id="search-section" name="section">
+            <option value="">All sections</option>
+            {SECTIONS.map((s) => <option value={s.key}>{s.label}</option>)}
+          </select>
+        </div>
+        <button class="btn" type="submit">Search stories <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 18 18 6M6 6h12v12" /></svg></button>
+      </form>
+      <div class="search-tools">
+        <p id="search-tip">Start with a name or a few words. Choose a section to narrow your search.</p>
+        <button id="search-clear" class="search-text-button" type="button" hidden>Clear search</button>
+      </div>
+    </section>
+    <div class="search-feedback">
+      <p id="search-status" class="search-status" role="status" aria-live="polite">Search by a topic, church or person, or explore a section below.</p>
+      <button id="search-clear-section" class="search-text-button" type="button" hidden>Search all sections</button>
+    </div>
+    <ol id="search-results" class="search-results" aria-label="Search results" aria-busy="false"></ol>
+    <section id="search-explore" class="search-explore" aria-labelledby="search-explore-heading">
+      <div class="search-explore-head">
+        <span class="kicker">Discover more</span>
+        <h2 id="search-explore-heading">Explore the sections</h2>
+      </div>
+      <ul class="search-section-links">
+        {SECTIONS.map((s, i) => (
+          <li data-sec={s.key}>
+            <a href={`/${s.key}/`}>
+              <span class="search-section-number" aria-hidden="true">0{i + 1}</span>
+              <span><strong>{s.label}</strong><span class="search-section-blurb">{s.blurb}</span></span>
+              <svg class="search-section-arrow" aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 18 18 6M6 6h12v12" /></svg>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+    <noscript><p>Search needs JavaScript. You can still browse the sections above.</p></noscript>
   </div>
 </Base>
 <script>
@@ -32,10 +63,15 @@ import { SECTIONS } from '../lib/site';
   const select = document.getElementById('search-section') as HTMLSelectElement;
   const statusEl = document.getElementById('search-status')!;
   const list = document.getElementById('search-results')!;
+  const clearButton = document.getElementById('search-clear') as HTMLButtonElement;
+  const clearSectionButton = document.getElementById('search-clear-section') as HTMLButtonElement;
+  const explore = document.getElementById('search-explore')!;
   const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" };
   const unescape = (s: string) => s.replace(/&(?:amp|lt|gt|quot|#39);/g, (e) => ENTITIES[e]);
   const sectionLabels: Record<string, string> = Object.fromEntries([...select.options].filter((o) => o.value).map((o) => [o.value, o.text]));
   let controller: AbortController | undefined;
+  let requestSequence = 0;
+  let activeQuery = '';
 
   interface Hit { slug: string; url: string; title: string; section: string; date: string; author: string; church?: string; snippet: string }
 
@@ -70,29 +106,75 @@ import { SECTIONS } from '../lib/site';
     return li;
   }
 
-  async function run(q: string, section: string, push: boolean) {
+  function syncAddress(q: string, section: string) {
+    const url = new URL(location.href);
+    url.search = '';
+    if (q) url.searchParams.set('q', q);
+    if (section) url.searchParams.set('section', section);
+    if (url.href !== location.href) history.pushState(null, '', url);
+  }
+
+  function updateClearButton() {
+    clearButton.hidden = !input.value && !select.value && !activeQuery;
+  }
+
+  function stopSearch() {
+    requestSequence++;
     controller?.abort();
-    controller = new AbortController();
+    controller = undefined;
     list.replaceChildren();
-    statusEl.textContent = 'Searching…';
-    if (push) {
-      const u = new URL(location.href);
-      u.search = '';
-      u.searchParams.set('q', q);
-      if (section) u.searchParams.set('section', section);
-      history.replaceState(null, '', u);
-    }
+    list.setAttribute('aria-busy', 'false');
+    clearSectionButton.hidden = true;
+  }
+
+  function showExplore() {
+    stopSearch();
+    activeQuery = '';
+    statusEl.textContent = 'Search by a topic, church or person, or explore a section below.';
+    explore.hidden = false;
+    updateClearButton();
+  }
+
+  async function run(q: string, section: string, push: boolean) {
+    stopSearch();
+    const sequence = requestSequence;
+    const request = new AbortController();
+    controller = request;
+    activeQuery = q;
+    input.value = q;
+    updateClearButton();
+    explore.hidden = true;
+    list.setAttribute('aria-busy', 'true');
+    const scope = `“${q}” in ${section ? sectionLabels[section] : 'all sections'}`;
+    statusEl.textContent = `Searching for ${scope}…`;
+    if (push) syncAddress(q, section);
     try {
-      const res = await fetch(`/api/search?${new URLSearchParams(section ? { q, section } : { q })}`, { signal: controller.signal, headers: { Accept: 'application/json' } });
+      const res = await fetch(`/api/search?${new URLSearchParams(section ? { q, section } : { q })}`, { signal: request.signal, headers: { Accept: 'application/json' } });
       const data = await res.json();
-      if (!data.ok) { statusEl.textContent = data.error || 'Search is not available right now.'; return; }
+      if (sequence !== requestSequence) return;
+      if (!data.ok) {
+        statusEl.textContent = data.error || 'Search is not available right now.';
+        explore.hidden = false;
+        return;
+      }
       const hits = data.results as Hit[];
-      if (!hits.length) { statusEl.textContent = 'No stories matched your search. Try different or fewer words.'; return; }
-      statusEl.textContent = hits.length === 1 ? '1 story found' : `${hits.length} stories found`;
+      if (!hits.length) {
+        statusEl.textContent = `No stories matched ${scope}. Try different or fewer words.`;
+        clearSectionButton.hidden = !section;
+        explore.hidden = false;
+        return;
+      }
+      // The API caps results at 20; its total is the returned count, not the number of all matching stories.
+      statusEl.textContent = hits.length >= 20
+        ? `Showing ${hits.length} stories for ${scope}. Refine your search to narrow the results.`
+        : `${hits.length} ${hits.length === 1 ? 'story' : 'stories'} found for ${scope}.`;
       list.append(...hits.map(resultNode));
     } catch (err) {
-      if ((err as Error).name === 'AbortError') return;
+      if (sequence !== requestSequence || (err as Error).name === 'AbortError') return;
       statusEl.textContent = 'Search is not available right now. Please try again in a moment.';
+      explore.hidden = false;
+    } finally {
+      if (sequence === requestSequence) list.setAttribute('aria-busy', 'false');
     }
   }
 
@@ -100,10 +182,37 @@ import { SECTIONS } from '../lib/site';
     e.preventDefault();
     const q = input.value.trim();
     if (q) void run(q, select.value, true);
+    else { showExplore(); syncAddress('', select.value); }
   });
-  const params = new URLSearchParams(location.search);
-  const q0 = (params.get('q') ?? '').slice(0, 200);
-  const s0 = params.get('section') ?? '';
-  if ([...select.options].some((o) => o.value === s0)) select.value = s0;
-  if (q0.trim()) { input.value = q0; void run(q0.trim(), select.value, false); }
+  input.addEventListener('input', updateClearButton);
+  select.addEventListener('change', () => {
+    const q = input.value.trim();
+    if (q) void run(q, select.value, true);
+    else { showExplore(); syncAddress('', select.value); }
+  });
+  clearButton.addEventListener('click', () => {
+    input.value = '';
+    select.value = '';
+    showExplore();
+    syncAddress('', '');
+    input.focus();
+  });
+  clearSectionButton.addEventListener('click', () => {
+    select.value = '';
+    // This button disappears while searching; put focus on the surviving section control.
+    select.focus();
+    void run(activeQuery, '', true);
+  });
+
+  function restoreAddress() {
+    const params = new URLSearchParams(location.search);
+    input.value = (params.get('q') ?? '').slice(0, 200);
+    const section = params.get('section') ?? '';
+    select.value = Object.hasOwn(sectionLabels, section) ? section : '';
+    const q = input.value.trim();
+    if (q) void run(q, select.value, false);
+    else showExplore();
+  }
+  window.addEventListener('popstate', restoreAddress);
+  restoreAddress();
 </script>

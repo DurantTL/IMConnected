@@ -1,4 +1,4 @@
-import { splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
+import { STORY_BLOCK_LIMIT, splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
 const blocksField = document.getElementById('story-blocks') as HTMLInputElement | null;
@@ -14,6 +14,15 @@ if (form && blocksField) {
   const redo = document.getElementById('blocks-redo') as HTMLButtonElement;
   const useModules = document.getElementById('use-modules') as HTMLButtonElement;
   const useMarkdown = document.getElementById('use-markdown') as HTMLButtonElement;
+  const split = document.getElementById('split')!;
+  const writePane = split.querySelector<HTMLElement>('.ed-write')!;
+  const previewPane = split.querySelector<HTMLElement>('.ed-preview')!;
+  const inspector = document.getElementById('module-inspector')!;
+  const compact = window.matchMedia('(max-width: 1100px)');
+  const library = document.querySelector<HTMLDetailsElement>('.sb-library-disclosure')!;
+  const phone = window.matchMedia('(max-width: 650px)');
+  if (phone.matches) library.open = false;
+  phone.addEventListener('change', () => { library.open = !phone.matches; });
   const editable = !form.querySelector('fieldset')?.disabled;
   type Photo = { id: number; src: string; alt: string; focalX: number; focalY: number };
   const builderData = JSON.parse(document.getElementById('story-builder-data')?.textContent || '{"photos":[]}');
@@ -39,6 +48,7 @@ if (form && blocksField) {
     const target = modular
       ? outline.querySelector<HTMLButtonElement>(`[data-select-module="${CSS.escape(selected)}"]`) || document.querySelector<HTMLButtonElement>('[data-add-module="text"]')
       : useModules;
+    if (target?.closest('.sb-library-disclosure')) library.open = true;
     target?.focus();
   }
   function remember(key = '') {
@@ -58,8 +68,13 @@ if (form && blocksField) {
       try { body.value = storyBlocksToMarkdown(blocks); }
       catch (error) { announce(error instanceof Error ? error.message : 'Check the module settings before saving.'); }
     }
+    split.dataset.mode = modular ? 'modules' : 'markdown';
+    const writeTab = document.querySelector('[data-view=write]');
+    if (writeTab) writeTab.textContent = modular ? 'Build' : 'Write';
     workspace.hidden = !modular;
     markdown.hidden = modular;
+    syncPanes();
+    highlightCanvas();
     useModules.setAttribute('aria-pressed', String(modular));
     useMarkdown.setAttribute('aria-pressed', String(!modular));
     useModules.textContent = modular ? 'Modules active' : 'Use modules';
@@ -218,7 +233,7 @@ if (form && blocksField) {
     if (block.type === 'divider') fields.append(node('p', 'A simple divider gives the next part of your story room to breathe.', 'admin-note'));
     const actions = node('div', undefined, 'sb-controls');
     actions.append(button('Duplicate module', () => {
-      if (blocks.length >= 60) { announce('A story can have up to 60 modules.'); return; }
+      if (blocks.length >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
       remember(); const copy = clone([block])[0]; copy.id = uid(); blocks.splice(blocks.indexOf(block) + 1, 0, copy); selected = copy.id; render(); focusSelected(); changed(); announce('Module duplicated.');
     }), button('Delete module', () => {
       if (!window.confirm(`Delete this ${labels[block.type].toLowerCase()} module? You can undo this change.`)) return;
@@ -227,6 +242,57 @@ if (form && blocksField) {
     fields.append(actions);
   }
   function render() { sync(); renderOutline(); renderFields(); }
+  function syncPanes() {
+    const previewOnly = compact.matches && split.dataset.view === 'preview';
+    for (const [pane, visible] of [[writePane, !previewOnly], [previewPane, !compact.matches || previewOnly], [inspector, modular && !previewOnly]] as const) {
+      pane.hidden = !visible;
+      pane.inert = !visible;
+    }
+  }
+  compact.addEventListener('change', syncPanes);
+  new MutationObserver(syncPanes).observe(split, { attributes: true, attributeFilter: ['data-view'] });
+  const librarySearch = document.getElementById('module-library-search') as HTMLInputElement;
+  const libraryReset = document.getElementById('module-library-reset') as HTMLButtonElement;
+  function filterLibrary() {
+    const query = librarySearch.value.trim().toLocaleLowerCase();
+    let matches = 0;
+    for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) {
+      const matchesQuery = `${add.textContent} ${add.dataset.addModule}`.toLocaleLowerCase().includes(query);
+      add.hidden = !matchesQuery;
+      if (matchesQuery) matches++;
+    }
+    document.getElementById('module-library-results')!.textContent = `${matches} ${matches === 1 ? 'module' : 'modules'}${query ? ' found' : ''}`;
+    document.getElementById('module-library-empty')!.hidden = matches > 0;
+    libraryReset.hidden = !librarySearch.value;
+  }
+  librarySearch.addEventListener('input', (event) => { event.stopPropagation(); filterLibrary(); });
+  libraryReset.addEventListener('click', () => { librarySearch.value = ''; filterLibrary(); librarySearch.focus(); });
+  const layouts: Record<string, { label: string; types: StoryBlock['type'][] }> = {
+    news: { label: 'News story', types: ['text', 'heading', 'text', 'quote'] },
+    recap: { label: 'Event recap', types: ['heading', 'text', 'list', 'text'] },
+    announcement: { label: 'Announcement', types: ['heading', 'text', 'list', 'divider'] },
+  };
+  for (const insert of document.querySelectorAll<HTMLButtonElement>('[data-insert-layout]')) insert.addEventListener('click', () => {
+    if (!editable || !modular) return;
+    const layout = layouts[insert.dataset.insertLayout || ''];
+    if (!layout) return;
+    if (blocks.length + layout.types.length > STORY_BLOCK_LIMIT) {
+      announce(`${layout.label} needs ${layout.types.length} spaces. A story can have up to ${STORY_BLOCK_LIMIT} modules. No modules were added.`);
+      return;
+    }
+    const added = layout.types.map((type): StoryBlock => ({ id: uid(), type,
+      ...(['text', 'heading', 'quote'].includes(type) ? { text: '' } : {}),
+      ...(type === 'heading' ? { level: 2 as const } : {}),
+      ...(type === 'list' ? { items: [''] } : {}),
+    }));
+    remember();
+    const at = blocks.findIndex((block) => block.id === selected);
+    blocks.splice(at < 0 ? blocks.length : at + 1, 0, ...added);
+    selected = added[0].id;
+    render(); changed();
+    fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
+    announce(`${layout.label} inserted after the selected module. ${added.length} empty modules added; existing content is kept.`);
+  });
   useModules.addEventListener('click', () => {
     if (!editable || modular) return;
     remember(); modular = true;
@@ -244,7 +310,7 @@ if (form && blocksField) {
   });
   for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) add.addEventListener('click', () => {
     if (!editable || !modular) return;
-    if (blocks.length >= 60) { announce('A story can have up to 60 modules.'); return; }
+    if (blocks.length >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
     const type = add.dataset.addModule as StoryBlock['type'];
     if (type === 'image' && !photos.some((p) => p.src)) return;
     remember();
@@ -271,16 +337,53 @@ if (form && blocksField) {
     for (const other of document.querySelectorAll('[data-preview-width]')) other.setAttribute('aria-pressed', String(other === control));
   });
   const previewFrame = document.getElementById('preview') as HTMLIFrameElement;
+  function highlightCanvas() {
+    const doc = (document.getElementById('preview') as HTMLIFrameElement)?.contentDocument;
+    for (const module of doc?.querySelectorAll<HTMLElement>('[data-module-id]') || []) {
+      const active = editable && modular && module.dataset.moduleId === selected;
+      module.toggleAttribute('data-preview-selected', active);
+      module.style.outline = active ? '3px solid #087e8b' : '';
+      module.style.outlineOffset = active ? '5px' : '';
+    }
+  }
   previewFrame.addEventListener('load', () => {
     const doc = previewFrame.contentDocument;
     if (!doc) return;
+    // The parent owns these DOM controls; the sandbox never gains script permission.
+    if (editable && modular) for (const module of doc.querySelectorAll<HTMLElement>('[data-module-id]')) {
+      const index = blocks.findIndex((block) => block.id === module.dataset.moduleId);
+      if (index < 0) continue;
+      module.tabIndex = 0;
+      module.setAttribute('aria-description', `${labels[blocks[index].type]} module ${index + 1}. Press Enter or Space to edit.`);
+      module.title = 'Select this module to edit its settings';
+      module.style.cursor = 'pointer';
+      module.style.minHeight = '24px';
+    }
+    highlightCanvas();
+    const selectFromCanvas = (target: Element) => {
+      if (!editable || !modular) return;
+      const id = target.closest<HTMLElement>('[data-module-id]')?.dataset.moduleId;
+      if (!id || !blocks.some((block) => block.id === id)) return;
+      selected = id;
+      // On phones, selecting a canvas module opens the Build view before focusing its field.
+      split.dataset.view = 'write';
+      for (const tab of document.querySelectorAll<HTMLElement>('.ed-tabs [data-view]')) tab.setAttribute('aria-pressed', String(tab.dataset.view === 'write'));
+      render();
+      fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
+      announce('Module selected from the canvas. Its settings are ready to edit.');
+    };
     doc.addEventListener('click', (event) => {
       const target = event.target as Element;
       if (target.closest('a')) event.preventDefault();
-      const id = target.closest<HTMLElement>('[data-module-id]')?.dataset.moduleId;
-      if (!id || !blocks.some((b) => b.id === id)) return;
-      selected = id; render();
-      announce('Module selected from the preview. Its settings are ready to edit.');
+      selectFromCanvas(target);
+    });
+    doc.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const target = event.target as Element;
+      if (target.closest('a')) event.preventDefault();
+      if (!editable || !modular || !target.closest('[data-module-id]')) return;
+      event.preventDefault();
+      selectFromCanvas(target);
     });
   });
 

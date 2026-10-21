@@ -177,3 +177,58 @@
  .studio-review-summary { grid-template-columns:minmax(0,1fr); }
 }
 @media(prefers-color-scheme:dark) { .editor-studio .ed-preview { background:#18292d; } .studio-review-action { background:var(--brand); color:var(--brand-ink); } .sb-private { background:#18382e; color:#a9d9ba; } }
+
+/* A composed canvas between the module library and the selected module inspector. */
+.editor-studio .sb-modules { display:block; min-height:0; }
+.editor-studio .sb-outline { border-right:0; min-height:0; }
+.sb-library-disclosure { padding-bottom:18px; margin-bottom:18px; border-bottom:1px solid var(--line); }
+.sb-library-disclosure>summary { cursor:pointer; font-size:.8rem; font-weight:750; min-height:44px; display:list-item; align-content:center; }
+.sb-insert-help { font-size:.7rem; line-height:1.6; color:var(--ink-2); margin:6px 0 12px; }
+.sb-library-search { display:grid; gap:6px; font-size:.74rem; font-weight:650; }
+.sb-library-search input { box-sizing:border-box; width:100%; min-width:0; min-height:42px; font:inherit; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); }
+.sb-library-feedback { display:flex; align-items:center; justify-content:space-between; gap:6px; margin:8px 0; min-height:28px; font-size:.68rem; color:var(--ink-2); }
+.sb-library-feedback button { min-height:32px; background:transparent; border:0; color:var(--brand); font:inherit; text-decoration:underline; cursor:pointer; }
+.editor-studio .sb-library-heading { margin:18px 0 8px; }
+.sb-starters { display:grid; gap:6px; }
+.sb-starters button { min-width:0; min-height:52px; padding:10px; border:1px solid var(--line); border-radius:8px; font:650 .74rem var(--sans); text-align:left; background:var(--surface); color:var(--ink); cursor:pointer; }
+.sb-starters small { display:block; margin-top:4px; color:var(--ink-2); font-size:.63rem; line-height:1.5; font-weight:400; }
+.editor-studio .sb-properties { border-left:1px solid var(--line); background:var(--surface); }
+.editor-studio .sb-properties textarea { min-height:200px; }
+@media(min-width:1101px) {
+ .editor-studio .story-builder .ed-split[data-mode=modules] { grid-template-columns:230px minmax(0,1fr) 300px; align-items:start; }
+ .editor-studio .story-builder .ed-split[data-mode=markdown] { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+ .editor-studio .sb-outline,.editor-studio .sb-properties { max-height:calc(100dvh - 300px); min-height:580px; overflow:auto; }
+ .editor-studio .ed-preview { align-self:stretch; padding:18px; }
+ .editor-studio .story-builder iframe { height:calc(100dvh - 360px); min-height:520px; }
+}
+@media(max-width:1250px) and (min-width:1101px) {
+ .editor-studio .story-builder .ed-split[data-mode=modules] { grid-template-columns:200px minmax(0,1fr) 270px; }
+ .editor-studio .sb-properties { padding:16px; }
+ .editor-studio .ed-preview { padding:14px; }
+}
+@media(max-width:1100px) {
+ .editor-studio .story-builder .ed-split { min-height:0; }
+ .editor-studio .sb-outline { min-height:0; border-bottom:1px solid var(--line); }
+ .editor-studio .sb-properties { border-left:0; }
+ .editor-studio .sb-outline ol { grid-template-columns:repeat(3,minmax(0,1fr)); margin-bottom:0; }
+ .editor-studio .sb-library { grid-template-columns:repeat(4,minmax(0,1fr)); }
+ .sb-starters { grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .editor-studio .ed-preview { padding:16px; }
+}
+@media(max-width:650px) {
+ .editor-studio .sb-heading { padding:14px 16px 0; }
+ .editor-studio .sb-heading h2 { font-size:1.2rem; }
+ .sb-workspace-intro { margin:6px 16px 10px; font-size:.74rem; }
+ .editor-studio .sb-outline { padding:10px 16px 14px; }
+ .sb-library-disclosure { padding-bottom:8px; margin-bottom:12px; }
+ .sb-library-disclosure:not([open]) { padding-bottom:0; }
+ .editor-studio .sb-outline ol { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .editor-studio .sb-library { grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .sb-starters { grid-template-columns:1fr; }
+ .editor-studio .sb-properties { padding:16px; }
+ .editor-studio .sb-pane-heading { margin-bottom:10px; }
+ .sb-drag-help { margin-bottom:8px; }
+ .editor-studio .story-builder iframe { min-height:520px; height:calc(100dvh - 170px); }
+}
+.editor-studio .sb-properties :is(input,textarea,select) { font:inherit; line-height:1.5; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); }
+.editor-studio .sb-properties :is(input,select) { min-height:44px; }

@@ -2,6 +2,16 @@
 
 This change follows the content-outline, task-focused panels, labelled actions, mobile reflow and private-preview direction in [IMSDA Events #1114](https://github.com/DurantTL/IMSDA-Events/issues/1114). It keeps IMConnected's routes, editorial permissions, SQLite source of truth and human publishing action.
 
+## Canvas and search follow-up
+
+This follow-up starts from the refreshed `main` at `d218010`, including the later module-safety, live-edit and no-JavaScript fixes. [The feature review](ISSUE_FEATURE_REVIEW.md) records coverage and remaining access gaps for the owner's #3–#38 review range.
+
+- Desktop editing now puts the library/outline at the left, the composed story canvas in the center and the selected module's settings at the right. Canvas selection has a visible highlight and Enter/Space support while preserving native headings and lists. Phone Build/Preview views hide and inert inactive panes.
+- The module library has search, result feedback and a clear recovery action. **News story**, **Event recap** and **Announcement** insert empty starter structures after the selection, preserve existing content and undo atomically. The 60-module cap applies to the whole insertion.
+- Published and rejected drafts preview their stored content and photo focus. Their disabled form controls no longer cause an empty preview, and posted replacement data cannot override the saved preview. The frame retains its restrictive CSP and script-disabled sandbox.
+- Public story search has a new discovery layout, visible labels, automatic section filtering, clear/reset and no-match recovery. Query/section feedback reflects the returned count, including the 20-result cap. URL history and request ordering are covered by browser regressions.
+- Issue **#38** was reproduced with only 50 of 121 stored stories indexed. Initial search now reports temporary unavailability until all live, non-draft rows have current index stamps. Catch-up runs in bounded background batches and retries after locks. Restart, failed-row and steady-state repair behavior are covered by tests.
+
 ## What changed after the design review
 
 The earlier pass left the existing page structure mostly intact: a large empty hero placeholder, lightly restyled navigation, and a long editor form with the module tools inserted halfway down. This revision changes those structures.
@@ -9,7 +19,7 @@ The earlier pass left the existing page structure mostly intact: a large empty h
 - The public site has a publication masthead, separate section-navigation band, typographic feature cover, numbered latest-story rail, topic directory and a redesigned conference board. Stories without photographs use an intentional text cover instead of a large empty picture placeholder.
 - Article pages have a clearer breadcrumb/headline/byline hierarchy and a focused reading column. The footer has a stronger submission invitation. Existing story URLs, feeds, section routes and image focus remain supported.
 - The editor starts with its content workspace. Metadata is in **Story settings**, image management is in **Photos**, and publishing is in **Review & publish**. A desktop sticky toolbar keeps Save and private Preview available; phones use a compact bottom Save/Review bar and let the header scroll away. Inactive panels are hidden and inert while their fields remain part of the saved form.
-- Desktop editing uses an outline/module library, selected-module settings and reader preview. The outline and settings can scroll independently. Mobile has explicit task tabs and Write/Preview controls rather than offscreen panels that remain keyboard-focusable.
+- Desktop editing uses a library/outline, central story canvas and selected-module settings. The outline and settings can scroll independently. Mobile has explicit task tabs and Build/Preview controls rather than offscreen panels that remain keyboard-focusable.
 - Paragraph, heading, quote, list, image, button/link and divider modules support ordering, duplicate/delete and undo/redo. Existing Markdown is retained; empty new drafts begin with a paragraph module. Previewing does not publish.
 - Photo editing shows a reader-crop preview beside the original image and focal marker. Dragging, arrows, Shift+arrows, labelled sliders and Center focus all update the stored point. Original image proportions are preserved in the focal pad so pointer coordinates match the image.
 - Additive migration 017 stores modules and focal coordinates. Save/publish/live-edit round trips retain them, and the save queue flushes later edits before publishing or photo operations.
@@ -45,9 +55,19 @@ These editor screenshots use a synthetic account, synthetic text and a generated
 
 ![Starting a new story on a phone](design/editor-empty-mobile.png)
 
+## Story search
+
+These screenshots use the synthetic story fixtures from the responsive design crawl.
+
+![Story search at desktop width](design/search-desktop.png)
+
+![Story search at phone width](design/search-mobile.png)
+
 ## Validation
 
 The production Astro build passed. The design crawl checked home, section, story, submission, search and sign-in screens at 360, 390, 768, 1024 and 1440 pixels (30 responsive screens), including keyboard navigation, overflow, script errors, the header's current-page markers and axe WCAG A/AA checks. All four editor panels also passed axe WCAG A/AA checks.
+
+After refreshing the Git baseline, the follow-up passed **24 module checks**, SQLite round-trip integration, **82 builder browser checks**, **110 search checks**, **183 editor checks**, the pending-save regression and **104 design checks across 30 responsive screens**. The enhanced canvas DOM was also audited as an exact snapshot in a separate diagnostic page because asynchronous axe execution cannot run inside its script-disabled frame; real-frame keyboard and semantic-role checks ran directly. The final independent Sol review found no blocking or medium findings. All listed follow-up checks completed with no failures or skips.
 
 **Why the baseline comparisons were not used.** `scripts/test-public-pages.mjs` can compare rendered pages with a historical build (`BASELINE_DIR`). Those comparisons assume the page markup did not change, which does not hold for an intentional redesign, so they were not applicable here and were not run (the script is unchanged and reports them as skipped, never as passes). Instead, during the review of this branch, Claude Code compared local builds of the previous main (`8e1c61a`) and this branch on the 5 stories in the frozen archive: 20 pages at 390 and 1280 pixels, all answered 200, with the same photos, credits and headlines, no horizontal overflow and no script errors.
 
