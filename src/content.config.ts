@@ -1,6 +1,7 @@
 import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
 import { z } from 'astro/zod';
+import { normalizeStoryBlocks } from './lib/story-blocks';
 import { SECTION_KEYS } from './lib/site';
 
 const stories = defineCollection({
@@ -28,6 +29,8 @@ const stories = defineCollection({
     photoAlts: z.array(z.string()).default([]),
     /** How the story page arranges the photos (Studio's story layouts). Missing means one: the lead photo, the others in a row. Values live in src/lib/photo-layouts.ts. */
     photoLayout: z.enum(['one', 'twoUp', 'heroGrid', 'mosaic', 'stack']).default('one'),
+    storyBlocks: z.unknown().optional().transform((value) => normalizeStoryBlocks(value)),
+    photoFocus: z.array(z.object({ focalX: z.number().min(0).max(100), focalY: z.number().min(0).max(100) })).default([]),
     featured: z.boolean().default(false),
     draft: z.boolean().default(false),
   }),

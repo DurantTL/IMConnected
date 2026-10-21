@@ -601,7 +601,7 @@ if (browser) {
     await page.click('.ed-tabs [data-view=preview]');
     await page.waitForTimeout(500);
     const sandbox = await page.getAttribute('#preview', 'sandbox');
-    check('the preview frame is sandboxed with no permissions (no scripts, no same-origin)', sandbox === '');
+    check('the preview allows authenticated same-origin photos but never scripts', sandbox === 'allow-same-origin' && !sandbox.includes('allow-scripts'));
     const frame = page.frameLocator('#preview');
     const frameText = (await frame.locator('body').innerText()).replace(/\s+/g, ' ');
     check('the preview shows the hostile text as text', frameText.includes('<script>alert(1)</script>') && frameText.includes('<img src=x onerror=alert(1)>'), frameText.slice(0, 200));
@@ -617,6 +617,7 @@ if (browser) {
     await c1.form(`/api/admin/drafts/${W}/photos`, { version: version(W), op: 'upload' }, [{ bytes: PNG_A, filename: 'a.png' }, { bytes: PNG_B, filename: 'b.png' }]);
     await c1.form(`/api/admin/drafts/${W}/photos`, { version: version(W), op: 'upload' }, [{ bytes: PNG_B, filename: 'c.png' }]);
     await page.goto(`${BASE}/admin/drafts/${W}`);
+    await page.locator('[data-studio-tab=photos]').click();
     await page.waitForSelector('.ed-photo img');
     await page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth > 0));
     check('390px: uploaded photos load through the guarded route', true);
@@ -624,6 +625,7 @@ if (browser) {
     const small = await page.evaluate(() => [...document.querySelectorAll('button, input[type=file], select, .ed-check')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.height < 43 || r.width < 43) && !e.closest('[hidden]'); }).map((e) => e.outerHTML.slice(0, 60)));
     check('390px: buttons and fields are at least 44px tall (touch targets)', small.length === 0, small.slice(0, 3).join(' | '));
     await shot('editor-390.png');
+    await page.locator('[data-studio-tab=content]').click();
     await page.fill('#f-body', 'Hello world');
     await page.evaluate(() => { const t = document.getElementById('f-body'); t.setSelectionRange(0, 5); });
     await page.click('[data-md=bold]');
@@ -652,7 +654,9 @@ if (browser) {
     await shot('editor-conflict-390.png');
     // photo operation saves pending edits first, then reloads
     await page.goto(`${BASE}/admin/drafts/${W}`);
+    await page.locator('[data-studio-tab=settings]').click();
     await page.fill('input[name=title]', 'Title edited before a photo change');
+    await page.locator('[data-studio-tab=photos]').click();
     await page.locator('.ed-photo').nth(1).locator('button', { hasText: 'Make lead' }).click();
     await page.waitForURL(/n=photos/);
     check('a photo action first saves unsaved edits, then applies', draftRow(W).title === 'Title edited before a photo change' && q('SELECT id FROM draft_photos WHERE draft_id = ? ORDER BY position', W).length === 3);

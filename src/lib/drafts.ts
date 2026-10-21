@@ -8,6 +8,7 @@ import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
 import { validDate } from './storyfile';
 import { ERRORS, type ErrorCode } from './messages';
+import { parseStoredStoryBlocks, normalizeStoryBlocks, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
 import { DEFAULT_PHOTO_LAYOUT, isPhotoLayout, photoLayoutOrDefault, type PhotoLayout } from './photo-layouts';
 
 export type DraftStatus = 'new' | 'in_review' | 'published' | 'rejected';
@@ -36,6 +37,7 @@ export interface DraftFields {
   photoLayout: PhotoLayout;
   featured: boolean;
   body: string;
+  storyBlocks?: StoryBlock[];
 }
 
 export interface Draft extends DraftFields {
@@ -76,6 +78,8 @@ export interface DraftPhoto {
   alt: string;
   caption: string;
   position: number;
+  focalX: number;
+  focalY: number;
 }
 
 export interface DraftListItem {
@@ -122,6 +126,7 @@ function toDraft(r: Row): Draft {
     photoLayout: photoLayoutOrDefault(r.photo_layout),
     featured: n(r.featured) === 1,
     body: s(r.body),
+    storyBlocks: parseStoredStoryBlocks(r.story_blocks),
     slug: sn(r.slug),
     publishedCommit: sn(r.published_commit),
     submitterName: sn(r.submitter_name),
@@ -146,7 +151,7 @@ function toDraft(r: Row): Draft {
 }
 
 function toPhoto(r: Row): DraftPhoto {
-  return { id: n(r.id), draftId: n(r.draft_id), path: sn(r.path), url: sn(r.url), ext: sn(r.ext), alt: s(r.alt), caption: s(r.caption), position: n(r.position) };
+  return { id: n(r.id), draftId: n(r.draft_id), path: sn(r.path), url: sn(r.url), ext: sn(r.ext), alt: s(r.alt), caption: s(r.caption), position: n(r.position), focalX: Number(r.focal_x ?? 50), focalY: Number(r.focal_y ?? 50) };
 }
 
 /** Run `fn` inside one write transaction (BEGIN IMMEDIATE ... COMMIT; rolled back if it throws). */
@@ -185,6 +190,7 @@ export interface NewDraft {
 /** Create a draft (also the entry point for the submit form and Studio in the next issue). */
 export function createDraft(opts: NewDraft): number {
   const f = emptyFields(opts.fields);
+  const blocks = f.storyBlocks === undefined ? undefined : normalizeStoryBlocks(f.storyBlocks);
   const now = Date.now();
   const status = opts.status ?? (opts.source === 'editor' ? 'in_review' : 'new');
   const sub = opts.submitter ?? {};
@@ -199,7 +205,9 @@ export function createDraft(opts: NewDraft): number {
       opts.slug ?? null, sub.name ?? null, sub.email ?? null, sub.phone ?? null, sub.church ?? null, opts.emailVerified ? 1 : 0,
       now, opts.userId ?? null, now, opts.userId ?? null, opts.sourceUrl ?? null, opts.agentNote ?? null,
     );
-  return Number(r.lastInsertRowid);
+  const id = Number(r.lastInsertRowid);
+  if (blocks !== undefined) getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(blocks), blocks.length ? storyBlocksToMarkdown(blocks) : f.body, id);
+  return id;
 }
 
 export function getDraft(id: number): Draft | null {
@@ -310,23 +318,29 @@ export function checkFieldValues(f: DraftFields): ErrorCode | null {
   return null;
 }
 
-export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null): SaveResult {
+export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null, photoFocus: Map<number, { focalX: number; focalY: number }> = new Map()): SaveResult {
   const bad = checkFieldValues(f);
   if (bad) return fail('invalid', bad);
   // null = the form did not carry the picker: keep the draft's layout.
   if (layout !== null && !isPhotoLayout(layout)) return fail('invalid', 'bad_layout');
   const area = isValidArea(f.section, f.area) ? f.area : '';
   return tx(() => {
-    const cur = getDb().prepare('SELECT status FROM drafts WHERE id = ?').get(id) as { status: DraftStatus } | undefined;
+    const cur = getDb().prepare('SELECT status, story_blocks FROM drafts WHERE id = ?').get(id) as { status: DraftStatus; story_blocks: string } | undefined;
     if (!cur) return fail('invalid', 'draft_gone') as SaveResult;
     if (!isEditable({ status: cur.status })) return fail('locked', 'closed') as SaveResult;
+    const blocks = f.storyBlocks === undefined ? parseStoredStoryBlocks(cur.story_blocks) : normalizeStoryBlocks(f.storyBlocks);
+    const ownedPhotos = listPhotos(id);
+    if (blocks.some((b) => b.type === 'image' && b.photoId !== undefined && !ownedPhotos.some((p) => p.id === b.photoId))) return fail('invalid', 'photo_gone');
+    const body = blocks.length ? storyBlocksToMarkdown(blocks) : f.body;
     const v = takeVersion(id, expected, userId, "status = 'in_review'");
     if (v === null) return CONFLICT;
     getDb()
-      .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = COALESCE(?, photo_layout), featured = ?, body = ? WHERE id = ?')
-      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, layout, f.featured ? 1 : 0, f.body, id);
+      .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = COALESCE(?, photo_layout), featured = ?, body = ?, story_blocks = ? WHERE id = ?')
+      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, layout, f.featured ? 1 : 0, body, JSON.stringify(blocks), id);
     const upd = getDb().prepare('UPDATE draft_photos SET alt = ? WHERE id = ? AND draft_id = ?');
     for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
+    const focus = getDb().prepare('UPDATE draft_photos SET focal_x = ?, focal_y = ? WHERE id = ? AND draft_id = ?');
+    for (const [pid, f] of photoFocus) focus.run(f.focalX, f.focalY, pid, id);
     return { ok: true, updatedAt: v } as SaveResult;
   });
 }
@@ -397,6 +411,11 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
       order.splice(i, 1);
       removed = photos[i].path;
       getDb().prepare('DELETE FROM draft_photos WHERE id = ?').run(photoId);
+      const blocks = getDraft(draftId)?.storyBlocks ?? [];
+      if (blocks.some((b) => b.type === 'image' && b.photoId === photoId)) {
+        const kept = blocks.filter((b) => b.type !== 'image' || b.photoId !== photoId);
+        getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(kept), storyBlocksToMarkdown(kept), draftId);
+      }
     } else if (op === 'lead') {
       order.splice(i, 1);
       order.unshift(photoId);
@@ -413,11 +432,11 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
 }
 
 /** Replace a draft's photos (used when a published story is loaded into the editor). Call inside tx(). */
-export function replacePhotos(draftId: number, photos: { url: string; alt: string; caption: string }[]): string[] {
+export function replacePhotos(draftId: number, photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number }[]): string[] {
   const old = listPhotos(draftId).map((p) => p.path).filter((p): p is string => !!p);
   getDb().prepare('DELETE FROM draft_photos WHERE draft_id = ?').run(draftId);
-  const ins = getDb().prepare('INSERT INTO draft_photos (draft_id, url, alt, caption, position, created_at) VALUES (?, ?, ?, ?, ?, ?)');
-  photos.forEach((p, i) => ins.run(draftId, p.url, p.alt, p.caption, i, Date.now()));
+  const ins = getDb().prepare('INSERT INTO draft_photos (draft_id, url, alt, caption, position, created_at, focal_x, focal_y) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  photos.forEach((p, i) => ins.run(draftId, p.url, p.alt, p.caption, i, Date.now(), p.focalX ?? 50, p.focalY ?? 50));
   return old;
 }
 
@@ -519,7 +538,7 @@ export function cleanupRejectedPhotos(now = Date.now(), force = false): number {
 }
 
 /** Put a live story's current content into an existing draft (a draft linked to that slug) and reopen it. */
-export function reloadDraftFromStory(id: number, userId: number, f: DraftFields, photos: { url: string; alt: string; caption: string }[]): void {
+export function reloadDraftFromStory(id: number, userId: number, f: DraftFields, photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number }[]): void {
   let old: string[] = [];
   tx(() => {
     const now = Date.now();
@@ -529,15 +548,28 @@ export function reloadDraftFromStory(id: number, userId: number, f: DraftFields,
       )
       .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
     old = replacePhotos(id, photos);
+    remapStoryBlocks(id, f.storyBlocks);
   });
   removeUploadFiles(old);
 }
 
+/** Resolve published image module URLs to this draft's newly assigned photo ids. */
+function remapStoryBlocks(id: number, input: StoryBlock[] | undefined): void {
+  const photos = listPhotos(id);
+  const blocks = normalizeStoryBlocks(input ?? []).map((b) => {
+    if (b.type !== 'image') return b;
+    const photo = photos.find((p) => p.url === b.url);
+    return photo ? { ...b, photoId: photo.id, url: undefined, focalX: undefined, focalY: undefined } : b;
+  });
+  getDb().prepare('UPDATE drafts SET story_blocks = ? WHERE id = ?').run(JSON.stringify(blocks), id);
+}
+
 /** An editor draft for a live story: its text and photos, linked to the story's slug. */
-export function createDraftFromStory(userId: number, slug: string, f: DraftFields, photos: { url: string; alt: string; caption: string }[]): number {
+export function createDraftFromStory(userId: number, slug: string, f: DraftFields, photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number }[]): number {
   return tx(() => {
     const id = createDraft({ source: 'editor', userId, fields: f, slug });
     replacePhotos(id, photos);
+    remapStoryBlocks(id, f.storyBlocks);
     return id;
   });
 }
@@ -617,7 +649,7 @@ export interface StudioStory {
   photoLayout: PhotoLayout;
   /** The Markdown that was published. */
   body: string;
-  photos: { url: string; alt: string; caption: string }[];
+  photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number }[];
 }
 
 /** Recent live stories for the inbox overview: only the columns it shows. */
@@ -662,7 +694,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
           id = cur.id;
           getDb()
             .prepare(
-              "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
+              "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, story_blocks = '[]', published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
             )
             .run(fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.photoLayout, fields.body, commit, now, now, id);
         } else {

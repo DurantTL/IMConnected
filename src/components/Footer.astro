@@ -4,12 +4,13 @@ const year = new Date().getFullYear();
 ---
 <footer class="site-footer">
   <div class="wrap">
+    <div class="footer-statement"><p>Connected by community.<br /><em>Inspired by faith.</em></p><a class="btn" href="/submit/">Share your story <span aria-hidden="true">↗</span></a></div>
     <div class="cols">
       <div>
         <a class="brand" href="/">
           <span class="brand-name">IM<span>Connected</span></span>
         </a>
-        <p>{SITE.tagline}. A publication of the <a href={SITE.publisherUrl}>{SITE.publisher}</a>.</p>
+        <p class="footer-intro">{SITE.tagline}. A publication of the <a href={SITE.publisherUrl}>{SITE.publisher}</a>.</p>
       </div>
       <div>
         <h2>Sections</h2>
@@ -27,6 +28,9 @@ const year = new Date().getFullYear();
         </ul>
       </div>
     </div>
-    <p class="fine">© {year} {SITE.publisher}. All rights reserved.</p>
+    <div class="footer-bottom">
+      <p class="fine">© {year} {SITE.publisher}. All rights reserved.</p>
+      <a class="footer-editor" href="/admin">Editor sign in <span aria-hidden="true">→</span></a>
+    </div>
   </div>
 </footer>

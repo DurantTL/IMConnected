@@ -2,6 +2,11 @@
 
 Instructions for AI coding agents (Codex, Claude) working in this repo.
 
+## Codex delegation
+- Read [CODEX.md](CODEX.md) for GPT subagent routing, task handoffs and verification. Delegate useful independent work without asking first; keep design decisions and final integration in the main session.
+- The owner's model mapping is **Haiku → Luna, Sonnet → Tera, Opus → Sol, Astra → Fable**. Check the session's selectable models and report actual model use. Never invent a model ID or describe an inherited model as Tera/Fable.
+- Project-local role configurations live in `.codex/config.toml` and `.codex/agents/`. They supplement these repository rules; clients without native role support should use the same handoff instructions with their available collaboration tools.
+
 ## Stack
 - Astro 7 (`output: 'static'` + `@astrojs/node` standalone). Pages are prerendered, and only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts` (`/api/stories`), `src/pages/api/studio-photo.ts` (`/api/studio-photo`), `src/pages/api/confirm.ts`, `GET /media/*` (`src/pages/media/[...path].ts`), the public story pages and feeds (`/`, `/stories/<slug>/`, `/<section>/`, `/<section>/<area>/`, `/stories.json`, `/rss.xml`; epic #25 step 2), `/images/stories/*` (only reached when the static file is missing), `/api/search` (epic #25 step 3), `/api/agent/*`, `/admin*` and `/api/admin/*` run on the server (`prerender = false`). `/submit/`, `/search/`, `/confirm/` and the 404 page are still prerendered.
 - Content: stories live in the SQLite database (`stories` and `story_photos`, photos in `DATA_DIR/media`), with the field set defined by `src/content.config.ts`. `src/content/stories/*.md` and `public/images/stories/` are a **frozen archive**: the server reads the built copy once, to adopt it (`src/lib/story-adopt.ts`), and never again.

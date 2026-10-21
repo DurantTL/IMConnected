@@ -7,6 +7,7 @@ import { getSection, areaLabel, formatDate, SITE } from '../lib/site';
 import StoryPhotos from './StoryPhotos.astro';
 import type { PublicStory } from '../lib/stories';
 import { photoLayoutOrDefault, planPhotos } from '../lib/photo-layouts';
+import { photoFocusStyle } from '../lib/story-blocks';
 
 interface Props {
   story: PublicStory;
@@ -24,11 +25,16 @@ const enc = encodeURIComponent;
 // the text and the others in a row under it. Another layout puts the lead and the others together above the text; photos it
 // has no place for (a fifth in Hero + grid, a third in Two up) stay in the row under the text.
 const layout = photoLayoutOrDefault(d.photoLayout);
+const inlinePhotos = new Set((d.storyBlocks ?? []).filter((b) => b.type === 'image' && b.url).map((b) => b.url));
 const allPhotos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] || '' }))]
-  .map((p, i) => ({ ...p, alt: p.alt || `Photo ${i + 1} from “${d.title}”` }));
+  .map((p, i) => ({ ...p, ...d.photoFocus?.[i], alt: p.alt || `Photo ${i + (d.image ? 1 : 2)} from “${d.title}”` }))
+  .filter((p) => !inlinePhotos.has(p.src));
 const plan = planPhotos(layout, allPhotos.length);
-const laid = plan.mode === 'layout' && !!d.image;
-const galleryPhotos = laid ? plan.rest.map((i) => ({ src: allPhotos[i].src, alt: allPhotos[i].alt })) : null;
+const laid = plan.mode === 'layout' && (!!d.image || inlinePhotos.size > 0);
+const galleryPhotos = laid ? plan.rest.map((i) => allPhotos[i]) : null;
+const leadPhoto = d.image && !inlinePhotos.has(d.image) ? allPhotos[0] : undefined;
+const plainGallery = leadPhoto ? allPhotos.slice(1) : allPhotos;
+const leadFocus = photoFocusStyle(leadPhoto);
 ---
 <Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section}>
   <script type="application/ld+json" slot="head" set:html={JSON.stringify({
@@ -43,6 +49,8 @@ const galleryPhotos = laid ? plan.rest.map((i) => ({ src: allPhotos[i].src, alt:
   }).replace(/</g, '\\u003c')} />
   <div class="wrap">
     <article class="article" data-sec={d.section}>
+      <nav class="article-breadcrumb" aria-label="Breadcrumb"><a href="/">Home</a><span aria-hidden="true">/</span><a href={`/${d.section}/`}>{section.label}</a></nav>
+      <header class="article-heading">
       <div>
         <a class="kicker" href={`/${d.section}/`}>{section.label}</a>
         {sub && (<><span class="kicker"><span class="sep">/</span></span>{subHref ? <a class="kicker" href={subHref}>{sub}</a> : <span class="kicker">{sub}</span>}</>)}
@@ -54,12 +62,13 @@ const galleryPhotos = laid ? plan.rest.map((i) => ({ src: allPhotos[i].src, alt:
         {d.church && <span>{d.church}</span>}
         <time datetime={d.date.toISOString()}>{formatDate(d.date)}</time>
       </div>
+      </header>
 
       {laid && <StoryPhotos layout={layout} plan={plan} photos={allPhotos} credit={d.photoCredit} />}
 
-      {d.image && !laid && (
+      {leadPhoto && !laid && (
         <figure>
-          <img src={d.image} alt={d.imageAlt ?? ''} loading="eager" />
+          <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />
           {(d.imageAlt || d.photoCredit) && (
             <figcaption>{d.imageAlt}{d.photoCredit && ` Photo: ${d.photoCredit}`}</figcaption>
           )}
@@ -72,15 +81,17 @@ const galleryPhotos = laid ? plan.rest.map((i) => ({ src: allPhotos[i].src, alt:
 
       {galleryPhotos && galleryPhotos.length > 0 && (
         <section class="gallery" aria-label="More photos">
-          {galleryPhotos.map((p) => <a href={p.src}><img src={p.src} alt={p.alt} loading="lazy" decoding="async" /></a>)}
+          {galleryPhotos.map((p) => <a href={p.src}><img src={p.src} alt={p.alt} loading="lazy" decoding="async" style={photoFocusStyle(p)} /></a>)}
         </section>
       )}
 
-      {!laid && d.photos.length > 0 && (
+      {!laid && plainGallery.length > 0 && (
         <section class="gallery" aria-label="Photos">
-          {d.photos.map((p, i) => <a href={p}><img src={p} alt={d.photoAlts[i] || `Photo ${i + 2} from “${d.title}”`} loading="lazy" /></a>)}
+          {plainGallery.map((p) => <a href={p.src}><img src={p.src} alt={p.alt} loading="lazy" style={photoFocusStyle(p)} /></a>)}
         </section>
       )}
+
+      {d.photoCredit && inlinePhotos.size > 0 && !laid && !leadPhoto && <p class="photo-credit">Photo: {d.photoCredit}</p>}
 
       <div class="share">
         <span>Share:</span>

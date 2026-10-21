@@ -1,6 +1,7 @@
 ---
 import { getSection, areaLabel, formatDate } from '../lib/site';
 import { storyUrl, type PublicStory } from '../lib/stories';
+import { photoFocusStyle } from '../lib/story-blocks';
 
 interface Props {
   story: PublicStory;
@@ -12,21 +13,19 @@ const { story, variant = 'default', showDek = variant !== 'compact', showKicker 
 const d = story.data;
 const section = getSection(d.section);
 const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
+const Heading = variant === 'lead' ? 'h2' : 'h3';
 ---
-<a class:list={['card', variant]} href={storyUrl(story)} data-sec={d.section}>
-  {variant !== 'text' && (
+<a class:list={['card', variant, { 'with-photo': !!d.image, 'without-photo': !d.image }]} href={storyUrl(story)} data-sec={d.section}>
+  {variant !== 'text' && d.image && (
     <div class="media">
-      {d.image ? (
-        <img src={d.image} alt={d.imageAlt ?? ''} loading={variant === 'lead' ? 'eager' : 'lazy'} />
-      ) : (
-        <div class="placeholder" aria-hidden="true"><span>{section?.short}</span></div>
-      )}
+        <img src={d.image} alt={d.imageAlt ?? ''} loading={variant === 'lead' ? 'eager' : 'lazy'} style={photoFocusStyle(d.photoFocus?.[0])} />
     </div>
   )}
-  <div style="display:grid;gap:8px">
+  <div class="card-copy">
     {showKicker && <span class="kicker">{section?.label}{sub && <><span class="sep">/</span>{sub}</>}</span>}
-    <h3>{d.title}</h3>
+    <Heading>{d.title}</Heading>
     {showDek && d.dek && <p class="dek">{d.dek}</p>}
     <span class="meta">{d.author}{d.church ? ` · ${d.church}` : ''} · {formatDate(d.date)}</span>
+    {variant === 'lead' && <span class="card-read">Read the story <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h16m-6-6 6 6-6 6" /></svg></span>}
   </div>
 </a>
