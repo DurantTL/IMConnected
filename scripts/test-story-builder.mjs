@@ -68,6 +68,7 @@ try {
   const photo = addPhoto(id, 'Synthetic scene', 120);
   const oldVersion = m.getDraft(id).updatedAt;
   assert.equal(photo.focalX, 50);
+  assert.equal(photo.zoom, 1, 'old and newly uploaded photos default to 100%');
   const blocks = [
     { id: 'heading-1', type: 'heading', text: 'Synthetic heading', level: 2 },
     { id: 'text-1', type: 'text', text: 'A synthetic paragraph with meaningful searchable story text.' },
@@ -79,10 +80,12 @@ try {
   form.set('storyBlocks', JSON.stringify(blocks));
   form.set('body', m.storyBlocksToMarkdown(blocks)); // what the editor script sends: the modules' projection
   form.set(`photo_${photo.id}_focalX`, '17'); form.set(`photo_${photo.id}_focalY`, '83');
+  form.set(`photo_${photo.id}_zoom`, '1.8');
   const parsed = m.readDraftFields(form);
   const saved = m.saveDraft(id, oldVersion, parsed.fields, parsed.photoAlts, user, parsed.layout, parsed.photoFocus);
   assert.equal(saved.ok, true);
   assert.equal(m.listPhotos(id)[0].focalX, 17);
+  assert.equal(m.listPhotos(id)[0].zoom, 1.8);
   assert.match(m.getDraft(id).body, /Synthetic heading/);
   assert.doesNotMatch(m.getDraft(id).body, /Synthetic scene/, 'an image module adds no alt-text paragraph to the saved body');
   assert.equal(m.saveDraft(id, oldVersion, parsed.fields, parsed.photoAlts, user).reason, 'conflict');
@@ -90,10 +93,20 @@ try {
   const legacySave = m.saveDraft(id, saved.updatedAt, legacyFields, new Map(), user);
   assert.equal(legacySave.ok, true);
   assert.equal(m.getDraft(id).storyBlocks.length, 4, 'an older save preserves modules');
+  assert.equal(m.listPhotos(id)[0].zoom, 1.8, 'older clients omitting crop fields preserve saved zoom');
+  const partialForm = new FormData(); partialForm.set(`photo_${photo.id}_focalX`, '17');
+  assert.deepEqual(m.readDraftFields(partialForm).photoFocus.get(photo.id), { focalX: 17 }, 'partial legacy crop forms do not reset other crop values');
+  for (const value of ['', 'NaN', 'Infinity', '.99', '3.01', '2;display:none']) {
+    partialForm.set(`photo_${photo.id}_zoom`, value);
+    assert.throws(() => m.readDraftFields(partialForm), /zoom/i);
+  }
+  assert.throws(() => db.prepare('UPDATE draft_photos SET zoom = 4 WHERE id = ?').run(photo.id), /CHECK constraint/);
   const published = await m.publishDraft(m.getDraft(id), m.listPhotos(id), legacySave.updatedAt, user);
   const story = m.getStoryBySlug(published.slug);
   assert.equal(story.photoRows[0].focalX, 17);
   assert.equal(story.photoRows[0].focalY, 83);
+  assert.equal(story.photoRows[0].zoom, 1.8);
+  assert.equal(story.storyBlocks[2].zoom, 1.8);
   assert.match(story.storyBlocks[2].url, new RegExp(`^/media/stories/${published.slug}/[0-9a-f]{64}\\.png$`), 'the module points at the story\'s own stored photo');
   assert.equal(story.storyBlocks[2].photoId, undefined, 'public modules do not contain private photo ids');
   m.recordStudioPublish([{ slug: published.slug, title: 'Synthetic Studio replacement', dek: '', section: 'news', area: 'conference', author: 'Synthetic Editor', date: m.getDraft(id).date, photoCredit: '', photoLayout: 'one', body: 'Synthetic Studio replacement text.', photos: loadedPhotos(story) }]);
@@ -101,11 +114,14 @@ try {
   const sentinel = m.createDraft({ source: 'editor', userId: user });
   addPhoto(sentinel, '', 30);
   const loaded = m.loadStory(published.slug);
+  assert.equal(loaded.photos[0].zoom, 1.8, 'loading a live story keeps the saved zoom');
   m.reloadDraftFromStory(id, user, loaded.fields, loaded.photos);
   const reopened = m.getDraft(id), reopenedPhoto = m.listPhotos(id)[0];
   assert.notEqual(reopenedPhoto.id, photo.id);
   assert.equal(reopened.storyBlocks[2].photoId, reopenedPhoto.id, 'editing live content remaps image references');
   assert.equal(reopenedPhoto.focalY, 83);
+  assert.equal(reopenedPhoto.zoom, 1.8, 'reopening a story keeps the crop while remapping photo IDs');
+  assert.equal(reopened.storyBlocks[2].zoom, undefined, 'editable modules use the authoritative photo crop');
   const removed = m.changePhoto(id, reopened.updatedAt, user, 'delete', reopenedPhoto.id);
   assert.equal(removed.ok, true);
   assert.equal(m.getDraft(id).storyBlocks.some((b) => b.type === 'image'), false);

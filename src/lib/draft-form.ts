@@ -1,7 +1,7 @@
 // Reads the editor form (save and preview) into draft fields, refusing oversized values instead of cutting them.
 import { FIELD_MAX, type DraftFields } from './drafts';
 import { clean } from './storyfile';
-import { OWN_PHOTO_ERROR, checkStoryBlockLength, parseStoryBlocks, storyBlocksToMarkdown } from './story-blocks';
+import { OWN_PHOTO_ERROR, checkStoryBlockLength, parseStoryBlocks, storyBlocksToMarkdown, photoZoom, type PhotoCrop } from './story-blocks';
 import { DEFAULT_PHOTO_LAYOUT } from './photo-layouts';
 
 function text(form: FormData, name: string, max: number, label: string): string {
@@ -15,7 +15,7 @@ function text(form: FormData, name: string, max: number, label: string): string 
 const line = (form: FormData, name: string, max: number, label: string) => text(form, name, max, label).replace(/\s+/g, ' ').trim();
 
 /** Throws an Error with an editor-readable message. */
-export function readDraftFields(form: FormData): { fields: DraftFields; photoAlts: Map<number, string>; layout: string | null; photoFocus: Map<number, { focalX: number; focalY: number }> } {
+export function readDraftFields(form: FormData): { fields: DraftFields; photoAlts: Map<number, string>; layout: string | null; photoFocus: Map<number, PhotoCrop> } {
   const fields: DraftFields = {
     title: line(form, 'title', FIELD_MAX.title, 'The title'),
     dek: line(form, 'dek', FIELD_MAX.dek, 'The summary'),
@@ -47,16 +47,19 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
       fields.body = projection;
     }
   }
-  const photoFocus = new Map<number, { focalX: number; focalY: number }>();
+  const photoFocus = new Map<number, PhotoCrop>();
   for (const key of form.keys()) {
-    const match = /^photo_(\d{1,12})_focal[XY]$/.exec(key);
+    const match = /^photo_(\d{1,12})_(focal[XY]|zoom)$/.exec(key);
     if (!match) continue;
     const id = Number(match[1]);
-    const point = { focalX: 50, focalY: 50 };
-    for (const axis of ['X', 'Y'] as const) {
-      const raw = form.get(`photo_${id}_focal${axis}`);
-      if (typeof raw !== 'string' || !raw.trim() || !Number.isFinite(Number(raw)) || Number(raw) < 0 || Number(raw) > 100) throw new Error('Photo focus must be between 0 and 100.');
-      point[`focal${axis}`] = Number(raw);
+    const name = match[2] as keyof PhotoCrop;
+    const raw = form.get(key);
+    if (typeof raw !== 'string' || !raw.trim() || !Number.isFinite(Number(raw))) throw new Error(name === 'zoom' ? 'Photo zoom must be between 100% and 300%.' : 'Photo focus must be between 0 and 100.');
+    const point = photoFocus.get(id) ?? {};
+    if (name === 'zoom') point.zoom = photoZoom(Number(raw));
+    else {
+      if (Number(raw) < 0 || Number(raw) > 100) throw new Error('Photo focus must be between 0 and 100.');
+      point[name] = Number(raw);
     }
     photoFocus.set(id, point);
   }

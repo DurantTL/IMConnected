@@ -36,7 +36,7 @@ export interface PublicStory {
     /** How the photos are arranged on the page (src/lib/photo-layouts.ts). Missing means 'one', the original look. */
     photoLayout?: string;
     storyBlocks?: StoryBlock[];
-    photoFocus?: { focalX: number; focalY: number }[];
+    photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
     featured: boolean;
   };
 }

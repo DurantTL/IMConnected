@@ -68,7 +68,7 @@ const leadFocus = photoFocusStyle(leadPhoto);
 
       {leadPhoto && !laid && (
         <figure>
-          <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />
+          {(leadPhoto.zoom ?? 1) > 1 ? <a class="story-lead-crop" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge story photo'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={`${leadFocus}aspect-ratio:16/9;object-fit:cover;`} /></a> : <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />}
           {(d.imageAlt || d.photoCredit) && (
             <figcaption>{d.imageAlt}{d.photoCredit && ` Photo: ${d.photoCredit}`}</figcaption>
           )}

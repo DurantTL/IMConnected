@@ -239,25 +239,58 @@ try {
   await page.mouse.up();
   await focal.press('ArrowRight');
   await focal.press('Shift+ArrowUp');
-  const x = Number(await page.locator(`[name="photo_${photo.id}_focalX"]`).inputValue());
-  const y = Number(await page.locator(`[name="photo_${photo.id}_focalY"]`).inputValue());
+  let x = Number(await page.locator(`[name="photo_${photo.id}_focalX"]`).inputValue());
+  let y = Number(await page.locator(`[name="photo_${photo.id}_focalY"]`).inputValue());
   check('pointer dragging and arrow-key focal adjustments update bounded values', Math.abs(x - 31) <= 1 && Math.abs(y - 60) <= 1);
+  const zoom = page.getByRole('slider', { name: 'Photo 1 zoom', exact: true });
+  await zoom.fill('2');
+  await page.getByRole('button', { name: 'Zoom photo 1 in', exact: true }).click();
+  check('zoom slider and buttons update the crop and accessible percentage', await zoom.inputValue() === '2.1' && await zoom.getAttribute('aria-valuetext') === '210 percent' && await page.locator(`[data-focus-preview="${photo.id}"]`).evaluate((image) => image.style.scale) === '2.1');
+  await page.getByRole('button', { name: 'Reset crop', exact: true }).click();
+  check('Reset crop restores the complete default crop', await zoom.inputValue() === '1' && await page.locator(`[name="photo_${photo.id}_focalX"]`).inputValue() === '50' && await page.locator(`[name="photo_${photo.id}_focalY"]`).inputValue() === '50');
+  await zoom.fill('1.8');
+  const crop = page.locator(`[data-pan-photo="${photo.id}"]`);
+  await crop.scrollIntoViewIfNeeded();
+  await crop.locator('img').evaluate((image) => image.decode());
+  const cropBox = await crop.boundingBox();
+  await page.mouse.move(cropBox.x + cropBox.width / 2, cropBox.y + cropBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(cropBox.x + cropBox.width / 2 + 20, cropBox.y + cropBox.height / 2 + 12, { steps: 3 });
+  await page.mouse.up();
+  x = Number(await page.locator(`[name="photo_${photo.id}_focalX"]`).inputValue());
+  y = Number(await page.locator(`[name="photo_${photo.id}_focalY"]`).inputValue());
+  check('dragging the crop moves the zoomed image in the pointer direction', x < 50 && x > 0 && y < 50 && y > 0);
+  await crop.press('Shift+ArrowLeft');
+  check('crop keyboard panning moves by ten percent with Shift', Math.abs(Number(await page.locator(`[name="photo_${photo.id}_focalX"]`).inputValue()) - x - 10) < .01);
+  x = Number(await page.locator(`[name="photo_${photo.id}_focalX"]`).inputValue());
+  y = Number(await page.locator(`[name="photo_${photo.id}_focalY"]`).inputValue());
+  check('crop preview fills its clipping frame without stretching', await crop.evaluate((frame) => {
+    const image = frame.querySelector('img'); const style = getComputedStyle(image);
+    return getComputedStyle(frame).overflow === 'hidden' && style.objectFit === 'cover' && Math.abs(image.clientHeight - frame.clientHeight) <= 1 && Math.abs(image.clientWidth - frame.clientWidth) <= 1;
+  }));
   const saveResponse = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
   await page.locator('#save-btn').click();
   const saved = await saveResponse;
   check('modular story and focus save successfully', saved.status() === 200 && (await saved.json()).ok);
   await page.reload();
+  if (shots) {
+    await page.locator('[data-studio-tab=photos]').click();
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({ path: path.join(shots, 'story-photo-zoom-pan.png'), fullPage: true });
+  }
   await page.locator('[data-studio-tab=content]').click();
   await page.locator('#module-workspace').waitFor({ state: 'visible' });
   check('module order and content survive reload', JSON.stringify(await blocks()) === JSON.stringify(expected));
   const storedPhoto = db.prepare('SELECT * FROM draft_photos WHERE id=?').get(photo.id);
   check('focal settings survive reload in SQLite', storedPhoto.focal_x === x && storedPhoto.focal_y === y);
+  check('zoom survives reload in SQLite and the editor form', storedPhoto.zoom === 1.8 && await page.locator(`[name="photo_${photo.id}_zoom"]`).inputValue() === '1.8');
   await page.waitForFunction(() => {
     const frame = document.getElementById('preview');
     const image = frame?.contentDocument?.querySelector('.story-module-image img');
     return image?.complete && image.naturalWidth > 0;
   });
   check('private preview loads the authenticated uploaded image', true);
+  check('private preview matches the saved zoom and clips the image', await page.frameLocator('#preview').locator('.story-module-image img').evaluate((image) => image.style.scale === '1.8' && getComputedStyle(image.parentElement).overflow === 'hidden'));
   check('preview keeps scripts disabled in its sandbox', !(await page.locator('#preview').getAttribute('sandbox') || '').split(/\s+/).includes('allow-scripts'));
   const canvasHeading = page.frameLocator('#preview').locator(`[data-module-id="${expected.find((block) => block.type === 'heading').id}"]`);
   await canvasHeading.press('Enter');
@@ -311,6 +344,13 @@ try {
     await page.screenshot({ path: path.join(shots, 'story-builder-desktop.png') });
   }
   await page.setViewportSize({ width: 390, height: 900 });
+  await page.locator('[data-studio-tab=photos]').click();
+  check('phone crop controls reflow without horizontal overflow and retain touch targets', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && [...document.querySelectorAll('.sb-zoom-controls button')].every((button) => button.getBoundingClientRect().height >= 44)));
+  if (shots) {
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({ path: path.join(shots, 'story-photo-zoom-pan-mobile.png'), fullPage: true });
+  }
+  await page.locator('[data-studio-tab=content]').click();
   await page.waitForTimeout(100);
   check('editor reflows without horizontal overflow at 390px', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
   check('phone Build view keeps its inspector visible and its preview hidden and inert', await page.getByRole('button', { name: 'Build', exact: true }).isVisible() && await page.locator('#module-inspector').isVisible() && await page.locator('.ed-preview').evaluate((pane) => pane.hidden && pane.inert));
@@ -354,9 +394,10 @@ try {
   forgedPreview.set('title', 'This unsaved title must be ignored');
   forgedPreview.set('storyBlocks', 'invalid-json');
   forgedPreview.set(`photo_${photo.id}_focalX`, '0');
+  forgedPreview.set(`photo_${photo.id}_zoom`, '3');
   const closedPreview = await post(`/api/admin/drafts/${id}/preview`, forgedPreview);
   const closedDoc = await closedPreview.json();
-  check('readonly preview ignores posted replacement content and uses stored photo focus', closedPreview.status === 200 && closedDoc.ok && closedDoc.doc.includes(row.title) && !closedDoc.doc.includes('This unsaved title must be ignored') && closedDoc.doc.includes(`object-position:${x}% ${y}%`));
+  check('readonly preview ignores posted replacement content and uses stored photo crop', closedPreview.status === 200 && closedDoc.ok && closedDoc.doc.includes(row.title) && !closedDoc.doc.includes('This unsaved title must be ignored') && closedDoc.doc.includes(`object-position:${x}% ${y}%`) && closedDoc.doc.includes('scale:1.8;'));
 
 
   const publicPage = await context.newPage();
@@ -367,7 +408,16 @@ try {
   check('an all-inline story keeps its global photo credit exactly once', (await publicPage.locator('article').innerText()).split('Synthetic Photographer').length - 1 === 1);
   const focus = await publicPage.locator('.story-module-image img').evaluate((image) => image.style.objectPosition);
   check('published image uses the persisted focal point', focus === `${x}% ${y}%`);
+  check('published image keeps its zoom inside a clipping link to the original', await publicPage.locator('.story-module-image img').evaluate((image) => image.style.scale === '1.8' && image.parentElement.href === image.src && getComputedStyle(image.parentElement).overflow === 'hidden'));
+  const original = await fetch(BASE + await publicPage.locator('.story-module-image img').getAttribute('src'));
+  check('crop adjustments leave the original uploaded bytes intact', original.ok && Buffer.from(await original.arrayBuffer()).equals(png));
+  const feed = await (await fetch(BASE + '/stories.json')).json();
+  const feedStory = feed.stories.find((story) => story.id === row.slug);
+  check('public feed adds crop metadata without changing its version', feed.version === 1 && feedStory?.photoFocus?.[0]?.zoom === 1.8 && feedStory.photoFocus[0].focalX === x);
   check('published action link remains functional content', await publicPage.locator('article a[href="https://example.invalid/synthetic-details"]').count() === 1);
+  await publicPage.goto(BASE + '/');
+  const storyCard = publicPage.locator(`.card[href="/stories/${row.slug}/"]`).filter({ has: publicPage.locator('img') }).first();
+  check('public story cards preserve crop metadata in their own clipping frame', await storyCard.locator('img').evaluate((image) => image.style.scale === '1.8' && getComputedStyle(image.closest('.media')).overflow === 'hidden'));
   // Publish a separate synthetic legacy story to protect the existing lead/layout credit paths.
   const createLegacy = async () => {
     const response = await post('/api/admin/drafts/new', new FormData());
@@ -394,11 +444,24 @@ try {
   await saveLegacy('one'); await publishLegacy();
   check('a legacy story with zero photos does not gain a dangling credit', !(await publicPage.locator('article').innerText()).includes(credit));
   legacyId = await createLegacy();
-  await saveLegacy('one'); await uploadLegacy(); await publishLegacy();
+  await saveLegacy('one'); await uploadLegacy();
+  const legacyPhoto = db.prepare('SELECT id FROM draft_photos WHERE draft_id=?').get(legacyId);
+  const cropForm = new FormData();
+  for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: legacyDraft().title, author: 'Synthetic Editor', section: 'news', area: 'conference', date: legacyDraft().date, body: legacy, photoCredit: credit, [`photo_${legacyPhoto.id}_zoom`]: 2 })) cropForm.set(key, String(value));
+  assert.equal((await post(`/api/admin/drafts/${legacyId}/save`, cropForm)).status, 200);
+  await publishLegacy();
   check('legacy lead photo credit appears once and remains escaped text', (await publicPage.locator('article').innerText()).split(credit).length - 1 === 1 && await publicPage.locator('article em').count() === 0);
+  check('zoomed legacy lead photos clip and retain their original enlargement link', await publicPage.locator('.story-lead-crop img').evaluate((image) => image.style.scale === '2' && image.parentElement.href === image.src && getComputedStyle(image.parentElement).overflow === 'hidden'));
   legacyId = await createLegacy();
-  await saveLegacy('twoUp'); await uploadLegacy(); await uploadLegacy(); await publishLegacy();
+  await saveLegacy('twoUp'); await uploadLegacy(); await uploadLegacy();
+  const pairPhotos = db.prepare('SELECT id FROM draft_photos WHERE draft_id=? ORDER BY position').all(legacyId);
+  const pairForm = new FormData();
+  for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: legacyDraft().title, author: 'Synthetic Editor', section: 'news', area: 'conference', date: legacyDraft().date, body: legacy, photoCredit: credit, photoLayout: 'twoUp' })) pairForm.set(key, String(value));
+  for (const photo of pairPhotos) { pairForm.set(`photo_${photo.id}_zoom`, '2.2'); pairForm.set(`photo_${photo.id}_focalX`, '0'); pairForm.set(`photo_${photo.id}_focalY`, '100'); }
+  assert.equal((await post(`/api/admin/drafts/${legacyId}/save`, pairForm)).status, 200);
+  await publishLegacy();
   check('noninline photo layout keeps the existing credit exactly once', await publicPage.locator('[data-photo-layout="twoUp"]').count() === 1 && (await publicPage.locator('article').innerText()).split(credit).length - 1 === 1);
+  check('paired photos clip zoom at edge focal points without losing their links', await publicPage.locator('[data-photo-layout="twoUp"] img').evaluateAll((images) => images.length === 2 && images.every((image) => image.style.scale === '2.2' && image.style.objectPosition === '0% 100%' && getComputedStyle(image.parentElement).overflow === 'hidden' && image.parentElement.href === image.src)));
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {

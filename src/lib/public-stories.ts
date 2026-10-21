@@ -45,7 +45,7 @@ export function toPublicStory(s: Story): PublicStory {
         const index = sources.indexOf(block.url);
         return index < 0 ? block : { ...block, url: photoUrl(s, index, block.url) };
       }),
-      photoFocus: s.photoRows.map((p) => ({ focalX: p.focalX ?? 50, focalY: p.focalY ?? 50 })),
+      photoFocus: s.photoRows.map((p) => ({ focalX: p.focalX ?? 50, focalY: p.focalY ?? 50, zoom: p.zoom ?? 1 })),
       featured: s.featured,
     },
   };

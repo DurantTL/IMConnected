@@ -25,6 +25,7 @@ export interface StoryPhoto {
   bytes: number | null;
   focalX?: number;
   focalY?: number;
+  zoom?: number;
 }
 
 /** The content schema's fields (src/content.config.ts) plus what the database adds. Optional fields are undefined when absent. */
@@ -108,7 +109,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
 }
 
 function photosOf(storyId: number): StoryPhoto[] {
-  const rows = getDb().prepare('SELECT position, kind, path, url, alt, sha256, bytes, focal_x, focal_y FROM story_photos WHERE story_id = ? ORDER BY position').all(storyId) as Row[];
+  const rows = getDb().prepare('SELECT position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom FROM story_photos WHERE story_id = ? ORDER BY position').all(storyId) as Row[];
   return rows.map((p) => ({
     position: Number(p.position),
     kind: p.kind as 'lead' | 'gallery',
@@ -119,6 +120,7 @@ function photosOf(storyId: number): StoryPhoto[] {
     bytes: optNum(p.bytes) ?? null,
     focalX: Number(p.focal_x ?? 50),
     focalY: Number(p.focal_y ?? 50),
+    zoom: Number(p.zoom ?? 1),
   }));
 }
 
@@ -224,8 +226,8 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, editedAt, s.slug);
     id = Number(r.lastInsertRowid);
   }
-  const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-  for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes, p.focalX ?? 50, p.focalY ?? 50);
+  const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes, p.focalX ?? 50, p.focalY ?? 50, p.zoom ?? 1);
   indexStory(db, id, s, now); // search index row (migration 013), in the same transaction: findable as soon as it is saved
   return { outcome: cur ? 'updated' : 'inserted', id };
 }
