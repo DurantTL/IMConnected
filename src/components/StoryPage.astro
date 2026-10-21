@@ -91,6 +91,8 @@ const leadFocus = photoFocusStyle(leadPhoto);
         </section>
       )}
 
+      {d.photoCredit && inlinePhotos.size > 0 && !laid && !leadPhoto && <p class="photo-credit">Photo: {d.photoCredit}</p>}
+
       <div class="share">
         <span>Share:</span>
         <a href={`https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`} target="_blank" rel="noopener">Facebook</a>

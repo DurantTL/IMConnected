@@ -69,6 +69,11 @@ try {
   });
   const unresolved = await renderStoryBlocksSafe([{ id: 'unresolved', type: 'image', photoId: 17 }]);
   check('an unresolved draft image is not leaked in public output', () => assert.equal(unresolved, ''));
+  const emptyAlt = await renderStoryBlocksSafe([{ id: 'empty-alt', type: 'image', url: '/media/stories/sample/abc.jpg', alt: '' }]);
+  check('an image without alt text keeps a named enlargement link without inventing a description', () => {
+    assert.match(emptyAlt, /<a [^>]*aria-label="Enlarge story photo"/);
+    assert.match(emptyAlt, /alt=""/);
+  });
   console.log(`\n${count} story module checks passed.`);
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });

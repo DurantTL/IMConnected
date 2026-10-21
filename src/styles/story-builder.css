@@ -63,6 +63,9 @@
 .studio-identity .ed-status { font-size:.7rem; color:var(--ink-2); }
 .studio-primary-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; flex-shrink:0; }
 .studio-primary-actions .cms-btn { font-size:.8rem; }
+.studio-mobile-actions { display:none; }
+.sb-start-writing { padding:14px; margin-bottom:16px; border:1px solid var(--line); border-radius:10px; background:var(--bg); }
+.sb-start-writing p { font-size:.85rem; line-height:1.5; margin:0 0 10px; }
 .studio-review-action { background:#172f37; border-color:#172f37; color:white; }
 .studio-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-top:1px solid var(--line); padding:0 12px; gap:6px; }
 .studio-tabs button { border:0; border-bottom:3px solid transparent; background:transparent; color:var(--ink-2); text-align:left; min-height:66px; padding:12px 16px; font:700 .85rem var(--sans); cursor:pointer; }
@@ -143,6 +146,14 @@
  .editor-studio .sb-photo-preview img { max-width:560px; height:auto; aspect-ratio:16/9; }
 }
 @media(max-width:650px) {
+ .studio-head { position:static; }
+ .studio-primary-actions { display:none; }
+ .editor-studio { padding-bottom:calc(96px + env(safe-area-inset-bottom,0px)); }
+ html:has(.editor-studio) { scroll-padding-bottom:calc(110px + env(safe-area-inset-bottom,0px)); }
+ .editor-studio :is(button,input,textarea,select,[tabindex]) { scroll-margin-bottom:calc(110px + env(safe-area-inset-bottom,0px)); }
+ .studio-mobile-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 8px; position:fixed; z-index:30; bottom:0; left:0; right:0; padding:8px max(12px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px)); background:var(--surface); border-top:1px solid var(--line); box-shadow:0 -4px 20px #173e4410; }
+ .studio-mobile-actions .cms-btn { min-height:44px; font-size:.75rem; }
+ .studio-mobile-actions [data-mobile-save-status] { grid-column:1/-1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink-2); font-size:.65rem; line-height:1.4; }
  .studio-titlebar { align-items:flex-start; flex-direction:column; gap:10px; }
  .studio-primary-actions { width:100%; }
  .studio-primary-actions .cms-btn { flex:1; font-size:.7rem; min-height:44px; }

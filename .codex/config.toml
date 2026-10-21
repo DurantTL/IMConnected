@@ -1,0 +1,21 @@
+# Project-local Codex roles. See CODEX.md for model availability and trust requirements.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 4
+max_depth = 1
+
+[agents.explorer]
+description = "Luna: read-only repository research, flow tracing and visual QA."
+config_file = "agents/explorer.toml"
+
+[agents.implementer]
+description = "Tera intended; currently inherits session model. Bounded implementation with owned files. Disclose actual model."
+config_file = "agents/implementer.toml"
+
+[agents.reviewer]
+description = "Sol: independent read-only correctness, security and accessibility review."
+config_file = "agents/reviewer.toml"
+
+[agents.strategist]
+description = "Fable intended; currently inherits session model. Read-only difficult investigation. Disclose actual model."
+config_file = "agents/strategist.toml"

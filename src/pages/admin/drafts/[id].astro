@@ -61,6 +61,11 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
           {editable && <button type="button" role="tab" id="studio-tab-review" aria-controls="studio-panel-review" aria-selected="false" tabindex="-1" data-studio-tab="review">Review &amp; publish <span>Check before going live</span></button>}
         </nav>
       </header>
+      <div class="studio-mobile-actions" role="group" aria-label="Story actions">
+        <button type="submit" form="draft-form" class="cms-btn" id="mobile-save-btn" aria-describedby="save-status" disabled={!editable}>Save changes</button>
+        {editable && <button type="button" class="cms-btn studio-review-action" data-open-panel="review">Review &amp; publish</button>}
+        <span data-mobile-save-status aria-hidden="true"></span>
+      </div>
 
       {published && (
         <p class="admin-ok" role="status">

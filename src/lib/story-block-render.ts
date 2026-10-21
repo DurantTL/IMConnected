@@ -27,7 +27,9 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
         // Only the trusted callback can return a protected editor photo endpoint.
         if (!isStoryImageUrl(url) && !(photo && /^\/api\/admin\/photos\/\d+$/.test(url))) break;
         const x = focalPoint(photo?.focalX ?? b.focalX), y = focalPoint(photo?.focalY ?? b.focalY);
-        out.push(`<figure class="story-module story-module-image"${attr}><a href="${escapeHtml(url)}" data-photo><img src="${escapeHtml(url)}" alt="${escapeHtml(b.alt || photo?.alt || '')}" loading="lazy" decoding="async" style="width:100%;aspect-ratio:16/9;object-fit:cover;object-position:${x}% ${y}%;"></a></figure>`);
+        const alt = b.alt || photo?.alt || '';
+        const linkLabel = alt.trim() ? '' : ' aria-label="Enlarge story photo"';
+        out.push(`<figure class="story-module story-module-image"${attr}><a href="${escapeHtml(url)}" data-photo${linkLabel}><img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" loading="lazy" decoding="async" style="width:100%;aspect-ratio:16/9;object-fit:cover;object-position:${x}% ${y}%;"></a></figure>`);
         break;
       }
     }

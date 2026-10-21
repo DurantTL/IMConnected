@@ -34,7 +34,13 @@ if (form && blocksField) {
   const clone = (value: StoryBlock[]) => JSON.parse(JSON.stringify(value)) as StoryBlock[];
   const announce = (message: string) => { status.textContent = message; };
   const changed = () => form.dispatchEvent(new Event('input', { bubbles: true }));
-  const snapshot = () => JSON.stringify({ blocks, modular, body: body.value });
+  const snapshot = () => JSON.stringify({ blocks, modular, body: body.value, selected });
+  function focusSelected() {
+    const target = modular
+      ? outline.querySelector<HTMLButtonElement>(`[data-select-module="${CSS.escape(selected)}"]`) || document.querySelector<HTMLButtonElement>('[data-add-module="text"]')
+      : useModules;
+    target?.focus();
+  }
   function remember(key = '') {
     const now = Date.now();
     if (!key || key !== editKey || now - editAt > 800) {
@@ -63,6 +69,8 @@ if (form && blocksField) {
     if (count) count.textContent = String(blocks.length);
     const summary = document.querySelector('[data-review-content]');
     if (summary) summary.textContent = modular ? `${blocks.length} modules` : 'Markdown story';
+    const start = document.getElementById('module-start-writing');
+    if (start) start.hidden = !(blocks.length === 1 && blocks[0].type === 'text' && !blocks[0].text);
     for (const button of document.querySelectorAll<HTMLButtonElement>('[data-add-module="image"]')) {
       button.disabled = !editable || !photos.some((p) => p.src);
       button.title = photos.some((p) => p.src) ? 'Place a story photo in the text' : 'Upload a photo in Photos first';
@@ -87,8 +95,9 @@ if (form && blocksField) {
     if (!editable || from < 0 || to < 0 || to >= blocks.length || from === to) return;
     remember();
     blocks.splice(to, 0, blocks.splice(from, 1)[0]);
+    selected = id;
     render(); changed(); announce(`Module moved to position ${to + 1}.`);
-    outline.querySelector<HTMLButtonElement>(`[data-select-module="${id}"]`)?.focus();
+    focusSelected();
   }
   function renderOutline() {
     outline.replaceChildren();
@@ -96,7 +105,7 @@ if (form && blocksField) {
       const item = node('li');
       item.draggable = editable;
       item.dataset.moduleId = block.id;
-      const select = button(`${index + 1}. ${labels[block.type]}`, () => { selected = block.id; render(); }, `Edit ${labels[block.type]} module ${index + 1}`);
+      const select = button(`${index + 1}. ${labels[block.type]}`, () => { selected = block.id; render(); focusSelected(); }, `Edit ${labels[block.type]} module ${index + 1}`);
       select.dataset.selectModule = block.id;
       const grip = node('span', '⠿', 'sb-grip'); grip.setAttribute('aria-hidden', 'true'); select.prepend(grip);
       select.setAttribute('aria-pressed', String(selected === block.id));
@@ -134,6 +143,7 @@ if (form && blocksField) {
     const input = multiline ? node('textarea') : node('input');
     if (input instanceof HTMLInputElement) input.type = key === 'url' ? 'url' : 'text';
     input.value = value;
+    if (key === 'text' && block.type === 'text') input.placeholder = 'Start writing your story here…';
     input.dataset.moduleField = key;
     input.maxLength = key === 'alt' || block.type === 'heading' ? 300 : key === 'label' ? 120 : multiline ? 20000 : 2048;
     if (input instanceof HTMLTextAreaElement) input.rows = key === 'items' ? 6 : 9;
@@ -165,6 +175,14 @@ if (form && blocksField) {
     const block = blocks.find((b) => b.id === selected);
     if (!block) { title.textContent = 'Module settings'; fields.append(node('p', 'Choose a module, or add one to start your story.', 'admin-note')); return; }
     title.textContent = `${labels[block.type]} settings`;
+    if (block.type === 'text') {
+      const start = node('div', undefined, 'sb-start-writing');
+      start.id = 'module-start-writing';
+      start.hidden = !(blocks.length === 1 && !block.text);
+      start.append(node('p', 'Start writing your story. Your first paragraph is ready.'));
+      start.append(button('Start writing', () => fields.querySelector<HTMLTextAreaElement>('textarea')?.focus()));
+      fields.append(start);
+    }
     if (['text', 'heading', 'quote'].includes(block.type)) field(block, block.type === 'heading' ? 'Heading text' : block.type === 'quote' ? 'Quote text' : 'Paragraph text (Markdown supported)', 'text', block.text || '', block.type !== 'heading');
     if (block.type === 'heading') {
       const label = node('label', 'Heading level');
@@ -183,7 +201,11 @@ if (form && blocksField) {
       const select = node('select'); select.dataset.moduleField = 'photoId';
       const placeholder = node('option', 'Choose a photo'); placeholder.value = ''; select.append(placeholder);
       for (const [i, photo] of photos.entries()) { if (!photo.src) continue; const option = node('option', `${i + 1}. ${photo.alt || 'Story photo'}`); option.value = String(photo.id); option.selected = photo.id === block.photoId; select.append(option); }
-      select.addEventListener('change', () => { update(block, 'photoId', select.value ? Number(select.value) : undefined); renderFields(); });
+      select.addEventListener('change', () => {
+        update(block, 'photoId', select.value ? Number(select.value) : undefined);
+        renderFields();
+        fields.querySelector<HTMLSelectElement>('[data-module-field="photoId"]')?.focus();
+      });
       label.append(select); fields.append(label);
       const photo = photos.find((p) => p.id === block.photoId);
       if (photo?.src) { const img = node('img'); img.src = photo.src; img.alt = block.alt || photo.alt; img.className = 'sb-module-image'; fields.append(img); }
@@ -195,10 +217,10 @@ if (form && blocksField) {
     const actions = node('div', undefined, 'sb-controls');
     actions.append(button('Duplicate module', () => {
       if (blocks.length >= 60) { announce('A story can have up to 60 modules.'); return; }
-      remember(); const copy = clone([block])[0]; copy.id = uid(); blocks.splice(blocks.indexOf(block) + 1, 0, copy); selected = copy.id; render(); changed(); announce('Module duplicated.');
+      remember(); const copy = clone([block])[0]; copy.id = uid(); blocks.splice(blocks.indexOf(block) + 1, 0, copy); selected = copy.id; render(); focusSelected(); changed(); announce('Module duplicated.');
     }), button('Delete module', () => {
       if (!window.confirm(`Delete this ${labels[block.type].toLowerCase()} module? You can undo this change.`)) return;
-      remember(); const at = blocks.indexOf(block); blocks.splice(at, 1); selected = blocks[Math.min(at, blocks.length - 1)]?.id || ''; render(); changed(); announce('Module deleted. Use Undo module change to restore it.');
+      remember(); const at = blocks.indexOf(block); blocks.splice(at, 1); selected = blocks[Math.min(at, blocks.length - 1)]?.id || ''; render(); focusSelected(); changed(); announce('Module deleted. Use Undo module change to restore it.');
     }));
     fields.append(actions);
   }
@@ -237,8 +259,8 @@ if (form && blocksField) {
     fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
   });
   function restore(raw: string) {
-    const state = JSON.parse(raw); blocks = state.blocks; modular = state.modular; body.value = state.body; selected = blocks.find((b) => b.id === selected)?.id || blocks[0]?.id || '';
-    editKey = ''; render(); changed();
+    const state = JSON.parse(raw); blocks = state.blocks; modular = state.modular; body.value = state.body; selected = state.selected || blocks[0]?.id || '';
+    editKey = ''; render(); focusSelected(); changed();
   }
   undo.addEventListener('click', () => { if (!editable || !history.length) return; future.push(snapshot()); restore(history.pop()!); announce('Module change undone.'); });
   redo.addEventListener('click', () => { if (!editable || !future.length) return; history.push(snapshot()); restore(future.pop()!); announce('Module change restored.'); });
@@ -329,6 +351,13 @@ if (form && blocksField) {
     });
   }
   for (const control of document.querySelectorAll<HTMLElement>('[data-open-panel]')) control.addEventListener('click', () => setPanel(control.dataset.openPanel!, true));
+  const saveStatus = document.getElementById('save-status');
+  const mobileSaveStatus = document.querySelector('[data-mobile-save-status]');
+  if (saveStatus && mobileSaveStatus) {
+    const reflectStatus = () => { mobileSaveStatus.textContent = saveStatus.textContent; };
+    reflectStatus();
+    new MutationObserver(reflectStatus).observe(saveStatus, { childList: true, subtree: true, characterData: true });
+  }
   for (const control of document.querySelectorAll('[data-studio-preview]')) control.addEventListener('click', () => {
     setPanel('content');
     document.getElementById('split')!.dataset.view = 'preview';

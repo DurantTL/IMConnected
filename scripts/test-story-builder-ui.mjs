@@ -59,7 +59,7 @@ try {
   const draft = () => db.prepare('SELECT * FROM drafts WHERE id=?').get(id);
   const legacy = 'This is synthetic Markdown preserved when the story moves into modules. **Existing formatting** remains editable and searchable.';
   const initial = new FormData();
-  for (const [name, value] of Object.entries({ version: draft().updated_at, title: 'Synthetic modular editor integration', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: legacy, photoLayout: 'one' })) initial.set(name, String(value));
+  for (const [name, value] of Object.entries({ version: draft().updated_at, title: 'Synthetic modular editor integration', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: legacy, photoLayout: 'one', photoCredit: 'Synthetic Photographer' })) initial.set(name, String(value));
   const initialResponse = await post(`/api/admin/drafts/${id}/save`, initial);
   check('legacy Markdown is saved through the real draft endpoint', initialResponse.status === 200 && (await initialResponse.json()).ok);
   // A synthetic landscape fixture makes the focal-point interaction visible without real people or photos.
@@ -95,20 +95,57 @@ try {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error)));
   page.on('dialog', (dialog) => dialog.accept());
+  const emptyCreated = await post('/api/admin/drafts/new', new FormData());
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(BASE + emptyCreated.headers.get('location'));
+  await page.locator('#module-workspace').waitFor({ state: 'visible' });
+  check('new empty stories show a writing prompt and paragraph placeholder', await page.locator('#module-start-writing').isVisible() && await page.locator('[data-module-field="text"]').getAttribute('placeholder') === 'Start writing your story here…');
+  check('opening an empty phone story does not focus a text field or summon the keyboard', await page.evaluate(() => !document.activeElement.matches('input,textarea,[contenteditable=true]')));
+  if (shots) {
+    await page.locator('#module-start-writing').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(shots, 'story-empty-mobile.png') });
+  }
+  await page.getByRole('button', { name: 'Start writing', exact: true }).click();
+  check('Start writing explicitly focuses the paragraph field', await page.locator('[data-module-field="text"]').evaluate((field) => field === document.activeElement));
+  await page.getByRole('button', { name: 'Delete module', exact: true }).click();
+  check('deleting the last module focuses the visible Add paragraph action', await page.locator('[data-add-module="text"]').evaluate((button) => button === document.activeElement));
+  await page.locator('#blocks-undo').click();
+  check('undoing the final deletion restores focus to the restored module', await page.locator('[data-select-module]').evaluate((button) => button === document.activeElement));
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(BASE + draftPath);
-  await page.locator('#use-modules').click();
   const blocks = () => page.locator('#story-blocks').inputValue().then(JSON.parse);
+  const selectedHasFocus = () => page.evaluate(() => document.activeElement.matches('[data-select-module][aria-pressed="true"]'));
+  check('existing Markdown stays in Markdown mode until the editor chooses modules', (await blocks()).length === 0 && await page.locator('#markdown-workspace').isVisible() && await page.locator('#f-body').inputValue() === legacy);
+  await page.locator('#use-modules').click();
   check('enabling modules preserves the complete legacy Markdown', (await blocks())[0].text === legacy);
   await page.locator('[data-add-module="heading"]').click();
   await page.locator('[data-module-field="text"]').fill('A synthetic heading');
+  await page.getByRole('button', { name: 'Edit Paragraph module 1', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  check('Enter selects a module and restores actual focus after rendering', await selectedHasFocus());
+  await page.keyboard.press('Tab');
+  check('Tab continues from the selected module to its next available action', await page.getByRole('button', { name: 'Move module 1 down', exact: true }).evaluate((button) => button === document.activeElement));
+  await page.keyboard.press('Shift+Tab');
+  check('Shift+Tab returns to the selected module', await selectedHasFocus());
+  await page.getByRole('button', { name: 'Edit Heading module 2', exact: true }).focus();
+  await page.keyboard.press('Space');
+  check('Space selects the heading and keeps actual focus on it', await selectedHasFocus() && await page.locator('#module-title').textContent() === 'Heading settings');
+  await page.getByRole('button', { name: 'Edit Paragraph module 1', exact: true }).click();
+  check('pointer selection keeps focus on the selected outline button', await selectedHasFocus());
   await page.getByRole('button', { name: 'Move module 2 up', exact: true }).click();
   check('accessible Move controls reorder actual module state', (await blocks())[0].type === 'heading');
   await page.getByRole('button', { name: 'Duplicate module', exact: true }).click();
   check('duplicate creates a distinct stable module ID', (await blocks()).length === 3 && new Set((await blocks()).map((b) => b.id)).size === 3);
+  check('duplicate focuses the new module outline button', await selectedHasFocus());
   await page.locator('#blocks-undo').click();
   check('Undo restores the module list', (await blocks()).length === 2);
+  check('Undo restores focus to the previous selection', await selectedHasFocus());
   await page.locator('#blocks-redo').click();
   check('Redo restores the duplicated module', (await blocks()).length === 3);
+  check('Redo focuses the restored duplicate', await selectedHasFocus());
+  await page.getByRole('button', { name: 'Delete module', exact: true }).click();
+  check('deleting a module focuses its remaining neighbour', (await blocks()).length === 2 && await selectedHasFocus());
+  await page.locator('#blocks-undo').click();
   await page.locator('#blocks-undo').click();
   await page.locator('[data-add-module="list"]').click();
   await page.locator('[data-module-field="items"]').fill('First synthetic item\nSecond synthetic item');
@@ -116,6 +153,9 @@ try {
   await page.locator('[data-module-field="label"]').fill('Synthetic details');
   await page.locator('[data-module-field="url"]').fill('https://example.invalid/synthetic-details');
   await page.locator('[data-add-module="image"]').click();
+  await page.locator('[data-module-field="photoId"]').selectOption('');
+  await page.locator('[data-module-field="photoId"]').selectOption(String(photo.id));
+  check('changing the image preserves focus on the recreated photo selector', await page.locator('[data-module-field="photoId"]').evaluate((select) => select === document.activeElement));
   await page.locator('[data-module-field="alt"]').fill('Synthetic image used only in this test');
   await page.locator('[data-add-module="quote"]').click();
   await page.locator('[data-module-field="text"]').fill('A synthetic quoted statement.');
@@ -180,7 +220,24 @@ try {
   await page.setViewportSize({ width: 390, height: 900 });
   await page.waitForTimeout(100);
   check('editor reflows without horizontal overflow at 390px', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
-  if (shots) await page.screenshot({ path: path.join(shots, 'story-builder-mobile.png') });
+  check('phone header scrolls normally and desktop actions leave the focus order', await page.locator('.studio-head').evaluate((head) => getComputedStyle(head).position === 'static') && !(await page.locator('#save-btn').isVisible()) && await page.locator('#mobile-save-btn').isVisible());
+  await page.locator('#module-fields').scrollIntoViewIfNeeded();
+  const phoneSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
+  await page.locator('#mobile-save-btn').click();
+  check('phone action bar saves through the existing authenticated form', (await phoneSave).status() === 200);
+  const bar = await page.locator('.studio-mobile-actions').boundingBox();
+  check('phone actions stay compact and visible at the viewport edge', bar && bar.height < 100 && Math.abs(bar.y + bar.height - 900) < 2);
+  await page.locator('.studio-mobile-actions [data-open-panel="review"]').click();
+  check('phone Review action opens the publishing review panel', await page.locator('#studio-panel-review').isVisible());
+  await page.locator('[data-studio-tab=content]').click();
+  await page.locator('[data-select-module]').last().click();
+  await page.locator('#module-fields').scrollIntoViewIfNeeded();
+  await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+  check('bottom content remains scrollable above the phone action bar', await page.locator('#module-fields').evaluate((fields) => fields.getBoundingClientRect().bottom <= document.querySelector('.studio-mobile-actions').getBoundingClientRect().top));
+  if (shots) {
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({ path: path.join(shots, 'story-builder-mobile.png') });
+  }
   await page.locator('[data-studio-tab=content]').focus();
   await page.keyboard.press('ArrowRight');
   check('workspace tabs support keyboard selection and hide inactive controls', await page.locator('#studio-panel-settings').isVisible() && await page.locator('#story-builder').evaluate((panel) => panel.hidden && panel.inert));
@@ -195,9 +252,41 @@ try {
   const renderedIds = await publicPage.locator('[data-module-id]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-module-id')));
   check('published modules retain their saved order', JSON.stringify(renderedIds) === JSON.stringify(expected.map((block) => block.id)));
   check('inline image is rendered once rather than duplicated in the hero/gallery', await publicPage.locator('article img').count() === 1);
+  check('an all-inline story keeps its global photo credit exactly once', (await publicPage.locator('article').innerText()).split('Synthetic Photographer').length - 1 === 1);
   const focus = await publicPage.locator('.story-module-image img').evaluate((image) => image.style.objectPosition);
   check('published image uses the persisted focal point', focus === `${x}% ${y}%`);
   check('published action link remains functional content', await publicPage.locator('article a[href="https://example.invalid/synthetic-details"]').count() === 1);
+  // Publish a separate synthetic legacy story to protect the existing lead/layout credit paths.
+  const createLegacy = async () => {
+    const response = await post('/api/admin/drafts/new', new FormData());
+    assert.equal(response.status, 303);
+    return Number(response.headers.get('location').split('/').pop());
+  };
+  let legacyId = await createLegacy();
+  const legacyDraft = () => db.prepare('SELECT * FROM drafts WHERE id=?').get(legacyId);
+  const credit = 'Synthetic Photographer <em>escaped credit</em>';
+  const saveLegacy = async (photoLayout) => {
+    const data = new FormData();
+    for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: 'Synthetic legacy credit', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: legacy, photoCredit: credit, photoLayout })) data.set(key, String(value));
+    assert.equal((await post(`/api/admin/drafts/${legacyId}/save`, data)).status, 200);
+  };
+  const uploadLegacy = async () => {
+    const data = new FormData(); data.set('version', String(legacyDraft().updated_at)); data.set('op', 'upload'); data.set('photos', new Blob([png], { type: 'image/png' }), 'synthetic.png');
+    assert.equal((await post(`/api/admin/drafts/${legacyId}/photos`, data)).status, 303);
+  };
+  const publishLegacy = async () => {
+    const data = new FormData(); data.set('version', String(legacyDraft().updated_at));
+    assert.equal((await post(`/api/admin/drafts/${legacyId}/publish`, data)).status, 303);
+    await publicPage.goto(BASE + `/stories/${legacyDraft().slug}/`);
+  };
+  await saveLegacy('one'); await publishLegacy();
+  check('a legacy story with zero photos does not gain a dangling credit', !(await publicPage.locator('article').innerText()).includes(credit));
+  legacyId = await createLegacy();
+  await saveLegacy('one'); await uploadLegacy(); await publishLegacy();
+  check('legacy lead photo credit appears once and remains escaped text', (await publicPage.locator('article').innerText()).split(credit).length - 1 === 1 && await publicPage.locator('article em').count() === 0);
+  legacyId = await createLegacy();
+  await saveLegacy('twoUp'); await uploadLegacy(); await uploadLegacy(); await publishLegacy();
+  check('noninline photo layout keeps the existing credit exactly once', await publicPage.locator('[data-photo-layout="twoUp"]').count() === 1 && (await publicPage.locator('article').innerText()).split(credit).length - 1 === 1);
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {
