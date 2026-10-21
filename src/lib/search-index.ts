@@ -29,6 +29,14 @@ const failed = new Set<string>();
 export const REPAIR_BATCH = 50;
 const testFailSlug = process.env.STORY_SYNC_TEST === '1' ? process.env.SEARCH_TEST_FAIL_SLUG : undefined; // test hook, like story-sync's
 
+/** Every searchable story must have its current index row before the first successful search in this process. */
+export function indexIsComplete(db: DatabaseSync): boolean {
+  return !db.prepare(
+    `SELECT 1 FROM stories s LEFT JOIN stories_fts f ON f.rowid = s.id
+     WHERE s.status = 'live' AND s.draft = 0 AND (f.rowid IS NULL OR f.stamp IS NOT s.updated_at) LIMIT 1`,
+  ).get();
+}
+
 /**
  * Re-index up to `limit` stories that are missing from the index or changed since they were indexed, each in its own
  * short transaction. A row that fails is logged once and skipped (not retried until its updated_at changes), so one bad

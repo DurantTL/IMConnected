@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
+import { openDatabase, runMigrations, readMigrationsFromDir } from '../src/lib/db/db-core.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Playwright is not a dependency of this repo. PLAYWRIGHT_ROOT (a folder whose node_modules has it) overrides the normal resolution.
@@ -33,6 +34,34 @@ let browser;
 let checks = 0;
 const check = (message, value) => { assert.ok(value, message); checks++; console.log(`PASS ${message}`); };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Screenshot fixtures must never adopt real stories from the frozen archive.
+// Seed a migrated throwaway database before the server can open it.
+const fixtureDb = openDatabase(scratch);
+try {
+  runMigrations(fixtureDb, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')));
+  const now = Date.now();
+  fixtureDb.prepare("INSERT INTO app_state(key,value,updated_at) VALUES ('git_adopted_at',?,?)").run(String(now), now);
+  const fixtures = [
+    ['news', 'conference', 'A connected community starts with a shared story'],
+    ['news', 'churches', 'A place to share stories of faith'],
+    ['news', 'schools', 'Learning together, growing together'],
+    ['news', 'camp', 'Room to explore and connect'],
+    ['features', null, 'The stories that bring us together'],
+    ['columns', null, 'A moment to pause and reflect'],
+    ['youth', 'pathfinders', 'Discovering purpose through service'],
+    ['kids', null, 'Small questions, bright discoveries'],
+  ];
+  const insert = fixtureDb.prepare(`INSERT INTO stories
+    (slug,title,dek,section,area,author,date,featured,body,source,published_at,updated_at)
+    VALUES (?,?,?,?,?,'Synthetic Editor','2026-10-21',?,?, 'editor',?,?)`);
+  for (const [i, [section, area, title]] of fixtures.entries()) {
+    insert.run(`synthetic-design-${i + 1}`, title, 'Synthetic design example for the IMConnected story magazine.', section, area, Number(i === 0),
+      'This synthetic church story is a design fixture. It demonstrates the reading layout, section navigation and story search without using real people or submissions.\n\n## A shared story\n\nEvery community has a story to share. This example contains no report of a real event.', now, now);
+  }
+} finally {
+  fixtureDb.close();
+}
 const server = spawn(process.execPath, ['dist/server/entry.mjs'], {
   cwd: ROOT,
   env: { ...process.env, HOST: '127.0.0.1', PORT: String(PORT), SITE_URL: BASE, DATA_DIR: scratch,
@@ -54,7 +83,7 @@ try {
   const feedResponse = await fetch(BASE + '/stories.json');
   assert.equal(feedResponse.status, 200);
   const feed = await feedResponse.json();
-  assert.ok(feed.stories.length > 0, 'Archive adoption must supply a real story to review');
+  check('design evidence contains only the eight synthetic fixture stories', feed.stories.length === 8 && feed.stories.every((story) => story.id.startsWith('synthetic-design-')));
   const sampleStory = feed.stories.find((story) => story.image) || feed.stories[0];
   const storyPath = new URL(sampleStory.url).pathname;
   const targets = [ ['home', '/'], ['section', '/news/'], ['story', storyPath], ['submit', '/submit/'], ['search', '/search/?q=church'], ['login', '/admin/login'] ];

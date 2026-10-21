@@ -131,6 +131,40 @@ try {
   check('enabling modules preserves the complete legacy Markdown', (await blocks())[0].text === legacy);
   await page.locator('[data-add-module="heading"]').click();
   await page.locator('[data-module-field="text"]').fill('A synthetic heading');
+  const layoutBefore = await blocks();
+  await page.locator('#module-library-search').fill('HEADING');
+  check('library search is labelled, case-insensitive and reports its count', await page.getByLabel('Find a module').inputValue() === 'HEADING' && await page.locator('[data-add-module]:visible').count() === 1 && await page.locator('#module-library-results').textContent() === '1 module found');
+  await page.locator('#module-library-search').fill('no-such-module');
+  check('library no-results state has a visible recovery action', await page.locator('#module-library-empty').isVisible() && await page.locator('[data-add-module]:visible').count() === 0 && await page.locator('#module-library-reset').isVisible());
+  await page.locator('#module-library-reset').click();
+  check('clearing library search restores the same seven module controls without changing content', await page.locator('[data-add-module]:visible').count() === 7 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
+  for (const layout of ['news', 'recap', 'announcement']) {
+    await page.getByRole('button', { name: /^1\. Paragraph/ }).click();
+    const before = await blocks();
+    await page.locator(`[data-insert-layout="${layout}"]`).click();
+    const inserted = await blocks();
+    check(`${layout} starter inserts four unique modules after selection and preserves both existing modules`, inserted.length === before.length + 4 && inserted[0].id === before[0].id && inserted[5].id === before[1].id && new Set(inserted.map((block) => block.id)).size === inserted.length && inserted.slice(1, 5).every((block) => !before.some((old) => old.id === block.id)) && inserted.every((block) => !['button', 'image'].includes(block.type)) && JSON.stringify(inserted[0]) === JSON.stringify(before[0]) && JSON.stringify(inserted[5]) === JSON.stringify(before[1]));
+    await page.locator('#blocks-undo').click();
+    check(`${layout} starter is one atomic undo change`, JSON.stringify(await blocks()) === JSON.stringify(before));
+    await page.locator('#blocks-redo').click();
+    check(`${layout} starter redo restores its stable IDs`, JSON.stringify(await blocks()) === JSON.stringify(inserted));
+    await page.locator('#blocks-undo').click();
+  }
+  for (let i = 0; i < 14; i++) await page.locator('[data-insert-layout="news"]').click();
+  check('starter layouts can fill the story up to 58 modules', (await blocks()).length === 58);
+  const beforeLimit = await blocks();
+  await page.locator('[data-insert-layout="news"]').click();
+  check('a starter that would exceed 60 modules makes no partial change', JSON.stringify(await blocks()) === JSON.stringify(beforeLimit) && (await page.locator('#module-status').textContent()).includes('No modules were added'));
+  await page.locator('[data-add-module="divider"]').click();
+  await page.locator('[data-add-module="divider"]').click();
+  const atLimit = await blocks();
+  await page.locator('[data-insert-layout="announcement"]').click();
+  check('starter insertion at the 60-module limit preserves every existing ID', atLimit.length === 60 && JSON.stringify(await blocks()) === JSON.stringify(atLimit));
+  for (let i = 0; i < 16; i++) await page.locator('#blocks-undo').click();
+  check('rejected starters do not consume undo history', JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
+  const paneBoxes = await Promise.all(['.sb-outline', '.ed-preview', '#module-inspector'].map((selector) => page.locator(selector).boundingBox()));
+  check('1440px builder places outline left, composed canvas center and inspector right', paneBoxes.every(Boolean) && paneBoxes[0].x + paneBoxes[0].width <= paneBoxes[1].x + 1 && paneBoxes[1].x + paneBoxes[1].width <= paneBoxes[2].x + 1 && Math.abs(paneBoxes[0].y - paneBoxes[1].y) < 2 && Math.abs(paneBoxes[1].y - paneBoxes[2].y) < 2);
+
   await page.getByRole('button', { name: /^1\. Paragraph/ }).focus();
   await page.keyboard.press('Enter');
   check('Enter selects a module and restores actual focus after rendering', await selectedHasFocus());
@@ -225,9 +259,35 @@ try {
   });
   check('private preview loads the authenticated uploaded image', true);
   check('preview keeps scripts disabled in its sandbox', !(await page.locator('#preview').getAttribute('sandbox') || '').split(/\s+/).includes('allow-scripts'));
+  const canvasHeading = page.frameLocator('#preview').locator(`[data-module-id="${expected.find((block) => block.type === 'heading').id}"]`);
+  await canvasHeading.press('Enter');
+  check('Enter on a canvas module selects it, highlights it and focuses its inspector field', await canvasHeading.getAttribute('data-preview-selected') !== null && await canvasHeading.evaluate((module) => module.style.outline.includes('3px')) && await page.locator('[data-module-field="text"]').evaluate((field) => field === document.activeElement) && await page.locator('#module-title').textContent() === 'Heading settings');
+  const canvasQuote = page.frameLocator('#preview').locator(`[data-module-id="${expected.find((block) => block.type === 'quote').id}"]`);
+  await canvasQuote.press('Space');
+  check('Space selects a different canvas module and clears the previous highlight', await canvasQuote.getAttribute('data-preview-selected') !== null && await canvasHeading.getAttribute('data-preview-selected') === null && await page.locator('#module-title').textContent() === 'Quote settings');
+  const canvasUrl = await page.locator('#preview').evaluate((frame) => frame.contentWindow.location.href);
+  await page.frameLocator('#preview').locator('a[href="https://example.invalid/synthetic-details"]').click();
+  check('canvas links select settings without navigating the private preview', await page.locator('#module-title').textContent() === 'Button / link settings' && await page.locator('[data-module-field="label"]').evaluate((field) => field === document.activeElement) && await page.locator('#preview').evaluate((frame) => frame.contentWindow.location.href) === canvasUrl);
+  if (shots) await page.screenshot({ path: path.join(shots, 'story-builder-canvas-selection.png') });
+
   const axePath = process.env.AXE_JS || (() => { try { return playwrightRequire.resolve('axe-core/axe.min.js'); } catch { return ''; } })();
   if (axePath && fs.existsSync(axePath)) {
     await page.addScriptTag({ path: axePath });
+    check('canvas keeps native heading and list semantics while exposing keyboard selection', await canvasHeading.evaluate((heading) => heading.matches('h2,h3') && !heading.hasAttribute('role') && heading.tabIndex === 0) && await page.frameLocator('#preview').getByRole('heading', { name: 'A synthetic heading', exact: true }).count() === 1 && await page.frameLocator('#preview').getByRole('list').filter({ hasText: 'First synthetic item' }).getByRole('listitem').count() === 2);
+    // Sandbox scripts stay disabled. Audit an exact snapshot of the enhanced frame DOM
+    // in a diagnostic page, where axe's asynchronous checks can execute.
+    const canvasSnapshot = await page.locator('#preview').evaluate((frame) => frame.contentDocument.documentElement.outerHTML);
+    const canvasBox = await page.locator('#preview').boundingBox();
+    const canvasAudit = await context.newPage();
+    await canvasAudit.setViewportSize({ width: Math.round(canvasBox.width), height: Math.round(canvasBox.height) });
+    await canvasAudit.setContent(canvasSnapshot);
+    await canvasAudit.evaluate(fs.readFileSync(axePath, 'utf8'));
+    const canvasViolations = await canvasAudit.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })).violations.map(({ id, impact, nodes }) => ({ id, impact, nodes: nodes.map(({ target, failureSummary }) => ({ target, failureSummary })) })));
+    await canvasAudit.close();
+    if (shots) fs.writeFileSync(path.join(shots, 'editor-canvas-axe-results.json'), JSON.stringify(canvasViolations, null, 2));
+    if (canvasViolations.length) console.error(JSON.stringify(canvasViolations, null, 2));
+    check('enhanced canvas DOM snapshot passes axe WCAG A/AA checks', canvasViolations.length === 0);
+
     const accessibility = [];
     for (const panel of ['content', 'settings', 'photos', 'review']) {
       await page.locator(`[data-studio-tab=${panel}]`).click();
@@ -245,11 +305,20 @@ try {
     await page.screenshot({ path: path.join(shots, 'story-photos-desktop.png') });
     await page.locator('[data-studio-tab=content]').click();
     await page.evaluate(() => scrollTo(0, 0));
+    await page.locator(`[data-select-module="${expected.find((block) => block.type === 'heading').id}"]`).click();
+    await page.locator('#preview').evaluate((frame) => frame.contentWindow.scrollTo(0, 0));
+    await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: path.join(shots, 'story-builder-desktop.png') });
   }
   await page.setViewportSize({ width: 390, height: 900 });
   await page.waitForTimeout(100);
   check('editor reflows without horizontal overflow at 390px', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  check('phone Build view keeps its inspector visible and its preview hidden and inert', await page.getByRole('button', { name: 'Build', exact: true }).isVisible() && await page.locator('#module-inspector').isVisible() && await page.locator('.ed-preview').evaluate((pane) => pane.hidden && pane.inert));
+  await page.locator('.ed-tabs [data-view=preview]').click();
+  check('phone Preview view removes library and inspector controls from the focus order', await page.locator('.ed-preview').isVisible() && await page.locator('.ed-write').evaluate((pane) => pane.hidden && pane.inert) && await page.locator('#module-inspector').evaluate((pane) => pane.hidden && pane.inert));
+  await page.getByRole('button', { name: 'Build', exact: true }).click();
+  check('phone Build action restores the selected inspector', await page.locator('#module-inspector').isVisible() && await page.locator('.ed-write').isVisible());
+
   check('phone header scrolls normally and desktop actions leave the focus order', await page.locator('.studio-head').evaluate((head) => getComputedStyle(head).position === 'static') && !(await page.locator('#save-btn').isVisible()) && await page.locator('#mobile-save-btn').isVisible());
   await page.locator('#module-fields').scrollIntoViewIfNeeded();
   const phoneSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
@@ -277,6 +346,19 @@ try {
   await Promise.all([page.waitForURL((url) => url.searchParams.get('n') === 'published'), page.locator('#publish-form button').click()]);
   const row = draft();
   check('local Publish creates a live modular story', row.status === 'published' && !!row.slug);
+  await page.locator('[data-studio-tab=content]').click();
+  await page.waitForFunction(() => document.getElementById('preview')?.contentDocument?.querySelector('[data-module-id]'));
+  check('published draft preview renders its saved title and modules from disabled fields', await page.frameLocator('#preview').locator('h1').textContent() === row.title && await page.frameLocator('#preview').locator('[data-module-id]').count() === expected.length);
+  check('published draft preview has no editable canvas affordances', await page.frameLocator('#preview').locator('[data-module-id][tabindex], [data-preview-selected]').count() === 0);
+  const forgedPreview = new FormData();
+  forgedPreview.set('title', 'This unsaved title must be ignored');
+  forgedPreview.set('storyBlocks', 'invalid-json');
+  forgedPreview.set(`photo_${photo.id}_focalX`, '0');
+  const closedPreview = await post(`/api/admin/drafts/${id}/preview`, forgedPreview);
+  const closedDoc = await closedPreview.json();
+  check('readonly preview ignores posted replacement content and uses stored photo focus', closedPreview.status === 200 && closedDoc.ok && closedDoc.doc.includes(row.title) && !closedDoc.doc.includes('This unsaved title must be ignored') && closedDoc.doc.includes(`object-position:${x}% ${y}%`));
+
+
   const publicPage = await context.newPage();
   await publicPage.goto(BASE + `/stories/${row.slug}/`);
   const renderedIds = await publicPage.locator('[data-module-id]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-module-id')));

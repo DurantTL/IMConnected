@@ -295,31 +295,105 @@ try {
         check('page: the highlighted word is a <mark> in the snippet', (await page.$$eval('.search-result mark', (ms) => ms.map((m) => m.textContent.toLowerCase()))).some((t) => t.startsWith(C.word.slice(0, 5))));
         check('page: nothing sideways at 390px (no horizontal scroll)', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), await page.evaluate(() => `${document.documentElement.scrollWidth} > ${window.innerWidth}`));
         check('page: the field, section menu and button are visible and the form is labelled', (await page.$$eval('#search-form input, #search-form select, #search-form button', (els) => els.map((e) => { const r = e.getBoundingClientRect(); return r.width > 40 && r.right <= window.innerWidth; }))).every(Boolean) && (await page.$$eval('#search-form label', (ls) => ls.length)) === 2);
+        // Discovery, section changes and history all use the same public search criteria.
+        await page.goto(`${BASE}/search/`, { waitUntil: 'load' });
+        check('page: an empty search offers the existing sections and visible field labels', await page.locator('#search-explore').isVisible() && await page.locator('.search-section-links a').count() === await page.locator('#search-section option[value]:not([value=""])').count() && await page.locator('label[for="search-q"]').isVisible() && await page.locator('label[for="search-section"]').isVisible());
+        await page.fill('#search-q', C.word);
+        await page.click('#search-form button[type="submit"]');
+        await page.waitForSelector('.search-result');
+        const otherSection = C.s.section === 'news' ? 'kids' : 'news';
+        await page.selectOption('#search-section', otherSection);
+        await page.waitForFunction(() => document.getElementById('search-status').textContent.includes('No stories matched'));
+        const sectionLabel = await page.locator('#search-section option:checked').textContent();
+        check('page: changing the section immediately applies it and names the query and scope', (await page.textContent('#search-status')).includes(`“${C.word}” in ${sectionLabel}`) && await page.locator('.search-result').count() === 0 && new URL(page.url()).searchParams.get('section') === otherSection);
+        check('page: no matches offers section recovery and section browsing', await page.locator('#search-clear-section').isVisible() && await page.locator('#search-explore').isVisible());
+        await page.click('#search-clear-section');
+        await page.waitForSelector('.search-result');
+        check('page: search all sections retains the query, restores results and keyboard focus', await page.inputValue('#search-q') === C.word && await page.inputValue('#search-section') === '' && new URL(page.url()).searchParams.get('section') === null && await page.locator('#search-section').evaluate((el) => el === document.activeElement));
+        await page.goBack();
+        await page.waitForFunction(() => document.getElementById('search-status').textContent.includes('No stories matched'));
+        check('page: Back restores the scoped criteria and results', await page.inputValue('#search-q') === C.word && await page.inputValue('#search-section') === otherSection && await page.locator('.search-result').count() === 0);
+        await page.goForward();
+        await page.waitForSelector('.search-result');
+        check('page: Forward restores all-section search', await page.inputValue('#search-q') === C.word && await page.inputValue('#search-section') === '' && (await page.textContent('#search-status')).includes('in all sections'));
+        await page.click('#search-clear');
+        check('page: Clear search removes criteria, returns discovery and focuses the query', new URL(page.url()).search === '' && await page.inputValue('#search-q') === '' && await page.inputValue('#search-section') === '' && await page.locator('.search-result').count() === 0 && await page.locator('#search-explore').isVisible() && await page.locator('#search-q').evaluate((el) => el === document.activeElement));
+
+        await page.goBack();
+        await page.waitForSelector('.search-result');
+        check('page: Back after reset restores the previous query', await page.inputValue('#search-q') === C.word && new URL(page.url()).searchParams.get('q') === C.word);
+        await page.goForward();
+        await page.waitForFunction(() => !document.getElementById('search-explore').hidden);
+        check('page: Forward to reset restores discovery without stale query or results', new URL(page.url()).search === '' && await page.inputValue('#search-q') === '' && await page.locator('.search-result').count() === 0);
         // submitting the form searches again and updates the address
         await page.fill('#search-q', 'zzhostileword');
         await page.selectOption('#search-section', 'news');
-        await page.click('#search-form button');
+        await page.click('#search-form button[type="submit"]');
         await page.waitForFunction(() => document.querySelector('.search-result h2')?.textContent.includes('Hostile'), null, { timeout: 15000 }).catch(() => {});
         const hostile = await page.evaluate(() => ({ title: document.querySelector('.search-result h2')?.textContent, imgs: document.querySelectorAll('.search-results img, .search-results script, .search-results b').length, xss: window.__xss, marks: document.querySelectorAll('.search-result mark').length, snippet: document.querySelector('.snippet')?.textContent, url: location.search }));
         check('page: a hostile story shows as text (title and snippet are literal text, no element was created, no script ran)', hostile.title === 'Hostile <img src=x onerror=alert(2)> title' && hostile.imgs === 0 && hostile.xss === undefined && hostile.marks >= 1 && hostile.snippet.includes('end <script> and') && !hostile.snippet.includes('onerror') && errors.length === 0, JSON.stringify(hostile) + errors.join());
         check('page: the address keeps the search (?q= and section)', hostile.url === '?q=zzhostileword&section=news', hostile.url);
         await page.fill('#search-q', 'zzzqqqxxnomatch');
-        await page.click('#search-form button');
+        await page.click('#search-form button[type="submit"]');
         await page.waitForFunction(() => /No stories matched/.test(document.getElementById('search-status').textContent), null, { timeout: 15000 }).catch(() => {});
         check('page: no matches says so', (await page.textContent('#search-status')).includes('No stories matched') && (await page.$$('.search-result')).length === 0);
         await page.fill('#search-q', '"');
-        await page.click('#search-form button');
+        await page.click('#search-form button[type="submit"]');
         await page.waitForFunction(() => /Type a word/.test(document.getElementById('search-status').textContent), null, { timeout: 15000 }).catch(() => {});
         check('page: a query of punctuation shows the server\'s message', (await page.textContent('#search-status')).includes('Type a word'));
+        // The returned count is capped, so the page must never imply it is an exhaustive total.
+        const now = Date.now();
+        for (let n = 0; n < 22; n++) run("INSERT INTO stories (slug, title, section, author, date, body, status, source, published_at, updated_at) VALUES (?, ?, 'news', 'Synthetic Author', '2026-10-20', ?, 'live', 'editor', ?, ?)", `zz-search-cap-${n}`, `Synthetic search story ${n}`, `Made-up zzsearchcapword story.${n < 3 ? ' zzsearchshowcase' : ''}`, now, now);
+        await page.selectOption('#search-section', 'news');
+        await page.fill('#search-q', 'zzsearchcapword');
+        await page.click('#search-form button[type="submit"]');
+        await page.waitForFunction(() => document.querySelectorAll('.search-result').length === 20);
+        check('page: capped feedback shows the returned 20, the query and section, with refinement advice', (await page.textContent('#search-status')) === 'Showing 20 stories for “zzsearchcapword” in News. Refine your search to narrow the results.');
+
+        // Simulate a transport that ignores aborts: request sequencing must still prevent stale rendering.
+        await page.evaluate(() => {
+          const realFetch = window.fetch;
+          window.__searchPending = {};
+          window.fetch = (url, options) => {
+            const query = new URL(String(url), location.href).searchParams.get('q');
+            if (query?.startsWith('zzdelayed')) return new Promise((resolve) => { window.__searchPending[query] = { signal: options.signal, resolve: () => resolve(new Response(JSON.stringify({ ok: true, results: [{ slug: 'zz-stale', title: 'Stale result must stay hidden', section: 'news', date: '2026-10-20', author: 'Synthetic Author', snippet: 'stale' }] }), { headers: { 'Content-Type': 'application/json' } })) }; });
+            return realFetch(url, options);
+          };
+        });
+        await page.fill('#search-q', 'zzdelayedclear');
+        await page.click('#search-form button[type="submit"]');
+        await page.waitForFunction(() => Boolean(window.__searchPending.zzdelayedclear));
+        await page.click('#search-clear');
+        const abortedOnClear = await page.evaluate(() => { const pending = window.__searchPending.zzdelayedclear; pending.resolve(); return pending.signal.aborted; });
+        await page.waitForTimeout(100);
+        check('page: reset aborts a pending request and a late response cannot restore results or URL', abortedOnClear && await page.locator('.search-result').count() === 0 && new URL(page.url()).search === '' && await page.locator('#search-explore').isVisible() && !(await page.textContent('#search-status')).includes('Stale'));
+        await page.fill('#search-q', 'zzdelayedolder');
+        await page.click('#search-form button[type="submit"]');
+        await page.waitForFunction(() => Boolean(window.__searchPending.zzdelayedolder));
+        await page.fill('#search-q', 'zzhostileword');
+        await page.click('#search-form button[type="submit"]');
+        await page.waitForSelector('.search-result');
+        const abortedOnNewSearch = await page.evaluate(() => { const pending = window.__searchPending.zzdelayedolder; pending.resolve(); return pending.signal.aborted; });
+        await page.waitForTimeout(100);
+        check('page: a new query aborts the previous request and ignores its late response', abortedOnNewSearch && (await page.textContent('.search-result h2')).startsWith('Hostile') && (await page.textContent('#search-status')).includes('“zzhostileword”') && new URL(page.url()).searchParams.get('q') === 'zzhostileword');
+        check('page: no browser script errors during discovery, filters, recovery and races', errors.length === 0, errors.join());
+        for (const width of [320, 360, 390, 768, 1280]) {
+          await page.setViewportSize({ width, height: 900 });
+          check(`page: search controls and long feedback fit at ${width}px`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('#search-form input, #search-form select, #search-form button')].every((el) => { const rect = el.getBoundingClientRect(); return rect.width > 40 && rect.left >= 0 && rect.right <= innerWidth; })));
+        }
         // screenshots with results
         if (SHOTS) {
           for (const w of [390, 768, 1280]) {
             await page.setViewportSize({ width: w, height: 900 });
-            await page.goto(`${BASE}/search/?q=${encodeURIComponent('conference')}`, { waitUntil: 'load' });
+            await page.goto(`${BASE}/search/?q=${encodeURIComponent('zzsearchshowcase')}`, { waitUntil: 'load' });
             await page.waitForSelector('.search-result', { timeout: 15000 }).catch(() => {});
             check(`page: results show at ${w}px`, (await page.$$('.search-result')).length >= 2);
             check(`page: no horizontal scroll at ${w}px`, await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
             await page.screenshot({ path: path.join(SHOTS, `search-${w}.png`), fullPage: true });
+            if (w !== 768) {
+              await page.goto(`${BASE}/search/`, { waitUntil: 'load' });
+              await page.screenshot({ path: path.join(SHOTS, `search-discover-${w}.png`), fullPage: true });
+            }
           }
           info(`screenshots in ${SHOTS}`);
         }
@@ -351,16 +425,27 @@ try {
     const d0 = openDatabase(DATA2);
     runMigrations(d0, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')).filter((m) => m.name < '013'));
     const addStory = (d, slug, body) => d.prepare("INSERT INTO stories (slug, title, section, author, date, body, status, source, published_at, updated_at) VALUES (?, ?, 'news', 'Sam Synthetic', '2026-10-20', ?, 'live', 'editor', ?, ?)").run(slug, 'Upgrade story ' + slug, body, now, now);
-    for (const n of [1, 2, 3]) addStory(d0, `zz-old-${n}`, `Made-up text with the word zzoldword${n} in it.`);
+    for (let n = 1; n <= 121; n++) addStory(d0, `zz-old-${n}`, `Made-up zzupgradecommon text with the word zzoldword${n} in it.`);
     d0.close();
     let srv = startServer({ DATA_DIR: DATA2, STORY_SYNC_TEST_DELAY_MS: '6000' }); // the default repair throttle (once a minute)
-    await waitFor(BASE + '/submit/');
+    await waitFor(BASE + '/admin/login'); // apply migrations, leaving adoption deliberately delayed
+    db2((d) => d.exec(`INSERT INTO stories_fts(rowid,title,dek,author,church,body,stamp)
+      SELECT id,title,COALESCE(dek,''),author,COALESCE(church,''),body,updated_at FROM stories ORDER BY id LIMIT 50`));
+    const initialLocker = new DatabaseSync(DB2);
+    initialLocker.exec('BEGIN IMMEDIATE');
     const t0 = Date.now();
-    const early = await search({ q: 'zzoldword2' });
-    check('upgrade: right after 015 on a populated database, search answers at once from the index (no waiting for the adoption pass) and finds the old story', early.status === 200 && early.source === 'index' && Date.now() - t0 < 2000 && slugsOf(early).includes('zz-old-2'), `${early.status} ${early.source} ${early.text.slice(0, 150)}`);
+    try {
+      const partial = await search({ q: 'zzupgradecommon' });
+      const tail = await search({ q: 'zzoldword121' });
+      check('#38: a partly built upgrade index cannot return successful partial matches or a false empty result', [partial, tail].every((r) => r.status === 200 && r.body?.ok === false && r.body.total === 0 && r.body.results.length === 0 && r.source === null), JSON.stringify([partial.body, tail.body]));
+      check('#38: initial search reports unavailable without waiting for a writer lock', Date.now() - t0 < 1500, String(Date.now() - t0));
+    } finally { initialLocker.exec('ROLLBACK'); initialLocker.close(); }
+    check('#38: initial indexing resumes in the background after the writer releases, without another search', await until(() => db2((d) => d.prepare('SELECT COUNT(*) AS n FROM stories s JOIN stories_fts f ON f.rowid=s.id WHERE f.stamp=s.updated_at').get().n) === 121, 5000));
+    const early = await search({ q: 'zzoldword121' });
+    check('#38: cutover finds a unique match beyond the first 50 rows before delayed adoption', early.body?.ok === true && early.source === 'index' && slugsOf(early).includes('zz-old-121') && !synced(), `${early.status} ${early.source} ${early.text.slice(0, 150)}`);
     check('(wait for the adoption)', await until(synced, 25000), log.slice(-4).join(' | '));
     const counts = db2((d) => [d.prepare('SELECT COUNT(*) AS n FROM stories').get().n, d.prepare('SELECT COUNT(*) AS n FROM stories s JOIN stories_fts f ON f.rowid = s.id WHERE f.stamp = s.updated_at').get().n]);
-    check('upgrade: the adoption pass indexed every story', counts[0] >= 3 && counts[0] === counts[1], JSON.stringify(counts));
+    check('upgrade: the adoption pass indexed every story', counts[0] >= 121 && counts[0] === counts[1], JSON.stringify(counts));
     const late = await search({ q: 'zzoldword3' });
     check('upgrade: after the pass, search uses the index and finds the old story', late.source === 'index' && slugsOf(late).includes('zz-old-3'), `${late.source} ${late.text.slice(0, 150)}`);
     await stopServer(srv);
@@ -394,6 +479,49 @@ try {
     await search({ q: 'zzoldword1' });
     const indexed = db2((d) => d.prepare("SELECT COUNT(*) AS n FROM stories s JOIN stories_fts f ON f.rowid = s.id WHERE s.slug LIKE 'zz-many-%'").get().n);
     check('repair: one request repairs at most 50 rows', indexed === 50, String(indexed));
+    await stopServer(srv);
+
+    // Already-adopted databases must recheck initial completeness after a failed build or restart.
+    const DATA3 = path.join(SCRATCH, 'data-initial-failure');
+    const DB3 = path.join(DATA3, 'imconnected.db');
+    const db3 = (fn) => { const d = new DatabaseSync(DB3); try { return fn(d); } finally { d.close(); } };
+    const d3 = openDatabase(DATA3);
+    runMigrations(d3, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')));
+    d3.prepare("INSERT INTO app_state(key,value,updated_at) VALUES ('git_adopted_at',?,?)").run(String(now), now);
+    for (let n = 1; n <= 121; n++) addStory(d3, n === 121 ? 'zz-initial-bad' : `zz-initial-${n}`, `Synthetic zzinitialcommon ${n === 121 ? 'zzinitialtail' : `zzinitialword${n}`}`);
+    d3.close();
+    srv = startServer({ DATA_DIR: DATA3, SEARCH_REPAIR_TEST_MS: '0', SEARCH_TEST_FAIL_SLUG: 'zz-initial-bad' });
+    await waitFor(BASE + '/admin/login');
+    const failedStart = await search({ q: 'zzinitialcommon' });
+    check('#38: a previously adopted database still checks index completeness on process start', failedStart.body?.ok === false && !synced());
+    check('#38: initial indexing reaches healthy rows even when one live row fails', await until(() => db3((d) => d.prepare('SELECT COUNT(*) AS n FROM stories_fts').get().n) === 120));
+    const failedReady = await search({ q: 'zzinitialcommon' });
+    check('#38: a failed initial live row keeps search unavailable instead of publishing partial results', failedReady.body?.ok === false && failedReady.body.results.length === 0);
+    await stopServer(srv);
+    // Equal row counts do not imply readiness: the last row has an old index stamp and body.
+    db3((d) => d.exec(`INSERT INTO stories_fts(rowid,title,dek,author,church,body,stamp)
+      SELECT id,title,'',author,'','Old synthetic index text',0 FROM stories WHERE slug='zz-initial-bad'`));
+    srv = startServer({ DATA_DIR: DATA3, SEARCH_REPAIR_TEST_MS: '0' });
+    await waitFor(BASE + '/admin/login');
+    const restartLocker = new DatabaseSync(DB3);
+    restartLocker.exec('BEGIN IMMEDIATE');
+    try {
+      const stale = await search({ q: 'zzinitialtail' });
+      check('#38: restart rejects a stale index stamp even when every story has an index row', stale.body?.ok === false && db3((d) => d.prepare('SELECT COUNT(*) AS n FROM stories_fts').get().n) === 121);
+    } finally { restartLocker.exec('ROLLBACK'); restartLocker.close(); }
+    check('#38: restart repairs the stale row without relying on archive adoption', await until(() => db3((d) => d.prepare('SELECT COUNT(*) AS n FROM stories s JOIN stories_fts f ON f.rowid=s.id WHERE f.stamp=s.updated_at').get().n) === 121));
+    const restarted = await search({ q: 'zzinitialtail' });
+    check('#38: a complete restarted index finds the tail story and does not re-adopt', restarted.body?.ok === true && slugsOf(restarted).includes('zz-initial-bad') && !synced());
+    await stopServer(srv);
+    db3((d) => {
+      addStory(d, 'zz-hidden-bad', 'Synthetic hidden story.');
+      addStory(d, 'zz-hidden-draft', 'Synthetic unpublished draft.');
+      d.exec("UPDATE stories SET status='unpublished',rev=rev+1 WHERE slug='zz-hidden-bad'; UPDATE stories SET draft=1,rev=rev+1 WHERE slug='zz-hidden-draft'");
+    });
+    srv = startServer({ DATA_DIR: DATA3, SEARCH_TEST_FAIL_SLUG: 'zz-hidden-bad' });
+    await waitFor(BASE + '/admin/login');
+    const hidden = await search({ q: 'zzinitialtail' });
+    check('#38: unindexed unpublished stories and drafts do not block a complete public index', hidden.body?.ok === true && slugsOf(hidden).includes('zz-initial-bad'));
     await stopServer(srv);
   }
 
