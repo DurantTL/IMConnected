@@ -124,12 +124,12 @@ The first start of this version on a server whose database has not adopted the b
 
 ### 6. Story feeds
 
-Every build publishes the 50 newest published stories in two formats:
+The site serves the 50 newest published stories from the live database in two formats:
 
 - **`/rss.xml`**: RSS 2.0 for feed readers and services that import RSS.
 - **`/stories.json`**: for the IMConnected Studio newsletter builder. Every story has `id`, `url`, `title`, `section`, `sectionLabel`, `author`, `date` (YYYY-MM-DD), `photos`, `photoAlts` (alt text for each photo in `photos`, same order; entries may be empty), `photoLayout` and `featured`. `photoLayout` (added by issue #35, so `version` stays 1) says how the story page arranges the photos: `one`, `twoUp`, `heroGrid`, `mosaic` or `stack` (the same names as IMConnected Studio's story layouts); `one` is the original look (lead photo, the others in a row under the text) and is what every story has unless an editor or Studio chose another, so a consumer that ignores the field is unaffected. `dek`, `area`, `areaLabel`, `column`, `authorTitle`, `church`, `image`, `imageAlt` and `photoCredit` appear only when the story has them. `FeedItem` in `src/lib/feed.ts` is the definitive list. All links and photo addresses are absolute, so they work inside an email.
 
-`/stories.json` is the public feed and is only the last build. IMConnected Studio's "Import from IMConnected" button doesn't use it: it reads the authenticated, CORS-enabled `GET /api/stories` (see "Story list for Studio" below), which also sees stories published since the last build and the drafts still waiting for an editor, so no proxy header is needed. See `docs/STUDIO-IMPORT.md` for the newsletter builder plan.
+`/stories.json` is the public feed of live stories. IMConnected Studio's "Import from IMConnected" button reads the authenticated, CORS-enabled `GET /api/stories` (see "Story list for Studio" below), which additionally includes drafts still waiting for an editor, so no proxy header is needed. Both lists read the database and reflect story changes without a build. See `docs/STUDIO-IMPORT.md` for the newsletter builder plan.
 
 ### 7. Nightly backups to Google Drive
 
@@ -380,7 +380,7 @@ For the dashboard flow, run the server with a throwaway `DATA_DIR` and `AUTH_SEC
 
 Editors sign in at `/admin` with email + password and a required second factor (invite-only; passkeys, Google and Microsoft arrive over the epic in issue #7). The pages are server-rendered, `noindex`, and never cached.
 
-- **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. That volume is now the only copy of the stories and their photos (`media/`), so keep the nightly Google Drive backup running (Setup, step 7) and add the volume to your own backups. Migrations in `src/lib/db/migrations/` apply automatically, once each, the first time `/admin` is used. If the database can't be opened, `/admin` answers 503 (and logs a line) and `/api/submit` answers 503 with "Submissions are temporarily unavailable. Please email us your story."; the public pages keep working, and Studio publishes still go live. `node scripts/migrate.mjs` applies them by hand. A bind mount instead of the named volume must be owned by uid 1000 (the `node` user).
+- **Data volume.** Accounts, sessions and the audit log are in `imconnected.db` inside `DATA_DIR` (`/data` in Docker, `./data` in development). The compose file mounts the named volume `imconnected-data` there. That volume is now the only copy of the stories and their photos (`media/`), so keep the nightly Google Drive backup running (Setup, step 7) and add the volume to your own backups. Migrations in `src/lib/db/migrations/` apply automatically, once each, when the database is first opened. If the database can't be read, `/admin`, submissions, Studio publishing, public pages and feeds report unavailability rather than use the frozen archive or accept a lost write; search reports `ok: false`. `node scripts/migrate.mjs` applies migrations by hand. A bind mount instead of the named volume must be owned by uid 1000 (the `node` user).
 - **First admin.** Run once on the server (the email and name are yours; the output is a 24-hour, single-use invite link at `/admin/invite/<token>`):
 
   ```bash
