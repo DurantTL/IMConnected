@@ -3,6 +3,7 @@
 // adoption (src/lib/story-adopt.ts). Every function is synchronous like the rest of the db code and every query is
 // parameterized. Public pages read the rows through public-stories.ts; every write below clears the page cache
 // (invalidateStories) so the change shows on the next request.
+import { assertOwnStoryImages, escapeStoryBlocks, parseStoredStoryBlocks, normalizeStoryBlocks, type StoryBlock } from './story-blocks';
 import { getDb } from './db';
 import { invalidateStories } from './public-cache';
 import { indexStory } from './search-index';
@@ -22,6 +23,8 @@ export interface StoryPhoto {
   sha256: string | null;
   /** Size of the stored file; lets the sync skip re-hashing an unchanged photo. */
   bytes: number | null;
+  focalX?: number;
+  focalY?: number;
 }
 
 /** The content schema's fields (src/content.config.ts) plus what the database adds. Optional fields are undefined when absent. */
@@ -47,6 +50,7 @@ export interface StoryInput {
   featured: boolean;
   draft: boolean;
   body: string;
+  storyBlocks?: StoryBlock[];
   status: StoryStatus;
   source: StorySource;
   draftId?: number;
@@ -90,6 +94,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
     featured: Number(r.featured) === 1,
     draft: Number(r.draft) === 1,
     body: String(r.body),
+    storyBlocks: escapeStoryBlocks(parseStoredStoryBlocks(r.story_blocks)),
     status: r.status as StoryStatus,
     source: r.source as StorySource,
     draftId: optNum(r.draft_id),
@@ -103,7 +108,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
 }
 
 function photosOf(storyId: number): StoryPhoto[] {
-  const rows = getDb().prepare('SELECT position, kind, path, url, alt, sha256, bytes FROM story_photos WHERE story_id = ? ORDER BY position').all(storyId) as Row[];
+  const rows = getDb().prepare('SELECT position, kind, path, url, alt, sha256, bytes, focal_x, focal_y FROM story_photos WHERE story_id = ? ORDER BY position').all(storyId) as Row[];
   return rows.map((p) => ({
     position: Number(p.position),
     kind: p.kind as 'lead' | 'gallery',
@@ -112,6 +117,8 @@ function photosOf(storyId: number): StoryPhoto[] {
     alt: String(p.alt),
     sha256: opt(p.sha256) ?? null,
     bytes: optNum(p.bytes) ?? null,
+    focalX: Number(p.focal_x ?? 50),
+    focalY: Number(p.focal_y ?? 50),
   }));
 }
 
@@ -198,24 +205,27 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   const cur = mode === 'insert' ? undefined : (db.prepare('SELECT id, content_hash, status, source FROM stories WHERE slug = ?').get(s.slug) as
     { id: number; content_hash: string | null; status: string; source: string } | undefined);
   if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source) return { outcome: 'unchanged', id: Number(cur.id) };
+  // Module text follows the body contract (every "<" is &lt;), and an image module may only show this story's own photos.
+  const blocks = escapeStoryBlocks(normalizeStoryBlocks(s.storyBlocks ?? []));
+  assertOwnStoryImages(blocks, [...(s.image ? [s.image] : []), ...s.photos]);
   const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
     JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
-    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout)];
+    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout), JSON.stringify(blocks)];
   const editedAt = s.editedAt === undefined ? null : editStamp(s.editedAt);
   let id: number;
   if (cur) {
     id = Number(cur.id);
     db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
     db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
   } else {
     const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, edited_at, slug)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, editedAt, s.slug);
+      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, edited_at, slug)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, editedAt, s.slug);
     id = Number(r.lastInsertRowid);
   }
-  const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-  for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes);
+  const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes, p.focalX ?? 50, p.focalY ?? 50);
   indexStory(db, id, s, now); // search index row (migration 013), in the same transaction: findable as soon as it is saved
   return { outcome: cur ? 'updated' : 'inserted', id };
 }

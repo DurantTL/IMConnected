@@ -8,10 +8,11 @@ import { publishDraft } from '../../../../../lib/story-publish';
 import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
 import { sniffImage } from '../../../../../lib/submission';
-import { renderMarkdownSafe, escapeHtml } from '../../../../../lib/markdown';
+import { renderStoryBlocksSafe } from '../../../../../lib/story-block-render';
+import { renderMarkdownSafe, escapeHtml, restrictPreviewImages } from '../../../../../lib/markdown';
 import { audit } from '../../../../../lib/auth/audit';
 import { clientIp } from '../../../../../lib/request';
-import { jsonResponse, readFormLimited, redirectTo } from '../../../../../lib/draft-http';
+import { jsonResponse, readFormLimited, redirectTo, siteUrl } from '../../../../../lib/draft-http';
 
 export const prerender = false;
 
@@ -39,14 +40,26 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
 
   if (action === 'preview') {
     let fields;
+    let focus;
     try {
-      fields = readDraftFields(form).fields;
+      const parsed = readDraftFields(form);
+      fields = parsed.fields;
+      focus = parsed.photoFocus;
     } catch (err) {
       return jsonResponse(400, { ok: false, error: (err as Error).message });
     }
-    const { html } = await renderMarkdownSafe(fields.body);
+    const draftPhotos = listPhotos(draft.id);
+    let html = fields.storyBlocks?.length ? await renderStoryBlocksSafe(fields.storyBlocks, { resolvePhoto: (photoId) => {
+      const photo = draftPhotos.find((p) => p.id === photoId);
+      if (!photo) return undefined;
+      const point = focus.get(photoId) ?? photo;
+      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: photo.alt, focalX: point.focalX, focalY: point.focalY };
+    } }) : (await renderMarkdownSafe(fields.body)).html;
+    const ownHosts = [new URL(request.url).hostname];
+    try { ownHosts.push(new URL(siteUrl()).hostname); } catch { /* a malformed SITE_URL must not break the preview: the request host alone is used */ }
+    html = restrictPreviewImages(html, ownHosts);
     const byline = [fields.author, fields.authorTitle, fields.church].filter(Boolean).map(escapeHtml).join(' · ');
-    const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https:"><style>body{font:17px/1.6 Georgia,serif;margin:0;padding:16px;color:#1b1b1b;background:#fff;overflow-wrap:anywhere}h1{font-size:1.7rem;line-height:1.2;margin:.2em 0}.dek{font-size:1.1rem;color:#444}.by{font:600 .85rem system-ui,sans-serif;color:#555}img{max-width:100%;height:auto}blockquote{margin:1em 0;padding-left:1em;border-left:4px solid #bbb;color:#333}a{color:#0b5cad}</style></head><body><article><h1>${escapeHtml(fields.title || 'Untitled')}</h1>${fields.dek ? `<p class="dek">${escapeHtml(fields.dek)}</p>` : ''}${byline ? `<p class="by">${byline}</p>` : ''}${html || '<p><em>Nothing to preview yet.</em></p>'}</article></body></html>`;
+    const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https:"><style>body{font:17px/1.6 Georgia,serif;margin:0;padding:16px;color:#1b1b1b;background:#fff;overflow-wrap:anywhere}h1{font-size:1.7rem;line-height:1.2;margin:.2em 0}.dek{font-size:1.1rem;color:#444}.by{font:600 .85rem system-ui,sans-serif;color:#555}img{max-width:100%;height:auto}blockquote{margin:1em 0;padding-left:1em;border-left:4px solid #bbb;color:#333}a{color:#0b5cad}</style></head><body><article><h1>${escapeHtml(fields.title || 'Untitled')}</h1>${fields.dek ? `<p class="dek">${escapeHtml(fields.dek)}</p>` : ''}${byline ? `<p class="by">${byline}</p>` : ''}${html || '<p><em>Nothing to preview yet.</em></p>'}</article></body></html>`;
     return jsonResponse(200, { ok: true, doc });
   }
 
@@ -58,7 +71,7 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     } catch (err) {
       return jsonResponse(400, { ok: false, error: (err as Error).message });
     }
-    const r = saveDraft(draft.id, version, parsed.fields, parsed.photoAlts, user.id, parsed.layout);
+    const r = saveDraft(draft.id, version, parsed.fields, parsed.photoAlts, user.id, parsed.layout, parsed.photoFocus);
     if (!r.ok) return jsonResponse(r.reason === 'conflict' ? 409 : r.reason === 'locked' ? 423 : 400, { ok: false, conflict: r.reason === 'conflict', error: r.message });
     if (saveAuditDue(user.id, draft.id)) audit('draft.save', { userId: user.id, target: `draft:${draft.id}`, ip });
     return jsonResponse(200, { ok: true, updatedAt: r.updatedAt, savedBy: user.name, savedAt: r.updatedAt });

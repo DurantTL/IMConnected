@@ -235,6 +235,10 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
       const prevSrc = prev ? [...(prev.image ? [prev.image] : []), ...prev.photos] : [];
       const photoRows: StoryPhoto[] = [];
       for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], result));
+      photoRows.forEach((row, i) => {
+        const point = d.photoFocus?.[i];
+        if (point && (point.focalX !== 50 || point.focalY !== 50)) { row.focalX = point.focalX; row.focalY = point.focalY; }
+      });
       await testPause(slug);
       const hold = holds.get(slug);
       let held = false;
@@ -247,6 +251,7 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
       };
       // The layout joins the hash only when it is not the default, so every already-adopted story keeps its hash.
       if (d.photoLayout && d.photoLayout !== 'one') (base as Record<string, unknown>).photoLayout = d.photoLayout;
+      if (d.storyBlocks?.length) (base as Record<string, unknown>).storyBlocks = d.storyBlocks;
       const contentHash = sha256Of(JSON.stringify([base, photoRows]));
 
       // 2. Then one short write for this story. Everything that decides it is read INSIDE the transaction, because a

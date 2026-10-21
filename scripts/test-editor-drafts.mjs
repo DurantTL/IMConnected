@@ -373,6 +373,93 @@ let H, slugH;
   await c1.form('/api/admin/stories/unpublish', { slug: slugH });
 }
 
+// ================= a live modular story at the length limit with "<" can be edited and republished =================
+{
+  const para = 'p'.repeat(19_990) + '<<<<<' + 'q'.repeat(5);
+  let r = await c1.form('/api/admin/drafts/new', {});
+  const L = idOf(r);
+  const f = baseFields({ title: 'Edge Paragraph Round Trip', section: 'news', area: 'churches' }); delete f.body;
+  r = await c1.json(`/api/admin/drafts/${L}/save`, { version: version(L), ...f, storyBlocks: JSON.stringify([{ id: 'p', type: 'text', text: para }]) });
+  check('a paragraph of 20,000 characters with five "<" saves', r.data.ok === true, JSON.stringify(r.data));
+  r = await c1.form(`/api/admin/drafts/${L}/publish`, { version: version(L) });
+  const slugL = draftRow(L).slug;
+  check('...and publishes', r.params.get('n') === 'published', r.loc);
+  const snapshot = async () => ({ feed: JSON.stringify(JSON.parse((await getPub('/stories.json')).text).stories.find((x) => x.url.includes(slugL))), api: PUBLISH_TOKEN ? (await (await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } })).text()) : '', page: (await getPub(`/stories/${slugL}/`)).text.replace(/<link[^>]*>|<script[^]*?<\/script>/g, ''), row: story(slugL) });
+  const before = await snapshot();
+  await c1.form('/api/admin/stories/edit', { slug: slugL });
+  const reopened = JSON.parse(draftRow(L).story_blocks);
+  check('editing it: the paragraph field shows "<" (20,000 characters, not 20,015)', reopened[0].text === para && reopened[0].text.length === 20_000);
+  // a page without JavaScript sends the read-only Markdown box back as it was rendered
+  r = await c1.json(`/api/admin/drafts/${L}/save`, { version: version(L), ...f, body: draftRow(L).body, storyBlocks: JSON.stringify(reopened) });
+  check('...a save that sends the Markdown box back unchanged (no JavaScript) succeeds', r.data.ok === true, JSON.stringify(r.data));
+  r = await c1.json(`/api/admin/drafts/${L}/save`, { version: version(L), ...f, storyBlocks: JSON.stringify(reopened) });
+  check('...Save succeeds', r.data.ok === true, JSON.stringify(r.data));
+  r = await c1.form(`/api/admin/drafts/${L}/publish`, { version: version(L) });
+  check('...and Publish changes succeeds', r.params.get('n') === 'published', r.loc);
+  const after = await snapshot();
+  check('...nothing reaches the database, the body, /stories.json or /api/stories unescaped, and the output is unchanged',
+    !after.row.story_blocks.includes('<') && !after.row.body.includes('<') && !after.feed.includes('<') && !after.api.includes('<<') && after.row.story_blocks === before.row.story_blocks && after.row.body === before.row.body && after.feed === before.feed && !after.page.includes('&amp;lt;'));
+  await c1.form('/api/admin/stories/unpublish', { slug: slugL });
+}
+
+// ================= story modules: hostile text everywhere, escaped like the body =================
+{
+  const evil = '<script>alert(1)</script> <img src=x onerror=alert(1)>';
+  let r = await c1.form('/api/admin/drafts/new', {});
+  const M = idOf(r);
+  await c1.form(`/api/admin/drafts/${M}/photos`, { version: version(M), op: 'upload' }, [{ bytes: PNG_A, filename: 'a.png' }]);
+  const pid = q('SELECT id FROM draft_photos WHERE draft_id = ?', M)[0].id;
+  const blocks = [
+    { id: 'm-text', type: 'text', text: `Intro. ${evil}` }, { id: 'm-head', type: 'heading', level: 2, text: evil }, { id: 'm-list', type: 'list', items: [evil, 'Plain item'] },
+    { id: 'm-quote', type: 'quote', text: evil }, { id: 'm-img', type: 'image', photoId: pid, alt: evil }, { id: 'm-btn', type: 'button', label: evil, url: 'https://example.test/go' },
+  ];
+  const fields = baseFields({ title: 'Module Hostility Check', section: 'news', area: 'churches' }); delete fields.body; // like a client that sends no Markdown box
+  r = await c1.json(`/api/admin/drafts/${M}/save`, { version: version(M), ...fields, storyBlocks: JSON.stringify(blocks) });
+  check('modules with hostile text, alt text and labels save', r.data.ok === true, JSON.stringify(r.data));
+  check('...the saved Markdown projection has no paragraph made of the image description (image modules add nothing)', (draftRow(M).body.match(/script/g) || []).length === 10, draftRow(M).body);
+  r = await c1.json(`/api/admin/drafts/${M}/save`, { version: version(M), ...fields, body: 'A change typed into the Markdown box', storyBlocks: JSON.stringify(blocks) });
+  check('a Markdown-box edit on a modular draft is refused with a clear message, never dropped', r.status === 400 && /Markdown box was not saved/.test(r.data.error || ''), JSON.stringify(r.data));
+  r = await c1.json(`/api/admin/drafts/${M}/save`, { version: version(M), ...fields, storyBlocks: JSON.stringify([{ id: 'x', type: 'image', url: 'https://example.test/outside.jpg' }]) });
+  check('an image module with an address (external or otherwise) is refused on save', r.status === 400 && /own photos/.test(r.data.error || ''), JSON.stringify(r.data));
+  check('the editor shows the Markdown box read-only for a modular draft', /<textarea[^>]*name="body"[^>]*readonly/.test((await c1.get(`/admin/drafts/${M}`)).text));
+  r = await c1.form(`/api/admin/drafts/${M}/publish`, { version: version(M) });
+  check('the hostile modular story publishes', r.params.get('n') === 'published', r.loc);
+  const slugM = draftRow(M).slug;
+  const sj = JSON.parse((await getPub('/stories.json')).text).stories.find((x) => x.url.includes(slugM));
+  const rawBlocks = JSON.stringify(sj?.storyBlocks ?? null);
+  check('/stories.json storyBlocks hold no "<" and show the text as &lt;', !!sj && !rawBlocks.includes('<') && rawBlocks.includes('&lt;script>alert(1)&lt;/script>'), rawBlocks.slice(0, 300));
+  if (PUBLISH_TOKEN) {
+    const api = await (await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } })).text();
+    const fromApi = JSON.stringify(JSON.parse(api).stories.find((x) => x.id === slugM)?.storyBlocks ?? null);
+    check('GET /api/stories storyBlocks hold no "<" either', fromApi.includes('&lt;script>') && !fromApi.includes('<'), fromApi.slice(0, 200));
+  }
+  const pageM = (await getPub(`/stories/${slugM}/`)).text;
+  const shown = (pageM.match(/&lt;script&gt;alert\(1\)&lt;\/script&gt; &lt;img src=x onerror=alert\(1\)&gt;/g) || []).length;
+  check('the story page shows every module text literally (paragraph, heading, list, quote, label)', shown >= 5, String(shown));
+  check('...with no element created from it and no double-escaped entity', !/<script>alert|<img src=x|<svg onload/.test(pageM.replace(/="[^"]*"/g, '=""')) && !pageM.includes('&amp;lt;'));
+  check('...the search index holds no doubled backslash-entity text', !(await anon.get('/api/search?q=' + encodeURIComponent('alert'))).text.includes('\\&lt;'));
+  // L2: editing the live modular story shows what was typed ("<"), and republishing keeps the page literal and the feed escaped
+  await c1.form('/api/admin/stories/edit', { slug: slugM });
+  const reopened = JSON.parse(draftRow(M).story_blocks);
+  check('editing a live modular story: heading, list item, label and alt show "<", not &lt;', reopened[1].text === evil && reopened[2].items[0] === evil && reopened[5].label === evil && reopened[4].alt === evil, JSON.stringify(reopened.slice(1, 3)));
+  r = await c1.form(`/api/admin/drafts/${M}/publish`, { version: version(M) });
+  const feed2 = JSON.stringify(JSON.parse((await getPub('/stories.json')).text).stories.find((x) => x.url.includes(slugM))?.storyBlocks ?? null);
+  const page2 = (await getPub(`/stories/${slugM}/`)).text;
+  check('...after edit and republish the feed still has &lt; and the page still shows the text literally', r.params.get('n') === 'published' && !feed2.includes('<') && feed2.includes('&lt;script>') && !page2.includes('&amp;lt;') && (page2.match(/&lt;script&gt;alert\(1\)&lt;\/script&gt;/g) || []).length >= 5, r.loc);
+  await c1.form('/api/admin/stories/unpublish', { slug: slugM });
+
+  // the private preview may load only the story's own photos
+  const pv = await c1.json(`/api/admin/drafts/${M}/preview`, { title: 'T', body: '![a](/api/admin/users) ![b](/admin/drafts/1) ![c](/api/admin/photos/1) ![d](/media/stories/x/y.jpg) ![e](https://example.test/p.jpg)' });
+  const pdoc = pv.data.doc || '';
+  check('preview: an image pointing at another same-origin path is removed', !pdoc.includes('/api/admin/users') && !pdoc.includes('/admin/drafts/1'), pdoc.slice(-400));
+  const own = await c1.json(`/api/admin/drafts/${M}/preview`, { title: 'T', body: `![x](${BASE}/api/admin/users) ![y](${BASE.replace('http:', 'https:')}/api/admin/users) ![z](https://example.test/p.jpg)` });
+  check('preview: an https address on the site\'s own host is removed, another host\'s image is kept', !(own.data.doc || '').includes('/api/admin/users') && (own.data.doc || '').includes('https://example.test/p.jpg'), (own.data.doc || '').slice(-300));
+  const host = new URL(BASE).hostname;
+  const dot = await c1.json(`/api/admin/drafts/${M}/preview`, { title: 'T', body: `![d](https://${host}./api/admin/users) ![u](https://${host.toUpperCase()}/api/admin/users)` });
+  check('preview: a trailing-dot or upper-case spelling of the site\'s own host is removed too', !(dot.data.doc || '').includes('/api/admin/users'), (dot.data.doc || '').slice(-300));
+  check('...the story\'s own photo paths are kept', pdoc.includes('src="/api/admin/photos/1"') && pdoc.includes('src="/media/stories/x/y.jpg"'));
+}
+
 // ================= conflicts =================
 {
   let r = await c1.form('/api/admin/drafts/new', {});
@@ -491,7 +578,7 @@ let S;
   const D = await mk('Double Click Story');
   const v = version(D);
   const both = await Promise.all([c1.form(`/api/admin/drafts/${D}/publish`, { version: v }), c1.form(`/api/admin/drafts/${D}/publish`, { version: v })]);
-  check('the same draft published twice at once publishes once (the other is refused)', both.filter((x) => x.params.get('n') === 'published').length === 1 && both.filter((x) => ['conflict', 'already_publishing', 'not_publishable'].includes(x.params.get('e'))).length === 1 && q("SELECT COUNT(*) n FROM stories WHERE slug LIKE '2026-10-19-double-click-story%'")[0].n === 1, JSON.stringify(both.map((x) => x.loc)));
+  check('the same draft published twice at once publishes once (the other is refused)', both.filter((x) => x.params.get('n') === 'published').length === 1 && both.filter((x) => ['conflict', 'already_publishing', 'not_publishable', 'closed'].includes(x.params.get('e'))).length === 1 && q("SELECT COUNT(*) n FROM stories WHERE slug LIKE '2026-10-19-double-click-story%'")[0].n === 1, JSON.stringify(both.map((x) => x.loc)));
   // a slug taken by someone else between freshSlug and the write is refused, not taken over
   const V = await mk('Taken Address Story');
   run("INSERT INTO stories (slug, title, section, author, date, source, published_at, updated_at) VALUES ('2026-10-19-taken-address-story', 'Other story', 'news', 'a', '2026-10-19', 'git', 1, 1)");
@@ -601,7 +688,7 @@ if (browser) {
     await page.click('.ed-tabs [data-view=preview]');
     await page.waitForTimeout(500);
     const sandbox = await page.getAttribute('#preview', 'sandbox');
-    check('the preview frame is sandboxed with no permissions (no scripts, no same-origin)', sandbox === '');
+    check('the preview allows authenticated same-origin photos but never scripts', sandbox === 'allow-same-origin' && !sandbox.includes('allow-scripts'));
     const frame = page.frameLocator('#preview');
     const frameText = (await frame.locator('body').innerText()).replace(/\s+/g, ' ');
     check('the preview shows the hostile text as text', frameText.includes('<script>alert(1)</script>') && frameText.includes('<img src=x onerror=alert(1)>'), frameText.slice(0, 200));
@@ -617,6 +704,7 @@ if (browser) {
     await c1.form(`/api/admin/drafts/${W}/photos`, { version: version(W), op: 'upload' }, [{ bytes: PNG_A, filename: 'a.png' }, { bytes: PNG_B, filename: 'b.png' }]);
     await c1.form(`/api/admin/drafts/${W}/photos`, { version: version(W), op: 'upload' }, [{ bytes: PNG_B, filename: 'c.png' }]);
     await page.goto(`${BASE}/admin/drafts/${W}`);
+    await page.locator('[data-studio-tab=photos]').click();
     await page.waitForSelector('.ed-photo img');
     await page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth > 0));
     check('390px: uploaded photos load through the guarded route', true);
@@ -624,6 +712,7 @@ if (browser) {
     const small = await page.evaluate(() => [...document.querySelectorAll('button, input[type=file], select, .ed-check')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.height < 43 || r.width < 43) && !e.closest('[hidden]'); }).map((e) => e.outerHTML.slice(0, 60)));
     check('390px: buttons and fields are at least 44px tall (touch targets)', small.length === 0, small.slice(0, 3).join(' | '));
     await shot('editor-390.png');
+    await page.locator('[data-studio-tab=content]').click();
     await page.fill('#f-body', 'Hello world');
     await page.evaluate(() => { const t = document.getElementById('f-body'); t.setSelectionRange(0, 5); });
     await page.click('[data-md=bold]');
@@ -635,7 +724,7 @@ if (browser) {
     check('the live preview is rendered by the server (blockquote, strong)', (await page.getAttribute('#preview', 'srcdoc')).includes('<blockquote>'));
     await shot('editor-preview-390.png');
     await page.click('.ed-tabs [data-view=write]');
-    await page.click('#save-btn');
+    await page.locator('#save-btn:visible, #mobile-save-btn:visible').first().click(); // the toolbar Save on desktop, the bottom bar Save on phones
     await page.waitForFunction(() => /Last saved \d/.test(document.getElementById('save-status').textContent));
     check('Save works and shows the time and name', /Test Editor/.test(await page.textContent('#save-status')) && draftRow(W).body.startsWith('> **Hello** world'), await page.textContent('#save-status'));
     // autosave after 20 s
@@ -646,13 +735,15 @@ if (browser) {
     // a conflict seen by the browser
     await c2.json(`/api/admin/drafts/${W}/save`, { version: version(W), ...baseFields({ title: 'Changed By Someone Else', body: 'Other text' }) });
     await page.fill('#f-body', 'My text that will conflict.');
-    await page.click('#save-btn');
+    await page.locator('#save-btn:visible, #mobile-save-btn:visible').first().click(); // the toolbar Save on desktop, the bottom bar Save on phones
     await page.waitForSelector('#conflict:not([hidden])');
     check('the browser shows "reload to see changes" on a stale save and does not overwrite', /Reload to see their changes/.test(await page.textContent('#conflict')) && draftRow(W).body === 'Other text');
     await shot('editor-conflict-390.png');
     // photo operation saves pending edits first, then reloads
     await page.goto(`${BASE}/admin/drafts/${W}`);
+    await page.locator('[data-studio-tab=settings]').click();
     await page.fill('input[name=title]', 'Title edited before a photo change');
+    await page.locator('[data-studio-tab=photos]').click();
     await page.locator('.ed-photo').nth(1).locator('button', { hasText: 'Make lead' }).click();
     await page.waitForURL(/n=photos/);
     check('a photo action first saves unsaved edits, then applies', draftRow(W).title === 'Title edited before a photo change' && q('SELECT id FROM draft_photos WHERE draft_id = ? ORDER BY position', W).length === 3);

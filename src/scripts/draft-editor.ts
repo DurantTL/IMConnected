@@ -1,5 +1,6 @@
 // Behaviour for /admin/drafts/<id>: toolbar, server-side preview, autosave, conflict handling.
 // Everything the server renders works without it except the toolbar, the preview and autosave.
+import './story-builder';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
 
@@ -71,6 +72,15 @@ if (form) {
     return saving;
   }
 
+  // A response for an older snapshot does not mean later edits were saved.
+  async function flushSaves(): Promise<boolean> {
+    if (!editable) return true; // nothing can change, so there is nothing to wait for
+    while (dirty || saving) {
+      if (!(await save())) return false;
+    }
+    return !conflict;
+  }
+
   form.addEventListener('input', () => {
     dirty = true;
     schedulePreview();
@@ -78,7 +88,7 @@ if (form) {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     dirty = true; // an explicit Save always saves
-    void save();
+    void flushSaves();
   });
   setInterval(() => {
     if (dirty && !saving && !conflict) void save();
@@ -92,10 +102,14 @@ if (form) {
     let resubmitting = false;
     other.addEventListener('submit', (e) => {
       if (resubmitting) return;
+      const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+      if (other.id === 'photo-form' && submitter?.value.startsWith('delete:') && !window.confirm('Delete this photo? Any image module using it will also be removed.')) {
+        e.preventDefault();
+        return;
+      }
       if (!dirty && !saving) return;
       e.preventDefault();
-      const submitter = (e as SubmitEvent).submitter as HTMLElement | null;
-      void save().then((ok) => {
+      void flushSaves().then((ok) => {
         if (!ok) return;
         resubmitting = true;
         other.requestSubmit(submitter ?? undefined);

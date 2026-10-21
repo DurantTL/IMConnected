@@ -2,6 +2,9 @@
 
 # Claude Code: delegating to subagents
 
+For the GPT/Codex counterpart and the owner's Luna/Tera/Sol/Fable mapping, see
+[CODEX.md](CODEX.md). Codex role configurations live in `.codex/`.
+
 These rules are for Claude Code only (Codex reads `AGENTS.md`). Delegate by
 these rules without asking first; they count as the user's request to use
 subagents. The agents live in `.claude/agents/`.

@@ -1,6 +1,7 @@
 import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
 import { z } from 'astro/zod';
+import { OWN_PHOTO_ERROR, normalizeStoryBlocks } from './lib/story-blocks';
 import { SECTION_KEYS } from './lib/site';
 
 const stories = defineCollection({
@@ -28,8 +29,14 @@ const stories = defineCollection({
     photoAlts: z.array(z.string()).default([]),
     /** How the story page arranges the photos (Studio's story layouts). Missing means one: the lead photo, the others in a row. Values live in src/lib/photo-layouts.ts. */
     photoLayout: z.enum(['one', 'twoUp', 'heroGrid', 'mosaic', 'stack']).default('one'),
+    storyBlocks: z.unknown().optional().transform((value) => normalizeStoryBlocks(value)),
+    photoFocus: z.array(z.object({ focalX: z.number().min(0).max(100), focalY: z.number().min(0).max(100) })).default([]),
     featured: z.boolean().default(false),
     draft: z.boolean().default(false),
+  }).superRefine((d, ctx) => {
+    // An image module can only show one of the story's own photos (its lead image or gallery).
+    const own = new Set([...(d.image ? [d.image] : []), ...d.photos]);
+    if (d.storyBlocks?.some((b) => b.type === 'image' && b.url && !own.has(b.url))) ctx.addIssue({ code: 'custom', path: ['storyBlocks'], message: OWN_PHOTO_ERROR });
   }),
 });
 

@@ -8,6 +8,7 @@
 // interleave with another publish in this process; a second process is stopped by the UNIQUE indexes on
 // stories.slug and drafts.slug.
 import fs from 'node:fs';
+import { checkStoryBlockLength, normalizeStoryBlocks, unescapeStoryBlockPlainText, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { LIMITS } from './limits';
@@ -183,7 +184,12 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   const title = oneLine(draft.title);
   const author = oneLine(draft.author);
   const dek = oneLine(draft.dek);
-  const body = clean(draft.body).trim();
+  let draftBlocks: StoryBlock[];
+  try { draftBlocks = normalizeStoryBlocks(draft.storyBlocks ?? []); } catch { throw new EditorError('blocks_bad'); }
+  if (draftBlocks.some((b) => b.type === 'button' && !b.url)) throw new EditorError('link_unsafe');
+  // The Markdown is built and measured as typed (the same rule as saving); every "<" becomes &lt; only when it is written
+  // (here for the body, in writeStory for the modules), so escaping can never push a field over its limit.
+  const body = clean(draftBlocks.length ? storyBlocksToMarkdown(draftBlocks) : draft.body).trim();
   const section = draft.section;
   const area = draft.area || undefined;
 
@@ -193,7 +199,8 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   if (author.length > PUBLISH_LIMITS.author) throw new EditorError('author_long');
   if (dek.length > LIMITS.dek) throw new EditorError('dek_long');
   if (!body) throw new EditorError('body_required');
-  if (body.length > LIMITS.bodyMax) throw new EditorError('body_long');
+  if (body.replace(/&lt;/g, '<').length > LIMITS.bodyMax || body.length > 4 * LIMITS.bodyMax) throw new EditorError('body_long');
+  try { checkStoryBlockLength(draftBlocks); } catch { throw new EditorError('body_long'); } // same rule as saving
   if (!getSection(section)) throw new EditorError('section_required');
   if (!isValidArea(section, area)) throw new EditorError('area_bad');
   if (!validDate(draft.date)) throw new EditorError('date_required');
@@ -230,12 +237,20 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
 
   const existing = getStoryBySlug(slug, { includeUnpublished: true });
   const stored = await storePhotos(slug, items, existing);
+  const storyBlocks: StoryBlock[] = draftBlocks.map((block) => {
+    if (block.type !== 'image') return block;
+    const index = photos.findIndex((p) => p.id === block.photoId);
+    if (index < 0) { removeFiles(stored.created); throw new EditorError('photo_missing'); }
+    const photo = photos[index];
+    return { ...block, photoId: undefined, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50 };
+  });
+  stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; });
   const now = Date.now();
   const story: StoryInput = {
     slug, title, dek: dek || undefined, section, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
     date: draft.date, photoCredit: stored.sources.length && photoCredit ? photoCredit : undefined,
     ...photoFields(stored, alts, title),
-    photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body),
+    photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body), storyBlocks,
     status: 'live', source: draft.source, draftId: draft.id, publishedAt: now, publishedBy: userId, editedAt: now, photoRows: stored.rows,
   };
 
@@ -281,7 +296,7 @@ export function unpublishLive(slug: string, userId: number): { title: string } |
 
 export interface LoadedStory {
   fields: DraftFields;
-  photos: { url: string; alt: string; caption: string }[];
+  photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number }[];
 }
 
 /** A live story from the database as editor fields and photos. Null when there is no live story with that address. */
@@ -291,13 +306,18 @@ export function loadStory(slug: string): LoadedStory | null {
   if (!s) return null;
   if (!getSection(s.section)) throw new EditorError('section_unknown');
   const sources = [...(s.image ? [s.image] : []), ...s.photos];
+  // Image modules can only show the story's own photos (writes refuse anything else); drop one that does not, never add a source.
+  const storyBlocks = s.storyBlocks && unescapeStoryBlockPlainText(s.storyBlocks).filter((b) => b.type !== 'image' || (b.url && sources.includes(b.url)));
   const alts = [s.imageAlt ?? '', ...s.photoAlts];
   return {
     fields: {
       title: s.title, dek: s.dek ?? '', section: s.section, area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
-      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body,
+      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks,
     },
-    photos: sources.map((url, i) => ({ url, alt: alts[i] ?? '', caption: '' })),
+    photos: sources.map((url, i) => {
+      const inline = storyBlocks?.find((b) => b.type === 'image' && b.url === url);
+      return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50 };
+    }),
   };
 }
 
