@@ -12,6 +12,19 @@ This follow-up starts from the refreshed `main` at `d218010`, including the late
 - Public story search has a new discovery layout, visible labels, automatic section filtering, clear/reset and no-match recovery. Query/section feedback reflects the returned count, including the 20-result cap. URL history and request ordering are covered by browser regressions.
 - Issue **#38** was reproduced with only 50 of 121 stored stories indexed. Initial search now reports temporary unavailability until all live, non-draft rows have current index stamps. Catch-up runs in bounded background batches and retries after locks. Restart, failed-row and steady-state repair behavior are covered by tests.
 
+## Image zoom and pan follow-up
+
+The Photos panel now has a crop you can drag, keyboard panning, 100–300% Zoom, +/− buttons and Reset crop. The existing focal marker and horizontal/vertical sliders remain available. Saved metadata follows a photo through publish, live-story reopening, imports/adoption, private previews, inline modules, public cards/layouts and the optional version-1 feed fields. Original image bytes and full-image links remain intact. The editor uses a 16:9 crop preview; cards, paired photos and galleries keep their own proportions around the same focal point.
+
+Migration 018 supplies 100% zoom for existing draft/published photos. Older forms that omit crop fields preserve saved values. No Studio or agent API request fields changed. An older server image does not understand zoom and may reset it if it republishes a story; use a current image for editing cropped photos.
+
+Synthetic screenshots, viewable directly on GitHub:
+
+- [Desktop zoom and pan controls](design/story-photo-zoom-pan-desktop.png)
+- [Phone zoom and pan controls](design/story-photo-zoom-pan-mobile.png)
+
+Verified against the crop build: 25 module checks, SQLite builder integration, 96 builder browser checks including axe, 183 editor draft checks, the pending-save publish regression, 94 photo layout/viewer checks including an upgrade with existing photos, 24 import checks, 201 agent API checks, 104 design checks across 30 responsive screens, and 37 public-page checks. Four old-markup comparison groups were explicitly skipped; pre-redesign byte comparisons do not apply to the magazine redesign. Tests used temporary local data, made-up credentials and synthetic photos. Independent read-only Sol review found no blocking or medium defects.
+
 ## What changed after the design review
 
 The earlier pass left the existing page structure mostly intact: a large empty hero placeholder, lightly restyled navigation, and a long editor form with the module tools inserted halfway down. This revision changes those structures.

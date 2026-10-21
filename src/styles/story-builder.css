@@ -32,6 +32,15 @@
 .story-builder iframe { display:block; width:100%; min-height:580px; margin:0 auto; background:white; border:1px solid var(--line); border-radius:10px; }
 .story-builder iframe.sb-phone-preview { max-width:375px; }
 .sb-photo-preview img { width:160px; max-width:100%; height:100px; object-fit:cover; border-radius:8px; }
+.sb-pan-crop { width:100%; aspect-ratio:16/9; overflow:hidden; border-radius:8px; background:#e6eeed; cursor:grab; touch-action:none; }
+.sb-pan-crop:active { cursor:grabbing; }
+.editor-studio .sb-photo-preview .sb-pan-crop img { display:block; width:100%; height:100%; max-width:none; aspect-ratio:auto; object-fit:cover; border-radius:0; pointer-events:none; user-select:none; }
+.sb-pan-crop:focus-visible { outline:3px solid var(--brand); outline-offset:4px; }
+.sb-zoom-controls { margin-top:14px; max-width:560px; }
+.sb-zoom-controls label { display:grid; grid-template-columns:1fr auto; gap:8px; font-size:.8rem; font-weight:650; }
+.sb-zoom-controls input { grid-column:1/-1; width:100%; min-height:44px; accent-color:var(--brand); }
+.sb-zoom-controls>div { display:flex; gap:8px; margin-top:6px; }
+.sb-zoom-controls button { min-height:44px; min-width:44px; padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font:inherit; cursor:pointer; }
 .ed-photo:has(.sb-photo-preview) { grid-template-columns:160px minmax(0,1fr) auto; }
 .sb-focus-settings { margin-top:12px; max-width:460px; }
 .sb-focus-settings summary { font-weight:650; cursor:pointer; padding:10px 0; min-height:44px; box-sizing:border-box; }

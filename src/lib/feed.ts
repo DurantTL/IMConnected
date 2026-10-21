@@ -33,7 +33,7 @@ export interface FeedItem {
   /** How the story page arranges the photos: one, twoUp, heroGrid, mosaic or stack (one = lead photo, others in a row) */
   photoLayout: string;
   storyBlocks?: StoryBlock[];
-  photoFocus?: { focalX: number; focalY: number }[];
+  photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
   featured: boolean;
 }
 
@@ -57,7 +57,7 @@ export interface FeedSource {
     photoAlts: string[];
     photoLayout?: string;
     storyBlocks?: StoryBlock[];
-    photoFocus?: { focalX: number; focalY: number }[];
+    photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
     featured: boolean;
   };
 }
@@ -86,7 +86,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     photoAlts: d.photos.map((_, i) => d.photoAlts[i] ?? ''),
     photoLayout: photoLayoutOrDefault(d.photoLayout),
     ...(d.storyBlocks?.length ? { storyBlocks: escapeStoryBlocks(d.storyBlocks).map((b) => b.type === 'image' && b.url ? { ...b, url: abs(b.url) } : b) } : {}),
-    ...(d.photoFocus?.some((p) => p.focalX !== 50 || p.focalY !== 50) ? { photoFocus: d.photoFocus } : {}),
+    ...(d.photoFocus?.some((p) => p.focalX !== 50 || p.focalY !== 50 || (p.zoom ?? 1) !== 1) ? { photoFocus: d.photoFocus } : {}),
     featured: d.featured,
   };
 }

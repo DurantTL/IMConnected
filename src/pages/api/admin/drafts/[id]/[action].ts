@@ -56,8 +56,8 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     let html = fields.storyBlocks?.length ? await renderStoryBlocksSafe(fields.storyBlocks, { resolvePhoto: (photoId) => {
       const photo = draftPhotos.find((p) => p.id === photoId);
       if (!photo) return undefined;
-      const point = focus.get(photoId) ?? photo;
-      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: photo.alt, focalX: point.focalX, focalY: point.focalY };
+      const point = { ...photo, ...focus.get(photoId) };
+      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: photo.alt, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom };
     } }) : (await renderMarkdownSafe(fields.body)).html;
     const ownHosts = [new URL(request.url).hostname];
     try { ownHosts.push(new URL(siteUrl()).hostname); } catch { /* a malformed SITE_URL must not break the preview: the request host alone is used */ }

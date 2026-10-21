@@ -1,10 +1,10 @@
 // Server-only module rendering. Keep the shared schema usable in the editor without pulling Markdown into its bundle.
 import { escapeHtml, renderMarkdownSafe } from './markdown';
-import { focalPoint, isStoryImageUrl, normalizeStoryBlocks, type StoryBlock } from './story-blocks';
+import { focalPoint, photoFocusStyle, isStoryImageUrl, normalizeStoryBlocks, type StoryBlock } from './story-blocks';
 
 export interface StoryBlockRenderOptions {
   /** The authenticated editor can resolve an image's draft photo ID without exposing it publicly. */
-  resolvePhoto?: (photoId: number) => { url: string; alt?: string; focalX?: number; focalY?: number } | undefined;
+  resolvePhoto?: (photoId: number) => { url: string; alt?: string; focalX?: number; focalY?: number; zoom?: number } | undefined;
 }
 
 /**
@@ -33,9 +33,10 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
         // Only the trusted callback can return a protected editor photo endpoint.
         if (!isStoryImageUrl(url) && !(photo && /^\/api\/admin\/photos\/\d+$/.test(url))) break;
         const x = focalPoint(photo?.focalX ?? b.focalX), y = focalPoint(photo?.focalY ?? b.focalY);
+        const crop = photoFocusStyle({ focalX: x, focalY: y, zoom: photo?.zoom ?? b.zoom });
         const alt = b.alt || photo?.alt || '';
         const linkLabel = alt.trim() ? '' : ' aria-label="Enlarge story photo"';
-        out.push(`<figure class="story-module story-module-image"${attr}><a href="${escapeHtml(url)}" data-photo${linkLabel}><img src="${escapeHtml(url)}" alt="${plain(alt)}" loading="lazy" decoding="async" style="width:100%;aspect-ratio:16/9;object-fit:cover;object-position:${x}% ${y}%;"></a></figure>`);
+        out.push(`<figure class="story-module story-module-image"${attr}><a href="${escapeHtml(url)}" data-photo${linkLabel} style="display:block;overflow:hidden;border-radius:8px;"><img src="${escapeHtml(url)}" alt="${plain(alt)}" loading="lazy" decoding="async" style="display:block;margin:0;width:100%;aspect-ratio:16/9;object-fit:cover;${crop || 'object-position:50% 50%;'}"></a></figure>`);
         break;
       }
     }

@@ -135,6 +135,17 @@ try {
     ['zz-mod-external', 'zz-mod-foreign', 'zz-mod-nophoto'].every((n) => new RegExp(`ERROR\\s+${n}.*own photos`).test(r.out) && !q('SELECT 1 FROM stories WHERE slug = ?', n).length), r.out);
   r = imp('--apply');
   check('...and a second run reports the module story as unchanged', /same\s+zz-mod-good/.test(r.out), r.out);
+  const cropStory = (zoom) => md('Synthetic crop metadata', lead + `photoFocus: [{ focalX: 17, focalY: 83, zoom: ${zoom} }]\n`);
+  write('zz-crop-good', cropStory(1.8));
+  write('zz-crop-bad', cropStory(4));
+  r = imp('--apply');
+  const crop = q("SELECT p.focal_x, p.focal_y, p.zoom FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = 'zz-crop-good'")[0];
+  check('import preserves crop focus and zoom while rejecting out-of-range zoom', crop?.focal_x === 17 && crop.focal_y === 83 && crop.zoom === 1.8 && /ERROR\s+zz-crop-bad.*zoom/.test(r.out) && !q("SELECT 1 FROM stories WHERE slug = 'zz-crop-bad'").length, r.out);
+  r = imp('--apply');
+  check('a second crop import is unchanged', /same\s+zz-crop-good/.test(r.out), r.out);
+  write('zz-crop-good', cropStory(2.2));
+  r = imp('--apply');
+  check('changing only zoom updates imported metadata', /update\s+zz-crop-good/.test(r.out) && q("SELECT p.zoom FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = 'zz-crop-good'")[0]?.zoom === 2.2, r.out);
 } catch (err) {
   console.error('ERROR', err);
   fails++;

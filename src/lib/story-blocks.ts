@@ -14,7 +14,10 @@ export interface StoryBlock {
   alt?: string;
   focalX?: number;
   focalY?: number;
+  zoom?: number;
 }
+
+export interface PhotoCrop { focalX?: number; focalY?: number; zoom?: number }
 
 
 export const STORY_BLOCK_LIMIT = 60;
@@ -67,10 +70,18 @@ export function focalPoint(value: unknown): number {
   return Math.round(n * 100) / 100;
 }
 
-/** Omits the style for the default focus so existing stories keep their original markup. */
-export function photoFocusStyle(focus?: { focalX?: number; focalY?: number } | null): string | undefined {
+export function photoZoom(value: unknown): number {
+  if (value === undefined || value === null || value === '') return 1;
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  if (!Number.isFinite(n) || n < 1 || n > 3) return error('Photo zoom must be between 100% and 300%.');
+  return Math.round(n * 100) / 100;
+}
+
+/** Zoomed images need a clipping parent. Defaults keep existing markup and object-position unchanged. */
+export function photoFocusStyle(focus?: PhotoCrop | null): string | undefined {
   const x = focalPoint(focus?.focalX), y = focalPoint(focus?.focalY);
-  return x === 50 && y === 50 ? undefined : `object-position:${x}% ${y}%;`;
+  const zoom = photoZoom(focus?.zoom);
+  return x === 50 && y === 50 && zoom === 1 ? undefined : `object-position:${x}% ${y}%;${zoom === 1 ? '' : `scale:${zoom};transform-origin:${x}% ${y}%;`}`;
 }
 
 export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
@@ -110,6 +121,7 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
       b.alt = text(r.alt, 300, 'Photo description');
       if (r.focalX !== undefined) b.focalX = focalPoint(r.focalX);
       if (r.focalY !== undefined) b.focalY = focalPoint(r.focalY);
+      if (r.zoom !== undefined) b.zoom = photoZoom(r.zoom);
       total += b.alt.length;
     }
     if (b.type === 'button') {

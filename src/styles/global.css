@@ -214,6 +214,8 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .prose img { border-radius: var(--radius); margin: 1.4em 0; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin: 28px 0; }
 .gallery img { border-radius: 8px; aspect-ratio: 4 / 3; object-fit: cover; width: 100%; }
+.gallery a, .story-lead-crop { display:block; overflow:hidden; border-radius:var(--radius); }
+.story-lead-crop img { display:block; }
 .share { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 32px 0 0; padding-top: 18px; border-top: 1px solid var(--line); font-size: 0.88rem; color: var(--ink-3); }
 .share a, .share button { display: inline-flex; align-items: center; min-height: 44px; font: 600 0.86rem/1.4 var(--sans); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); text-decoration: none; cursor: pointer; }
 .share a:hover, .share button:hover { color: var(--ink); }
