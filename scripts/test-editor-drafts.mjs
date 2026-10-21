@@ -544,7 +544,7 @@ async function mockCommit(files) {
     check('the server log holds no submitter email, phone or name', !log.includes(SUB.email) && !log.includes('555-0142') && !log.includes('taylor') && !log.includes('Taylor Synthetic'));
   } else console.log('SKIP  server log check (set SERVER_LOG)');
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
-  const built = fs.existsSync('dist') ? walk('dist').filter((f) => !/\.(png|jpe?g|webp|woff2?|pf_\w+|pagefind|wasm)$/.test(f)).some((f) => { const t = fs.readFileSync(f, 'latin1'); return t.includes(SUB.email) || t.includes('555-0142'); }) : false;
+  const built = fs.existsSync('dist') ? walk('dist').filter((f) => !/\.(png|jpe?g|webp|woff2?|wasm)$/.test(f)).some((f) => { const t = fs.readFileSync(f, 'latin1'); return t.includes(SUB.email) || t.includes('555-0142'); }) : false;
   check('the built site (dist/) holds no submitter email or phone', !built);
 }
 

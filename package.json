@@ -6,7 +6,7 @@
   "description": "IMConnected — story magazine for the Iowa-Missouri Conference of Seventh-day Adventists",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && pagefind --site dist/client && node scripts/prune-search-source.mjs",
+    "build": "astro build",
     "start": "node dist/server/entry.mjs",
     "preview": "npm run build && npm start",
     "check": "astro check"
@@ -24,7 +24,6 @@
     "qrcode": "1.5.4"
   },
   "devDependencies": {
-    "@types/qrcode": "1.5.6",
-    "pagefind": "1.5.2"
+    "@types/qrcode": "1.5.6"
   }
 }
