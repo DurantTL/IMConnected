@@ -7,7 +7,6 @@ dist
 .env.*
 !.env.example
 /data/
-.mock-prs
 *.log
 scripts/test-*
 # synthetic story written by scripts/test-story-store.mjs while it runs

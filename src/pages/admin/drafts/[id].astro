@@ -6,6 +6,7 @@ import { SOURCE_LABEL, STATUS_LABEL, getDraft, isEditable, listPhotos } from '..
 import { noticeText, fmtTime, looksLikeEmail } from '../../../lib/admin-ui';
 import { errorText } from '../../../lib/messages';
 import { siteUrl } from '../../../lib/draft-http';
+import { driveConfig } from '../../../lib/db/gdrive.mjs';
 export const prerender = false;
 
 const id = /^\d{1,12}$/.test(Astro.params.id ?? '') ? Number(Astro.params.id) : null;
@@ -21,10 +22,12 @@ const notice = noticeText(q.get('n'));
 const error = errorText(q.get('e'));
 const liveUrl = draft?.slug ? `${siteUrl()}/stories/${draft.slug}/` : '';
 const isAgent = draft?.source === 'agent';
+// Administrators are reminded on the publish screen when backups are off: the database is the only copy of the stories.
+const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
 // Only an http(s) address becomes a link (the API checks it too; this is the last line of defence).
 const originalPost = draft?.sourceUrl && /^https?:\/\//i.test(draft.sourceUrl) ? draft.sourceUrl : '';
 const hasSubmitter = !!draft && !isAgent && (draft.source !== 'editor' || !!(draft.submitterName || draft.submitterEmail || draft.submitterPhone || draft.submitterChurch));
-const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
+const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
 ---
 <Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current="drafts" wide>
   {!draft ? (
@@ -46,7 +49,7 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
 
       {published && (
         <p class="admin-ok" role="status">
-          Published. Live in about 3–5 minutes at <a href={liveUrl}>{liveUrl}</a>.
+          Published. It's live now at <a href={liveUrl}>{liveUrl}</a>.
         </p>
       )}
       {notice && !published && <p class="admin-ok" role="status">{notice}</p>}
@@ -235,8 +238,9 @@ const safeImg = (u: string) => /^\/images\/[A-Za-z0-9._\-/]+$/.test(u) || /^http
       {editable && (
         <section class="ed-card">
           <h2>Publish</h2>
+          {backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
           <p class="admin-note">
-            {draft.live ? 'This story is already live. Publishing overwrites it with these changes. ' : ''}Publishing saves your changes, checks the story, and commits it to the live site. It appears in about 3–5 minutes.
+            {draft.live ? 'This story is already live. Publishing overwrites it with these changes. ' : ''}Publishing saves your changes, checks the story and puts it on the live site. It is live at once.
           </p>
           <form id="publish-form" method="post" action={`/api/admin/drafts/${draft.id}/publish`}>
             <input type="hidden" name="version" value={draft.updatedAt} />

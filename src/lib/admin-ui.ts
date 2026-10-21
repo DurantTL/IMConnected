@@ -19,9 +19,9 @@ export const NOTICES: Record<string, string> = {
   restored: 'Draft restored to In review.',
   uploaded: 'Photos uploaded.',
   photos: 'Photos updated.',
-  published_stale: 'Published and live in about 3–5 minutes, but edits saved while it was publishing are not live yet. Publish again to include them.',
-  published_held: 'Published. It returns with the next deploy (about 3–5 minutes after GitHub finishes building).',
-  unpublished: 'Story unpublished. It will disappear from the site in about 3–5 minutes.',
+  // 'published' is shown by the draft page itself, with a link to the story.
+  published: "Published. It's live now.",
+  unpublished: "Story unpublished. It's off the site now.",
 };
 
 /** Only an address that looks like an email gets a mailto: link. */

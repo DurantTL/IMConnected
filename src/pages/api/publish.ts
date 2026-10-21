@@ -1,9 +1,8 @@
 import type { APIRoute } from 'astro';
-import { githubConfigFromEnv, commitToBase, fileExistsOnBase } from '../../lib/github';
-import { buildPublish, PublishError, PUBLISH_LIMITS } from '../../lib/publish';
+import { prepareStudioPublish, PublishError, PUBLISH_LIMITS } from '../../lib/publish';
+import { publishStudioStories } from '../../lib/story-publish';
 import { SECTIONS } from '../../lib/site';
 import { clientIp } from '../../lib/request';
-import { recordStudioPublish } from '../../lib/drafts';
 import { audit } from '../../lib/auth/audit';
 import { readLimited } from '../../lib/bearer';
 import { studioAuth as checkAuth, studioCors as corsHeaders, studioJson as json } from '../../lib/studio-api';
@@ -46,12 +45,6 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
   if (denied) return denied;
   if (rateLimited(clientIp(request, clientAddress))) return json(request, 429, { ok: false, error: 'Too many requests. Please try again later.' });
 
-  const cfg = githubConfigFromEnv();
-  if (!cfg) {
-    console.error('[publish] GITHUB_TOKEN / GITHUB_REPO not configured');
-    return json(request, 503, { ok: false, error: 'Publishing is not configured.' });
-  }
-
   const text = await readLimited(request, PUBLISH_LIMITS.maxBodyBytes);
   if (text === null) return json(request, 400, { ok: false, error: 'The request is larger than 40 MB.' });
   let input: unknown;
@@ -62,25 +55,24 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
   }
 
   try {
-    const built = await buildPublish(input, (path) => fileExistsOnBase(cfg, path));
-    const n = built.stories.length;
-    const commit = await commitToBase(cfg, {
-      files: built.files,
-      message: `Publish ${n} ${n === 1 ? 'story' : 'stories'} from ${built.name} (${built.issueDate})`,
-    });
-    console.log(`[publish] committed ${n} stories, ${built.files.length} files, ${commit.sha}`);
-    // The story is live; also record it in the dashboard's history. Never fail the publish over this.
-    try {
-      const { ids, overwrote } = recordStudioPublish(built.stories.map((s) => ({ slug: s.slug, ...s.record })), commit.sha);
-      for (const id of ids) audit(overwrote.includes(id) ? 'draft.studio_overwrote_live' : 'draft.published_studio', { target: `draft:${id}`, detail: { commit: commit.sha } });
-    } catch (err) {
-      console.error('[publish] could not record the stories in the dashboard', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+    const prepared = await prepareStudioPublish(input);
+    const n = prepared.stories.length;
+    // One transaction: the stories, their photos, the search rows and the dashboard records change together or not at all.
+    const out = await publishStudioStories(prepared.stories);
+    console.log(`[publish] published ${n} ${n === 1 ? 'story' : 'stories'} to the database`);
+    for (const id of out.ids) {
+      try {
+        audit(out.overwrote.includes(id) ? 'draft.studio_overwrote_live' : 'draft.published_studio', { target: `draft:${id}`, detail: { newsletter: prepared.name } });
+      } catch {
+        /* the audit entry is a convenience */
+      }
     }
     const base = siteUrl();
     return json(request, 200, {
       ok: true,
-      commit: commit.sha,
-      stories: built.stories.map((s) => ({ ref: s.ref, slug: s.slug, url: `${base}/stories/${s.slug}/`, status: s.status })),
+      // Kept so older Studio builds that read it keep working: there is no commit any more (stories live in the database).
+      commit: null,
+      stories: out.stories.map((s) => ({ ref: s.ref, slug: s.slug, url: `${base}/stories/${s.slug}/`, status: s.status })),
     });
   } catch (err) {
     if (err instanceof PublishError) {

@@ -24,8 +24,7 @@ You implement one IMConnected issue. The caller gives you the issue number.
    people's names in made-up stories, or secrets in code, sample stories,
    logs, or commits.
 5. Before reporting success, run `npm run build` and, when you touched the
-   submit form or `src/lib/`, one synthetic submission through
-   `node scripts/mock-github.mjs` (see the README), then delete `.mock-prs/`.
+   submit form or `src/lib/`, the end-to-end suite that covers it (`scripts/test-editor-submissions.mjs` for the submit form and Studio, `scripts/test-editor-drafts.mjs` for the dashboard; there is no GitHub mock any more).
    Report the exact commands and results. If anything fails and you can't fix
    it after two honest attempts, stop and report the failing output verbatim.
 6. Your final report lists: what changed (files), the acceptance criteria and

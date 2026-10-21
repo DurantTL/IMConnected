@@ -78,7 +78,7 @@ async function cleanup() {
   if (!process.env.KEEP) fs.rmSync(SCRATCH, { recursive: true, force: true });
 }
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => cleanup().finally(() => process.exit(sig === 'SIGINT' ? 130 : 143)));
-const synced = () => log.some((l) => l.includes('[stories] mirrored the build'));
+const synced = () => log.some((l) => l.includes('[stories] adopting the build'));
 
 // ---- helpers ----
 const ip = (n) => ({ 'X-Forwarded-For': `203.0.113.${n}` }); // TRUST_PROXY=true: the rightmost entry is the client
@@ -113,7 +113,7 @@ const [A, B, C] = withWord; // A: unpublished in the dashboard, B: held, C: stay
 const aSection = A.s.section;
 
 try {
-  // ================= part 1: a fresh start (the mirror has not run yet) =================
+  // ================= part 1: a fresh start (the one-time adoption of the build has not run yet) =================
   // Prepare the database the way the dashboard leaves it: story A unpublished, story B unpublished then republished and held.
   const { openDatabase, runMigrations, readMigrationsFromDir } = await import(pathToFileURL(path.join(ROOT, 'src/lib/db/db-core.mjs')).href);
   {
@@ -130,12 +130,12 @@ try {
   await waitFor(BASE + '/submit/');
   {
     const r = await search({ q: C.word });
-    check('fresh start: search works before the mirror is ready (in-memory search over the build) and says where it looked', r.status === 200 && r.source === 'build' && !synced() && q('SELECT COUNT(*) AS n FROM stories')[0].n === 0, `${r.status} ${r.source} synced=${synced()}`);
+    check('fresh start: on a brand new, still empty database the first search waits for the adoption, then answers from the index (never from the build)', r.status === 200 && r.source === 'index' && synced() && q('SELECT COUNT(*) AS n FROM stories')[0].n > 0, `${r.status} ${r.source} synced=${synced()}`);
     check('fresh start: a word from a story body finds that story', slugsOf(r).includes(C.s.slug), r.text.slice(0, 300));
     const a = await search({ q: A.word });
     check('fresh start: a story unpublished in the dashboard is not returned', a.status === 200 && !slugsOf(a).includes(A.s.slug), r.text.slice(0, 200));
     const b = await search({ q: B.word });
-    check('fresh start: a held story (unpublished, then published again, old text still in the build) is not returned', b.status === 200 && !slugsOf(b).includes(B.s.slug), b.text.slice(0, 200));
+    check('fresh start: a story with an active hold (unpublish not provably in this build) is not returned', b.status === 200 && !slugsOf(b).includes(B.s.slug), b.text.slice(0, 200));
     const t = await search({ q: C.s.title.split(/\s+/).slice(0, 3).join(' ') });
     check('fresh start: a title search finds the story', slugsOf(t).includes(C.s.slug), t.text.slice(0, 200));
     check('fresh start: a one-letter word must match a whole word, never a prefix', slugsOf(await search({ q: `${C.word} ${C.word[0]}` })).length === 0);
@@ -144,7 +144,7 @@ try {
     const sec = await search({ q: C.word, section: C.s.section === 'news' ? 'kids' : 'news' });
     check('fresh start: the section filter applies', sec.status === 200 && !slugsOf(sec).includes(C.s.slug));
   }
-  check('(wait for the mirror)', await until(synced, 25000), log.slice(-4).join(' | '));
+  check('(wait for the adoption)', await until(synced, 25000), log.slice(-4).join(' | '));
 
   // ================= part 2: after the mirror =================
   {
@@ -263,19 +263,6 @@ try {
     check('a match found only in the dek still gives an escaped snippet', dekHit && !/<(?!\/?mark>)/.test(dekHit.snippet), JSON.stringify(dekHit));
   }
 
-  // ---- re-sync through the store: upsertStory keeps the index in step ----
-  {
-    run("UPDATE stories SET body = 'Edited behind the back: zzbackdoorword.', content_hash = 'edited-1', updated_at = updated_at + 5 WHERE slug = ?", C.s.slug);
-    check('(the edit is found, through the self-healing index)', slugsOf(await search({ q: 'zzbackdoorword' })).includes(C.s.slug));
-    run("UPDATE stories SET content_hash = 'edited-2' WHERE slug = ?", C.s.slug);
-    log.length = 0;
-    server1.kill('SIGUSR2');
-    check('(the server re-synced from the build)', await until(() => log.some((l) => l.includes('[stories] test re-sync')), 15000), log.slice(-3).join(' | '));
-    const row = q('SELECT s.updated_at AS u, f.stamp AS stamp, f.body AS body FROM stories s JOIN stories_fts f ON f.rowid = s.id WHERE s.slug = ?', C.s.slug)[0];
-    check('upsertStory re-indexed the story in its own transaction (index row stamped with the new updated_at, built text back) before any search', row && row.stamp === row.u && !row.body.includes('zzbackdoorword') && row.body.toLowerCase().includes(C.word), JSON.stringify(row)?.slice(0, 200));
-    check('...and search sees the built text again', slugsOf(await search({ q: C.word })).includes(C.s.slug) && !slugsOf(await search({ q: 'zzbackdoorword' })).includes(C.s.slug));
-  }
-
   // ---- rate limit ----
   {
     let limited = 0;
@@ -346,11 +333,10 @@ try {
     const server2 = startServer({ SEARCH_REPAIR_TEST_MS: '0' });
     await waitFor(BASE + '/submit/');
     await search({ q: 'baptism' });
-    check('after a restart the index persists and is used', await until(synced, 25000) && (await search({ q: C.word })).source === 'index');
+    check('after a restart (adoption already done: no second pass) the index persists and is used', !synced() && (await search({ q: C.word })).source === 'index');
     run('DROP TABLE stories_fts');
     const r = await search({ q: C.word });
-    check('when the index table is unreadable, search falls back to the in-memory search over what the pages show (200, not 500)', r.status === 200 && r.source === 'build' && slugsOf(r).includes(C.s.slug), `${r.status} ${r.source} ${r.text.slice(0, 200)}`);
-    check('...and still hides dashboard-unpublished and held stories', !slugsOf(await search({ q: A.word })).includes(A.s.slug) && !slugsOf(await search({ q: B.word })).includes(B.s.slug));
+    check('when the index table is unreadable, search says it is not available (200, ok: false, no results), never a 500 and never a wrong "no matches" from the old build', r.status === 200 && r.body?.ok === false && r.body.results.length === 0 && r.body.total === 0, `${r.status} ${r.source} ${r.text.slice(0, 200)}`);
     check('...hostile queries still never give a 500', [await search('q=NEAR('), await search({ q: '<script>' }), await search('q=%22'), await search('q=')].every((x) => x.status === 200 || x.status === 400));
     await stopServer(server2);
   }
@@ -371,10 +357,10 @@ try {
     await waitFor(BASE + '/submit/');
     const t0 = Date.now();
     const early = await search({ q: 'zzoldword2' });
-    check('upgrade: right after 013 on a populated database, search answers at once from the in-memory fallback (the index is still empty)', early.status === 200 && early.source === 'build' && Date.now() - t0 < 2000 && db2((d) => d.prepare('SELECT COUNT(*) AS n FROM stories_fts').get().n) === 0, `${early.status} ${early.source}`);
-    check('(wait for the mirror)', await until(synced, 25000), log.slice(-4).join(' | '));
+    check('upgrade: right after 015 on a populated database, search answers at once from the index (no waiting for the adoption pass) and finds the old story', early.status === 200 && early.source === 'index' && Date.now() - t0 < 2000 && slugsOf(early).includes('zz-old-2'), `${early.status} ${early.source} ${early.text.slice(0, 150)}`);
+    check('(wait for the adoption)', await until(synced, 25000), log.slice(-4).join(' | '));
     const counts = db2((d) => [d.prepare('SELECT COUNT(*) AS n FROM stories').get().n, d.prepare('SELECT COUNT(*) AS n FROM stories s JOIN stories_fts f ON f.rowid = s.id WHERE f.stamp = s.updated_at').get().n]);
-    check('upgrade: the sync pass indexed every story before search switched to the index (no per-request repair needed)', counts[0] >= 3 && counts[0] === counts[1], JSON.stringify(counts));
+    check('upgrade: the adoption pass indexed every story', counts[0] >= 3 && counts[0] === counts[1], JSON.stringify(counts));
     const late = await search({ q: 'zzoldword3' });
     check('upgrade: after the pass, search uses the index and finds the old story', late.source === 'index' && slugsOf(late).includes('zz-old-3'), `${late.source} ${late.text.slice(0, 150)}`);
     await stopServer(srv);
@@ -383,7 +369,6 @@ try {
     srv = startServer({ DATA_DIR: DATA2, SEARCH_REPAIR_TEST_MS: '0', SEARCH_TEST_FAIL_SLUG: 'zz-bad' });
     await waitFor(BASE + '/submit/');
     await search({ q: 'zzoldword1' });
-    check('(wait for the mirror)', await until(synced, 25000), log.slice(-4).join(' | '));
     db2((d) => { addStory(d, 'zz-bad', 'The zzbadword text.'); addStory(d, 'zz-good', 'zzgoodtoken alpha beta.'); });
     for (let i = 0; i < 6; i++) await search({ q: 'zzgoodtoken' });
     const fails = log.filter((l) => l.includes('could not index story')).length;

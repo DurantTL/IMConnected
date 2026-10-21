@@ -1,9 +1,8 @@
-// Validates a Studio publish request and turns it into story files for a direct commit.
+// Validates a Studio publish request and turns it into stories ready to write to the database (story-publish.ts).
 import { getSection, isValidArea } from './site';
 import { LIMITS } from './limits';
 import { slugify, sniffImage, textToMarkdown } from './submission';
-import { clean, validDate, leadImageFields, storyFrontmatter, storyPhotoPath } from './storyfile';
-import type { NewFile } from './github';
+import { clean, validDate, leadImageFields } from './storyfile';
 
 export class PublishError extends Error {
   constructor(message: string, public ref?: string) {
@@ -13,12 +12,22 @@ export class PublishError extends Error {
 
 export const PUBLISH_LIMITS = { maxStories: 12, maxBodyBytes: 40 * 1024 * 1024, author: 120, alt: 300, caption: 300, quote: 2000, attribution: 200, url: 2000, name: 80 };
 
-export interface PublishedStory {
+export interface PreparedStudioStory {
   ref: string;
   slug: string;
-  path: string;
-  /** What the dashboard records for the history (no personal data: Studio stories carry none). */
-  record: { title: string; dek: string; section: string; area?: string; author: string; date: string; photoCredit: string; body: string; photos: Photo[] };
+  title: string;
+  dek: string;
+  section: string;
+  area?: string;
+  author: string;
+  date: string;
+  photoCredit: string;
+  /** Alt text of the lead photo as the story page shows it (alt, else caption, else title). */
+  leadAlt: string;
+  /** The Markdown body (with the pull quote, if any). */
+  body: string;
+  /** A photo is either uploaded bytes (`data`) or a remote https address (`url`). */
+  photos: { url: string; alt: string; caption: string; data?: { ext: string; bytes: Buffer } }[];
 }
 
 interface Photo {
@@ -27,7 +36,7 @@ interface Photo {
   caption: string;
 }
 
-function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: string; base64: string } } {
+function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: string; bytes: Buffer } } {
   if (!raw || typeof raw !== 'object') throw new PublishError('Each photo needs a url.', ref);
   const p = raw as Record<string, unknown>;
   const url = typeof p.url === 'string' ? p.url.trim() : '';
@@ -40,7 +49,7 @@ function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: st
     if (bytes.length > LIMITS.maxPhotoMB * 1024 * 1024) throw new PublishError(`A photo is larger than ${LIMITS.maxPhotoMB} MB.`, ref);
     const ext = sniffImage(new Uint8Array(bytes.subarray(0, 16)));
     if (!ext) throw new PublishError('A photo is not a JPG, PNG or WebP image.', ref);
-    return { photo: { url: '', alt, caption }, data: { ext, base64: bytes.toString('base64') } };
+    return { photo: { url: '', alt, caption }, data: { ext, bytes } };
   }
   if (url.length > PUBLISH_LIMITS.url) throw new PublishError('A photo URL is too long.', ref);
   let parsed: URL;
@@ -53,8 +62,8 @@ function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: st
   return { photo: { url: parsed.href, alt, caption } };
 }
 
-export function buildPublish(input: unknown, existing: (path: string) => Promise<boolean>) {
-  return (async () => {
+export function prepareStudioPublish(input: unknown) {
+  return (() => {
     if (!input || typeof input !== 'object') throw new PublishError('The request body must be a JSON object.');
     const body = input as Record<string, unknown>;
     const nl = (body.newsletter ?? {}) as Record<string, unknown>;
@@ -66,8 +75,7 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
     if (!Array.isArray(list) || list.length < 1) throw new PublishError('Send at least one story.');
     if (list.length > PUBLISH_LIMITS.maxStories) throw new PublishError(`Send up to ${PUBLISH_LIMITS.maxStories} stories at a time.`);
 
-    const files: NewFile[] = [];
-    const stories: PublishedStory[] = [];
+    const stories: PreparedStudioStory[] = [];
     const usedSlugs = new Set<string>();
 
     for (const [i, raw] of list.entries()) {
@@ -104,57 +112,24 @@ export function buildPublish(input: unknown, existing: (path: string) => Promise
       for (let n = 2; usedSlugs.has(slug); n++) slug = `${baseSlug}-${n}`;
       usedSlugs.add(slug);
 
-      const photoPaths: string[] = [];
       const photoMeta: Photo[] = [];
-      for (const [pi, rp] of rawPhotos.entries()) {
+      const photos: PreparedStudioStory['photos'] = [];
+      for (const rp of rawPhotos) {
         const parsed = parsePhoto(rp, ref);
-        if (parsed.data) {
-          const publicPath = storyPhotoPath(slug, pi + 1, parsed.data.ext);
-          files.push({ path: `public${publicPath}`, content: parsed.data.base64, encoding: 'base64' });
-          photoPaths.push(publicPath);
-        } else {
-          photoPaths.push(parsed.photo.url);
-        }
         photoMeta.push(parsed.photo);
+        photos.push({ ...parsed.photo, data: parsed.data });
       }
 
-      const lead = photoPaths[0] ? leadImageFields(photoMeta[0], title) : null;
-      const frontmatter = storyFrontmatter({
-        title,
-        dek,
-        section,
-        area,
-        author,
-        date: issueDate,
-        photoPaths,
-        imageAlt: lead?.alt,
-        photoCredit: lead?.credit,
-        photoAlts: photoMeta.slice(1).map((m) => m.alt),
-        featured: false,
-        draft: false,
-      });
-
-      let md = frontmatter + textToMarkdown(storyBody);
+      const lead = photos[0] ? leadImageFields(photoMeta[0], title) : null;
+      let md = textToMarkdown(storyBody);
       if (quote) {
         const lines = textToMarkdown(quote).split('\n').map((l) => (l ? `> ${l}` : '>'));
         if (attribution) lines.push('>', `> — ${textToMarkdown(attribution).replace(/\n+/g, ' ')}`);
         md += '\n\n' + lines.join('\n');
       }
-      files.push({ path: `src/content/stories/${slug}.md`, content: md + '\n', encoding: 'utf-8' });
-      stories.push({
-        ref,
-        slug,
-        path: `src/content/stories/${slug}.md`,
-        record: { title, dek, section, area, author, date: issueDate, photoCredit: lead?.credit ?? '', body: md.slice(frontmatter.length), photos: photoPaths.map((url, i) => ({ url, alt: photoMeta[i].alt, caption: photoMeta[i].caption })) },
-      });
+      stories.push({ ref, slug, title, dek, section, area, author, date: issueDate, photoCredit: lead?.credit ?? '', leadAlt: lead?.alt ?? '', body: md.trim(), photos });
     }
 
-    const statuses = await Promise.all(stories.map((s) => existing(s.path)));
-    return {
-      name,
-      issueDate,
-      files,
-      stories: stories.map((s, i) => ({ ref: s.ref, slug: s.slug, record: s.record, status: statuses[i] ? ('updated' as const) : ('created' as const) })),
-    };
+    return { name, issueDate, stories };
   })();
 }

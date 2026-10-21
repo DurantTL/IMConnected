@@ -1,7 +1,8 @@
-// Stories and their photos in the database (epic #25, step 1). Every function is synchronous like the rest of
-// the db code and every query is parameterized. Until step 4, git is the source of truth and these rows are a
-// mirror of the built site (see story-sync.ts). Public pages read them through public-stories.ts once the mirror
-// is complete; every write below clears the page cache (invalidateStories) so the change shows on the next request.
+// Stories and their photos in the database. Since epic #25 step 4 this is the source of truth: publishing, editing and
+// unpublishing write here (src/lib/story-publish.ts) and nothing reads the build for content after the one-time
+// adoption (src/lib/story-adopt.ts). Every function is synchronous like the rest of the db code and every query is
+// parameterized. Public pages read the rows through public-stories.ts; every write below clears the page cache
+// (invalidateStories) so the change shows on the next request.
 import { getDb } from './db';
 import { invalidateStories } from './public-cache';
 import { indexStory } from './search-index';
@@ -49,6 +50,8 @@ export interface StoryInput {
   publishedAt: number;
   publishedBy?: number;
   contentHash?: string;
+  /** Set by dashboard/Studio changes; left alone when undefined. */
+  editedAt?: number;
   photoRows: StoryPhoto[];
 }
 
@@ -90,6 +93,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
     updatedAt: Number(r.updated_at),
     publishedBy: optNum(r.published_by),
     contentHash: opt(r.content_hash),
+    editedAt: optNum(r.edited_at),
     photoRows,
   };
 }
@@ -160,93 +164,74 @@ export function countStories(opts: Omit<ListOptions, 'limit' | 'offset'> = {}): 
 
 const nul = (v: string | undefined) => v ?? null;
 
+export type WriteOutcome = 'inserted' | 'updated' | 'unchanged';
+
 /**
- * Insert or update a story by slug, replacing its photo rows, in one transaction.
- * When the row exists with the same contentHash, status and source, nothing is written ('unchanged').
+ * Write one story and its photo rows and index it for search. NO transaction of its own: the caller has one open
+ * (BEGIN IMMEDIATE), so a publish can change several tables, or several stories, all or nothing. `mode: 'insert'`
+ * fails with a UNIQUE error when the slug exists (a new story must never silently take another's address).
  */
-export function upsertStory(s: StoryInput, now = Date.now()): 'inserted' | 'updated' | 'unchanged' {
+export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert' = 'upsert'): { outcome: WriteOutcome; id: number } {
   const db = getDb();
   // draft_id and published_by are plain columns (no foreign keys, see migration 011), so check them here.
-  if (s.draftId !== undefined && !db.prepare('SELECT 1 FROM drafts WHERE id = ?').get(s.draftId)) throw new Error('upsertStory: unknown draft');
-  if (s.publishedBy !== undefined && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(s.publishedBy)) throw new Error('upsertStory: unknown user');
-  // Callers do all file reading and hashing before this: the write lock is held only for these few statements.
+  if (s.draftId !== undefined && !db.prepare('SELECT 1 FROM drafts WHERE id = ?').get(s.draftId)) throw new Error('writeStory: unknown draft');
+  if (s.publishedBy !== undefined && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(s.publishedBy)) throw new Error('writeStory: unknown user');
+  const cur = mode === 'insert' ? undefined : (db.prepare('SELECT id, content_hash, status, source FROM stories WHERE slug = ?').get(s.slug) as
+    { id: number; content_hash: string | null; status: string; source: string } | undefined);
+  if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source) return { outcome: 'unchanged', id: Number(cur.id) };
+  const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
+    JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
+    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null];
+  let id: number;
+  if (cur) {
+    id = Number(cur.id);
+    db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, edited_at=COALESCE(?, edited_at) WHERE id = ?`).run(...cols, s.editedAt ?? null, id);
+    db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
+  } else {
+    const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
+      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, edited_at, slug)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, s.editedAt ?? null, s.slug);
+    id = Number(r.lastInsertRowid);
+  }
+  const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes);
+  indexStory(db, id, s, now); // search index row (migration 013), in the same transaction: findable as soon as it is saved
+  return { outcome: cur ? 'updated' : 'inserted', id };
+}
+
+/**
+ * Insert or update a story by slug, replacing its photo rows, in one transaction of its own (the adoption pass and
+ * tests use this). When the row exists with the same contentHash, status and source, nothing is written ('unchanged').
+ * Callers do all file reading and hashing first: the write lock is held only for these few statements.
+ */
+export function upsertStory(s: StoryInput, now = Date.now()): WriteOutcome {
+  const db = getDb();
   db.exec('BEGIN IMMEDIATE');
   try {
-    const cur = db.prepare('SELECT id, content_hash, status, source FROM stories WHERE slug = ?').get(s.slug) as
-      { id: number; content_hash: string | null; status: string; source: string } | undefined;
-    if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source) {
-      db.exec('COMMIT');
-      return 'unchanged';
-    }
-    const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
-      JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
-      s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null];
-    let id: number;
-    if (cur) {
-      id = Number(cur.id);
-      db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-        photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=? WHERE id = ?`).run(...cols, id);
-      db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
-    } else {
-      const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-        photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, slug)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, s.slug);
-      id = Number(r.lastInsertRowid);
-    }
-    const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes);
-    indexStory(db, id, s, now); // search index row (migration 013), in the same transaction: findable as soon as it is saved
+    const { outcome } = writeStory(s, now);
     db.exec('COMMIT');
-    invalidateStories();
-    return cur ? 'updated' : 'inserted';
+    if (outcome !== 'unchanged') invalidateStories();
+    return outcome;
   } catch (err) {
     try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
     throw err;
   }
 }
 
-/** Take a story off the site (the row and its photos stay). True when a live story was changed. */
-export function unpublishStory(slug: string, now = Date.now()): boolean {
-  const r = getDb().prepare("UPDATE stories SET status = 'unpublished', updated_at = ? WHERE slug = ? AND status = 'live'").run(now, slug);
-  if (Number(r.changes) > 0) invalidateStories();
+/**
+ * Take a story off the site (the row and its photos stay). True when a live story was changed. `editedAt` marks it as
+ * changed through the dashboard. No transaction of its own, so a caller can combine it with the draft's change; the
+ * caller invalidates the cache after committing (use unpublishStoryNow outside a transaction).
+ */
+export function unpublishStory(slug: string, now = Date.now(), edited = false): boolean {
+  const r = getDb().prepare("UPDATE stories SET status = 'unpublished', updated_at = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END WHERE slug = ? AND status = 'live'").run(now, edited ? 1 : 0, now, slug);
   return Number(r.changes) > 0;
 }
 
-/**
- * Keep a story off the public pages until an image that contains its unpublish commit runs (see story-holds.ts and
- * migration 012). Call it inside the same transaction as the unpublish itself; `unpublishTime` is GitHub's commit time (ms).
- */
-export function holdStory(slug: string, unpublishSha: string, unpublishTime: number | null, now = Date.now()): void {
-  getDb().prepare('INSERT OR REPLACE INTO story_holds (slug, build_marker, unpublish_sha, unpublish_time, released_at, created_at) VALUES (?, NULL, ?, ?, NULL, ?)').run(slug, unpublishSha, unpublishTime, now);
-  invalidateStories();
-}
-
-/** Fill in the build marker of a hold written by holdStory (only if it is still that unpublish's hold). */
-export function setHoldMarker(slug: string, unpublishSha: string, marker: string): void {
-  getDb().prepare('UPDATE story_holds SET build_marker = ? WHERE slug = ? AND unpublish_sha = ? AND released_at IS NULL').run(marker, slug, unpublishSha);
-}
-
-export interface StoredHold { marker: string | null; unpublishSha: string | null; unpublishTime: number | null; releasedAt: number | null }
-
-type HoldRow = { slug: string; build_marker: string | null; unpublish_sha: string | null; unpublish_time: number | null; released_at: number | null };
-const toHold = (r: HoldRow): StoredHold => ({ marker: r.build_marker, unpublishSha: r.unpublish_sha, unpublishTime: r.unpublish_time === null ? null : Number(r.unpublish_time), releasedAt: r.released_at === null ? null : Number(r.released_at) });
-const HOLD_COLS = 'slug, build_marker, unpublish_sha, unpublish_time, released_at';
-
-/** The hold row of a story, released or not (a released one is kept as a record that the hold existed). */
-export function getHold(slug: string): StoredHold | undefined {
-  const r = getDb().prepare(`SELECT ${HOLD_COLS} FROM story_holds WHERE slug = ?`).get(slug) as HoldRow | undefined;
-  return r ? toHold(r) : undefined;
-}
-
-/** The holds still in force (not released). */
-export function listHolds(): Map<string, StoredHold> {
-  const rows = getDb().prepare(`SELECT ${HOLD_COLS} FROM story_holds WHERE released_at IS NULL`).all() as HoldRow[];
-  return new Map(rows.map((r) => [r.slug, toHold(r)]));
-}
-
-/** Mark the hold released, but only the hold that was evaluated (same unpublish commit), never a newer one. */
-export function releaseHold(slug: string, unpublishSha: string | null, now = Date.now()): void {
-  getDb().prepare('UPDATE story_holds SET released_at = ? WHERE slug = ? AND unpublish_sha IS ? AND released_at IS NULL').run(now, slug, unpublishSha);
+/** Whether a story row exists, live or not. */
+export function storyExists(slug: string): boolean {
+  return !!getDb().prepare('SELECT 1 FROM stories WHERE slug = ?').get(slug);
 }
 
 /** Slugs of the stories of one source with a given status (the git sync uses this to find stories that left the build). */

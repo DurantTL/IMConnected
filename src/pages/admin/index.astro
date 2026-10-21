@@ -30,7 +30,7 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
   </div>
 
   {showHome && backupsOff && (
-    <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Stories, photos and editor accounts are only on this server. <a href="/admin/backups">See how</a>.</p>
+    <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Stories, photos and editor accounts live only on this server, and the database is now the only copy of the published stories. <a href="/admin/backups">See how</a>.</p>
   )}
 
   {showHome && <div class="cms-home">

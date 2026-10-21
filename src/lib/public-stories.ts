@@ -1,20 +1,14 @@
-// Where the public pages get their stories (epic #25, step 2). Server-side only.
+// Where the public pages get their stories (epic #25, step 4). Server-side only.
 //
-// Two sources, one rule: readers must never get a missing or empty page because the stories table is still
-// empty or half-filled after a start.
-//   * Once the mirror of the build has completed in this process (storySyncDone), pages read the stories table
-//     (story-store.ts) and photos are served from /media.
-//   * Until then, and whenever the database can't be read, pages read the built content collection, exactly what
-//     the prerendered pages used (photos are the build's own /images/... files), minus anything the dashboard
-//     unpublished. The first public request starts the mirror; when it finishes, invalidateStories() drops the
-//     cached pages so the next request is served from the table.
-// Both sources return the same PublicStory shape, newest first (date, then slug), so the markup is identical.
-import { getStories, type PublicStory } from './stories';
-import { getStoryBySlug, listHolds, listStories, LIST_MAX, type Story } from './story-store';
-import { computeBuildMarker, ensureStorySync, storySyncDone } from './story-sync';
-import { listUnpublishedSlugs } from './drafts';
+// One source: the stories table. The built content collection is NOT a fallback any more: after the one-time adoption
+// (story-adopt.ts) the database is the truth, and an empty table is a real empty site. If the table can't be read,
+// pages answer 503 (StoriesUnavailable / unavailableResponse) instead of showing stale built content.
+// Photo addresses on these pages are the row's /media copy when we hold the file, else the photo's own address.
+import type { PublicStory } from './stories';
+import { getStoryBySlug, listStories, LIST_MAX, type Story } from './story-store';
+import { adoptionDone, adoptionInFlight } from './story-adopt';
+import { getDb } from './db';
 import { cacheGeneration, TTL_MS } from './public-cache';
-import { buildCommits, holdActive } from './story-holds';
 import { renderMarkdownSafe } from './markdown';
 
 /** The /media address of a photo we hold, else the photo's own address. */
@@ -48,7 +42,8 @@ export function toPublicStory(s: Story): PublicStory {
   };
 }
 
-function listLiveFromDb(): PublicStory[] {
+/** Every live story straight from the table, newest first. Not cached: callers that need the freshest answer (the Studio list) use it. */
+export function listLiveFromDb(): PublicStory[] {
   const out: PublicStory[] = [];
   for (let offset = 0; ; offset += LIST_MAX) {
     const page = listStories({ limit: LIST_MAX, offset });
@@ -57,72 +52,70 @@ function listLiveFromDb(): PublicStory[] {
   }
 }
 
-let buildMarker: Promise<string> | undefined;
-/** The running build's marker; a failure is not remembered. */
-function currentMarker(): Promise<string> {
-  buildMarker ??= computeBuildMarker().catch((err) => { buildMarker = undefined; throw err; });
-  return buildMarker;
+/**
+ * The database cannot be read. Pages and feeds answer 503 (unavailableResponse) rather than show anything else: the
+ * build is no longer a source of content, and an old copy of the site would hide a real problem.
+ */
+export class StoriesUnavailable extends Error {
+  constructor(cause?: unknown) {
+    super('The stories could not be read.');
+    if (cause !== undefined) console.error('[stories] could not read the stories table:', cause instanceof Error ? cause.message.slice(0, 200) : 'unknown error');
+  }
 }
 
-async function listFromBuild(): Promise<PublicStory[]> {
-  let hidden = new Set<string>();
+/** A 503 that says to try again; never cached (only 200 responses are) and marked no-store. */
+export function unavailableResponse(): Response {
+  return new Response(
+    '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Back in a moment</title><body style="font-family:system-ui;max-width:640px;margin:48px auto;padding:0 16px"><h1>We’ll be right back</h1><p>IMConnected can’t load its stories right now. Please try again in a minute.</p></body>',
+    { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': '30' } },
+  );
+}
+
+/** The 503 response for a StoriesUnavailable; any other error is rethrown. */
+export function asUnavailable(err: unknown): Response {
+  if (err instanceof StoriesUnavailable) return unavailableResponse();
+  throw err;
+}
+
+/** Wait (up to 60 s) for the one-time adoption only when the table is still empty, i.e. a brand new database. */
+export async function ready(): Promise<void> {
+  const db = getDb(); // starts the adoption on the first use after a start
+  if (adoptionDone()) return;
+  const running = adoptionInFlight();
+  if (!running) return;
+  let empty = false;
   try {
-    hidden = listUnpublishedSlugs();
-    // Held stories (unpublished, then published again; the running build still has the old text) stay hidden until the
-    // image contains the unpublish commit. If that can't be worked out, every held story stays hidden.
-    const holds = listHolds();
-    if (holds.size) {
-      let marker: string | null = null;
-      try {
-        if (buildCommits() === null) marker = await currentMarker();
-      } catch { marker = null; }
-      for (const [slug, h] of holds) {
-        let active = true;
-        try { active = holdActive(h, marker); } catch { active = true; }
-        if (active) hidden.add(slug);
-      }
-    }
-  } catch (err) {
-    console.error('[stories] could not read the unpublished list:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-  }
-  return (await getStories())
-    .filter((s) => !hidden.has(s.id))
-    .sort((a, b) => b.data.date.getTime() - a.data.date.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    empty = Number((db.prepare('SELECT COUNT(*) AS n FROM stories').get() as { n: number }).n) === 0;
+  } catch { /* the read below reports it */ }
+  if (empty) await Promise.race([running, new Promise((r) => setTimeout(r, 60_000).unref?.())]);
 }
 
 // The whole list is kept for reuse by the home page, the section pages and the feeds; it goes with every invalidation.
 let listed: { generation: number; at: number; stories: PublicStory[] } | undefined;
 
-/** Published stories, newest first. */
+/** Published stories, newest first (date, then slug). Throws StoriesUnavailable when the table can't be read. */
 export async function getPublicStories(): Promise<PublicStory[]> {
-  ensureStorySync(); // a no-op once finished; this is what starts the first import after a start
-  const generation = cacheGeneration();
-  if (listed && listed.generation === generation && Date.now() - listed.at < TTL_MS) return listed.stories;
-  let stories: PublicStory[] | undefined;
-  if (storySyncDone()) {
-    try {
-      stories = listLiveFromDb();
-    } catch (err) {
-      console.error('[stories] could not read the stories table; using the build:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    }
+  try {
+    await ready();
+    const generation = cacheGeneration();
+    if (listed && listed.generation === generation && Date.now() - listed.at < TTL_MS) return listed.stories;
+    const stories = listLiveFromDb();
+    listed = { generation, at: Date.now(), stories };
+    return stories;
+  } catch (err) {
+    throw new StoriesUnavailable(err);
   }
-  stories ??= await listFromBuild();
-  listed = { generation, at: Date.now(), stories };
-  return stories;
 }
 
-/** One published story, or undefined for an unknown or unpublished slug. */
+/** One published story, or undefined for an unknown or unpublished slug. Throws StoriesUnavailable when the table can't be read. */
 export async function getPublicStory(slug: string): Promise<PublicStory | undefined> {
-  ensureStorySync();
-  if (storySyncDone()) {
-    try {
-      const s = getStoryBySlug(slug);
-      return s && !s.draft ? toPublicStory(s) : undefined;
-    } catch (err) {
-      console.error('[stories] could not read the stories table; using the build:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    }
+  try {
+    await ready();
+    const s = getStoryBySlug(slug);
+    return s && !s.draft ? toPublicStory(s) : undefined;
+  } catch (err) {
+    throw new StoriesUnavailable(err);
   }
-  return (await listFromBuild()).find((s) => s.id === slug);
 }
 
 /** A story's body as HTML. Raw HTML in the Markdown is neutralised, and links with a script scheme become "#". */

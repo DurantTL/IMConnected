@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // End-to-end check of the database-rendered public pages and feeds (issue 27, epic 25 step 2).
-// It starts the mock GitHub API and the BUILT server (dist/server/entry.mjs) against a throwaway data folder, and
-// compares every page with a BASELINE: the dist/client folder of a build from before this change (the
-// prerendered pages). Synthetic data only: a made-up publish token, the mock GitHub API, no real email.
+// It starts the BUILT server (dist/server/entry.mjs) against throwaway data folders and compares every page with a
+// BASELINE: the dist/client folder of a build from before step 2 (the prerendered pages). Since step 4 the pages come from
+// the one-time adoption of the build into the database; there is no GitHub at all. Synthetic data only: a made-up
+// publish token, no real email.
 //
 //   # once: build the code from before the change into a folder, e.g. from the previous commit on main
 //   git worktree add /tmp/imc-before <commit-before-step-2> && (cd /tmp/imc-before && npm ci && npm run build) \
@@ -41,10 +42,8 @@ const BASELINE = process.env.BASELINE_DIR ? path.resolve(process.env.BASELINE_DI
 if (BASELINE && !fs.existsSync(path.join(BASELINE, 'index.html'))) throw new Error('BASELINE_DIR must be a dist/client folder with index.html.');
 
 const PORT = Number(process.env.PORT || 4541);
-const GH_PORT = Number(process.env.MOCK_PORT || 4542);
 const BASE = `http://127.0.0.1:${PORT}`;
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
-const MOCK_OUT = path.join(SCRATCH, 'mock-prs'); // never the repo's .mock-prs
 const dirs = { legacy: path.join(SCRATCH, 'data-legacy'), main: path.join(SCRATCH, 'data-main'), partial: path.join(SCRATCH, 'data-partial') };
 const dbFile = (dir) => path.join(dir, 'imconnected.db');
 
@@ -89,11 +88,10 @@ async function cleanup() {
 }
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => cleanup().finally(() => process.exit(sig === 'SIGINT' ? 130 : 143)));
 
-const ghLog = [];
 const common = {
   HOST: '127.0.0.1', NODE_ENV: 'production', STORY_SYNC_TEST: '1', AUTH_SECRET: 'e2e-made-up-auth-secret-' + 'a'.repeat(24), TRUST_PROXY: 'true',
-  GITHUB_TOKEN: 'mock-token', GITHUB_REPO: 'mock/repo', GITHUB_API_URL: `http://127.0.0.1:${GH_PORT}`, PUBLISH_TOKEN,
-  RESEND_API_KEY: '', BUILD_COMMITS_FILE: path.join(SCRATCH, 'build-commits.txt'), PORT: String(PORT), SITE_URL: BASE,
+  PUBLISH_TOKEN,
+  RESEND_API_KEY: '', PORT: String(PORT), SITE_URL: BASE,
 };
 const serverLog = [];
 let server;
@@ -104,13 +102,7 @@ async function startServer(dataDir, extra = {}) {
   await waitFor(BASE + '/submit/');
 }
 const stopServer = async () => { await stop(server); server = undefined; };
-const COMMITS = path.join(SCRATCH, 'build-commits.txt'); // the image's commit list (BUILD_COMMITS_FILE); absent = a local build
-const fakeShas = (n, seed) => Array.from({ length: n }, (_, i) => createHash('sha1').update(`${seed}-${i}`).digest('hex'));
-/** Write the image's commit list the way docker.yml does ("<sha> <unix seconds>", newest first); times are spread from `newestSec` back. */
-const writeList = (n, seed, newestSec, extra = []) => fs.writeFileSync(COMMITS, [...extra, ...fakeShas(n - extra.length, seed)].map((sha, i) => `${sha} ${newestSec - i * 60}`).join('\n') + '\n');
-const latestUnpublishSha = () => JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'draft.unpublish' ORDER BY id DESC LIMIT 1")[0].detail).commit;
-const restartMain = async (extra = {}) => { await stopServer(); await startServer(dirs.main, extra); await get('/'); return until(synced, 20000); };
-const synced = () => serverLog.some((l) => l.includes('[stories] mirrored the build'));
+const synced = () => serverLog.some((l) => l.includes('[stories] adopting the build'));
 
 // ---- fetch helpers ----
 async function get(u, headers = {}) {
@@ -295,188 +287,68 @@ async function post(u, cookie, fields) {
 }
 
 try {
-  // mock GitHub (in the scratch folder, never ./.mock-prs)
-  start('node', ['scripts/mock-github.mjs'], { MOCK_PORT: String(GH_PORT), MOCK_OUT }, ghLog);
-  await sleep(600);
-
+  // A brand new database: the first public request waits for the one-time adoption of the build (held back 9 s here),
+  // so a visitor never sees an empty site. Nothing needs GitHub: there is no GitHub token and no mock server at all.
   await startServer(dirs.main, { STORY_SYNC_TEST_DELAY_MS: '9000' });
   const t0 = Date.now();
+  check('right after a start of a brand new database no adoption has run (the database does not even exist yet)', !synced() && !fs.existsSync(dbFile(dirs.main)));
   const homeEarly = await get('/');
-  const pending = () => !synced();
-  check('right after a start the stories table is still empty, yet the home page is complete (served from the build)', pending() && q('SELECT COUNT(*) AS n FROM stories')[0].n === 0 && homeEarly.status === 200 && !homeEarly.text.includes('empty-state'), `${q('SELECT COUNT(*) AS n FROM stories')[0].n}`);
-  if (BASELINE) {
-    await comparePages('while the mirror is still empty', false);
-    check('...and those pages link the build\'s own /images photos', homeEarly.text.includes('/images/stories/') && !homeEarly.text.includes('/media/'));
-  } else skip('page comparison while the mirror is empty');
+  info(`the first request on a brand new database was answered ${Date.now() - t0} ms after the start`);
+  check('the first home page request waits for the adoption and is complete (never an empty site, never read from the build)', synced() && homeEarly.status === 200 && !homeEarly.text.includes('empty-state') && homeEarly.text.includes('/media/stories/') && q('SELECT COUNT(*) AS n FROM stories')[0].n >= 3, `${homeEarly.status} synced=${synced()}`);
+  check('...and the adoption recorded its flag', q("SELECT COUNT(*) AS n FROM app_state WHERE key = 'git_adopted_at'")[0].n === 1);
+  if (BASELINE) await comparePages('after the first adoption', true); else skip('page comparison after the first adoption');
+  // a restart reads the table only (the flag is set): the pages are still identical to the prerendered ones
+  await stopServer();
+  await startServer(dirs.main);
+  if (BASELINE) await comparePages('after a restart (table only)', true); else skip('page comparison after a restart');
+  check('...and the restart adopted nothing', !synced());
   const hit1 = await get('/news/');
   const hit2 = await get('/news/');
   check('a cached page is served from memory on the second request (X-Page-Cache miss, then hit)', hit2.headers.get('x-page-cache') === 'hit' && hit1.text === hit2.text, `${hit1.headers.get('x-page-cache')} ${hit2.headers.get('x-page-cache')}`);
   check('/news and /news/ are the same page, with the same canonical link', (await get('/news')).text === hit1.text && /rel="canonical" href="[^"]*\/news\/"/.test(hit1.text));
 
-  // ---- the dashboard unpublishes a story while the mirror is still filling ----
-  let oldSnippets = [];
-  /** True when no page or feed shows the story's old text or links to it. */
-  const noOldText = async () => {
-    const urls = ['/', `/${feedBase.stories.find((x) => x.id === slug).section}/`, `/stories/${slug}/`, '/stories.json', '/rss.xml'];
-    for (const u of urls) { const r = await get(u); if (r.text.includes(`/stories/${slug}`) || oldSnippets.some((sn) => r.text.includes(sn.replace(/’/g, '&#39;')) || r.text.includes(sn))) return false; }
-    // search (epic #25 step 3) shows exactly what readers can see: the story must not come back from /api/search either,
-    // whether the table is filled (FTS5) or not yet (in-memory search over the build)
-    const title = feedBase.stories.find((x) => x.id === slug).title.split(/\s+/).slice(0, 5).join(' ');
-    const found = await get('/api/search?q=' + encodeURIComponent(title));
-    if (found.status !== 200 || found.text.includes(`/stories/${slug}/`)) return false;
-    return true;
-  };
+  // ---- the dashboard unpublishes and republishes a story: instant, with no hold and no deploy ----
   let slug = null;
   let draftId = null;
   const cookie = signedInEditor();
+  const found = async (title) => (await get('/api/search?q=' + encodeURIComponent(title))).text;
   if (BASELINE && feedBase) {
     const target = feedBase.stories.find((s) => /^\d{4}-\d{2}-\d{2}-/.test(s.id));
-    const pub = await fetch(BASE + '/api/publish', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${PUBLISH_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newsletter: { name: 'E2E Issue', issueDate: target.id.slice(0, 10) }, stories: [{ ref: 'a', title: target.title, section: target.section, area: target.area, author: 'Studio Author', body: 'A made-up body for the dashboard test.', photos: [] }] }),
-    });
+    const titleWords = target.title.split(/\s+/).slice(0, 5).join(' ');
+    // Studio publishes the same title (same slug) so there is a dashboard draft the editor can republish
+    const studioBody = (text) => JSON.stringify({ newsletter: { name: 'E2E Issue', issueDate: target.id.slice(0, 10) }, stories: [{ ref: 'a', title: target.title, section: target.section, area: target.area, author: 'Studio Author', body: text, photos: [] }] });
+    const pub = await fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${PUBLISH_TOKEN}`, 'Content-Type': 'application/json' }, body: studioBody('A made-up body for the dashboard test.') });
     const pj = await pub.json().catch(() => ({}));
     slug = pj.stories?.[0]?.slug ?? null;
-    check('set-up: a synthetic Studio publish of the same title (mock GitHub) gives the built story\'s slug, so the dashboard can unpublish it', pub.status === 200 && slug === target.id, `${pub.status} ${JSON.stringify(pj).slice(0, 200)} ${slug} vs ${target.id}`);
+    check('set-up: a synthetic Studio publish of the same title gives the adopted story\'s slug and updates it in place', pub.status === 200 && slug === target.id && pj.stories[0].status === 'updated', `${pub.status} ${JSON.stringify(pj).slice(0, 200)} ${slug} vs ${target.id}`);
+    check('...and it is live with the Studio text at once (no deploy)', (await get(`/stories/${slug}/`)).text.includes('A made-up body for the dashboard test.') && q('SELECT source FROM stories WHERE slug = ?', slug)[0].source === 'studio');
     draftId = q('SELECT id FROM drafts WHERE slug = ?', slug)[0]?.id ?? null;
-    const before = await get(`/stories/${slug}/`);
-    check('the story page is live before the unpublish', before.status === 200);
+    check('the story page is live before the unpublish', (await get(`/stories/${slug}/`)).status === 200 && (await found(titleWords)).includes(`/stories/${slug}/`));
     const un = await post('/api/admin/stories/unpublish', cookie, { slug });
     check('the dashboard unpublish succeeds', un.params.get('n') === 'unpublished', un.loc);
     const after = await get(`/stories/${slug}/`);
-    check('mirror still empty: the unpublished story is a real 404 straight away (page cache invalidated)', pending() && after.status === 404 && after.text.includes('We couldn’t find that page') && after.headers.get('cache-control') === 'no-store', `${after.status}`);
-    check('the unpublish recorded a hold with the unpublish commit', q('SELECT unpublish_sha FROM story_holds WHERE slug = ?', slug)[0]?.unpublish_sha === latestUnpublishSha() && /^[0-9a-f]{40}$/.test(latestUnpublishSha()));
+    check('the unpublished story is a real 404 straight away', after.status === 404 && after.text.includes('We couldn’t find that page') && after.headers.get('cache-control') === 'no-store', `${after.status}`);
     const lists = [await get('/'), await get(`/${target.section}/`), await get('/stories.json'), await get('/rss.xml')];
-    check('...and it is gone from the home page, its section page and both feeds', lists.every((r) => !r.text.includes(`/stories/${slug}`)), lists.map((r) => r.text.includes(`/stories/${slug}`)).join());
-    // The editor fixes the text and publishes again. The running build still has the OLD text, so the story must stay hidden.
-    const base = baselineHtml(`/stories/${slug}/`);
-    oldSnippets = [...new Set([target.dek, visibleText(base).match(/[A-Z][^.]{40,}\./)?.[0]?.slice(0, 60)].filter(Boolean))];
+    check('...and it is gone from the home page, its section page and both feeds, and from search', lists.every((r) => !r.text.includes(`/stories/${slug}`)) && !(await found(titleWords)).includes(`/stories/${slug}/`), lists.map((r) => r.text.includes(`/stories/${slug}`)).join());
+    check('no hold is recorded any more (unpublish just flips the row)', q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished');
+    // The editor fixes the text and publishes again: the NEW text is live at once, the old text never comes back.
     const d0 = q('SELECT updated_at, status FROM drafts WHERE slug = ?', slug)[0];
     check('the unpublished draft is back in review', d0?.status === 'in_review', JSON.stringify(d0));
-    const rp0 = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: d0.updated_at });
-    check('the dashboard publishes it again (the editor is told it returns with the next deploy)', rp0.params.get('n') === 'published_held', rp0.loc);
-    check('mirror still empty: after publishing again it stays hidden (the old built text must not come back)', pending() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText(), `${await get(`/stories/${slug}/`).then((r) => r.status)}`);
-  } else skip('dashboard unpublish while the mirror is empty');
-
-  // ---- the first import finishes ----
-  const done = await until(synced, 20000);
-  info(`the held-back first import finished ${Date.now() - t0} ms after the start`);
-  check('the first import finishes and logs a completed pass', done, serverLog.slice(-5).join(' | '));
-  const rows = q('SELECT slug, status FROM stories');
-  check('the stories table is now filled; the dashboard-unpublished story is mirrored as unpublished', rows.length >= 3 && (!slug || rows.find((r) => r.slug === slug)?.status === 'unpublished'), JSON.stringify(rows));
-  if (slug) {
-    const r = await get(`/stories/${slug}/`);
-    check('after the import the unpublished story is still a 404', r.status === 404);
-    const home = await get('/');
-    check('after the import pages come from the table (photos are /media links, cache invalidated)', home.text.includes('/media/stories/') && !home.text.includes('/images/stories/'), home.text.match(/src="[^"]*stories[^"]*"/)?.[0]);
-    const holdRow = () => q('SELECT build_marker, unpublish_sha FROM story_holds WHERE slug = ?', slug)[0];
-    const x1 = latestUnpublishSha();
-    check('after the import the story published again is still hidden; its hold has the unpublish commit and the build marker', q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished' && holdRow()?.unpublish_sha === x1 && !!holdRow().build_marker && await noOldText(), JSON.stringify(holdRow()));
-    check('a restart of the same image (no commit list, same build marker) keeps it hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
-    // an image built before the unpublish (for example finishing after it): a different build, but its commits lack the unpublish
-    writeList(60, 'older-image', Math.floor(Date.now() / 1000));
-    run("UPDATE story_holds SET build_marker = 'an-older-build' WHERE slug = ?", slug);
-    check('an image whose commit list lacks the unpublish commit keeps it hidden, even though the build differs; the old text stays away', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && !!holdRow() && await noOldText());
-    // Studio publishes the same story (same slug) while it is held: still hidden until an image has the unpublish
-    const target0 = feedBase.stories.find((x) => x.id === slug);
-    const studio = await fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${PUBLISH_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ newsletter: { name: 'E2E Issue', issueDate: slug.slice(0, 10) }, stories: [{ ref: 'a', title: target0.title, section: target0.section, area: target0.area, author: 'Studio Author', body: 'A made-up corrected body from Studio.', photos: [] }] }) });
-    await studio.arrayBuffer();
-    check('Studio publishes the same slug again (mock GitHub)', studio.status === 200);
-    check('...it stays hidden on the server until an image has the unpublish commit', (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
-    writeList(60, 'newer-image', Math.floor(Date.now() / 1000), [x1]);
-    check('an image whose commit list has the unpublish commit drops the hold and shows the story (Studio path)', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'live');
-  }
-
-  // ================= part 2: equivalence with the prerendered site, served from the table =================
-  if (BASELINE) await comparePages('from the database', true); else skip('page comparison from the database');
-
-  // ---- unpublish again, now with the mirror complete ----
-  if (slug) {
-    const target = feedBase.stories.find((s) => s.id === slug);
-    await get(`/stories/${slug}/`); await get('/'); // make sure they are cached
-    const un = await post('/api/admin/stories/unpublish', cookie, { slug });
-    const gone = await get(`/stories/${slug}/`);
-    const list = await get('/stories.json');
-    check('an unpublish with the mirror complete: 404 straight away, row unpublished, gone from /stories.json and the home page',
-      un.params.get('n') === 'unpublished' && gone.status === 404 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished' && !list.text.includes(slug) && !(await get('/')).text.includes(`/stories/${slug}`), `${gone.status}`);
-    const section = await get(`/${target.section}/`);
-    check('...and from its section page', !section.text.includes(`/stories/${slug}`));
-    const d = q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0];
-    await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: d.updated_at });
-    check('publishing it again does not bring it back (mirror complete): 404, row unpublished, old text nowhere', (await get(`/stories/${slug}/`)).status === 404 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished' && await noOldText());
-    const x2 = latestUnpublishSha();
-    const nowSec = Math.floor(Date.now() / 1000);
-    // the 200-commit safeguard: an unpublish older than the list's window is in the build
-    run('UPDATE story_holds SET unpublish_time = NULL WHERE slug = ?', slug);
-    writeList(200, 'full-window-newer', nowSec + 86400);
-    check('a full newer 200-commit list does not release a hold that has no recorded commit time (no safeguard)', await restartMain() && (await get(`/stories/${slug}/`)).status === 404);
-    run('UPDATE story_holds SET unpublish_time = ? WHERE slug = ?', Date.now(), slug);
-    check('a full 200-commit list whose oldest commit is newer than the unpublish (+10 min) releases the story: the unpublish is older than the window', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 0);
+    run("UPDATE drafts SET body = 'The editor fixed the text before publishing again.', updated_at = updated_at + 1 WHERE slug = ?", slug);
+    const rp0 = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: d0.updated_at + 1 });
+    check('the dashboard publishes it again: "Published. It\'s live now"', rp0.params.get('n') === 'published', rp0.loc);
+    const back = await get(`/stories/${slug}/`);
+    check('...it is live straight away with the new text only', back.status === 200 && back.text.includes('The editor fixed the text before publishing again.') && !back.text.includes('A made-up body for the dashboard test.') && (await get('/')).text.includes(`/stories/${slug}`), `${back.status}`);
+    // a restart of the same image changes nothing: the table is the truth
     await post('/api/admin/stories/unpublish', cookie, { slug });
-    const x3 = latestUnpublishSha();
-    check('(a new unpublish records a new commit)', x3 !== x2 && q('SELECT unpublish_sha FROM story_holds WHERE slug = ?', slug)[0].unpublish_sha === x3);
-    await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at }); // published again
-    writeList(200, 'full-window-older', nowSec - 7 * 86400);
-    check('a full list whose oldest commit is older than the unpublish keeps it hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
-    writeList(199, 'short-newer', nowSec + 86400);
-    check('a list with fewer than 200 commits has no window safeguard: hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404);
-    fs.writeFileSync(COMMITS, fakeShas(5, 'old-format').join('\n') + '\n');
-    check('the old sha-only list format is accepted (no times, so no safeguard): hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404);
-    fs.rmSync(COMMITS, { force: true });
-    run("UPDATE story_holds SET build_marker = 'an-older-build' WHERE slug = ?", slug);
-    check('a local build without a commit list releases the hold once its build marker differs', await restartMain() && (await get(`/stories/${slug}/`)).status === 200);
-    if (BASELINE) await comparePages('after unpublish, publish again and a new build', true);
+    await stopServer();
+    await startServer(dirs.main);
+    check('a restart (same image) keeps an unpublished story unpublished, and nothing is adopted again', (await get(`/stories/${slug}/`)).status === 404 && !synced() && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished');
+    const rp1 = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
+    check('...and publishing it again brings it back at once', rp1.params.get('n') === 'published' && (await get(`/stories/${slug}/`)).status === 200);
+  } else skip('dashboard unpublish and publish');
 
-    // ---- a commit list that can't be parsed keeps every hold active ----
-    await post('/api/admin/stories/unpublish', cookie, { slug });
-    await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
-    const xu = latestUnpublishSha();
-    fs.writeFileSync(COMMITS, `${xu} ${nowSec}\nthis line is not a commit\n`);
-    check('a malformed non-empty commit list (even one containing the unpublish commit) keeps the story hidden', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
-    fs.writeFileSync(COMMITS, `${xu} ${nowSec}\n${xu} ${nowSec}\n`);
-    check('a commit list with a duplicate sha keeps it hidden too', await restartMain() && (await get(`/stories/${slug}/`)).status === 404);
-    fs.writeFileSync(COMMITS, `${xu} ${nowSec}\n`);
-    check('a good list with the unpublish commit releases it (hold kept as a released record)', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT released_at FROM story_holds WHERE slug = ?', slug)[0].released_at > 0);
-    fs.rmSync(COMMITS, { force: true });
-
-    // ---- the unpublish and its hold are written together, and publishing needs the hold ----
-    const mockTime = q('SELECT unpublish_time FROM story_holds WHERE slug = ?', slug)[0].unpublish_time;
-    check('the hold has GitHub\'s commit time, not just the server clock', Math.abs(mockTime - Date.now()) < 3600_000 && mockTime > 0, String(mockTime));
-    run("CREATE TRIGGER zz_fail_hold BEFORE INSERT ON story_holds BEGIN SELECT RAISE(ABORT, 'test: hold can not be written'); END");
-    const bad = await post('/api/admin/stories/unpublish', cookie, { slug });
-    run('DROP TRIGGER zz_fail_hold');
-    check('if the hold can\'t be written the editor gets a clear error and nothing is half-recorded (draft not marked unpublished)', bad.params.get('e') === 'unpublish_not_recorded' && q('SELECT unpublished_at FROM drafts WHERE slug = ?', slug)[0].unpublished_at === null, bad.loc);
-    await post('/api/admin/stories/unpublish', cookie, { slug });
-    run('DELETE FROM story_holds WHERE slug = ?', slug);
-    const refused = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
-    check('publishing a story that was unpublished but has no hold row is refused with a clear notice', refused.params.get('e') === 'hold_missing' && q('SELECT unpublished_at FROM drafts WHERE slug = ?', slug)[0].unpublished_at !== null, refused.loc);
-    await post('/api/admin/stories/unpublish', cookie, { slug }); // records the hold again
-    const xr = latestUnpublishSha();
-    writeList(20, 'r', nowSec, [xr]);
-    check('(a released hold)', await restartMain() && q('SELECT released_at FROM story_holds WHERE slug = ?', slug)[0].released_at > 0);
-    const afterRelease = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
-    check('...publishing after a released hold is accepted (the record of the hold is kept)', afterRelease.params.get('n') === 'published' && !afterRelease.params.get('e'), afterRelease.loc);
-    fs.rmSync(COMMITS, { force: true });
-    await restartMain();
-
-    // ---- the build marker can't be worked out while unpublishing: the story must still stay hidden ----
-    check('(restart with a failing build marker)', await restartMain({ STORY_SYNC_TEST_FAIL_MARKER: '1' }));
-    await post('/api/admin/stories/unpublish', cookie, { slug });
-    const h1 = q('SELECT build_marker, unpublish_sha FROM story_holds WHERE slug = ?', slug)[0];
-    const x4 = latestUnpublishSha();
-    check('a failed build marker still records the hold (marker NULL, unpublish commit set)', h1 && h1.build_marker === null && h1.unpublish_sha === x4, JSON.stringify(h1));
-    const dd = q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0];
-    const rp2 = await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: dd.updated_at });
-    check('republishing a held story tells the editor it returns with the next deploy', rp2.params.get('n') === 'published_held', rp2.loc);
-    check('...and it stays hidden', (await get(`/stories/${slug}/`)).status === 404 && await noOldText());
-    check('after a restart (no commit list, NULL marker) it is still hidden: a NULL marker never counts as a different build', await restartMain() && (await get(`/stories/${slug}/`)).status === 404 && await noOldText() && q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 1);
-    writeList(30, 'x', nowSec, [x4]);
-    check('an image that contains the unpublish commit shows it', await restartMain() && (await get(`/stories/${slug}/`)).status === 200 && q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 0);
-    fs.rmSync(COMMITS, { force: true });
-  }
-
-  // ---- a story row edited in the database shows on the page right away, through the cache invalidation ----
+  // ---- a story row edited in the database shows on the page after a store write clears the cache ----
   if (slug) {
     const other = q("SELECT slug, title FROM stories WHERE status = 'live' AND slug != ? ORDER BY slug LIMIT 1", slug)[0];
     const url = `/stories/${other.slug}/`;
@@ -490,11 +362,10 @@ try {
     run("UPDATE stories SET title = 'Edited a second time', content_hash = 'edited-2' WHERE slug = ?", other.slug);
     const b = await get(url);
     check('...a second edit made behind the server\'s back is not shown while the page is cached', hasTitle(b, 'Edited in the database') && b.headers.get('x-page-cache') === 'hit');
-    // the server's own store write: a pass of the sync puts the built text back with upsertStory, which clears the cache
-    server.kill('SIGUSR2');
-    check('the server\'s re-sync ran', await until(() => serverLog.some((l) => l.includes('[stories] test re-sync')), 15000), serverLog.slice(-3).join(' | '));
+    await post('/api/admin/stories/unpublish', cookie, { slug });
+    await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
     const c = await get(url);
-    check('a write through the store (upsertStory) invalidates the cache: the page shows the new row at once', c.status === 200 && c.headers.get('x-page-cache') === 'miss' && !c.text.includes('Edited a second time') && !c.text.includes('Edited in the database'), `${c.status} ${c.headers.get('x-page-cache')} ${c.text.match(/<h1[^>]*>[^<]*/)?.[0]}`);
+    check('a write through the store (publish) clears the cache: the page shows the new row at once', c.status === 200 && c.headers.get('x-page-cache') === 'miss' && hasTitle(c, 'Edited a second time'), `${c.status} ${c.headers.get('x-page-cache')}`);
   }
 
   // ================= part 3: 404s, middleware, old image links =================
@@ -564,40 +435,24 @@ try {
     check('Pagefind is gone: no index is served and the search page does not load it', pf.status === 404 && !(await get('/search/')).text.includes('pagefind') && !fs.existsSync(path.join(ROOT, 'dist/client/pagefind')));
   }
 
-  // ================= part 4b: a story unpublished before migration 012 can still be published from the dashboard =================
-  await stopServer();
-  if (BASELINE) {
-    const { openDatabase, runMigrations, readMigrationsFromDir } = await import(pathToFileURL(path.join(ROOT, 'src/lib/db/db-core.mjs')).href);
-    const legacyDir = path.join(SCRATCH, 'data-legacy');
-    const ldb = openDatabase(legacyDir);
-    runMigrations(ldb, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')).filter((m) => m.name < '012'));
-    const tgt = feedBase.stories[1];
-    const nowL = Date.now();
-    ldb.prepare("INSERT INTO drafts (status, source, title, dek, section, area, author, date, body, slug, published_commit, published_at, unpublished_at, created_at, updated_at) VALUES ('in_review', 'editor', ?, '', ?, ?, 'Legacy Author', ?, 'A made-up body.', ?, 'abc', ?, ?, ?, ?)").run(tgt.title, tgt.section, tgt.area ?? '', tgt.date, tgt.id, nowL - 9000, nowL - 5000, nowL - 9000, nowL - 5000);
-    ldb.close();
-    fs.rmSync(COMMITS, { force: true });
-    await startServer(dirs.legacy);
-    const cookieL = signedInEditor();
-    const dl = q('SELECT id, updated_at FROM drafts WHERE slug = ?', tgt.id)[0];
-    const seededL = await post(`/api/admin/drafts/${dl.id}/publish`, cookieL, { version: dl.updated_at });
-    check('migration 012 seeded a released hold, so a draft unpublished before it can be published (no hold_missing)', !seededL.params.get('e') && /^published/.test(seededL.params.get('n') ?? '') && q('SELECT released_at FROM story_holds WHERE slug = ?', tgt.id)[0]?.released_at > 0, `${seededL.status} ${seededL.loc}`);
-    await stopServer();
-  } else skip('legacy unpublished draft');
-
-  // ================= part 5: a partial mirror never shows a missing story =================
+  // ================= part 5: a story that can not be adopted is simply absent (the table is the truth, no build fallback) =================
   await stopServer();
   if (BASELINE) {
     const failing = feedBase.stories[feedBase.stories.length - 1].id;
     await startServer(dirs.partial, { STORY_SYNC_TEST_FAIL_SLUG: failing, STORY_SYNC_TEST_RETRY_MS: '300' });
     await get('/');
-    check('(partial) one story can never be mirrored; the sync gives up after 5 passes', await until(() => serverLog.some((l) => l.includes('pass 5 of 5')), 20000), serverLog.slice(-4).join(' | '));
+    check('(partial) one story can never be adopted; the adoption gives up after 5 passes and does not set its flag', await until(() => serverLog.some((l) => l.includes('pass 5 of 5')), 20000) && q("SELECT COUNT(*) AS n FROM app_state WHERE key = 'git_adopted_at'")[0].n === 0, serverLog.slice(-4).join(' | '));
     check('(partial) the table is missing exactly that story', q('SELECT slug FROM stories WHERE slug = ?', failing).length === 0 && q('SELECT COUNT(*) AS n FROM stories')[0].n === feedBase.stories.length - 1);
-    await comparePages('with a story that can never be mirrored (read from the build)', false);
-    check('(partial) the story that failed to mirror still has its page', (await get(`/stories/${failing}/`)).status === 200);
+    const rest = pages.filter((p) => p !== `/stories/${failing}/`);
+    check('(partial) the pages are still served from the table: the failed story is a 404, never read from the build, and the other stories are there', (await get(`/stories/${failing}/`)).status === 404 && !(await get('/')).text.includes(`/stories/${failing}`) && (await Promise.all(rest.filter((p) => p.startsWith('/stories/')).map((p) => get(p)))).every((r) => r.status === 200));
     await stopServer();
-  } else skip('partial mirror');
+    await startServer(dirs.partial);
+    await get('/');
+    check('(partial) the next start, with the problem gone, completes the adoption', await until(synced, 20000) && (await get(`/stories/${failing}/`)).status === 200 && q("SELECT COUNT(*) AS n FROM app_state WHERE key = 'git_adopted_at'")[0].n === 1);
+    await stopServer();
+  } else skip('partial adoption');
 
-  const leaked = serverLog.concat(ghLog).filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|secret/i.test(l) && !/mock-github/.test(l));
+  const leaked = serverLog.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|secret/i.test(l));
   check('no server log line has contact details or secrets', leaked.length === 0, leaked.join(' | '));
 } catch (err) {
   console.error('ERROR', err);

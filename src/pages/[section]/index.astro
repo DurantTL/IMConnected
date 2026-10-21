@@ -1,7 +1,7 @@
 ---
 import SectionList from '../../components/SectionList.astro';
 import { getSection } from '../../lib/site';
-import { getPublicStories } from '../../lib/public-stories';
+import { asUnavailable, getPublicStories } from '../../lib/public-stories';
 import { bySection } from '../../lib/stories';
 
 // Rendered on the server from the stories table (epic #25, step 2); the middleware caches the result.
@@ -9,6 +9,12 @@ export const prerender = false;
 
 const section = getSection(Astro.params.section ?? '');
 if (!section) return new Response(null, { status: 404 });
-const stories = bySection(await getPublicStories(), section.key);
+let all: Awaited<ReturnType<typeof getPublicStories>>;
+try {
+  all = await getPublicStories();
+} catch (err) {
+  return asUnavailable(err);
+}
+const stories = bySection(all, section.key);
 ---
 <SectionList section={section} stories={stories} />

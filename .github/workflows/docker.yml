@@ -1,11 +1,18 @@
 name: Build & publish image
 
-# Every merge to main (including approved story submissions) builds a new image.
+# Every merge to main builds a new image. Stories are published in the dashboard and live in the database, so there are
+# no content commits any more; a hand-committed story file or photo (the frozen archive) does not build an image.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'src/content/stories/**'
+      - 'public/images/stories/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'src/content/stories/**'
+      - 'public/images/stories/**'
   workflow_dispatch:
 
 permissions:
@@ -65,6 +72,8 @@ jobs:
       - name: Lowercase image name
         if: steps.target.outputs.publish == 'true'
         run: echo "IMAGE=${IMAGE,,}" >> "$GITHUB_ENV"
+      # Still written for this release: the one-time adoption of the built stories (src/lib/story-adopt.ts) uses it to
+      # settle old unpublish holds on the first start. Remove with story_holds in a later cleanup.
       - name: List the commits in this image
         if: steps.target.outputs.publish == 'true'
         run: git log -200 --format='%H %ct' > .build-commits

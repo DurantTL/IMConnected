@@ -1,14 +1,14 @@
 import type { APIRoute } from 'astro';
 import { createDraftFromStory, getDraftBySlug, isEditable, reloadDraftFromStory } from '../../../../lib/drafts';
-import { loadStory, validSlug } from '../../../../lib/draft-publish';
+import { loadStory, validSlug } from '../../../../lib/story-publish';
 import { EditorError } from '../../../../lib/messages';
-import { githubOrNull, readFormLimited, redirectTo } from '../../../../lib/draft-http';
+import { readFormLimited, redirectTo } from '../../../../lib/draft-http';
 import { audit } from '../../../../lib/auth/audit';
 import { clientIp } from '../../../../lib/request';
 
 export const prerender = false;
 
-// "Edit" on a published story: load its current .md from the base branch into an editor draft linked to
+// "Edit" on a published story: load its current text from the database into an editor draft linked to
 // the slug (reusing the draft that already has this slug, so there is one draft per story).
 export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
   const user = locals.user!;
@@ -22,10 +22,8 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
   const existing = getDraftBySlug(slug);
   if (existing && isEditable(existing)) return redirectTo(`/admin/drafts/${existing.id}`);
 
-  const cfg = githubOrNull();
-  if (!cfg) return redirectTo(back, { e: 'edit_no_github' });
   try {
-    const story = await loadStory(cfg, slug);
+    const story = loadStory(slug);
     if (!story) return redirectTo(back, { e: 'story_missing' });
     let id: number;
     if (existing) {

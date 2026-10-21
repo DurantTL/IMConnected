@@ -1,33 +1,35 @@
-// TEMPORARY (epic #25, until step 4): mirror the built stories into the `stories` table and copy their photos
-// into DATA_DIR/media, so public pages can serve from the database (step 2; until storySyncDone() they use the build).
-// Git stays the source of truth meanwhile.
+// ONE-TIME ADOPTION of the built stories (epic #25, step 4). Server-side only.
 //
-// Where the stories come from at run time: the Markdown sources are NOT in the Docker image (only dist/,
-// node_modules, scripts and src/lib/db are copied), but Astro bakes the built content collection (front matter
-// and body) into the server bundle, which is what getStories() reads and what /api/stories already relies on.
-// Photos come from dist/client/images/stories/..., the build's copy of public/images/stories/....
+// Until step 3 the stories table was a mirror of the built content collection and git was the source of truth.
+// From step 4 the table IS the source of truth (publishing writes it directly, see story-publish.ts). So the first
+// start of this version on a database that has not adopted yet runs ONE last import of the build, shaped exactly like
+// the old mirror pass (so every live story stays live, every unpublished story stays unpublished, and a story the
+// build has that the table lacks or has older is brought in), and then records `git_adopted_at` in app_state, in
+// the same transaction that retires any holds. From then on:
+//   * the build is never read for content again: a later start, even with an OLDER image, finds the flag and does
+//     nothing, so a redeploy can never revert a dashboard edit;
+//   * story_holds (migration 012) is inert: no code reads or writes it after this pass.
+// A story edited in the database (source other than 'git') is never overwritten, even by this pass.
 //
-// How it runs: getDb() calls ensureStorySync() on every use (a cheap check once it has finished) and /media does
-// too. The pass runs in the background and never throws into a request. It is polite to the event loop: photos
-// are read with async streams, and it yields between stories. All file reading, hashing and copying for a story
-// happens BEFORE its database write, and each story is written in its own short transaction, so the sync never
-// holds the write lock while doing file I/O. A photo is reused WITHOUT being read only when its source path is the
-// one the stored row came from, its size matches (story_photos.bytes), its file is in the media folder, and the
-// build marker (DATA_DIR/media/.build-marker: a hash of the built data-layer chunk name and of the path, size and
-// mtime of exactly the built files the stories reference, wherever they live under /images) is unchanged since the last fully successful pass. After a new build the marker differs,
-// so each size-matching photo is stream-hashed read-only (async, yielding) and compared with the stored sha256;
-// it is copied only when the bytes really changed (a same-size replacement is therefore picked up).
-// A pass with a failed story (or a thrown error) is retried after about a minute, at most 5 passes per process.
+// Where the stories come from: the Markdown sources are NOT in the Docker image, but Astro bakes the built content
+// collection (front matter and body) into the server bundle, which getStories() reads. Photos come from
+// dist/client/images/stories/..., the build's copy of public/images/stories/....
+//
+// How it runs: getDb() calls ensureAdoption() on every use (a boolean check once finished). The pass runs in the
+// background, never throws into a request, and is polite to the event loop: photos are read with async streams and
+// it yields between stories. All file reading, hashing and copying for a story happens BEFORE its database write,
+// and each story is written in its own short transaction. A failed pass (or a failed story) is retried after about a
+// minute, at most 5 passes per process, and the flag is only set by a pass in which nothing failed.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { mediaDir, MEDIA_TYPES } from './media';
-import { getHold, listHolds, releaseHold, getStoryHash, getStoryBySlug, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
+import { buildCommits, holdActive, type Hold } from './story-holds';
+import { getStoryHash, getStoryBySlug, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
 import { listUnpublishedSlugs } from './drafts';
 import { invalidateStories } from './public-cache';
-import { holdActive } from './story-holds';
 import { getDb } from './db';
 import { reindexAll } from './search-index';
 
@@ -60,8 +62,6 @@ interface Located { src: string; kind: 'lead' | 'gallery'; alt: string }
 
 export interface SyncResult { inserted: number; updated: number; unchanged: number; unpublished: number; skipped: number; hashed: number; copied: number }
 
-const markerFile = () => path.join(mediaDir(), '.build-marker');
-
 /**
  * Cheap fingerprint of the current build: the data-layer chunk's name plus the path, size and mtime of exactly the
  * built files the stories reference (every image and photos entry under /images/, deduplicated and sorted). No
@@ -92,7 +92,7 @@ async function hashFile(file: string): Promise<string> {
 const testHooks = process.env.STORY_SYNC_TEST === '1';
 const failSlug = () => (testHooks ? process.env.STORY_SYNC_TEST_FAIL_SLUG : undefined);
 // Also test-only: hold the first pass back for N ms (so a test can request pages while the table is still empty), and
-// re-run a pass on SIGUSR2 (so a test can change a row and watch the page cache react to the store's own write).
+// (no other hooks).
 const testDelayMs = testHooks ? Number(process.env.STORY_SYNC_TEST_DELAY_MS) || 0 : 0;
 
 /**
@@ -125,9 +125,8 @@ async function copyAndHash(file: string, slug: string, ext: string, result: Sync
 
 /**
  * Resolve one photo to its row. `known` is the stored row at this position and `knownSrc` the source path it came from.
- * `markerChanged` is true after a new build (or when no verified pass has been recorded).
  */
-async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, position: number, known: StoryPhoto | undefined, knownSrc: string | undefined, markerChanged: boolean, result: SyncResult): Promise<StoryPhoto> {
+async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, position: number, known: StoryPhoto | undefined, knownSrc: string | undefined, result: SyncResult): Promise<StoryPhoto> {
   const remote = (): StoryPhoto => ({ position, kind: p.kind, path: null, url: p.src, alt: p.alt, sha256: null, bytes: null });
   const file = builtPhotoFile(clientDir, p.src);
   const ext = extOf(p.src);
@@ -144,8 +143,7 @@ async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, p
     const exists = await fs.promises.access(path.join(mediaDir(), known.path)).then(() => true, () => false);
     if (exists) {
       const reuse = { position, kind: p.kind, path: known.path, url: null, alt: p.alt, sha256: known.sha256, bytes: size };
-      if (!markerChanged) return reuse;
-      // New build: same path and size can still be different bytes. Hash read-only; copy only on a mismatch.
+      // Same path and size can still be different bytes. Hash read-only; copy only on a mismatch.
       result.hashed++;
       if ((await hashFile(file)) === known.sha256) return reuse;
       verified = true;
@@ -156,32 +154,57 @@ async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, p
   return { position, kind: p.kind, path: rel, url: null, alt: p.alt, sha256: sha, bytes };
 }
 
-/** The marker of the build this server is running (also what holds are recorded against). */
-export async function computeBuildMarker(): Promise<string> {
-  if (testHooks && process.env.STORY_SYNC_TEST_FAIL_MARKER === '1') throw new Error('test failure');
-  const { getStories } = await import('./stories');
-  const clientDir = builtClientDir();
-  const referenced: string[] = [];
-  for (const entry of await getStories()) for (const src of [entry.data.image, ...entry.data.photos]) {
-    const f = src ? builtPhotoFile(clientDir, src) : null;
-    if (f) referenced.push(f);
-  }
-  return buildMarker(clientDir, referenced);
+const ADOPTED_KEY = 'git_adopted_at';
+
+/** True once this database has adopted the build (the flag is in app_state). */
+export function isAdopted(): boolean {
+  return !!getDb().prepare('SELECT 1 FROM app_state WHERE key = ?').get(ADOPTED_KEY);
 }
 
-/** One pass. Exported so tests and tools can call it; the server uses ensureStorySync(). */
-export async function syncStoriesFromBuild(): Promise<SyncResult> {
-  const { getStories } = await import('./stories');
-  const built = await getStories();
-  const clientDir = builtClientDir();
-  const referenced: string[] = [];
-  for (const entry of built) for (const src of [entry.data.image, ...entry.data.photos]) {
-    const f = src ? builtPhotoFile(clientDir, src) : null;
-    if (f) referenced.push(f);
+interface HoldRow { slug: string; build_marker: string | null; unpublish_sha: string | null; unpublish_time: number | null; released_at: number | null }
+/** Holds still in force in migration 012's table. Read only here, once. */
+function activeHolds(): Map<string, Hold> {
+  const rows = getDb().prepare('SELECT slug, build_marker, unpublish_sha, unpublish_time, released_at FROM story_holds WHERE released_at IS NULL').all() as unknown as HoldRow[];
+  return new Map(rows.map((r) => [r.slug, { marker: r.build_marker, unpublishSha: r.unpublish_sha, unpublishTime: r.unpublish_time === null ? null : Number(r.unpublish_time) }]));
+}
+
+/** The build's marker, used only to evaluate holds of a build that has no commit list (local and dev builds). */
+async function currentMarker(clientDir: string | null, built: Awaited<ReturnType<typeof getBuilt>>): Promise<string | null> {
+  if (buildCommits() !== null) return null;
+  if (testHooks && process.env.STORY_SYNC_TEST_FAIL_MARKER === '1') return null;
+  try {
+    const referenced: string[] = [];
+    for (const entry of built) for (const src of [entry.data.image, ...entry.data.photos]) {
+      const f = src ? builtPhotoFile(clientDir, src) : null;
+      if (f) referenced.push(f);
+    }
+    return await buildMarker(clientDir, referenced);
+  } catch {
+    return null;
   }
-  const marker = await buildMarker(clientDir, referenced);
-  const markerChanged = (await fs.promises.readFile(markerFile(), 'utf8').catch(() => '')) !== marker;
-  const result: SyncResult = { inserted: 0, updated: 0, unchanged: 0, unpublished: 0, skipped: 0, hashed: 0, copied: 0 };
+}
+
+async function getBuilt() {
+  const { getStories } = await import('./stories');
+  return getStories();
+}
+
+export interface AdoptResult extends SyncResult { notGit: number }
+
+/**
+ * One adoption pass. Exported for tests; the server uses ensureAdoption(). Imports every built story that is missing
+ * from the table or differs from its (git-sourced) row; a row whose source is not 'git' is left alone. Status follows
+ * the old mirror's rule: unpublished when the dashboard unpublished it (drafts.unpublished_at) or a hold is still
+ * active (the unpublish is not provably in this build), else live. A git-sourced live row that is not in the build any
+ * more (deleted or draft: true) is unpublished. Sets the flag only when no story failed.
+ */
+export async function adoptBuiltStories(): Promise<AdoptResult> {
+  const built = await getBuilt();
+  const clientDir = builtClientDir();
+  const marker = await currentMarker(clientDir, built);
+  const holds = activeHolds();
+  const unpublished = listUnpublishedSlugs();
+  const result: AdoptResult = { inserted: 0, updated: 0, unchanged: 0, unpublished: 0, skipped: 0, hashed: 0, copied: 0, notGit: 0 };
   const seen = new Set<string>();
 
   for (const entry of built) {
@@ -195,20 +218,18 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
       d.photos.forEach((src, i) => located.push({ src, kind: 'gallery', alt: d.photoAlts[i] ?? '' }));
       const date = d.date.toISOString().slice(0, 10);
 
-      // 1. Files first: stat, hash and copy with no transaction open.
       if (failSlug() === slug) throw new Error('test failure');
       const prev = getStoryBySlug(slug, { includeUnpublished: true });
+      if (prev && prev.source !== 'git') { result.notGit++; continue; } // edited in the database: the build is older by definition
+      // 1. Files first: stat, hash and copy with no transaction open.
       const known = prev?.photoRows ?? [];
       const prevSrc = prev ? [...(prev.image ? [prev.image] : []), ...prev.photos] : [];
       const photoRows: StoryPhoto[] = [];
-      for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], markerChanged, result));
-      // Read the dashboard's unpublish list right before the write, so one made during this pass is not missed.
-      // A story unpublished and then published again in the dashboard stays hidden while a hold is active (migration 012,
-      // story-holds.ts): until the running image contains the unpublish commit. A released hold is marked released here.
-      const hold = getHold(slug);
-      const held = hold !== undefined && hold.releasedAt === null && holdActive(hold, marker);
-      if (hold !== undefined && hold.releasedAt === null && !held) releaseHold(slug, hold.unpublishSha);
-      const status = listUnpublishedSlugs().has(slug) || held ? 'unpublished' : 'live';
+      for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], result));
+      const hold = holds.get(slug);
+      let held = false;
+      if (hold) { try { held = holdActive(hold, marker); } catch { held = true; } }
+      const status = unpublished.has(slug) || held ? 'unpublished' : 'live';
 
       const base = {
         slug, title: d.title, dek: d.dek, section: d.section, area: d.area, column: d.column, author: d.author, authorTitle: d.authorTitle,
@@ -225,22 +246,26 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
       if (status === 'unpublished' && outcome !== 'unchanged') result.unpublished++;
     } catch (err) {
       result.skipped++;
-      console.error(`[stories] could not mirror ${slug}:`, err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      console.error(`[stories] could not adopt ${slug}:`, err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
   }
 
-  // A mirrored story that left the build (an unpublish or delete in git) is no longer live.
-  for (const slug of slugsBySource('git', 'live')) {
-    if (!seen.has(slug) && unpublishStory(slug)) result.unpublished++;
-  }
-  for (const [slug, h] of listHolds()) if (!holdActive(h, marker)) releaseHold(slug, h.unpublishSha); // only released holds
-  // Record the build as verified only when every story was mirrored.
-  if (result.skipped === 0 && markerChanged) {
+  // A git story that left the build (an unpublish or a delete in git) is no longer live.
+  if (result.skipped === 0) {
+    for (const slug of slugsBySource('git', 'live')) {
+      if (!seen.has(slug) && unpublishStory(slug)) result.unpublished++;
+    }
+    // Adopted: set the flag and retire the holds in one transaction. The build is never read again.
+    const db = getDb();
+    const now = Date.now();
+    db.exec('BEGIN IMMEDIATE');
     try {
-      await fs.promises.mkdir(mediaDir(), { recursive: true });
-      await fs.promises.writeFile(markerFile(), marker);
+      db.prepare('UPDATE story_holds SET released_at = ? WHERE released_at IS NULL').run(now);
+      db.prepare('INSERT OR IGNORE INTO app_state (key, value, updated_at) VALUES (?, ?, ?)').run(ADOPTED_KEY, new Date(now).toISOString(), now);
+      db.exec('COMMIT');
     } catch (err) {
-      console.error('[stories] could not record the build marker:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+      throw err;
     }
   }
   return result;
@@ -251,50 +276,47 @@ const MAX_PASSES = 5;
 let busy = false;
 let done = false;
 let passes = 0;
-
-/**
- * True once a pass has mirrored every built story in this process. Until then the stories table can be empty or
- * partial, so public pages read the built collection instead (see public-stories.ts).
- */
-export const storySyncDone = () => done;
+let current: Promise<void> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** True once this process knows the database has adopted the build. */
+export const adoptionDone = () => done;
+/** The pass that is running now (resolves when it ends, whether it worked or not), else undefined. */
+export const adoptionInFlight = () => current;
 
 function scheduleRetry(): void {
   if (retryTimer || passes >= MAX_PASSES) return;
-  retryTimer = setTimeout(() => { retryTimer = undefined; ensureStorySync(); }, RETRY_MS);
+  retryTimer = setTimeout(() => { retryTimer = undefined; ensureAdoption(); }, RETRY_MS);
   retryTimer.unref?.();
 }
 
 /**
- * Start the import in the background if it has not finished. Safe on every call: a boolean check once done, and
- * it does nothing while a pass runs or a retry is waiting. Never throws; public pages never wait for it. A pass
- * that fails, or in which a story could not be mirrored, is retried after a minute, up to 5 passes per process.
+ * Start the adoption in the background if the database has not adopted. Safe on every call: a boolean check once done,
+ * and nothing while a pass runs or a retry is waiting. Never throws; public pages do not wait for it unless the
+ * table is empty (public-stories.ts). The flag is read first, so an already-adopted database never reads the build.
  */
-export function ensureStorySync(): void {
+export function ensureAdoption(): void {
   if (done || busy || retryTimer || passes >= MAX_PASSES) return;
   busy = true;
   passes++;
-  void (async () => {
+  current = (async () => {
     await yieldToLoop(); // let the caller (usually getDb) finish first
-    if (testDelayMs && passes === 1) await new Promise((r) => setTimeout(r, testDelayMs));
     try {
-      const r = await syncStoriesFromBuild();
-      console.log(`[stories] mirrored the build: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged, ${r.unpublished} unpublished, ${r.skipped} skipped, ${r.hashed} photos hashed, ${r.copied} copied`);
-      // Fill the search index for every story (migration 013 leaves it empty) before search starts using it.
+      if (isAdopted()) { done = true; return; }
+      if (testDelayMs && passes === 1) await new Promise((r) => setTimeout(r, testDelayMs));
+      const r = await adoptBuiltStories();
+      console.log(`[stories] adopting the build: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged, ${r.unpublished} unpublished, ${r.notGit} left alone, ${r.skipped} skipped, ${r.hashed} photos hashed, ${r.copied} copied`);
+      // Fill the search index for every story (migration 013 leaves it empty).
       try { await reindexAll(getDb(), yieldToLoop); } catch (err) { console.error('[stories] could not build the search index:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error'); }
-      if (r.skipped === 0) { done = true; invalidateStories(); } // pages cached from the built collection give way to the database
-      else { console.error(`[stories] ${r.skipped} stories could not be mirrored; pass ${passes} of ${MAX_PASSES}`); scheduleRetry(); }
+      if (r.skipped === 0) { done = true; console.log('[stories] the database is now the source of truth; the build is not read for content any more'); }
+      else { console.error(`[stories] ${r.skipped} stories could not be adopted; pass ${passes} of ${MAX_PASSES}`); scheduleRetry(); }
+      invalidateStories();
     } catch (err) {
-      console.error('[stories] sync failed:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      console.error('[stories] adoption failed:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
       scheduleRetry();
     } finally {
       busy = false;
+      current = undefined;
     }
   })();
-}
-
-if (testHooks) {
-  process.on('SIGUSR2', () => {
-    void syncStoriesFromBuild().then((r) => console.log(`[stories] test re-sync: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged`), () => {});
-  });
 }

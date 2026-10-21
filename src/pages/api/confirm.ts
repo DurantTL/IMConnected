@@ -1,11 +1,10 @@
 import type { APIRoute } from 'astro';
-import { addLabels, githubConfigFromEnv, removeLabel } from '../../lib/github';
 import { confirmSecret, verifyConfirmToken } from '../../lib/email';
 import { clientIp, originAllowed } from '../../lib/request';
 import { markEmailVerified } from '../../lib/drafts';
 import { audit } from '../../lib/auth/audit';
 
-// Third server route (with /api/submit and /api/publish). Same-origin only: no CORS headers.
+// Server route (with /api/submit and /api/publish). Same-origin only: no CORS headers.
 export const prerender = false;
 
 // ---- per-IP rate limit: 30 an hour ----
@@ -65,22 +64,8 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     return json(200, { ok: true });
   }
 
-  // An older link, from when submissions opened pull requests: still honoured while GitHub is configured.
-  const cfg = githubConfigFromEnv();
-  if (!cfg) return json(400, { ok: false, error: "This link isn't valid." });
-  // A closed or merged PR still accepts label changes, and the answer is the same either way.
-  try {
-    await removeLabel(cfg, check.id, 'email-unverified');
-    await addLabels(cfg, check.id, ['email-verified']);
-  } catch (err) {
-    // A PR that is gone answers the same as one that worked, so the response reveals nothing.
-    const status = (err as { status?: number }).status;
-    if (status === 404 || status === 410 || status === 422) return json(200, { ok: true });
-    console.error(`[confirm] PR #${check.id}: label update failed`, err instanceof Error ? err.message : err);
-    return json(502, { ok: false, error: 'We couldn’t record your confirmation right now. Please try again in a few minutes.' });
-  }
-  console.log(`[confirm] PR #${check.id}: email verified`);
-  return json(200, { ok: true });
+  // An older link, from when submissions opened pull requests: there are no pull requests any more.
+  return json(400, { ok: false, error: "This link isn't valid." });
 };
 
 export const ALL: APIRoute = () => new Response('Method not allowed', { status: 405, headers: { Allow: 'POST' } });

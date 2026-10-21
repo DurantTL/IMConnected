@@ -1,7 +1,8 @@
-// RSS 2.0 feed of the newest stories. Rendered on the server from the stories table (epic #25, step 2); the middleware caches the result.
+// RSS 2.0 feed of the newest stories. Rendered on the server from the stories table; the middleware caches the result.
 import type { APIRoute } from 'astro';
 import { getFeedItems } from '../lib/feed';
 import { SITE } from '../lib/site';
+import { asUnavailable } from '../lib/public-stories';
 
 // Strips characters XML 1.0 forbids (one stray control character would break the whole feed), then escapes.
 const xml = (v: string) =>
@@ -13,7 +14,12 @@ export const prerender = false;
 
 export const GET: APIRoute = async ({ site }) => {
   const base = site ?? new URL('https://stories.imadventist.org');
-  const items = await getFeedItems(base);
+  let items;
+  try {
+    items = await getFeedItems(base);
+  } catch (err) {
+    return asUnavailable(err);
+  }
   const entries = items.map((s) => {
     const category = s.areaLabel ? `${s.sectionLabel} / ${s.areaLabel}` : s.sectionLabel;
     return [

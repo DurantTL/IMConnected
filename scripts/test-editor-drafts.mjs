@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// End-to-end check of the drafts inbox and story editor against a RUNNING built server, a throwaway data
-// folder and the mock GitHub API (scripts/mock-github.mjs). Synthetic data only.
-//   node scripts/mock-github.mjs &                       # writes commits to ./.mock-prs/direct/<sha>/
+// End-to-end check of the drafts inbox and story editor against a RUNNING built server and a throwaway data
+// folder. Publishing writes to the database: there is no GitHub token, no mock and no network here. Synthetic data only.
 //   DATA_DIR=/tmp/x AUTH_SECRET=<32+ chars> SITE_URL=http://localhost:4390 PORT=4390 TRUST_PROXY=true \
-//     GITHUB_TOKEN=mock-token GITHUB_REPO=mock/repo GITHUB_API_URL=http://localhost:4010 node dist/server/entry.mjs > server.log &
-//   DATA_DIR=/tmp/x SITE_URL=http://localhost:4390 SERVER_LOG=server.log SHOTS=/tmp/shots node scripts/test-editor-drafts.mjs
+//     PUBLISH_TOKEN=<32+ made-up chars> node dist/server/entry.mjs > server.log &
+//   DATA_DIR=/tmp/x SITE_URL=http://localhost:4390 PUBLISH_TOKEN=<same> SERVER_LOG=server.log SHOTS=/tmp/shots node scripts/test-editor-drafts.mjs
 // Run from the repo root. Playwright (Chromium) is optional: PLAYWRIGHT_ROOT (default /opt/node-tools) and
 // CHROMIUM_PATH (default /opt/pw-browsers/chromium). The signed-in editors are inserted straight into the database.
 import fs from 'node:fs';
@@ -19,8 +18,7 @@ const BASE = (process.env.SITE_URL || 'http://localhost:4390').replace(/\/+$/, '
 if (!process.env.DATA_DIR) throw new Error('Set DATA_DIR to the throwaway data folder the server uses.');
 const DATA_DIR = path.resolve(process.env.DATA_DIR);
 const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
-const MOCK_OUT = path.resolve(process.env.MOCK_OUT || '.mock-prs');
-const DIRECT = path.join(MOCK_OUT, 'direct');
+const PUBLISH_TOKEN = process.env.PUBLISH_TOKEN || '';
 const SHOTS = process.env.SHOTS ? path.resolve(process.env.SHOTS) : '';
 const SERVER_LOG = process.env.SERVER_LOG ? path.resolve(process.env.SERVER_LOG) : '';
 
@@ -91,16 +89,37 @@ const anon = new Client(null);
 const draftRow = (id) => q('SELECT * FROM drafts WHERE id = ?', id)[0];
 const version = (id) => draftRow(id).updated_at;
 const idOf = (r) => Number(/\/admin\/drafts\/(\d+)/.exec(r.loc || '')?.[1]);
-const commits = () => (fs.existsSync(DIRECT) ? fs.readdirSync(DIRECT) : []);
-const commitFiles = (sha) => {
-  const out = [];
-  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) (e.isDirectory() ? walk(path.join(d, e.name)) : out.push(path.relative(path.join(DIRECT, sha), path.join(d, e.name)))); };
-  walk(path.join(DIRECT, sha));
-  return out.filter((f) => f !== 'COMMIT_MESSAGE.txt').sort();
-};
-const readCommitted = (sha, rel) => fs.readFileSync(path.join(DIRECT, sha, rel), 'utf8');
-const newCommit = (before) => commits().filter((c) => !before.includes(c));
+const story = (slug) => q('SELECT * FROM stories WHERE slug = ?', slug)[0];
+const storyPhotos = (slug) => q('SELECT p.* FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = ? ORDER BY p.position', slug);
+const storyCount = () => q('SELECT COUNT(*) n FROM stories')[0].n;
+const mediaFile = (rel) => path.join(DATA_DIR, 'media', rel);
+const mediaFiles = () => { const out = []; const walk = (d) => { if (!fs.existsSync(d)) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) (e.isDirectory() ? walk(path.join(d, e.name)) : out.push(path.join(d, e.name))); }; walk(path.join(DATA_DIR, 'media')); return out.sort(); };
+const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
+const getPub = (p) => anon.get(p); // what a visitor sees
+const searchHits = async (term) => { const r = await anon.get('/api/search?q=' + encodeURIComponent(term)); try { return JSON.parse(r.text).results.map((x) => x.slug); } catch { return []; } };
+const studioList = async () => { if (!PUBLISH_TOKEN) return null; const res = await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } }); return (await res.json()).stories.map((x) => x.id); };
+/** Is the story live on every public surface right now? */
+async function liveEverywhere(slug, titleText, section) {
+  const page = await getPub(`/stories/${slug}/`);
+  const sec = await getPub(`/${section}/`);
+  const home = await getPub('/');
+  const json = await getPub('/stories.json');
+  const rss = await getPub('/rss.xml');
+  const find = await searchHits(titleText);
+  const studio = await studioList();
+  return { page: page.status === 200, section: sec.text.includes(`/stories/${slug}/`), home: home.text.includes(`/stories/${slug}/`), json: json.text.includes(`/stories/${slug}/`), rss: rss.text.includes(`/stories/${slug}/`), search: find.includes(slug), studio: studio === null ? true : studio.includes(slug) };
+}
+const allTrue = (o) => Object.values(o).every(Boolean);
+const noneTrue = (o) => Object.entries(o).filter(([k]) => k !== 'page').every(([, v]) => !v);
 const baseFields = (over = {}) => ({ title: 'Volunteers Needed for Camp Meeting', dek: 'Cooks, drivers and greeters are welcome.', section: 'news', area: 'churches', column: '', author: 'Pat Example', authorTitle: 'Communication Volunteer', church: 'Example Hills Church', date: '2026-10-19', photoCredit: 'Sam Sample', featured: '1', body: 'Camp meeting is **coming up** and we need help.\n\n> Many hands make light work.\n\n- Cooks\n- Drivers', ...over });
+
+// ================= no code path calls GitHub =================
+{
+  const hits = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (/\.(ts|astro|mjs|cjs|js)$/.test(e.name) && !/test-/.test(e.name)) { const t = fs.readFileSync(f, 'utf8'); for (const w of ['api.github.com', 'GITHUB_', 'commitToBase', 'openPullRequest', 'githubConfigFromEnv', 'X-GitHub-Api-Version']) if (t.includes(w)) hits.push(`${f}: ${w}`); } } };
+  walk('src'); walk('scripts');
+  check('no source file in src/ or scripts/ (apart from the tests) can call the GitHub API: no client, no token, no commit helper', hits.length === 0 && !fs.existsSync('src/lib/github.ts') && !fs.existsSync('scripts/mock-github.mjs'), hits.join(' | '));
+}
 
 // ================= guards =================
 {
@@ -142,9 +161,8 @@ let agedId, freshId, agedFile, freshFile;
 }
 
 // ================= create, edit, two photos, publish =================
-let A, slugA, shaA;
+let A, slugA;
 {
-  const before = commits();
   let r = await c1.form('/api/admin/drafts/new', {});
   A = idOf(r);
   check('"New story" creates an editor draft and opens it', r.status === 303 && A > 0 && draftRow(A).source === 'editor' && draftRow(A).status === 'in_review');
@@ -197,75 +215,81 @@ let A, slugA, shaA;
   // publish
   r = await c1.get(`/admin/drafts/${A}`);
   check('the editor shows both photos with controls', (r.text.match(/class="ed-photo"/g) || []).length === 2 && r.text.includes('Make lead'));
+  const storiesBefore = storyCount();
+  const mediaBefore = mediaFiles();
   r = await c1.form(`/api/admin/drafts/${A}/publish`, { version: version(A) });
-  const made = newCommit(before);
   check('publish redirects back with the published notice', r.status === 303 && r.params.get('n') === 'published', r.loc);
-  check('exactly one commit was made', made.length === 1, String(made.length));
-  shaA = made[0];
   const row = draftRow(A);
   slugA = row.slug;
-  check('the draft is published with its slug and commit', row.status === 'published' && slugA === '2026-10-19-volunteers-needed-for-camp-meeting' && row.published_commit === shaA && !!row.published_at);
-  check('the uploaded files are deleted after publishing (the photos are in the repo)', !fs.existsSync(path.join(DATA_DIR, 'uploads', String(A))));
+  check('the draft is published with its slug and the database marker (no commit)', row.status === 'published' && slugA === '2026-10-19-volunteers-needed-for-camp-meeting' && row.published_commit === 'db' && !!row.published_at && row.published_by === E1.id);
+  const st = story(slugA);
+  check('exactly one story row was added, live, from the editor, linked to the draft and the editor', storyCount() === storiesBefore + 1 && st.status === 'live' && st.source === 'editor' && st.draft_id === A && st.published_by === E1.id && st.draft === 0 && st.edited_at > 0, JSON.stringify(st).slice(0, 300));
+  check('the story fields are what the editor entered', st.title === 'Volunteers Needed for Camp Meeting' && st.section === 'news' && st.area === 'churches' && st.author === 'Pat Example' && st.author_title === 'Communication Volunteer' && st.church === 'Example Hills Church' && st.date === '2026-10-19' && st.photo_credit === 'Sam Sample' && st.featured === 1 && st.image_alt === 'Volunteers sorting boxes' && JSON.stringify(JSON.parse(st.photo_alts)) === JSON.stringify(['A full kitchen']), JSON.stringify(st).slice(0, 400));
+  const sp = storyPhotos(slugA);
+  const want1 = `stories/${slugA}/${sha256(PNG_A)}.png`, want2 = `stories/${slugA}/${sha256(PNG_B)}.png`;
+  check('both photos are rows at stories/<slug>/<sha256>.png, lead first, with the alt texts', sp.length === 2 && sp[0].path === want1 && sp[0].kind === 'lead' && sp[0].alt === 'Volunteers sorting boxes' && sp[1].path === want2 && sp[1].kind === 'gallery' && sp[1].alt === 'A full kitchen' && sp[0].sha256 === sha256(PNG_A), JSON.stringify(sp));
+  check('...the photo files are byte-identical to the uploads and nothing else was written', Buffer.compare(fs.readFileSync(mediaFile(want1)), PNG_A) === 0 && Buffer.compare(fs.readFileSync(mediaFile(want2)), PNG_B) === 0 && mediaFiles().length === mediaBefore.length + 2);
+  check('the story keeps its Markdown', st.body.includes('**coming up**') && st.body.includes('> Many hands make light work.') && st.body.includes('- Cooks'));
+  check('the uploaded files are deleted after publishing (the photos are in the media folder)', !fs.existsSync(path.join(DATA_DIR, 'uploads', String(A))));
   const retired = q('SELECT url, path FROM draft_photos WHERE draft_id = ? ORDER BY position', A);
-  check('...and the draft keeps its photos as site images', retired.length === 2 && retired.every((x) => x.path === null && x.url.startsWith(`/images/stories/${slugA}/photo-`)), JSON.stringify(retired));
-  const files = commitFiles(shaA);
-  check('the commit holds the story .md and both photos', JSON.stringify(files) === JSON.stringify([`public/images/stories/${slugA}/photo-1.png`, `public/images/stories/${slugA}/photo-2.png`, `src/content/stories/${slugA}.md`].sort()), files.join(','));
-  check('the commit message is Publish "<title>" (edited by <editor name>)', fs.readFileSync(path.join(DIRECT, shaA, 'COMMIT_MESSAGE.txt'), 'utf8') === 'Publish "Volunteers Needed for Camp Meeting" (edited by Test Editor)');
-  const md = readCommitted(shaA, `src/content/stories/${slugA}.md`);
-  check('the story file has the expected frontmatter', ['title: "Volunteers Needed for Camp Meeting"', 'section: news', 'area: churches', 'author: "Pat Example"', 'authorTitle: "Communication Volunteer"', 'church: "Example Hills Church"', 'date: 2026-10-19', `image: "/images/stories/${slugA}/photo-1.png"`, 'imageAlt: "Volunteers sorting boxes"', 'photoCredit: "Sam Sample"', `  - "/images/stories/${slugA}/photo-2.png"`, 'photoAlts:', '  - "A full kitchen"', 'featured: true', 'draft: false'].every((s) => md.includes(s)), md.slice(0, 700));
-  check('Markdown formatting survives into the file', md.includes('**coming up**') && md.includes('> Many hands make light work.') && md.includes('- Cooks'));
-  check('the photo files are byte-identical to the uploads', Buffer.compare(fs.readFileSync(path.join(DIRECT, shaA, `public/images/stories/${slugA}/photo-1.png`)), PNG_A) === 0 && Buffer.compare(fs.readFileSync(path.join(DIRECT, shaA, `public/images/stories/${slugA}/photo-2.png`)), PNG_B) === 0);
+  check('...and the draft keeps its photos as site images', retired.length === 2 && retired.every((x) => x.path === null && x.url.startsWith(`/media/stories/${slugA}/`)), JSON.stringify(retired));
+  // live on the very next request, everywhere, with its photos
+  const live = await liveEverywhere(slugA, 'Volunteers Needed', 'news');
+  check('the very next request shows it: story page, section page, home page, /stories.json, /rss.xml, search and /api/stories', allTrue(live), JSON.stringify(live));
+  const pageA = (await getPub(`/stories/${slugA}/`)).text;
+  const photoRes = await anon.get(`/media/${want1}`);
+  check('...with its photos (/media links on the page, served as image/png)', pageA.includes(`/media/${want1}`) && pageA.includes(`/media/${want2}`) && photoRes.status === 200 && photoRes.headers.get('content-type') === 'image/png' && Buffer.compare(photoRes.buf, PNG_A) === 0);
+  check('...and /stories.json lists the photo and the title', (await getPub('/stories.json')).text.includes(`/media/${want1}`));
   r = await c1.get(`/admin/drafts/${A}?n=published`);
-  check('the editor says "Live in about 3–5 minutes" and links the story', r.text.includes('Live in about 3–5 minutes') && r.text.includes(`${BASE}/stories/${slugA}/`));
+  check('the editor says "It\'s live now" and links the story', r.text.includes('It&#39;s live now') || r.text.includes("It's live now"));
+  check('...with the link to the story', r.text.includes(`${BASE}/stories/${slugA}/`));
+  check('the notice no longer promises a 3–5 minute wait', !r.text.includes('3–5 minutes'));
+  check('the publish is audited with the slug (and no commit)', q("SELECT detail FROM audit_log WHERE action = 'draft.publish' AND target = ?", `draft:${A}`).some((x) => JSON.parse(x.detail).slug === slugA && !('commit' in JSON.parse(x.detail))));
   r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields() });
   check('a published draft is read-only (save refused with 423)', r.status === 423, String(r.status));
 }
 
 // ================= edit the published story and publish again to the same slug =================
 {
-  const before = commits();
+  const mediaBefore = mediaFiles();
+  const before = story(slugA);
   let r = await c1.form('/api/admin/stories/edit', { slug: slugA });
   const id = idOf(r);
   check('"Edit" loads the live story into the same draft (one draft per story)', r.status === 303 && id === A && q('SELECT COUNT(*) n FROM drafts WHERE slug = ?', slugA)[0].n === 1 && draftRow(A).status === 'in_review');
   const d = draftRow(A);
-  check('...with the fields read back from the file on main', d.title === 'Volunteers Needed for Camp Meeting' && d.author === 'Pat Example' && d.author_title === 'Communication Volunteer' && d.church === 'Example Hills Church' && d.date === '2026-10-19' && d.featured === 1 && d.photo_credit === 'Sam Sample' && d.body.startsWith('Camp meeting is **coming up**'), JSON.stringify(d).slice(0, 300));
+  check('...with the fields read back from the database', d.title === 'Volunteers Needed for Camp Meeting' && d.author === 'Pat Example' && d.author_title === 'Communication Volunteer' && d.church === 'Example Hills Church' && d.date === '2026-10-19' && d.featured === 1 && d.photo_credit === 'Sam Sample' && d.body.startsWith('Camp meeting is **coming up**'), JSON.stringify(d).slice(0, 300));
   const ph = q('SELECT url, path, alt FROM draft_photos WHERE draft_id = ? ORDER BY position', A);
-  check('...and its two photos kept as site images with every alt text restored', ph.length === 2 && ph[0].url === `/images/stories/${slugA}/photo-1.png` && ph[0].path === null && ph[0].alt === 'Volunteers sorting boxes' && ph[1].alt === 'A full kitchen', JSON.stringify(ph));
+  check('...and its two photos kept as site images with every alt text restored', ph.length === 2 && ph[0].url === `/media/stories/${slugA}/${sha256(PNG_A)}.png` && ph[0].path === null && ph[0].alt === 'Volunteers sorting boxes' && ph[1].alt === 'A full kitchen', JSON.stringify(ph));
   r = await c1.get('/admin/published');
   check('the Published tab lists the story with Edit and Unpublish', r.status === 200 && r.text.includes('Volunteers Needed for Camp Meeting') && r.text.includes('Unpublish') && r.text.includes('>Edit<'));
   r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields({ dek: 'Updated: sign up this Sabbath.', body: 'Camp meeting is **almost here**. Please sign up.' }) });
   check('the loaded draft saves', r.data.ok);
+  check('(editing a draft does not change the live story)', story(slugA).dek === before.dek && (await getPub(`/stories/${slugA}/`)).text.includes('coming up'));
   r = await c1.form(`/api/admin/drafts/${A}/publish`, { version: version(A) });
-  const made = newCommit(before);
-  check('publishing again makes one new commit', r.params.get('n') === 'published' && made.length === 1, r.loc);
-  const files = commitFiles(made[0]);
-  check('...which overwrites the same slug (only the .md; the photos are already on the site)', JSON.stringify(files) === JSON.stringify([`src/content/stories/${slugA}.md`]), files.join(','));
-  const md = readCommitted(made[0], `src/content/stories/${slugA}.md`);
-  check('...with the new text and the old photos', md.includes('Updated: sign up this Sabbath.') && md.includes('**almost here**') && md.includes(`image: "/images/stories/${slugA}/photo-1.png"`) && md.includes(`  - "/images/stories/${slugA}/photo-2.png"`) && md.includes('  - "A full kitchen"'));
-  check('...and the slug did not change', draftRow(A).slug === slugA && draftRow(A).status === 'published' && draftRow(A).published_commit === made[0]);
-  shaA = made[0];
+  check('publishing again overwrites the same slug', r.params.get('n') === 'published' && draftRow(A).slug === slugA && draftRow(A).status === 'published' && q('SELECT COUNT(*) n FROM stories WHERE slug = ?', slugA)[0].n === 1, r.loc);
+  const st = story(slugA);
+  check('...with the new text and the old photos (no new files, same rows)', st.dek === 'Updated: sign up this Sabbath.' && st.body.includes('**almost here**') && storyPhotos(slugA).length === 2 && storyPhotos(slugA)[0].path === `stories/${slugA}/${sha256(PNG_A)}.png` && mediaFiles().length === mediaBefore.length && st.image === `/media/stories/${slugA}/${sha256(PNG_A)}.png`, JSON.stringify(st).slice(0, 300));
+  const page = (await getPub(`/stories/${slugA}/`)).text;
+  check('...and the new text is on the page at once', page.includes('almost here') && page.includes('Updated: sign up this Sabbath.') && !page.includes('coming up'));
 }
 
 // ================= unpublish =================
 {
-  const before = commits();
   let r = await c1.form('/api/admin/stories/unpublish', { slug: slugA });
-  const made = newCommit(before);
-  check('unpublish makes one commit', r.params.get('n') === 'unpublished' && made.length === 1, r.loc);
-  const files = commitFiles(made[0]);
-  const md = readCommitted(made[0], `src/content/stories/${slugA}.md`);
-  check('...of just that story with draft: true (everything else unchanged)', files.length === 1 && /^draft: true$/m.test(md) && !/^draft: false$/m.test(md) && md.includes('**almost here**') && md.includes('title: "Volunteers Needed for Camp Meeting"'));
-  check('...with an Unpublish commit message', fs.readFileSync(path.join(DIRECT, made[0], 'COMMIT_MESSAGE.txt'), 'utf8') === 'Unpublish "Volunteers Needed for Camp Meeting" (by Test Editor)');
-  check('the draft goes back to in review, keeping its slug', draftRow(A).status === 'in_review' && draftRow(A).slug === slugA);
+  check('unpublish reports the notice', r.params.get('n') === 'unpublished', r.loc);
+  const st = story(slugA);
+  check('...the row stays (unpublished, not deleted) with its photos', st.status === 'unpublished' && storyPhotos(slugA).length === 2 && fs.existsSync(mediaFile(`stories/${slugA}/${sha256(PNG_A)}.png`)));
+  const gone = await liveEverywhere(slugA, 'Volunteers Needed', 'news');
+  check('it is gone everywhere at once: 404 page, section, home, /stories.json, /rss.xml, search, /api/stories', (await getPub(`/stories/${slugA}/`)).status === 404 && noneTrue(gone) && gone.studio === (PUBLISH_TOKEN === '' ? true : false), JSON.stringify(gone));
+  check('the draft goes back to in review, keeping its slug', draftRow(A).status === 'in_review' && draftRow(A).slug === slugA && draftRow(A).unpublished_at > 0);
+  check('the unpublish is audited', q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.unpublish' AND target = ?", `story:${slugA}`)[0].n === 1);
   r = await c1.form('/api/admin/stories/unpublish', { slug: '../../etc/passwd' });
   check('a bad story address is refused', r.params.get('e') === 'slug_bad');
   r = await c1.form('/api/admin/stories/unpublish', { slug: 'no-such-story' });
-  check('an unknown story is reported, not committed', r.params.get('e') === 'story_missing' && newCommit([...before, ...made]).length === 0);
-  // publishing again brings it back
-  const before2 = commits();
+  check('an unknown story is reported', r.params.get('e') === 'story_missing');
+  // publishing again brings it back, with no hold, no deploy
   r = await c1.form(`/api/admin/drafts/${A}/publish`, { version: version(A) });
-  const again = newCommit(before2);
-  check('publishing the draft again restores draft: false', again.length === 1 && /^draft: false$/m.test(readCommitted(again[0], `src/content/stories/${slugA}.md`)));
+  check('publishing the unpublished draft again makes it live at once (no waiting for a deploy)', r.params.get('n') === 'published' && story(slugA).status === 'live' && (await getPub(`/stories/${slugA}/`)).status === 200 && allTrue(await liveEverywhere(slugA, 'Volunteers Needed', 'news')), r.loc);
 }
 
 // ================= reject and restore =================
@@ -319,21 +343,31 @@ let H, slugH;
   check('...with a CSP that forbids scripts', /Content-Security-Policy" content="default-src 'none'/.test(doc));
 
   // publish: the javascript: link is refused until it is removed
-  const before = commits();
+  const storiesBefore = storyCount();
   r = await c1.form(`/api/admin/drafts/${H}/publish`, { version: version(H) });
-  check('publishing is refused while a link uses javascript:', r.params.get('e') === 'link_unsafe' && newCommit(before).length === 0, r.loc);
+  check('publishing is refused while a link uses javascript:', r.params.get('e') === 'link_unsafe' && storyCount() === storiesBefore && draftRow(H).slug === null, r.loc);
   const safeBody = hostile.body.replace('[bad link](javascript:alert(1))', '').replace('![bad image](data:text/html,x)', '');
   await c1.json(`/api/admin/drafts/${H}/save`, { version: version(H), ...hostile, body: safeBody });
   r = await c1.form(`/api/admin/drafts/${H}/publish`, { version: version(H) });
-  const made = newCommit(before);
-  check('after removing it, the hostile story publishes', r.params.get('n') === 'published' && made.length === 1, r.loc);
+  check('after removing it, the hostile story publishes', r.params.get('n') === 'published' && storyCount() === storiesBefore + 1, r.loc);
   slugH = draftRow(H).slug;
-  const file = readCommitted(made[0], `src/content/stories/${slugH}.md`);
-  check('the committed file has no raw HTML anywhere (no "<" followed by a tag)', !/<[a-zA-Z\/!?]/.test(file), (file.match(/<[a-zA-Z\/!?].{0,40}/) || [''])[0]);
-  check('...the body is escaped (&lt;script&gt;) and the frontmatter writes < as \\u003c', file.includes('&lt;script>alert(1)&lt;/script>') && file.includes('title: "\\u003cscript\\u003ealert(1)\\u003c/script\\u003e"'), file.slice(0, 400));
-  check('...even inside a code fence', file.includes("&lt;script>alert('in a fence')&lt;/script>"));
-  check('...the column field is written (columns section)', file.includes('section: columns') && file.includes('column: '));
-  // the title survives a round trip through the file (YAML < decodes back to <)
+  const hs = story(slugH);
+  check('the stored body has no raw HTML anywhere (no "<" followed by a tag)', !/<[a-zA-Z\/!?]/.test(hs.body), (hs.body.match(/<[a-zA-Z\/!?].{0,40}/) || [''])[0]);
+  check('...the body is escaped (&lt;script&gt;), even inside a code fence', hs.body.includes('&lt;script>alert(1)&lt;/script>') && hs.body.includes("&lt;script>alert('in a fence')&lt;/script>"), hs.body.slice(0, 300));
+  check('...the column field is stored (columns section)', hs.section === 'columns' && hs.story_column === XSS[2]);
+  const anonText = (await getPub('/stories.json')).text;
+  const hostilePages = [`/stories/${slugH}/`, '/', '/columns/', '/stories.json', '/rss.xml'];
+  const pageBad = [];
+  for (const u of hostilePages) {
+    if (u === '/stories.json') continue; // JSON text, not markup: its strings are checked below
+    // Astro leaves < and > as they are inside a quoted attribute value (e.g. og:title), which is inert there.
+    const t = (await getPub(u)).text.replace(/="[^"]*"/g, '=""');
+    for (const m of ['<script>alert', '<img src=x onerror', '<svg onload', '<iframe src=javascript', '<a href="javascript', '<b onmouseover']) if (t.includes(m)) pageBad.push(`${u}: ${m}`);
+  }
+  check('the public story page, section page, home page and feeds show hostile text as text, never as markup', pageBad.length === 0, pageBad.join(' | '));
+  check('...in /stories.json the hostile text is only a JSON string', (() => { try { return JSON.parse((anonText)).stories.some((x) => x.title === XSS[0]); } catch { return false; } })());
+  check('...the story page has the escaped title', (await getPub(`/stories/${slugH}/`)).text.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+  // the title survives a round trip through the database
   r = await c1.form('/api/admin/stories/edit', { slug: slugH });
   check('a story with escaped characters loads back into the editor intact', draftRow(H).title === XSS[0] && draftRow(H).story_column === XSS[2] && draftRow(H).status === 'in_review', JSON.stringify([r.loc, draftRow(H).title, draftRow(H).story_column, draftRow(H).status]));
   await c1.form('/api/admin/stories/unpublish', { slug: slugH });
@@ -365,7 +399,7 @@ let H, slugH;
 
 // ================= submitter contact details =================
 const SUB = { name: 'Taylor Synthetic', email: 'taylor.synthetic@example.test', phone: '555-0142-SYN', church: 'Placeholder Valley Church' };
-let S, shaS;
+let S;
 {
   S = Number(run("INSERT INTO drafts (status, source, title, dek, section, area, author, church, date, body, submitter_name, submitter_email, submitter_phone, submitter_church, email_verified, created_at, updated_at) VALUES ('new','form',?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
     'Youth Day of Service', 'Teens cleaned up a park.', 'youth', 'youth', SUB.name, SUB.church, '2026-10-18', 'A group of teens spent Saturday cleaning a park and sharing lunch with neighbors, a simple act of service for the community.', SUB.name, SUB.email, SUB.phone, SUB.church, Date.now(), Date.now()).lastInsertRowid);
@@ -380,34 +414,26 @@ let S, shaS;
   check('opening a new draft does not change it (GET has no side effects)', draftRow(S).status === 'new');
   r = await c1.json(`/api/admin/drafts/${S}/save`, { version: version(S), ...baseFields({ title: 'Youth Day of Service', section: 'youth', area: 'youth', author: SUB.name, church: SUB.church, body: 'A group of teens spent Saturday cleaning a park and sharing lunch with neighbors.', featured: '0' }) });
   check('the first save moves a new draft to in review', r.data.ok && draftRow(S).status === 'in_review');
-  const before = commits();
   r = await c1.form(`/api/admin/drafts/${S}/publish`, { version: version(S) });
-  const made = newCommit(before);
-  check('a submitted draft publishes', r.params.get('n') === 'published' && made.length === 1, r.loc);
-  shaS = made[0];
-  const dump = commitFiles(shaS).map((f) => fs.readFileSync(path.join(DIRECT, shaS, f)).toString('latin1')).join('\n') + fs.readFileSync(path.join(DIRECT, shaS, 'COMMIT_MESSAGE.txt'), 'utf8');
-  check('the submitter email and phone are not in the commit (files or message)', !dump.includes(SUB.email) && !dump.includes('taylor.synthetic') && !dump.includes(SUB.phone) && !dump.includes('555-0142'));
-  check('...a gallery photo already on the site keeps its https link', readCommitted(shaS, `src/content/stories/${draftRow(S).slug}.md`).includes('image: "https://example.test/synthetic.jpg"'));
+  check('a submitted draft publishes', r.params.get('n') === 'published', r.loc);
+  const slugS = draftRow(S).slug;
+  const ss = story(slugS);
+  const dump = JSON.stringify([ss, storyPhotos(slugS)]) + (await getPub(`/stories/${slugS}/`)).text + (await getPub('/stories.json')).text + (await getPub('/rss.xml')).text + JSON.stringify(await (await anon.get('/api/search?q=youth')).text);
+  check('the submitter email and phone are not in the story row or on any public page or feed', !dump.includes(SUB.email) && !dump.includes('taylor.synthetic') && !dump.includes(SUB.phone) && !dump.includes('555-0142') );
+  check('...a photo already on the web keeps its https link (a remote photo row, never downloaded)', ss.image === 'https://example.test/synthetic.jpg' && storyPhotos(slugS)[0].url === 'https://example.test/synthetic.jpg' && storyPhotos(slugS)[0].path === null);
+  if (PUBLISH_TOKEN) {
+    const res = await (await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } })).text();
+    check('...nor in /api/stories', !res.includes(SUB.email) && !res.includes(SUB.phone));
+  }
 }
 
 
-// ================= error codes, body size, Pages CMS stories =================
-const MOCK = (process.env.MOCK_URL || 'http://localhost:4010').replace(/\/+$/, '');
-const mock = async (method, p, body) => (await fetch(MOCK + p, { method, headers: { Authorization: 'Bearer mock-token', 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })).json();
-// A commit made straight to the mock's main branch, as if someone edited the file in Pages CMS or on GitHub.
-async function mockCommit(files) {
-  const tip = (await mock('GET', '/repos/mock/repo/git/ref/heads/main')).object.sha;
-  const tree = [];
-  for (const [file, content] of Object.entries(files)) tree.push({ path: file, mode: '100644', type: 'blob', sha: (await mock('POST', '/repos/mock/repo/git/blobs', { content, encoding: 'utf-8' })).sha });
-  const t = await mock('POST', '/repos/mock/repo/git/trees', { tree });
-  const c = await mock('POST', '/repos/mock/repo/git/commits', { message: 'Edit in Pages CMS (synthetic)', tree: t.sha, parents: [tip] });
-  await mock('PATCH', '/repos/mock/repo/git/refs/heads/main', { sha: c.sha, force: false });
-}
+// ================= error codes, body size, stories that came from git =================
 {
   let r = await c1.get('/admin/published?e=Call+555-0100+to+claim+your+prize');
   check('?e= text from a link is never shown; only known codes are', !r.text.includes('claim your prize') && !/role="alert"/.test(r.text.replace(/<script[\s\S]*?<\/script>/g, '')));
   r = await c1.get('/admin/published?e=story_missing');
-  check('...a known code shows its fixed message', r.text.includes('That story was not found on the live branch.'));
+  check('...a known code shows its fixed message', r.text.includes('That story was not found on the site.'));
   r = await c1.get('/admin/published?e=constructor');
   check('...and prototype-style names are ignored', !/role="alert"/.test(r.text));
 
@@ -416,14 +442,15 @@ async function mockCommit(files) {
   const res = await fetch(`${BASE}/api/admin/drafts/${id}/save`, { method: 'POST', headers: { Cookie: c1.cookie, Origin: BASE, Connection: 'close', 'Content-Type': 'application/x-www-form-urlencoded' }, body: huge, duplex: 'half' });
   check('a body over the limit is refused (413) even without a Content-Length', res.status === 413, String(res.status));
 
-  // stories edited elsewhere (Pages CMS): raw HTML in the body, a gallery with alt texts, and an unreadable date
-  await mockCommit({
-    'src/content/stories/cms-html-story.md': '---\ntitle: "CMS Story"\nsection: news\narea: churches\nauthor: "Pat Example"\ndate: 2026-10-01\nimage: "/images/stories/cms/one.jpg"\nimageAlt: "Lead alt text"\nphotos:\n  - "/images/stories/cms/two.jpg"\n  - "/images/stories/cms/three.jpg"\nphotoAlts:\n  - "Second alt"\n  - "Third alt"\nfeatured: false\ndraft: false\n---\nPlain paragraph.\n\n<div class="note">Raw HTML from the CMS</div>\n',
-    'src/content/stories/bad-date-story.md': '---\ntitle: "Bad Date"\nsection: news\narea: churches\nauthor: "Pat Example"\ndate: not-a-date\n---\nBody.\n',
-  });
+  // stories that came from git (adopted or imported): raw HTML in the body, a gallery with alt texts, and an unknown section
+  const insStory = (slug, f) => Number(run("INSERT INTO stories (slug, title, section, area, author, date, image, image_alt, photos, photo_alts, body, status, source, published_at, updated_at) VALUES (?, ?, ?, 'churches', 'Pat Example', '2026-10-01', ?, ?, ?, ?, ?, 'live', 'git', 1, 1)",
+    slug, f.title, f.section ?? 'news', f.image ?? null, f.imageAlt ?? null, JSON.stringify(f.photos ?? []), JSON.stringify(f.photoAlts ?? []), f.body).lastInsertRowid);
+  const gid = insStory('cms-html-story', { title: 'CMS Story', image: '/images/stories/cms/one.jpg', imageAlt: 'Lead alt text', photos: ['/images/stories/cms/two.jpg', '/images/stories/cms/three.jpg'], photoAlts: ['Second alt', 'Third alt'], body: 'Plain paragraph.\n\n<div class="note">Raw HTML from git</div>' });
+  [['/images/stories/cms/one.jpg', 'lead', 'Lead alt text'], ['/images/stories/cms/two.jpg', 'gallery', 'Second alt'], ['/images/stories/cms/three.jpg', 'gallery', 'Third alt']].forEach(([u, k, alt], i) => run('INSERT INTO story_photos (story_id, position, kind, url, alt) VALUES (?, ?, ?, ?, ?)', gid, i, k, u, alt));
+  insStory('odd-section-story', { title: 'Odd Section', section: 'nonsense', body: 'Body.' });
   r = await c1.form('/api/admin/stories/edit', { slug: 'cms-html-story' });
   const cid = idOf(r);
-  check('a story edited elsewhere loads into the editor', cid > 0 && draftRow(cid).title === 'CMS Story', r.loc);
+  check('a story that came from git loads into the editor', cid > 0 && draftRow(cid).title === 'CMS Story', r.loc);
   const alts = q('SELECT alt FROM draft_photos WHERE draft_id = ? ORDER BY position', cid).map((x) => x.alt);
   check('...with the lead alt (imageAlt) and every gallery alt (photoAlts) restored', JSON.stringify(alts) === JSON.stringify(['Lead alt text', 'Second alt', 'Third alt']), JSON.stringify(alts));
   r = await c1.get(`/admin/drafts/${cid}`);
@@ -431,99 +458,94 @@ async function mockCommit(files) {
   r = await c1.get(`/admin/drafts/${A}`);
   check('...and a draft without "<" has no warning', !r.text.includes('may hold raw HTML'));
   const draftsBefore = q('SELECT COUNT(*) n FROM drafts')[0].n;
-  r = await c1.form('/api/admin/stories/edit', { slug: 'bad-date-story' });
-  check('a story whose date cannot be read is refused, not given today\'s date', r.params.get('e') === 'date_unreadable' && q('SELECT COUNT(*) n FROM drafts')[0].n === draftsBefore, r.loc);
-  // publish the CMS story back: every alt becomes imageAlt / photoAlts
-  const before = commits();
-  await c1.json(`/api/admin/drafts/${cid}/save`, { version: version(cid), ...baseFields({ title: 'CMS Story', body: 'Plain paragraph.\n\n<div class="note">Raw HTML from the CMS</div>', photoCredit: '' }) });
+  r = await c1.form('/api/admin/stories/edit', { slug: 'odd-section-story' });
+  check('a story with a section the editor does not know is refused, not given a default', r.params.get('e') === 'section_unknown' && q('SELECT COUNT(*) n FROM drafts')[0].n === draftsBefore, r.loc);
+  r = await c1.form('/api/admin/stories/edit', { slug: 'no-such-story' });
+  check('an unknown story to edit is reported', r.params.get('e') === 'story_missing');
+  // publish the story back: every alt becomes imageAlt / photoAlts, the photos keep their rows
+  await c1.json(`/api/admin/drafts/${cid}/save`, { version: version(cid), ...baseFields({ title: 'CMS Story', body: 'Plain paragraph.\n\n<div class="note">Raw HTML from git</div>', photoCredit: '' }) });
   r = await c1.form(`/api/admin/drafts/${cid}/publish`, { version: version(cid) });
-  const made = newCommit(before);
-  const md = made.length ? readCommitted(made[0], 'src/content/stories/cms-html-story.md') : '';
-  check('republishing a CMS story writes imageAlt and photoAlts and turns raw HTML into text', r.params.get('n') === 'published' && md.includes('imageAlt: "Lead alt text"') && md.includes('  - "Second alt"') && md.includes('  - "Third alt"') && md.includes('&lt;div class="note">') && !/<[a-zA-Z\/!?]/.test(md), md.slice(0, 600));
+  const cs = story('cms-html-story');
+  check('republishing it writes imageAlt and photoAlts, keeps the three photos and turns raw HTML into text', r.params.get('n') === 'published' && cs.image_alt === 'Lead alt text' && cs.photo_alts === JSON.stringify(['Second alt', 'Third alt']) && cs.photos === JSON.stringify(['/images/stories/cms/two.jpg', '/images/stories/cms/three.jpg']) && storyPhotos('cms-html-story').length === 3 && cs.body.includes('&lt;div class="note">') && !/<[a-zA-Z\/!?]/.test(cs.body) && cs.source === 'editor', JSON.stringify(cs).slice(0, 500));
+  const bogus = idOf(await c1.form('/api/admin/drafts/new', {}));
+  await c1.json(`/api/admin/drafts/${bogus}/save`, { version: version(bogus), ...baseFields({ title: 'Bogus Photo Link' }) });
+  run('INSERT INTO draft_photos (draft_id, url, alt, position, created_at) VALUES (?, ?, ?, 0, ?)', bogus, '/images/stories/not-mine/secret.jpg', 'x', Date.now());
+  const nBefore = storyCount();
+  r = await c1.form(`/api/admin/drafts/${bogus}/publish`, { version: version(bogus) });
+  check('a draft photo pointing at a site path that is not one of the story\'s own photos is refused (photo_link_bad), nothing is written', r.params.get('e') === 'photo_link_bad' && draftRow(bogus).slug === null && storyCount() === nBefore && !story('2026-10-19-bogus-photo-link'), r.loc);
 }
 
-// ================= edits during a publish, slug reservation =================
+// ================= two editors at once, slug reservation, nothing half-written =================
 {
   const mk = async (title, body = 'A short story body for the concurrency test.') => { const id = idOf(await c1.form('/api/admin/drafts/new', {})); await c1.json(`/api/admin/drafts/${id}/save`, { version: version(id), ...baseFields({ title, body }) }); return id; };
-  const T = await mk('Slow Publish Story');
-  const U = await mk('Slow Publish Story'); // same title and date: must not share a slug
-  await mock('POST', '/__mock/delay', { ms: 1800 });
-  const before = commits();
-  const v0 = version(T);
-  const pT = c1.form(`/api/admin/drafts/${T}/publish`, { version: v0 });
-  await new Promise((r) => setTimeout(r, 600));
-  check('while the commit runs, the draft is locked and its slug is reserved', version(T) > v0 && draftRow(T).slug === '2026-10-19-slow-publish-story', String(draftRow(T).slug));
-  let r = await c1.json(`/api/admin/drafts/${T}/save`, { version: v0, ...baseFields({ title: 'Slow Publish Story', body: 'Edit from the old page.' }) });
-  check('a save from the page that started the publish gets a 409 conflict', r.status === 409 && r.data.conflict === true, JSON.stringify(r.data));
-  r = await c1.form(`/api/admin/drafts/${T}/publish`, { version: v0 });
-  check('a second publish of the same version is refused', ['conflict', 'already_publishing'].includes(r.params.get('e')), r.loc);
-  const pU = c2.form(`/api/admin/drafts/${U}/publish`, { version: version(U) });
-  // an editor who reloaded during the publish sees the new version and saves
-  r = await c2.json(`/api/admin/drafts/${T}/save`, { version: version(T), ...baseFields({ title: 'Slow Publish Story', body: 'Edited while the publish was running.' }) });
-  check('an editor who reloaded mid-publish can save', r.data.ok, JSON.stringify(r.data));
-  const resT = await pT;
-  const resU = await pU;
-  check('the publish still finishes, and the editor is told newer edits are not live yet', resT.params.get('n') === 'published_stale', resT.loc);
-  const t = draftRow(T);
-  const madeT = newCommit(before).filter((c) => commitFiles(c).includes(`src/content/stories/${t.slug}.md`));
-  check('...the commit and slug are recorded, the story is live, the draft stays in review with the newer text', t.published_commit && madeT.includes(t.published_commit) && t.status === 'in_review' && t.body === 'Edited while the publish was running.' && !readCommitted(t.published_commit, `src/content/stories/${t.slug}.md`).includes('Edited while'), JSON.stringify([t.status, t.published_commit]));
-  const u = draftRow(U);
-  check('two drafts with the same title get different slugs (the reservation is in the database)', u.slug !== t.slug && /-2$/.test(u.slug || '') && resU.params.get('n') === 'published', `${t.slug} ${u.slug} ${resU.loc}`);
-  await mock('POST', '/__mock/delay', { ms: 0 });
-  check('a draft whose newer edits are not live shows as live in the Published tab', (await c1.get('/admin/published')).text.includes(`/stories/${t.slug}/`));
-  r = await c1.form(`/api/admin/drafts/${T}/publish`, { version: version(T) });
-  check('publishing again makes the newer edits live', r.params.get('n') === 'published' && readCommitted(draftRow(T).published_commit, `src/content/stories/${t.slug}.md`).includes('Edited while the publish was running.') && draftRow(T).status === 'published');
-}
+  // two drafts with the same title and date, published at the same moment by two editors
+  const T = await mk('Simultaneous Story');
+  const U = await mk('Simultaneous Story');
+  const [rT, rU] = await Promise.all([c1.form(`/api/admin/drafts/${T}/publish`, { version: version(T) }), c2.form(`/api/admin/drafts/${U}/publish`, { version: version(U) })]);
+  const t = draftRow(T), u = draftRow(U);
+  const won = [rT, rU].filter((x) => x.params.get('n') === 'published');
+  const slugs = [t.slug, u.slug].filter(Boolean);
+  check('two editors publishing the same title at once can never both win the same slug', new Set(slugs).size === slugs.length && won.length >= 1 && slugs.every((sl) => q('SELECT COUNT(*) n FROM stories WHERE slug = ?', sl)[0].n === 1), JSON.stringify([rT.loc, rU.loc, t.slug, u.slug]));
+  check('...in practice both publish, one at -2 (each story has its own row and page)', t.status === 'published' && u.status === 'published' && [t.slug, u.slug].sort().join() === ['2026-10-19-simultaneous-story', '2026-10-19-simultaneous-story-2'].join() && (await Promise.all(slugs.map((sl) => getPub(`/stories/${sl}/`)))).every((x) => x.status === 200));
+  // the same draft published twice at the same moment: one story
+  const D = await mk('Double Click Story');
+  const v = version(D);
+  const both = await Promise.all([c1.form(`/api/admin/drafts/${D}/publish`, { version: v }), c1.form(`/api/admin/drafts/${D}/publish`, { version: v })]);
+  check('the same draft published twice at once publishes once (the other is refused)', both.filter((x) => x.params.get('n') === 'published').length === 1 && both.filter((x) => ['conflict', 'already_publishing', 'not_publishable'].includes(x.params.get('e'))).length === 1 && q("SELECT COUNT(*) n FROM stories WHERE slug LIKE '2026-10-19-double-click-story%'")[0].n === 1, JSON.stringify(both.map((x) => x.loc)));
+  // a slug taken by someone else between freshSlug and the write is refused, not taken over
+  const V = await mk('Taken Address Story');
+  run("INSERT INTO stories (slug, title, section, author, date, source, published_at, updated_at) VALUES ('2026-10-19-taken-address-story', 'Other story', 'news', 'a', '2026-10-19', 'git', 1, 1)");
+  const rV = await c1.form(`/api/admin/drafts/${V}/publish`, { version: version(V) });
+  check('a story that already has the address is never overwritten by a new draft (it gets -2)', rV.params.get('n') === 'published' && draftRow(V).slug === '2026-10-19-taken-address-story-2' && story('2026-10-19-taken-address-story').title === 'Other story', rV.loc);
 
-// ================= rejected mid-publish, GitHub refusals, ?n= lookup =================
-{
-  const mk = async (title) => { const id = idOf(await c1.form('/api/admin/drafts/new', {})); await c1.json(`/api/admin/drafts/${id}/save`, { version: version(id), ...baseFields({ title, body: 'A short story body for the refusal tests.' }) }); return id; };
+  // a stale version from a page opened before another editor's change is refused and writes nothing
+  const X = await mk('Stale Version Story');
+  const seen = version(X);
+  await c2.json(`/api/admin/drafts/${X}/save`, { version: version(X), ...baseFields({ title: 'Stale Version Story', body: 'Changed by editor two.' }) });
+  const nX = storyCount();
+  const rX = await c1.form(`/api/admin/drafts/${X}/publish`, { version: seen });
+  check('publishing from a stale page is refused (conflict) and nothing is written', rX.params.get('e') === 'conflict' && draftRow(X).slug === null && draftRow(X).status === 'in_review' && storyCount() === nX, rX.loc);
+  const rX2 = await c1.form(`/api/admin/drafts/${X}/publish`, { version: version(X) });
+  check('...after reloading, it publishes the newer text', rX2.params.get('n') === 'published' && story(draftRow(X).slug).body === 'Changed by editor two.');
+
+  // a database error part-way through leaves nothing half-written (a trigger makes the photo insert fail)
+  const F = await mk('Database Fails Story');
+  await c1.form(`/api/admin/drafts/${F}/photos`, { version: version(F), op: 'upload' }, [{ bytes: PNG_A, filename: 'keep.png' }, { bytes: PNG_B, filename: 'keep2.png' }]);
+  await c1.json(`/api/admin/drafts/${F}/save`, { version: version(F), ...baseFields({ title: 'Database Fails Story', body: 'A short story body for the failure test.' }), [`photo_${q('SELECT id FROM draft_photos WHERE draft_id = ? ORDER BY position', F)[1].id}_alt`]: 'BOOM' });
+  const fFiles = q('SELECT path FROM draft_photos WHERE draft_id = ?', F).map((x) => path.join(DATA_DIR, 'uploads', x.path));
+  run("CREATE TRIGGER zz_fail_photo BEFORE INSERT ON story_photos WHEN NEW.alt = 'BOOM' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END");
+  const snap = () => JSON.stringify([q('SELECT * FROM stories ORDER BY id'), q('SELECT * FROM story_photos ORDER BY id'), q('SELECT rowid, * FROM stories_fts'), q('SELECT id, status, slug, published_commit, updated_at FROM drafts ORDER BY id')]);
+  const beforeFail = snap();
+  const filesBefore = mediaFiles();
+  const rF = await c1.form(`/api/admin/drafts/${F}/publish`, { version: version(F) });
+  check('a database error in the middle of a publish reports "could not publish"', rF.params.get('e') === 'publish_failed', rF.loc);
+  check('...and nothing is half-written: no story, photo rows, search entry, slug or draft change, and no media file left behind', snap() === beforeFail && mediaFiles().join() === filesBefore.join(), 'state changed');
+  check('...the draft is still editable with its uploaded photos on disk', draftRow(F).status === 'in_review' && draftRow(F).slug === null && fFiles.every((f) => fs.existsSync(f)));
+  check('...and nothing is visible to visitors', (await getPub('/stories/2026-10-19-database-fails-story/')).status === 404);
+  run('DROP TRIGGER zz_fail_photo');
+  const rF2 = await c1.form(`/api/admin/drafts/${F}/publish`, { version: version(F) });
+  check('...once the fault is gone, publishing works', rF2.params.get('n') === 'published' && story('2026-10-19-database-fails-story').status === 'live' && storyPhotos('2026-10-19-database-fails-story').length === 2, rF2.loc);
+
+  // ?n= lookup
   let r = await c1.get('/admin/published?n=constructor');
   check('?n= with a prototype-style name or any other text shows nothing', !/class="admin-ok"/.test(r.text) && !(await c1.get('/admin/published?n=hello+there')).text.includes('hello there'));
   r = await c1.get(`/admin/drafts/${A}?n=constructor`);
   check('...also on the editor page', !/class="admin-ok"/.test(r.text));
+  r = await c1.get(`/admin/drafts/${A}?n=published_stale`);
+  check('...and the retired GitHub-era notices are gone', !/class="admin-ok"/.test(r.text));
+}
 
-  // rejected while the commit is running
-  const R = await mk('Rejected During Publish');
-  await mock('POST', '/__mock/delay', { ms: 1800 });
-  const before = commits();
-  const pR = c1.form(`/api/admin/drafts/${R}/publish`, { version: version(R) });
-  await new Promise((x) => setTimeout(x, 600));
-  r = await c2.form(`/api/admin/drafts/${R}/reject`, { version: version(R), note: 'Rejected mid-publish (synthetic).' });
-  check('another editor who reloaded can reject while the commit runs', r.params.get('n') === 'rejected' && draftRow(R).status === 'rejected');
-  const resR = await pR;
-  await mock('POST', '/__mock/delay', { ms: 0 });
-  const dR = draftRow(R);
-  check('the story is live, so the draft returns to in review linked to its slug and commit (note kept)', resR.params.get('n') === 'published_stale' && dR.status === 'in_review' && dR.rejected_at === null && dR.slug === '2026-10-19-rejected-during-publish' && !!dR.published_commit && dR.reject_note.startsWith('Rejected mid-publish'), JSON.stringify([resR.loc, dR.status, dR.slug]));
-  check('...and the editor sees the stale notice', (await c1.get(`/admin/drafts/${R}?n=published_stale`)).text.includes('not live yet'));
-  check('...and the restore is audited', q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.restore' AND target = ? AND detail LIKE '%rejected while publishing%'", `draft:${R}`)[0].n === 1);
-  const shaFirst = dR.published_commit;
-  await c1.json(`/api/admin/drafts/${R}/save`, { version: version(R), ...baseFields({ title: 'Rejected During Publish', body: 'Second version after the mid-publish reject.' }) });
-  r = await c1.form(`/api/admin/drafts/${R}/publish`, { version: version(R) });
-  const dR2 = draftRow(R);
-  check('publishing again overwrites the same slug', r.params.get('n') === 'published' && dR2.slug === dR.slug && dR2.published_commit !== shaFirst && readCommitted(dR2.published_commit, `src/content/stories/${dR.slug}.md`).includes('Second version after'));
-  check('...no second story was created', newCommit(before).filter((c) => commitFiles(c).some((f) => f.startsWith('src/content/stories/2026-10-19-rejected-during-publish'))).length === 2 && q("SELECT COUNT(*) n FROM drafts WHERE slug LIKE '2026-10-19-rejected-during-publish%'")[0].n === 1);
-
-  // GitHub refuses the commit (422): the reservation is released and nothing is lost
-  const F = await mk('Refused By GitHub');
-  await c1.form(`/api/admin/drafts/${F}/photos`, { version: version(F), op: 'upload' }, [{ bytes: PNG_A, filename: 'keep.png' }]);
-  const fFile = path.join(DATA_DIR, 'uploads', q('SELECT path FROM draft_photos WHERE draft_id = ?', F)[0].path);
-  await mock('POST', '/__mock/fail', { status: 422 });
-  r = await c1.form(`/api/admin/drafts/${F}/publish`, { version: version(F) });
-  check('a 422 from GitHub reports "could not publish", frees the slug and leaves the draft editable', r.params.get('e') === 'publish_failed' && draftRow(F).slug === null && draftRow(F).status === 'in_review' && draftRow(F).published_commit === null, r.loc);
-  check('...and the uploaded photo is still there', fs.existsSync(fFile) && q('SELECT COUNT(*) n FROM draft_photos WHERE draft_id = ? AND path IS NOT NULL', F)[0].n === 1);
-  await mock('POST', '/__mock/fail', { status: 0 });
-  r = await c1.form(`/api/admin/drafts/${F}/publish`, { version: version(F) });
-  check('...and publishing works once GitHub accepts it', r.params.get('n') === 'published' && draftRow(F).slug === '2026-10-19-refused-by-github');
-
-  // a 5xx: the commit may have landed, so the slug stays reserved and a retry overwrites the same story
-  const G = await mk('Server Error From GitHub');
-  await mock('POST', '/__mock/fail', { status: 500 });
-  r = await c1.form(`/api/admin/drafts/${G}/publish`, { version: version(G) });
-  check('a 500 from GitHub reports "could not publish" but keeps the slug reserved', r.params.get('e') === 'publish_failed' && draftRow(G).slug === '2026-10-19-server-error-from-github' && draftRow(G).status === 'in_review', r.loc);
-  await mock('POST', '/__mock/fail', { status: 0 });
-  r = await c1.form(`/api/admin/drafts/${G}/publish`, { version: version(G) });
-  check('...the retry publishes to the same slug (no -2)', r.params.get('n') === 'published' && draftRow(G).slug === '2026-10-19-server-error-from-github');
+// ================= backups reminder on the publish screen =================
+{
+  const adminE = mkUser('backup-admin@example.test', 'Backup Admin');
+  run("UPDATE users SET role = 'admin' WHERE id = ?", adminE.id);
+  const cAdmin = new Client(adminE);
+  const open = idOf(await cAdmin.form('/api/admin/drafts/new', {}));
+  const forAdmin = (await cAdmin.get(`/admin/drafts/${open}`)).text;
+  const forEditor = (await c1.get(`/admin/drafts/${open}`)).text;
+  check('administrators are reminded on the publish screen when backups are not set up (publishing is not blocked)', forAdmin.includes('id="backups-notice"') && forAdmin.includes('only in this server') && /id="publish-form"/.test(forAdmin), forAdmin.includes('backups-notice') ? 'notice present' : 'no notice');
+  check('...ordinary editors do not see it', !forEditor.includes('id="backups-notice"'));
+  check('...and the dashboard home shows it to administrators too', (await cAdmin.get('/admin')).text.includes('id="backups-notice"') && !(await c1.get('/admin')).text.includes('id="backups-notice"'));
 }
 
 // ================= audit log =================
