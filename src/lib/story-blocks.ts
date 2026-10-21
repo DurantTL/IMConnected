@@ -125,7 +125,7 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
 
 /** Modules become the Markdown body, which publishing limits to 20,000 characters: refuse at save with a clear message. */
 export function checkStoryBlockLength(blocks: StoryBlock[]): void {
-  if (storyBlocksToMarkdown(blocks).length > STORY_BLOCKS_TEXT_MAX) {
+  if (storyBlocksToMarkdown(blocks).replace(/&lt;/g, '<').length > STORY_BLOCKS_TEXT_MAX) { // as typed, the same rule as text()
     error(`The story text is too long: modules together can hold up to ${STORY_BLOCKS_TEXT_MAX.toLocaleString('en-US')} characters.`);
   }
 }
@@ -196,14 +196,14 @@ export function splitMarkdownIntoModules(markdown: string, max = 20_000): string
 }
 
 /**
- * Plain-text fields (heading, list items, button label, alt) back to what the editor typed: stored "&lt;" shown as "<".
- * Paragraph and quote text stay as stored (Markdown, where &lt; is already shown as "<"). Output is escaped again on write.
+ * Module text (paragraph, heading, quote, list items, button label, alt) back to what the editor typed: stored "&lt;" shown as "<".
+ * Paragraph and quote text too. Output is escaped again on write (escapeHtmlInMarkdown for the body, escapeStoryBlocks for modules).
  */
 export function unescapeStoryBlockPlainText(blocks: StoryBlock[]): StoryBlock[] {
   const un = (v: string) => v.replace(/&lt;/g, '<');
   return blocks.map((b) => {
     const o: StoryBlock = { ...b };
-    if (o.type === 'heading' && o.text !== undefined) o.text = un(o.text);
+    if (o.text !== undefined) o.text = un(o.text); // paragraph and quote too: the editor shows what was typed, and every "<" is escaped again on write
     if (o.items) o.items = o.items.map(un);
     if (o.alt !== undefined) o.alt = un(o.alt);
     if (o.label !== undefined) o.label = un(o.label);

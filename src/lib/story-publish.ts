@@ -199,7 +199,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   if (author.length > PUBLISH_LIMITS.author) throw new EditorError('author_long');
   if (dek.length > LIMITS.dek) throw new EditorError('dek_long');
   if (!body) throw new EditorError('body_required');
-  if (body.length > LIMITS.bodyMax) throw new EditorError('body_long');
+  if (body.replace(/&lt;/g, '<').length > LIMITS.bodyMax) throw new EditorError('body_long');
   try { checkStoryBlockLength(draftBlocks); } catch { throw new EditorError('body_long'); } // same rule as saving
   if (!getSection(section)) throw new EditorError('section_required');
   if (!isValidArea(section, area)) throw new EditorError('area_bad');

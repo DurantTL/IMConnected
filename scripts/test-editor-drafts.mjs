@@ -373,6 +373,32 @@ let H, slugH;
   await c1.form('/api/admin/stories/unpublish', { slug: slugH });
 }
 
+// ================= a live modular story at the length limit with "<" can be edited and republished =================
+{
+  const para = 'p'.repeat(19_990) + '<<<<<' + 'q'.repeat(5);
+  let r = await c1.form('/api/admin/drafts/new', {});
+  const L = idOf(r);
+  const f = baseFields({ title: 'Edge Paragraph Round Trip', section: 'news', area: 'churches' }); delete f.body;
+  r = await c1.json(`/api/admin/drafts/${L}/save`, { version: version(L), ...f, storyBlocks: JSON.stringify([{ id: 'p', type: 'text', text: para }]) });
+  check('a paragraph of 20,000 characters with five "<" saves', r.data.ok === true, JSON.stringify(r.data));
+  r = await c1.form(`/api/admin/drafts/${L}/publish`, { version: version(L) });
+  const slugL = draftRow(L).slug;
+  check('...and publishes', r.params.get('n') === 'published', r.loc);
+  const snapshot = async () => ({ feed: JSON.stringify(JSON.parse((await getPub('/stories.json')).text).stories.find((x) => x.url.includes(slugL))), api: PUBLISH_TOKEN ? (await (await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } })).text()) : '', page: (await getPub(`/stories/${slugL}/`)).text.replace(/<link[^>]*>|<script[^]*?<\/script>/g, ''), row: story(slugL) });
+  const before = await snapshot();
+  await c1.form('/api/admin/stories/edit', { slug: slugL });
+  const reopened = JSON.parse(draftRow(L).story_blocks);
+  check('editing it: the paragraph field shows "<" (20,000 characters, not 20,015)', reopened[0].text === para && reopened[0].text.length === 20_000);
+  r = await c1.json(`/api/admin/drafts/${L}/save`, { version: version(L), ...f, storyBlocks: JSON.stringify(reopened) });
+  check('...Save succeeds', r.data.ok === true, JSON.stringify(r.data));
+  r = await c1.form(`/api/admin/drafts/${L}/publish`, { version: version(L) });
+  check('...and Publish changes succeeds', r.params.get('n') === 'published', r.loc);
+  const after = await snapshot();
+  check('...nothing reaches the database, the body, /stories.json or /api/stories unescaped, and the output is unchanged',
+    !after.row.story_blocks.includes('<') && !after.row.body.includes('<') && !after.feed.includes('<') && !after.api.includes('<<') && after.row.story_blocks === before.row.story_blocks && after.row.body === before.row.body && after.feed === before.feed && !after.page.includes('&amp;lt;'));
+  await c1.form('/api/admin/stories/unpublish', { slug: slugL });
+}
+
 // ================= story modules: hostile text everywhere, escaped like the body =================
 {
   const evil = '<script>alert(1)</script> <img src=x onerror=alert(1)>';
@@ -425,6 +451,9 @@ let H, slugH;
   check('preview: an image pointing at another same-origin path is removed', !pdoc.includes('/api/admin/users') && !pdoc.includes('/admin/drafts/1'), pdoc.slice(-400));
   const own = await c1.json(`/api/admin/drafts/${M}/preview`, { title: 'T', body: `![x](${BASE}/api/admin/users) ![y](${BASE.replace('http:', 'https:')}/api/admin/users) ![z](https://example.test/p.jpg)` });
   check('preview: an https address on the site\'s own host is removed, another host\'s image is kept', !(own.data.doc || '').includes('/api/admin/users') && (own.data.doc || '').includes('https://example.test/p.jpg'), (own.data.doc || '').slice(-300));
+  const host = new URL(BASE).hostname;
+  const dot = await c1.json(`/api/admin/drafts/${M}/preview`, { title: 'T', body: `![d](https://${host}./api/admin/users) ![u](https://${host.toUpperCase()}/api/admin/users)` });
+  check('preview: a trailing-dot or upper-case spelling of the site\'s own host is removed too', !(dot.data.doc || '').includes('/api/admin/users'), (dot.data.doc || '').slice(-300));
   check('...the story\'s own photo paths are kept', pdoc.includes('src="/api/admin/photos/1"') && pdoc.includes('src="/media/stories/x/y.jpg"'));
 }
 
