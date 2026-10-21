@@ -2,12 +2,12 @@
 import Base from '../layouts/Base.astro';
 import StoryCard from './StoryCard.astro';
 import type { Section } from '../lib/site';
-import type { Story } from '../lib/stories';
+import type { PublicStory } from '../lib/stories';
 
 interface Props {
   section: Section;
   area?: { key: string; label: string };
-  stories: Story[];
+  stories: PublicStory[];
 }
 const { section, area, stories } = Astro.props;
 const title = area ? `${area.label} · ${section.label}` : section.label;

@@ -12,7 +12,31 @@ export function storyUrl(story: { id: string }): string {
   return `/stories/${story.id}/`;
 }
 
-export function bySection(stories: Story[], section: string, area?: string): Story[] {
+/** What the public pages need from a story. A content-collection entry fits, and so does a row from the stories table (public-stories.ts). */
+export interface PublicStory {
+  id: string;
+  /** The Markdown source */
+  body?: string;
+  data: {
+    title: string;
+    dek?: string;
+    section: string;
+    area?: string;
+    column?: string;
+    author: string;
+    authorTitle?: string;
+    church?: string;
+    date: Date;
+    image?: string;
+    imageAlt?: string;
+    photoCredit?: string;
+    photos: string[];
+    photoAlts: string[];
+    featured: boolean;
+  };
+}
+
+export function bySection<T extends PublicStory>(stories: T[], section: string, area?: string): T[] {
   return stories.filter(
     (s) => s.data.section === section && (!area || s.data.area === area),
   );

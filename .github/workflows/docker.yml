@@ -27,6 +27,9 @@ jobs:
       publish: ${{ steps.target.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Enough history to list the commits in the image (the server uses it to tell whether a republish is in the build).
+          fetch-depth: 200
 
       # Publish only from main, and only while this commit is still main's newest. A manual
       # run on another branch, or a re-run of an old main run, must not replace :latest.
@@ -62,6 +65,9 @@ jobs:
       - name: Lowercase image name
         if: steps.target.outputs.publish == 'true'
         run: echo "IMAGE=${IMAGE,,}" >> "$GITHUB_ENV"
+      - name: List the commits in this image
+        if: steps.target.outputs.publish == 'true'
+        run: git log -200 --format='%H %ct' > .build-commits
       - uses: docker/build-push-action@v6
         if: steps.target.outputs.publish == 'true'
         with:

@@ -1,7 +1,9 @@
 // Stories and their photos in the database (epic #25, step 1). Every function is synchronous like the rest of
 // the db code and every query is parameterized. Until step 4, git is the source of truth and these rows are a
-// mirror of the built site (see story-sync.ts); public pages do not read them yet.
+// mirror of the built site (see story-sync.ts). Public pages read them through public-stories.ts once the mirror
+// is complete; every write below clears the page cache (invalidateStories) so the change shows on the next request.
 import { getDb } from './db';
+import { invalidateStories } from './public-cache';
 
 export type StoryStatus = 'live' | 'unpublished';
 export type StorySource = 'git' | 'form' | 'studio' | 'editor' | 'agent';
@@ -193,6 +195,7 @@ export function upsertStory(s: StoryInput, now = Date.now()): 'inserted' | 'upda
     const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes);
     db.exec('COMMIT');
+    invalidateStories();
     return cur ? 'updated' : 'inserted';
   } catch (err) {
     try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
@@ -203,7 +206,45 @@ export function upsertStory(s: StoryInput, now = Date.now()): 'inserted' | 'upda
 /** Take a story off the site (the row and its photos stay). True when a live story was changed. */
 export function unpublishStory(slug: string, now = Date.now()): boolean {
   const r = getDb().prepare("UPDATE stories SET status = 'unpublished', updated_at = ? WHERE slug = ? AND status = 'live'").run(now, slug);
+  if (Number(r.changes) > 0) invalidateStories();
   return Number(r.changes) > 0;
+}
+
+/**
+ * Keep a story off the public pages until an image that contains its unpublish commit runs (see story-holds.ts and
+ * migration 012). Call it inside the same transaction as the unpublish itself; `unpublishTime` is GitHub's commit time (ms).
+ */
+export function holdStory(slug: string, unpublishSha: string, unpublishTime: number | null, now = Date.now()): void {
+  getDb().prepare('INSERT OR REPLACE INTO story_holds (slug, build_marker, unpublish_sha, unpublish_time, released_at, created_at) VALUES (?, NULL, ?, ?, NULL, ?)').run(slug, unpublishSha, unpublishTime, now);
+  invalidateStories();
+}
+
+/** Fill in the build marker of a hold written by holdStory (only if it is still that unpublish's hold). */
+export function setHoldMarker(slug: string, unpublishSha: string, marker: string): void {
+  getDb().prepare('UPDATE story_holds SET build_marker = ? WHERE slug = ? AND unpublish_sha = ? AND released_at IS NULL').run(marker, slug, unpublishSha);
+}
+
+export interface StoredHold { marker: string | null; unpublishSha: string | null; unpublishTime: number | null; releasedAt: number | null }
+
+type HoldRow = { slug: string; build_marker: string | null; unpublish_sha: string | null; unpublish_time: number | null; released_at: number | null };
+const toHold = (r: HoldRow): StoredHold => ({ marker: r.build_marker, unpublishSha: r.unpublish_sha, unpublishTime: r.unpublish_time === null ? null : Number(r.unpublish_time), releasedAt: r.released_at === null ? null : Number(r.released_at) });
+const HOLD_COLS = 'slug, build_marker, unpublish_sha, unpublish_time, released_at';
+
+/** The hold row of a story, released or not (a released one is kept as a record that the hold existed). */
+export function getHold(slug: string): StoredHold | undefined {
+  const r = getDb().prepare(`SELECT ${HOLD_COLS} FROM story_holds WHERE slug = ?`).get(slug) as HoldRow | undefined;
+  return r ? toHold(r) : undefined;
+}
+
+/** The holds still in force (not released). */
+export function listHolds(): Map<string, StoredHold> {
+  const rows = getDb().prepare(`SELECT ${HOLD_COLS} FROM story_holds WHERE released_at IS NULL`).all() as HoldRow[];
+  return new Map(rows.map((r) => [r.slug, toHold(r)]));
+}
+
+/** Mark the hold released, but only the hold that was evaluated (same unpublish commit), never a newer one. */
+export function releaseHold(slug: string, unpublishSha: string | null, now = Date.now()): void {
+  getDb().prepare('UPDATE story_holds SET released_at = ? WHERE slug = ? AND unpublish_sha IS ? AND released_at IS NULL').run(now, slug, unpublishSha);
 }
 
 /** Slugs of the stories of one source with a given status (the git sync uses this to find stories that left the build). */

@@ -1,9 +1,9 @@
 ---
 import { getSection, areaLabel, formatDate } from '../lib/site';
-import { storyUrl, type Story } from '../lib/stories';
+import { storyUrl, type PublicStory } from '../lib/stories';
 
 interface Props {
-  story: Story;
+  story: PublicStory;
   variant?: 'default' | 'lead' | 'compact' | 'text';
   showDek?: boolean;
   showKicker?: boolean;
