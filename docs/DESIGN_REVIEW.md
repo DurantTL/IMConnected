@@ -27,6 +27,8 @@ The follow-up used Luna for research, an already-running `gpt-6.1-sol` implement
 
 ## Website
 
+These two screenshots were generated from a throwaway database that holds only synthetic stories (made-up text and people, generated illustrations, no real names or churches).
+
 ![Magazine homepage at desktop width](design/website-desktop.png)
 
 ![Magazine homepage at phone width](design/website-mobile.png)
@@ -45,33 +47,22 @@ These editor screenshots use a synthetic account, synthetic text and a generated
 
 ## Validation
 
-The production Astro build passed. The design crawl checked home, section, story, submission, search and sign-in screens at 360, 390, 768, 1024 and 1440 pixels: **30 responsive screens and 98 checks passed**, including keyboard navigation, overflow, script errors and axe WCAG A/AA checks. All four editor panels also passed axe WCAG A/AA checks.
+The production Astro build passed. The design crawl checked home, section, story, submission, search and sign-in screens at 360, 390, 768, 1024 and 1440 pixels (30 responsive screens), including keyboard navigation, overflow, script errors, the header's current-page markers and axe WCAG A/AA checks. All four editor panels also passed axe WCAG A/AA checks.
 
-The GPT follow-up reran the build, 15 module checks, SQLite integration, 50 editor browser checks, pending-save regression, public-page suite and photo-layout/viewer suite. The other rows below record the earlier full redesign verification. The final independent Sol review reported no remaining findings.
+**Why the baseline comparisons were not used.** `scripts/test-public-pages.mjs` can compare rendered pages with a historical build (`BASELINE_DIR`). Those comparisons assume the page markup did not change, which does not hold for an intentional redesign, so they were not applicable here and were not run (the script is unchanged and reports them as skipped, never as passes). Instead a before/after check of every published story was done by the owner: all 20 pages answered 200 with the same photos, credits and headlines, no horizontal overflow and no script errors.
 
-| Check | Passed | Failed | Skipped |
-| --- | ---: | ---: | ---: |
-| Module schema and safe rendering | 15 | 0 | 0 |
-| SQLite module/focus round trips | Integration passed | 0 | 0 |
-| Editor browser workflow | 50 | 0 | 0 |
-| Pending-save publish regression | Integration passed | 0 | 0 |
-| Existing editor suite | 159 | 0 | 0 |
-| Submission suite | 92 | 0 | 0 |
-| Public-page suite | 37 | 0 | 4 |
-| Search suite, including Chromium | 76 | 0 | 0 |
-| Story import suite | 18 | 0 | 0 |
-| Photo layouts/viewer, including axe | 92 | 0 | 0 |
+**Review follow-up.** An independent review plus test runs found problems that are fixed on this branch: module text is escaped like the body (`<` stored as `&lt;`) and the renderer shows it literally; image modules add nothing to the Markdown projection and may only show the story's own photos (never an external address); a Markdown-box edit on a modular draft is refused instead of silently dropped; modules together are limited to the 20,000-character body limit, and "Use modules" splits between paragraphs; the From AI agent badge is back on the draft page; the editor tests use the Save control that is actually visible at each width; the header marks only the current page and the phone menu has a Latest link; outline controls' accessible names start with their visible text; opening an empty draft no longer autosaves; the private preview loads only the story's own photo paths.
 
-The four skipped public-page comparison groups require a historical build baseline; they are not counted as passes. Browser and integration tests use isolated local data and mock requests. Live WordPress, SSO, email, Google Drive, production publishing and every Gmail/Outlook rendering combination were not exercised. This is a modular story editor, not a form-response, payment or conditional-logic engine.
+Browser and integration tests use isolated local data and mock requests. Live WordPress, SSO, email, Google Drive, production publishing and every Gmail/Outlook rendering combination were not exercised. This is a modular story editor, not a form-response, payment or conditional-logic engine.
 
-Reproduce the key checks after `npm ci` and `npm run build`:
+Reproduce the key checks after `npm ci` and `npm run build`. Playwright and axe are not dependencies: they resolve normally, and `PLAYWRIGHT_ROOT` (a folder whose `node_modules` has Playwright), `CHROMIUM_PATH`, `CHROMIUM_NO_SANDBOX=1` (needed when running as root, for example in a container) and `AXE_JS` (path to `axe.min.js`) override that.
 
 ```bash
 node scripts/test-story-blocks.mjs
 node scripts/test-story-builder.mjs
-PLAYWRIGHT_ROOT=/workspace/.tools/browser CHROMIUM_PATH=/usr/bin/chromium node scripts/test-story-builder-ui.mjs
-PLAYWRIGHT_ROOT=/workspace/.tools/browser CHROMIUM_PATH=/usr/bin/chromium node scripts/test-editor-save-race.mjs
-PLAYWRIGHT_ROOT=/workspace/.tools/browser CHROMIUM_PATH=/usr/bin/chromium AXE_JS=/workspace/.tools/a11y/node_modules/axe-core/axe.min.js node scripts/test-design-review.mjs
+node scripts/test-story-builder-ui.mjs
+node scripts/test-editor-save-race.mjs
+AXE_JS=/path/to/axe.min.js node scripts/test-design-review.mjs
 ```
 
-Playwright, Chromium and axe paths can be overridden for another machine; no new application dependencies were added. This branch contains code changes only and has not been deployed or merged to the production branch.
+The editor, submission, public-page, photo-layout, search, import and agent suites are listed in `AGENTS.md`. This branch contains code changes only and has not been deployed or merged to the production branch.
