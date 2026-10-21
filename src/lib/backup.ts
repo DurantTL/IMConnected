@@ -10,7 +10,7 @@
 // quick; the archive and uploads are streams, so requests are never held up for long.
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
-import { driveConfig, createDriveClient, type DriveClient } from './db/gdrive.mjs';
+import { driveConfig, createDriveClient, settingsFingerprint, type DriveClient } from './db/gdrive.mjs';
 import { performBackup, listLocal } from './db/backup-run.mjs';
 import { utcDay, redact } from './db/backup-core.mjs';
 import { buildBackupAlert, postEmailBatch } from './email';
@@ -69,13 +69,16 @@ function claimRun(day: string, now: number, env = process.env): number | null {
     db.prepare("UPDATE backup_runs SET finished_at = ?, error = 'interrupted (the server stopped during the backup)' WHERE finished_at IS NULL AND heartbeat_at < ?").run(now, now - STALE_MS);
     const done = db.prepare('SELECT 1 FROM backup_runs WHERE day = ? AND ok = 1').get(day);
     const busy = db.prepare('SELECT 1 FROM backup_runs WHERE finished_at IS NULL').get();
-    const last = db.prepare('SELECT finished_at, permanent FROM backup_runs WHERE day = ? ORDER BY id DESC LIMIT 1').get(day) as { finished_at: number | null; permanent: number } | undefined;
+    const last = db.prepare('SELECT finished_at, permanent, fingerprint FROM backup_runs WHERE day = ? ORDER BY id DESC LIMIT 1').get(day) as { finished_at: number | null; permanent: number; fingerprint: string | null } | undefined;
+    const fp = settingsFingerprint(driveConfig(env));
+    // Settings changed since a permanent failure (a new folder, scope or service account): try again right away.
+    const fixed = last?.permanent === 1 && last.fingerprint !== fp;
     // A permanent failure (no permission or quota, missing folder) is not retried the same day: it would only rebuild and fail again.
-    if (done || busy || last?.permanent === 1 || (last?.finished_at != null && now - last.finished_at < retryMs(env))) {
+    if (done || busy || (!fixed && (last?.permanent === 1 || (last?.finished_at != null && now - last.finished_at < retryMs(env))))) {
       db.exec('COMMIT');
       return null;
     }
-    const id = Number(db.prepare('INSERT INTO backup_runs (day, started_at, heartbeat_at) VALUES (?, ?, ?)').run(day, now, now).lastInsertRowid);
+    const id = Number(db.prepare('INSERT INTO backup_runs (day, started_at, heartbeat_at, fingerprint) VALUES (?, ?, ?, ?)').run(day, now, now, fp).lastInsertRowid);
     db.exec('COMMIT');
     return id;
   } catch (err) {

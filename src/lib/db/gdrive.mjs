@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import { createSign } from 'node:crypto';
+import { createHash, createSign } from 'node:crypto';
 import { redact } from './backup-core.mjs';
 
 export const SCOPE_FILE = 'https://www.googleapis.com/auth/drive.file';
@@ -29,10 +29,26 @@ const b64u = (v) => Buffer.from(v).toString('base64url');
  * (configured false) unless both GDRIVE_SERVICE_ACCOUNT_JSON (base64) and GDRIVE_FOLDER_ID are set and usable.
  */
 /** True for a failure that retrying will not fix: bad request, bad credentials, no permission or quota, missing folder. */
+const TRANSIENT_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded', 'backendError', 'internalError', 'sharingRateLimitExceeded']);
+const PERMANENT_REASONS = new Set(['storageQuotaExceeded', 'notFound', 'insufficientPermissions', 'forbidden', 'invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_scope', 'teamDriveFileLimitExceeded']);
 export function isPermanentDriveError(err) {
   const st = err?.status;
-  if (st === 403) return !/rate ?limit|too many/i.test(String(err.message));
-  return st === 400 || st === 401 || st === 404;
+  const reason = err?.reason;
+  if (reason && TRANSIENT_REASONS.has(reason)) return false;
+  if (err?.stage === 'session' && st === 404) return false; // an expired resumable session (404): start a new one
+  if (err?.stage === 'token') return st === 400 || st === 401 || (reason ? PERMANENT_REASONS.has(reason) : false); // a bad key
+  if (reason && PERMANENT_REASONS.has(reason)) return true;
+  if (/storage quota/i.test(String(err?.message))) return true;
+  if (st === 403) return !/rate ?limit|too many/i.test(String(err?.message));
+  return st === 404; // a 401 or 400 from the API itself is not blamed on the settings
+}
+
+/**
+ * A fingerprint of the settings that decide whether Drive accepts us: sha256 of folder id, scope and the service
+ * account's client_email (never the key). A permanent failure is retried at once when this changes.
+ */
+export function settingsFingerprint(cfg) {
+  return createHash('sha256').update(`${cfg.folderId}\n${cfg.scope}\n${cfg.key?.client_email ?? ''}`).digest('hex');
 }
 
 export function driveConfig(env = process.env) {
@@ -76,14 +92,18 @@ export function signJwt({ client_email, private_key }, scope, audience, nowSec) 
 }
 
 /** Google's short error text from a failed response body, never the whole body. */
-async function failure(what, res) {
+async function failure(what, res, stage = 'api') {
   let detail = '';
+  let reason = '';
   try {
     const j = JSON.parse(await res.text());
     detail = j?.error?.message || j?.error_description || (typeof j?.error === 'string' ? j.error : '') || '';
+    reason = String(j?.error?.errors?.[0]?.reason || (typeof j?.error === 'string' ? j.error : '') || '').slice(0, 60);
   } catch { /* not JSON */ }
   const err = new Error(redact(`${what} failed (HTTP ${res.status}${detail ? `: ${detail}` : ''})`));
   err.status = res.status;
+  err.stage = stage;
+  if (/^[A-Za-z_]+$/.test(reason)) err.reason = reason;
   return err;
 }
 
@@ -111,7 +131,7 @@ export function createDriveClient(cfg, { now = () => Date.now() } = {}) {
     } catch (err) {
       throw netError('Google sign-in', err);
     }
-    if (!res.ok) throw await failure('Google sign-in', res);
+    if (!res.ok) throw await failure('Google sign-in', res, 'token');
     const j = await res.json().catch(() => null);
     if (!j || typeof j.access_token !== 'string') throw new Error('Google sign-in failed (no access token in the answer)');
     token = { value: j.access_token, expiresAt: now() + Math.max(60, Number(j.expires_in) || 3600) * 1000 };
@@ -201,22 +221,26 @@ export function createDriveClient(cfg, { now = () => Date.now() } = {}) {
     const size = fs.statSync(file).size;
     const params = new URLSearchParams({ uploadType: 'resumable', supportsAllDrives: 'true', fields: 'id,name,size' });
     let init;
-    try {
-      init = await fetch(`${cfg.apiUrl}/upload/drive/v3/files?${params}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${await accessToken()}`,
-          'Content-Type': 'application/json; charset=UTF-8',
-          'X-Upload-Content-Type': contentType,
-          'X-Upload-Content-Length': String(size),
-        },
-        body: JSON.stringify({ name, parents: [cfg.folderId] }),
-        signal: AbortSignal.timeout(30_000),
-      });
-    } catch (err) {
-      throw netError('Starting the Drive upload', err);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        init = await fetch(`${cfg.apiUrl}/upload/drive/v3/files?${params}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${await accessToken(attempt > 0)}`,
+            'Content-Type': 'application/json; charset=UTF-8',
+            'X-Upload-Content-Type': contentType,
+            'X-Upload-Content-Length': String(size),
+          },
+          body: JSON.stringify({ name, parents: [cfg.folderId] }),
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (err) {
+        throw netError('Starting the Drive upload', err);
+      }
+      // An expired access token: sign in again and retry once, as api() does.
+      if (init.status === 401 && attempt === 0) { token = null; await init.arrayBuffer().catch(() => {}); continue; }
+      break;
     }
-    if (init.status === 401) token = null;
     if (!init.ok) throw await failure('Starting the Drive upload', init);
     await init.arrayBuffer().catch(() => {});
     const location = init.headers.get('location');
@@ -234,9 +258,12 @@ export function createDriveClient(cfg, { now = () => Date.now() } = {}) {
     }
     if (put.status < 200 || put.status >= 300) {
       let detail = '';
-      try { detail = JSON.parse(put.body)?.error?.message || ''; } catch { /* not JSON */ }
+      let reason = '';
+      try { const pj = JSON.parse(put.body); detail = pj?.error?.message || ''; reason = String(pj?.error?.errors?.[0]?.reason || ''); } catch { /* not JSON */ }
       const e = new Error(redact(`The Drive upload failed (HTTP ${put.status}${detail ? `: ${detail}` : ''})`));
       e.status = put.status;
+      e.stage = 'session';
+      if (/^[A-Za-z_]+$/.test(reason)) e.reason = reason;
       throw e;
     }
     let j = null;

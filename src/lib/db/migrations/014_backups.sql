@@ -15,6 +15,7 @@ CREATE TABLE backup_runs (
   uploads     INTEGER NOT NULL DEFAULT 0, -- files the Drive folder received in this attempt (0, 1 or 2)
   attempts    INTEGER NOT NULL DEFAULT 0, -- upload tries made (a retried upload counts again)
   permanent   INTEGER NOT NULL DEFAULT 0 CHECK (permanent IN (0, 1)), -- failed in a way retrying today cannot fix (no permission or quota, missing folder); not retried that day
+  fingerprint TEXT, -- sha256 of folder id + scope + the service account's email (never the key); a permanent failure is retried at once when it changes
   error       TEXT
 ) STRICT;
 CREATE INDEX backup_runs_day ON backup_runs(day, ok);

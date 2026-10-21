@@ -451,10 +451,47 @@ const get = async (url, cookie) => {
   await gget('/__mode?folder404=0');
   check('a 404 on the folder is permanent too', nf?.permanent === true && /404/.test(nf.message) && nf.partial.uploads === 0, nf?.message);
   check('a 503 is not permanent (it is retried)', failure?.permanent === false);
-  check('permanent classification: 400/401/404 and 403 (not a rate limit) yes; 429, 5xx, rate-limit 403 and network errors no',
-    [400, 401, 404, 403].every((st) => gdrive.isPermanentDriveError(Object.assign(new Error('x'), { status: st }))) &&
-    [429, 500, 503, undefined].every((st) => !gdrive.isPermanentDriveError(Object.assign(new Error('x'), { status: st }))) &&
+  check('plain statuses: 403 (not a rate limit) and 404 are permanent; 400, 401, 429, 5xx, a rate-limit 403 and network errors are not',
+    [404, 403].every((st) => gdrive.isPermanentDriveError(Object.assign(new Error('x'), { status: st }))) &&
+    [400, 401, 429, 500, 503, undefined].every((st) => !gdrive.isPermanentDriveError(Object.assign(new Error('x'), { status: st }))) &&
     !gdrive.isPermanentDriveError(Object.assign(new Error('User rate limit exceeded'), { status: 403 })));
+
+  // an expired access token at upload start (401) is refreshed and retried once
+  const tokBefore = (await gstate()).counters.tokenRequests;
+  await gget('/__mode?expire=1');
+  const exp = await runner.performBackup({ dataDir: dd, drive: gdrive.createDriveClient(cfg), now: START + (N + 4) * 86400000, attemptDelayMs: 10 });
+  check('a 401 when starting an upload gets a fresh token and one retry, not a failed attempt', exp.uploads === 2 && exp.attempts === 2 && (await gstate()).counters.tokenRequests === tokBefore + 2, JSON.stringify(exp));
+  // classification by Google's error reason
+  const modeRun = async (mode, day) => {
+    await gget(`/__mode?${mode}=1`);
+    let e = null;
+    try { await runner.performBackup({ dataDir: dd, drive: gdrive.createDriveClient(cfg), now: START + day * 86400000, attemptDelayMs: 10 }); } catch (x) { e = x; }
+    await gget(`/__mode?${mode}=0`);
+    return e;
+  };
+  const eRate = await modeRun('rate', N + 5);
+  check('rateLimitExceeded/userRateLimitExceeded (a 403 without any telling text) is temporary: retried 3 times', eRate && eRate.permanent === false && eRate.partial.attempts === 3, eRate?.message);
+  const eBackend = await modeRun('backend', N + 6);
+  check('backendError (500) is temporary', eBackend && eBackend.permanent === false && eBackend.partial.attempts === 3, eBackend?.message);
+  const eSession = await modeRun('session404', N + 7);
+  check('a 404 on the resumable session URL (an expired session) is temporary: a new session is started on each try', eSession && eSession.permanent === false && eSession.partial.attempts === 3, eSession?.message);
+  const eForbid = await modeRun('forbidden', N + 8);
+  check('insufficientPermissions (403) is permanent after one try', eForbid && eForbid.permanent === true && eForbid.partial.attempts === 1, eForbid?.message);
+  check('storageQuotaExceeded and notFound are permanent by their reasons', quota?.permanent === true && nf?.permanent === true);
+  let tokenErr = null;
+  try { await runner.performBackup({ dataDir: dd, drive: gdrive.createDriveClient(badCfg), now: START + (N + 9) * 86400000, attemptDelayMs: 10 }); } catch (x) { tokenErr = x; }
+  check('a rejected key (token endpoint 400 invalid_grant) is permanent', tokenErr?.permanent === true && /sign-in failed/.test(tokenErr.message), tokenErr?.message);
+  const mk = (o) => Object.assign(new Error('x'), o);
+  check('401/400 count as permanent only from the token endpoint; reasons win over status text',
+    gdrive.isPermanentDriveError(mk({ status: 401, stage: 'token' })) && gdrive.isPermanentDriveError(mk({ status: 400, stage: 'token' })) &&
+    !gdrive.isPermanentDriveError(mk({ status: 401, stage: 'api' })) && !gdrive.isPermanentDriveError(mk({ status: 400, stage: 'api' })) &&
+    !gdrive.isPermanentDriveError(mk({ status: 403, reason: 'rateLimitExceeded' })) && gdrive.isPermanentDriveError(mk({ status: 403, reason: 'insufficientPermissions' })) &&
+    !gdrive.isPermanentDriveError(mk({ status: 404, stage: 'session' })) && gdrive.isPermanentDriveError(mk({ status: 404, stage: 'api', reason: 'notFound' })));
+  // the settings fingerprint
+  const fpOf = (o) => gdrive.settingsFingerprint(gdrive.driveConfig({ GDRIVE_SERVICE_ACCOUNT_JSON: KEY_B64, GDRIVE_FOLDER_ID: FOLDER, ...o }));
+  const otherKey = Buffer.from(JSON.stringify({ ...keyJson, client_email: 'other-bot@synthetic-test-project.iam.example.test' })).toString('base64');
+  check('the settings fingerprint is a sha256 that changes with folder, scope or service-account email, and contains no key',
+    /^[0-9a-f]{64}$/.test(fpOf({})) && fpOf({}) === fpOf({}) && fpOf({}) !== fpOf({ GDRIVE_FOLDER_ID: 'another-folder-id-123456' }) && fpOf({}) !== fpOf({ GDRIVE_SCOPE: 'drive.file' }) && fpOf({}) !== fpOf({ GDRIVE_SERVICE_ACCOUNT_JSON: otherKey }) && !fpOf({}).includes(KEY_B64));
   rmrf(dd);
 
   // Shared Drive mode: files are never "owned by me"; every request must say supportsAllDrives
@@ -686,6 +723,28 @@ try {
   check('configured and never visited: the scheduler starts by itself and makes the day\'s backup', !!quietRun && quietRun.uploads === 2 && (await gstate()).files.length === 2);
   await stopServer();
   rmrf(QUIET);
+
+  // ---- 3d2. a permanent failure is retried at once when the settings change ----
+  const FPD = path.join(SCRATCH, 'fp-data');
+  const FDB = path.join(FPD, 'imconnected.db');
+  const FOLDER2 = 'folder-two-for-tests-9876543210';
+  await gget('/__reset');
+  await gget('/__mode?quota=1');
+  await startServer(FPD, SITE_ENV);
+  const fpRun = await until(() => { try { return q(FDB, 'SELECT * FROM backup_runs WHERE finished_at IS NOT NULL')[0]; } catch { return null; } });
+  check('(setup) the first run failed permanently and stored a settings fingerprint', !!fpRun && fpRun.permanent === 1 && /^[0-9a-f]{64}$/.test(fpRun.fingerprint || ''), JSON.stringify(fpRun));
+  await stopServer();
+  await gget('/__mode?quota=0');
+  await startServer(FPD, SITE_ENV);
+  await sleep(3500);
+  check('same settings after the owner "fixed" Google: still not retried today', q(FDB, 'SELECT COUNT(*) n FROM backup_runs')[0].n === 1);
+  await stopServer();
+  await startServer(FPD, { ...SITE_ENV, GDRIVE_FOLDER_ID: FOLDER2 });
+  const fixedRun = await until(() => { try { return q(FDB, 'SELECT * FROM backup_runs WHERE ok = 1')[0]; } catch { return null; } }, 15000);
+  check('a changed folder id gives a new attempt within seconds of the restart, and it succeeds', !!fixedRun && fixedRun.fingerprint !== fpRun.fingerprint && (await gstate()).files.some((f) => f.parents[0] === FOLDER2), JSON.stringify(fixedRun));
+  check('only the fingerprint is stored, never the key or the email', !JSON.stringify(q(FDB, 'SELECT * FROM backup_runs')).includes(keyJson.client_email) && !JSON.stringify(q(FDB, 'SELECT * FROM backup_runs')).includes(KEY_B64));
+  await stopServer();
+  rmrf(FPD);
 
   // ---- 3e. restore ----
   const BK = path.join(DATA, 'backups');

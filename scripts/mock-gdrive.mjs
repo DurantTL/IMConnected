@@ -15,6 +15,9 @@
 // account wrote; every request must carry supportsAllDrives=true (else 404, as Google does for Shared Drive items).
 // GET /__mode?quota=1 makes uploads answer 403 "Service Accounts do not have storage quota" (a My Drive folder);
 // GET /__mode?folder404=1 makes every use of the folder answer 404 "File not found" (drive.file scope, or not shared).
+// More modes (GET /__mode?x=1): expire (the next upload start answers 401 and forgets the token), rate (403 with reason
+// userRateLimitExceeded but no telling text), forbidden (403 insufficientPermissions), backend (500 backendError),
+// session404 (the byte upload answers 404, an expired upload session). Errors carry Google's errors[0].reason.
 // Control endpoints, no auth (test use):
 //   GET /__state                  JSON: files, counters, tokens issued, last upload sizes
 //   GET /__fail?uploads=N         the next N upload PUTs answer 503
@@ -42,7 +45,7 @@ let mode;
 function reset() {
   files = new Map(); sessions = new Map(); tokens = new Set();
   counters = { tokenRequests: 0, uploadsStarted: 0, uploadsDone: 0, uploadsFailed: 0, deletes: 0, lists: 0 };
-  failUploads = 0; lastUploads = []; mode = { shared: false, quota: false, folder404: false };
+  failUploads = 0; lastUploads = []; mode = { shared: false, quota: false, folder404: false, expire: false, rate: false, forbidden: false, session404: false, backend: false };
 }
 reset();
 
@@ -51,7 +54,7 @@ const send = (res, status, body, headers = {}) => {
   res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
   res.end(body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body));
 };
-const apiError = (res, status, message) => send(res, status, { error: { code: status, message } });
+const apiError = (res, status, message, reason) => send(res, status, { error: { code: status, message, ...(reason ? { errors: [{ message, domain: 'global', reason }] } : {}) } });
 const authed = (req) => {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
   return !!m && tokens.has(m[1]);
@@ -86,7 +89,7 @@ createServer(async (req, res) => {
     // ---- control ----
     if (url.pathname === '/__reset') { reset(); return send(res, 200, { ok: true }); }
     if (url.pathname === '/__mode') {
-      for (const k of ['shared', 'quota', 'folder404']) if (url.searchParams.has(k)) mode[k] = url.searchParams.get(k) === '1';
+      for (const k of ['shared', 'quota', 'folder404', 'expire', 'rate', 'forbidden', 'session404', 'backend']) if (url.searchParams.has(k)) mode[k] = url.searchParams.get(k) === '1';
       return send(res, 200, mode);
     }
     if (url.pathname === '/__fail') { failUploads = Number(url.searchParams.get('uploads') || 0); return send(res, 200, { ok: true }); }
@@ -118,14 +121,18 @@ createServer(async (req, res) => {
     if (route === 'POST /upload/drive/v3/files') {
       let raw = '';
       for await (const c of req) raw += c;
+      if (mode.expire) { mode.expire = false; tokens.delete((/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1]); }
       if (!authed(req)) { log({ route, status: 401 }); return apiError(res, 401, 'Invalid Credentials'); }
       if (url.searchParams.get('uploadType') !== 'resumable') return apiError(res, 400, 'only resumable uploads are mocked');
       if (needAllDrives(url)) return apiError(res, 404, 'File not found: (supportsAllDrives is required for a Shared Drive)');
       let meta;
       try { meta = JSON.parse(raw); } catch { return apiError(res, 400, 'bad metadata'); }
       if (!meta.name || !Array.isArray(meta.parents) || meta.parents.length !== 1) return apiError(res, 400, 'name and one parent are required');
-      if (mode.folder404) { log({ route, status: 404 }); return apiError(res, 404, `File not found: ${meta.parents[0]}.`); }
-      if (mode.quota) { log({ route, status: 403 }); return apiError(res, 403, 'Service Accounts do not have storage quota. Leverage shared drives or use OAuth delegation instead.'); }
+      if (mode.folder404) { log({ route, status: 404 }); return apiError(res, 404, `File not found: ${meta.parents[0]}.`, 'notFound'); }
+      if (mode.quota) { log({ route, status: 403 }); return apiError(res, 403, 'Service Accounts do not have storage quota. Leverage shared drives or use OAuth delegation instead.', 'storageQuotaExceeded'); }
+      if (mode.rate) { log({ route, status: 403 }); return apiError(res, 403, 'Slow down.', 'userRateLimitExceeded'); }
+      if (mode.forbidden) { log({ route, status: 403 }); return apiError(res, 403, 'The user does not have sufficient permissions.', 'insufficientPermissions'); }
+      if (mode.backend) { log({ route, status: 500 }); return apiError(res, 500, 'Internal error.', 'backendError'); }
       const uploadId = randomBytes(10).toString('hex');
       sessions.set(uploadId, { name: meta.name, parents: meta.parents, size: Number(req.headers['x-upload-content-length'] || -1) });
       counters.uploadsStarted++;
@@ -143,6 +150,7 @@ createServer(async (req, res) => {
       for await (const c of req) { hash.update(c); got += c.length; out?.write(c); }
       out?.end();
       if (!s) return apiError(res, 404, 'Unknown upload session');
+      if (mode.session404) { log({ route, status: 404 }); return apiError(res, 404, 'Upload session expired.'); }
       if (failUploads > 0) { failUploads--; counters.uploadsFailed++; log({ route, status: 503 }); return apiError(res, 503, 'Backend Error (mock failure)'); }
       if (s.size >= 0 && got !== s.size) { counters.uploadsFailed++; return apiError(res, 400, `size mismatch: promised ${s.size}, got ${got}`); }
       const id = newId();
