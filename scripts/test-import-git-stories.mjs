@@ -65,12 +65,12 @@ try {
   check('...and updated with --apply', q("SELECT title, body FROM stories WHERE slug = 'zz-second-story'")[0].body === 'The text was fixed in git.' && q("SELECT title FROM stories WHERE slug = 'zz-second-story'")[0].title === 'Second Hand Story, Corrected');
 
   // a story changed in the dashboard since its import is never overwritten without --force
-  run("UPDATE stories SET title = 'Edited in the dashboard', source = 'editor', edited_at = ? WHERE slug = 'zz-hand-story'", Date.now());
+  run("UPDATE stories SET rev = rev + 1, title = 'Edited in the dashboard', source = 'editor', edited_at = ? WHERE slug = 'zz-hand-story'", Date.now());
   write('zz-hand-story', md('Hand Story Changed In Git', 'image: "/images/stories/zz-hand-story/photo-1.jpg"\nimageAlt: "A synthetic picture"\n'));
   r = imp('--apply');
-  check('a story edited in the dashboard since its last import is left alone (reported, not overwritten)', /skip\s+zz-hand-story.*edited in the dashboard/.test(r.out) && q("SELECT title, source FROM stories WHERE slug = 'zz-hand-story'")[0].title === 'Edited in the dashboard', r.out);
+  check('a story edited in the dashboard since its last import is left alone (reported, not overwritten)', /skip\s+zz-hand-story.*changed in the dashboard or Studio.*--force overwrites/.test(r.out) && q("SELECT title, source FROM stories WHERE slug = 'zz-hand-story'")[0].title === 'Edited in the dashboard', r.out);
   // unpublished in the dashboard (source still git, but edited_at set) is also protected
-  run("UPDATE stories SET title = 'Unpublished in the dashboard', source = 'git', status = 'unpublished', edited_at = ? WHERE slug = 'zz-hand-story'", Date.now());
+  run("UPDATE stories SET rev = rev + 1, title = 'Unpublished in the dashboard', source = 'git', status = 'unpublished', edited_at = ? WHERE slug = 'zz-hand-story'", Date.now());
   r = imp('--apply');
   check('...a story only unpublished in the dashboard (edited_at set) is protected too', /skip\s+zz-hand-story/.test(r.out) && q("SELECT status FROM stories WHERE slug = 'zz-hand-story'")[0].status === 'unpublished');
   r = imp('--apply', '--force');
@@ -91,6 +91,19 @@ try {
   r = imp('--apply');
   check('a draft: true file is skipped; invalid files are errors (exit 1) that name the file and why', r.code === 1 && /skip\s+zz-draft-story/.test(r.out) && /ERROR\s+zz-bad-section.*unknown section/.test(r.out) && /ERROR\s+zz-bad-area.*area/.test(r.out) && /ERROR\s+zz-no-photo.*not found/.test(r.out) && /ERROR\s+zz-fake-photo.*not really a jpg/.test(r.out) && /ERROR\s+zz-traversal.*not allowed/.test(r.out) && /ERROR\s+Bad Name/.test(r.out) && /ERROR\s+zz-nofront.*front matter/.test(r.out), r.out);
   check('...only the valid new story (remote photo) was created, and no half-written rows or files exist for the failures', q('SELECT COUNT(*) n FROM stories')[0].n === before + 1 && q("SELECT url FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = 'zz-remote'")[0].url === 'https://example.test/photo.jpg' && !q("SELECT 1 FROM stories WHERE slug IN ('zz-bad-section','zz-no-photo','zz-fake-photo','zz-traversal','zz-draft-story')").length && mediaFiles().every((m) => !/zz-(no-photo|fake-photo)/.test(m)), r.out);
+  // body safety, link targets and photo limits
+  write('zz-html', md('Html Story', '', 'Plain text then <script>alert(1)</script> and <b>bold</b> and [fine](https://example.test/ok) and [rel](/news/).'));
+  write('zz-js-link', md('Js Link', '', 'A [bad link](javascript:alert(1)) here.'));
+  write('zz-data-image', md('Data Image', '', 'An ![image](data:text/html,x) here.'));
+  write('zz-ref-link', md('Ref Link', '', 'See [this][1].\n\n[1]: JaVaScRiPt:alert(1)'));
+  write('zz-many-photos', md('Many Photos', 'image: "/images/stories/zz-hand-story/photo-1.jpg"\nphotos:\n' + Array.from({ length: 6 }, () => '  - "/images/stories/zz-hand-story/photo-1.jpg"\n').join('')));
+  fs.writeFileSync(path.join(PUB, 'images/stories/zz-hand-story/big.jpg'), Buffer.concat([JPG, Buffer.alloc(10 * 1024 * 1024 + 10)]));
+  write('zz-big-photo', md('Big Photo', 'image: "/images/stories/zz-hand-story/big.jpg"\n'));
+  r = imp('--apply');
+  const html = q("SELECT body FROM stories WHERE slug = 'zz-html'")[0]?.body ?? '';
+  check('a "<" in the body is stored as &lt; (no tag can be stored), links that are fine stay', !html.includes('<') && html.includes('&lt;script>alert(1)&lt;/script>') && html.includes('[fine](https://example.test/ok)') && html.includes('[rel](/news/)'), html);
+  check('javascript:, data: and reference-style javascript: link targets are refused, nothing stored', ['zz-js-link', 'zz-data-image', 'zz-ref-link'].every((n) => new RegExp(`ERROR\\s+${n}.*not a web, mail or tel link`).test(r.out) && !q('SELECT 1 FROM stories WHERE slug = ?', n).length), r.out);
+  check('more than the photo count limit, or a photo over the size limit, is refused', /ERROR\s+zz-many-photos.*more than 6 photos/.test(r.out) && /ERROR\s+zz-big-photo.*larger than 10 MB/.test(r.out) && !q("SELECT 1 FROM stories WHERE slug IN ('zz-many-photos','zz-big-photo')").length, r.out);
   const unknown = imp('--bogus');
   check('an unknown option is refused', unknown.code === 2);
 } catch (err) {

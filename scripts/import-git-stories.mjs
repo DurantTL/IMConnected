@@ -21,13 +21,14 @@
 //   * no story with that address in the database: it is created (live; a file with draft: true is skipped);
 //   * a story that was only ever imported from git and whose text differs: it is updated;
 //   * a story that was changed in the dashboard or Studio since (stories.source is not 'git', or stories.edited_at is
-//     set): left alone, reported as "edited in the dashboard", unless --force;
+//     set): left alone, reported as "changed in the dashboard or Studio ... --force overwrites it with the file", unless --force;
 //   * an identical story: unchanged.
 // Photos are copied to DATA_DIR/media/stories/<slug>/<sha256>.<ext>. The site's page cache is in the server's memory, so
 // the server shows the change within about 10 minutes (or at once after a restart), and search picks new stories up
 // within about a minute. Use synthetic data in tests; never run this against a real server's data without a backup.
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
@@ -48,13 +49,45 @@ const FORCE = flag('--force');
 const DIR = path.resolve(opt('--dir', path.join(here, '../src/content/stories')));
 const PUBLIC = path.resolve(opt('--public', path.join(here, '../public')));
 
-// Sections and areas come from the site's one definition (src/lib/site.ts); Node strips the types.
-let site;
+// Sections, areas and limits come from the site's own definitions (src/lib/site.ts and limits.ts, so there is no second
+// copy to drift). They are TypeScript files with only type annotations, which Node can load by stripping the types: built in
+// from Node 22.18, behind --experimental-strip-types from 22.6 (package.json requires 22.22). On a Node that does not strip by
+// default the script re-runs itself once with the flag, so it works on any 22.6+ image.
+let site, limitsMod;
 try {
   site = await import(path.join(here, '../src/lib/site.ts'));
+  limitsMod = await import(path.join(here, '../src/lib/limits.ts'));
 } catch (err) {
-  console.error('Cannot load src/lib/site.ts to check sections (needs Node 22.18 or newer):', err instanceof Error ? err.message : err);
+  if (!process.env.IMPORT_STRIP_RETRY && /ERR_UNKNOWN_FILE_EXTENSION|Unknown file extension/.test(String(err?.code ?? err))) {
+    const r = spawnSync(process.execPath, ['--experimental-strip-types', '--no-warnings', ...process.argv.slice(1)], { stdio: 'inherit', env: { ...process.env, IMPORT_STRIP_RETRY: '1' } });
+    process.exit(r.status ?? 2);
+  }
+  console.error('Cannot load src/lib/site.ts and limits.ts to check sections and limits:', err instanceof Error ? err.message : err);
   process.exit(2);
+}
+const LIMITS = limitsMod.LIMITS;
+
+/** Same rule as src/lib/markdown.ts safeUrl: web, mail, tel, relative and anchor targets only. */
+function safeUrl(raw) {
+  const v = raw
+    .replace(/&#x([0-9a-f]+);?/gi, (_, h) => String.fromCodePoint(Math.min(parseInt(h, 16), 0x10ffff)))
+    .replace(/&#(\d+);?/g, (_, d) => String.fromCodePoint(Math.min(parseInt(d, 10), 0x10ffff)))
+    .replace(/&(colon|tab|newline);/gi, (_, n) => ({ colon: ':', tab: '\t', newline: '\n' })[n.toLowerCase()])
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000- \u007f-\u009f]+/g, '')
+    .toLowerCase();
+  if (/^(https?:|mailto:|tel:)/.test(v)) return true;
+  const colon = v.indexOf(':');
+  if (colon === -1) return true;
+  const stop = v.search(/[/?#]/);
+  return stop !== -1 && stop < colon;
+}
+/** Link and image targets in Markdown text: [x](target "title"), ![x](target) and reference definitions. */
+function linkTargets(md) {
+  const out = [];
+  for (const m of md.matchAll(/\]\(\s*<?([^)\s>]*)/g)) out.push(m[1]);
+  for (const m of md.matchAll(/^ {0,3}\[[^\]]+\]:\s*<?(\S+)/gm)) out.push(m[1]);
+  return out;
 }
 
 const MEDIA_TYPES = { jpg: 1, png: 1, webp: 1 };
@@ -91,9 +124,14 @@ function readStory(file) {
   const photos = Array.isArray(fm.photos) ? fm.photos.map(String) : [];
   const photoAlts = Array.isArray(fm.photoAlts) ? fm.photoAlts.map(String) : [];
   const image = str(fm.image) || undefined;
-  const body = m[2].replace(/\r\n?/g, '\n').trim();
-  if (!body) throw new Error('empty story text');
-  if (/<[a-z!\/][^>]*>/i.test(body)) console.warn(`  note: ${slug} contains HTML-looking text; the site shows it as plain text, never as markup`);
+  // Same as the dashboard: every "<" becomes &lt; so no tag, comment or autolink can be stored.
+  const raw = m[2].replace(/\r\n?/g, '\n').trim();
+  if (!raw) throw new Error('empty story text');
+  if (raw.includes('<')) console.warn(`  note: ${slug} contains "<"; it is stored as &lt; and shown as plain text, never as markup`);
+  const body = raw.replace(/</g, '&lt;');
+  const bad = linkTargets(body).find((t) => !safeUrl(t));
+  if (bad) throw new Error(`a link or image target is not a web, mail or tel link: ${bad.slice(0, 40)}`);
+  if (body.length > LIMITS.bodyMax) throw new Error(`story text is longer than ${LIMITS.bodyMax} characters`);
   return {
     slug, title, dek: str(fm.dek) || undefined, section, area, column: str(fm.column) || undefined, author, authorTitle: str(fm.authorTitle) || undefined,
     church: str(fm.church) || undefined, date, image, imageAlt: str(fm.imageAlt) || undefined, photoCredit: str(fm.photoCredit) || undefined,
@@ -103,6 +141,7 @@ function readStory(file) {
 
 /** Resolve a story's photos to files (or remote addresses) without copying anything yet. */
 function planPhotos(s) {
+  if ((s.image ? 1 : 0) + s.photos.length > LIMITS.maxPhotos) throw new Error(`more than ${LIMITS.maxPhotos} photos`);
   const located = [];
   if (s.image) located.push({ src: s.image, kind: 'lead', alt: s.imageAlt ?? '' });
   s.photos.forEach((src, i) => located.push({ src, kind: 'gallery', alt: s.photoAlts[i] ?? '' }));
@@ -113,6 +152,7 @@ function planPhotos(s) {
     if (!MEDIA_TYPES[ext]) throw new Error(`photo is not a jpg, png or webp: ${p.src}`);
     const file = path.join(PUBLIC, p.src);
     if (!file.startsWith(path.join(PUBLIC, 'images') + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`photo file not found: ${p.src}`);
+    if (fs.statSync(file).size > LIMITS.maxPhotoMB * 1024 * 1024) throw new Error(`photo is larger than ${LIMITS.maxPhotoMB} MB: ${p.src}`);
     const bytes = fs.readFileSync(file);
     if (sniff(bytes) !== ext) throw new Error(`photo is not really a ${ext} image: ${p.src}`);
     return { ...p, position, ext, file, bytes, sha: sha256(bytes) };
@@ -146,7 +186,7 @@ for (const f of files) {
     const s = readStory(path.join(DIR, f));
     const row = db.prepare('SELECT * FROM stories WHERE slug = ?').get(slug);
     const edited = row && (row.source !== 'git' || row.edited_at !== null);
-    if (row && edited && !FORCE) { tally.skipped++; console.log(`  skip     ${slug}  (edited in the dashboard or Studio since its last import; use --force to overwrite)`); continue; }
+    if (row && edited && !FORCE) { tally.skipped++; console.log(`  skip     ${slug}  (changed in the dashboard or Studio since its last import, or unpublished or republished there: the database copy is newer than this file, so it is left alone. --force overwrites it with this file)`); continue; }
     if (!row && s.draft) { tally.skipped++; console.log(`  skip     ${slug}  (draft: true, not published)`); continue; }
     const plan = planPhotos(s); // also checks the photos exist
     if (row && !edited && same(row, s) && (row.status === 'live') === !s.draft) { tally.unchanged++; console.log(`  same     ${slug}`); continue; }
@@ -182,7 +222,7 @@ for (const f of files) {
         if (row) {
           id = Number(row.id);
           db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-            photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, published_at=?, updated_at=?, content_hash=?, edited_at=NULL WHERE id = ?`).run(...cols, id);
+            photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, published_at=?, updated_at=?, content_hash=?, edited_at=NULL, rev=rev+1 WHERE id = ?`).run(...cols, id);
           db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
         } else {
           id = Number(db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,

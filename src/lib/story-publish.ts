@@ -115,9 +115,18 @@ export async function storePhotos(slug: string, items: PhotoInput[], existing: S
   return { rows, sources, created, uploaded };
 }
 
+/**
+ * Delete files a failed attempt created, but only those no story_photos row references (checked now, after the rollback):
+ * the same content-addressed file may belong to a story that was published meanwhile, and it must survive.
+ */
 export function removeFiles(files: string[]): void {
+  const root = mediaDir() + path.sep;
   for (const f of files) {
-    try { fs.rmSync(f, { force: true }); } catch { /* best effort */ }
+    try {
+      const rel = f.startsWith(root) ? f.slice(root.length).split(path.sep).join('/') : null;
+      if (rel && getDb().prepare('SELECT 1 FROM story_photos WHERE path = ?').get(rel)) continue;
+      fs.rmSync(f, { force: true });
+    } catch { /* best effort */ }
   }
 }
 

@@ -81,8 +81,10 @@ you to review the current branch against `origin/main`.
      publishes, rejects or unpublishes; the agent route still only creates `new` drafts). One-time adoption
      (`src/lib/story-adopt.ts`): runs only while `app_state.git_adopted_at` is missing, never overwrites a row whose
      source is not `git`, sets the flag and releases `story_holds` in one transaction only when no story failed, and the
-     build is never read for content afterwards (an older image changes nothing); `story_holds` and `story-holds.ts`/
-     `.build-commits` are read only by that pass. Public pages read only the table through `src/lib/public-stories.ts`
+     build is never read for content afterwards (an older image changes nothing); `story_holds_retired` and `story-holds.ts`/
+     `.build-commits` are read only by that pass, every decision of the pass is re-read inside the per-story write transaction
+     (source git, `updated_at` unchanged, `edited_at` not newer than migration 015's `applied_at`), and every write of step-4 code
+     bumps `stories.rev` (a trigger refuses non-bumping updates once the flag is set, which guards against an old image). Public pages read only the table through `src/lib/public-stories.ts`
      (no build fallback): if it can't be read they answer 503 `no-store` (`StoriesUnavailable`/`asUnavailable`), an empty
      table on a brand new database waits for the adoption, and `/api/stories` and search say unavailable instead of
      showing anything else; `/api/stories` is read straight from the table (not the page cache). Markup, URLs, SEO tags, the

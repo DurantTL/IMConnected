@@ -186,7 +186,7 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   if (cur) {
     id = Number(cur.id);
     db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, edited_at=COALESCE(?, edited_at) WHERE id = ?`).run(...cols, s.editedAt ?? null, id);
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, s.editedAt ?? null, id);
     db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
   } else {
     const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
@@ -225,7 +225,7 @@ export function upsertStory(s: StoryInput, now = Date.now()): WriteOutcome {
  * caller invalidates the cache after committing (use unpublishStoryNow outside a transaction).
  */
 export function unpublishStory(slug: string, now = Date.now(), edited = false): boolean {
-  const r = getDb().prepare("UPDATE stories SET status = 'unpublished', updated_at = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END WHERE slug = ? AND status = 'live'").run(now, edited ? 1 : 0, now, slug);
+  const r = getDb().prepare("UPDATE stories SET status = 'unpublished', updated_at = ?, edited_at = CASE WHEN ? THEN MAX(?, COALESCE(edited_at, 0) + 1) ELSE edited_at END, rev = rev + 1 WHERE slug = ? AND status = 'live'").run(now, edited ? 1 : 0, now, slug);
   return Number(r.changes) > 0;
 }
 

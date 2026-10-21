@@ -330,7 +330,7 @@ try {
     check('the unpublished story is a real 404 straight away', after.status === 404 && after.text.includes('We couldn’t find that page') && after.headers.get('cache-control') === 'no-store', `${after.status}`);
     const lists = [await get('/'), await get(`/${target.section}/`), await get('/stories.json'), await get('/rss.xml')];
     check('...and it is gone from the home page, its section page and both feeds, and from search', lists.every((r) => !r.text.includes(`/stories/${slug}`)) && !(await found(titleWords)).includes(`/stories/${slug}/`), lists.map((r) => r.text.includes(`/stories/${slug}`)).join());
-    check('no hold is recorded any more (unpublish just flips the row)', q('SELECT COUNT(*) AS n FROM story_holds')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished');
+    check('no hold is recorded any more (unpublish just flips the row)', q('SELECT COUNT(*) AS n FROM story_holds_retired')[0].n === 0 && q('SELECT status FROM stories WHERE slug = ?', slug)[0].status === 'unpublished');
     // The editor fixes the text and publishes again: the NEW text is live at once, the old text never comes back.
     const d0 = q('SELECT updated_at, status FROM drafts WHERE slug = ?', slug)[0];
     check('the unpublished draft is back in review', d0?.status === 'in_review', JSON.stringify(d0));
@@ -353,13 +353,13 @@ try {
     const other = q("SELECT slug, title FROM stories WHERE status = 'live' AND slug != ? ORDER BY slug LIMIT 1", slug)[0];
     const url = `/stories/${other.slug}/`;
     const hasTitle = (r, t) => r.text.includes(`<h1>${t}</h1>`);
-    run("UPDATE stories SET title = 'Edited in the database', content_hash = 'edited-1' WHERE slug = ?", other.slug);
+    run("UPDATE stories SET rev = rev + 1, title = 'Edited in the database', content_hash = 'edited-1' WHERE slug = ?", other.slug);
     // The pages above are cached; an unpublish and republish in the dashboard (store writes) clears the cache.
     await post('/api/admin/stories/unpublish', cookie, { slug });
     await post(`/api/admin/drafts/${draftId}/publish`, cookie, { version: q('SELECT updated_at FROM drafts WHERE slug = ?', slug)[0].updated_at });
     const a = await get(url);
     check('a row edited in the database shows on the page (the page reads the table)', a.status === 200 && hasTitle(a, 'Edited in the database') && a.headers.get('x-page-cache') === 'miss', `${a.status} ${a.headers.get('x-page-cache')}`);
-    run("UPDATE stories SET title = 'Edited a second time', content_hash = 'edited-2' WHERE slug = ?", other.slug);
+    run("UPDATE stories SET rev = rev + 1, title = 'Edited a second time', content_hash = 'edited-2' WHERE slug = ?", other.slug);
     const b = await get(url);
     check('...a second edit made behind the server\'s back is not shown while the page is cached', hasTitle(b, 'Edited in the database') && b.headers.get('x-page-cache') === 'hit');
     await post('/api/admin/stories/unpublish', cookie, { slug });

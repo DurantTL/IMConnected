@@ -545,10 +545,10 @@ try {
     check('...and every url is on the site\'s own origin', d.stories.every((s) => s.url.startsWith(BASE + '/')));
 
     // unpublish hides it
-    run("UPDATE stories SET status = 'unpublished' WHERE slug = ?", slug);
+    run("UPDATE stories SET rev = rev + 1, status = 'unpublished' WHERE slug = ?", slug);
     r = await S('/api/stories', { token: PUBLISH_TOKEN });
     check('stories: an unpublished story disappears from the list (read fresh from the table)', !r.data.stories.some((s) => s.id === slug));
-    run("UPDATE stories SET status = 'live' WHERE slug = ?", slug);
+    run("UPDATE stories SET rev = rev + 1, status = 'live' WHERE slug = ?", slug);
     // a live story being edited again keeps its live text
     run("UPDATE drafts SET status = 'in_review', title = 'UNPUBLISHED EDIT' WHERE slug = ?", slug);
     r = await S('/api/stories', { token: PUBLISH_TOKEN });

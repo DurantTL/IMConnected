@@ -123,7 +123,7 @@ try {
     const ins = d.prepare("INSERT INTO drafts (status, source, title, dek, section, area, author, date, body, slug, published_commit, published_at, unpublished_at, created_at, updated_at) VALUES ('in_review', 'editor', ?, '', ?, '', 'Test Author', '2026-10-01', 'A made-up body.', ?, 'abc', ?, ?, ?, ?)");
     ins.run(A.s.title, A.s.section, A.s.slug, now - 9000, now - 5000, now - 9000, now - 5000); // unpublished
     ins.run(B.s.title, B.s.section, B.s.slug, now - 9000, null, now - 9000, now - 5000); // republished while held
-    d.prepare('INSERT INTO story_holds (slug, build_marker, unpublish_sha, unpublish_time, released_at, created_at) VALUES (?, NULL, ?, ?, NULL, ?)').run(B.s.slug, 'a'.repeat(40), now - 6000, now - 6000);
+    d.prepare('INSERT INTO story_holds_retired (slug, build_marker, unpublish_sha, unpublish_time, released_at, created_at) VALUES (?, NULL, ?, ?, NULL, ?)').run(B.s.slug, 'a'.repeat(40), now - 6000, now - 6000);
     d.close();
   }
   const server1 = startServer({ STORY_SYNC_TEST_DELAY_MS: '8000', SEARCH_REPAIR_TEST_MS: '0' });
@@ -215,13 +215,13 @@ try {
   // ---- unpublishing and publishing ----
   {
     const slug = C.s.slug;
-    run("UPDATE stories SET status = 'unpublished' WHERE slug = ?", slug);
+    run("UPDATE stories SET rev = rev + 1, status = 'unpublished' WHERE slug = ?", slug);
     check('a story unpublished is gone from the very next search', !slugsOf(await search({ q: C.word })).includes(slug));
-    run("UPDATE stories SET status = 'live' WHERE slug = ?", slug);
+    run("UPDATE stories SET rev = rev + 1, status = 'live' WHERE slug = ?", slug);
     check('...and back when it is live again', slugsOf(await search({ q: C.word })).includes(slug));
-    run('UPDATE stories SET draft = 1 WHERE slug = ?', slug);
+    run('UPDATE stories SET rev = rev + 1, draft = 1 WHERE slug = ?', slug);
     check('a story marked draft is never returned', !slugsOf(await search({ q: C.word })).includes(slug));
-    run('UPDATE stories SET draft = 0 WHERE slug = ?', slug);
+    run('UPDATE stories SET rev = rev + 1, draft = 0 WHERE slug = ?', slug);
 
     // a story saved by something other than the sync (stamp missing): found at once, because a search first indexes what is new
     const now = Date.now();
@@ -232,9 +232,9 @@ try {
     const jp = await search({ q: 'zyxwvortex' });
     check('a just-published story is findable immediately', jp.status === 200 && slugsOf(jp).join() === 'zz-just-published', jp.text.slice(0, 300));
     check('...and was added to the index', q("SELECT COUNT(*) AS n FROM stories_fts WHERE rowid = (SELECT id FROM stories WHERE slug = 'zz-just-published')")[0].n === 1);
-    run("UPDATE stories SET body = 'Now about a zyxwquasar instead.', updated_at = updated_at + 1 WHERE slug = 'zz-just-published'");
+    run("UPDATE stories SET rev = rev + 1, body = 'Now about a zyxwquasar instead.', updated_at = updated_at + 1 WHERE slug = 'zz-just-published'");
     check('an edited story is found by its new text and not its old text', slugsOf(await search({ q: 'zyxwquasar' })).includes('zz-just-published') && !slugsOf(await search({ q: 'zyxwvortex' })).includes('zz-just-published'));
-    run("UPDATE stories SET status = 'unpublished' WHERE slug = 'zz-just-published'");
+    run("UPDATE stories SET rev = rev + 1, status = 'unpublished' WHERE slug = 'zz-just-published'");
     check('...and unpublished it is gone', slugsOf(await search({ q: 'zyxwquasar' })).length === 0);
 
     // fields: dek, author, church; accents; Markdown
@@ -284,7 +284,7 @@ try {
     if (!browser) info('Playwright/Chromium is not available: the browser checks are skipped');
     else {
       try {
-        run("UPDATE stories SET status = 'live' WHERE slug = 'zz-hostile'");
+        run("UPDATE stories SET rev = rev + 1, status = 'live' WHERE slug = 'zz-hostile'");
         const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
         const errors = [];
         page.on('pageerror', (e) => errors.push(String(e)));

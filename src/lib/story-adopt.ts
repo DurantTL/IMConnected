@@ -27,8 +27,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { mediaDir, MEDIA_TYPES } from './media';
 import { buildCommits, holdActive, type Hold } from './story-holds';
-import { getStoryHash, getStoryBySlug, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
-import { listUnpublishedSlugs } from './drafts';
+import { getStoryBySlug, writeStory, type StoryInput, type StoryPhoto } from './story-store';
 import { invalidateStories } from './public-cache';
 import { getDb } from './db';
 import { reindexAll } from './search-index';
@@ -93,6 +92,12 @@ const testHooks = process.env.STORY_SYNC_TEST === '1';
 const failSlug = () => (testHooks ? process.env.STORY_SYNC_TEST_FAIL_SLUG : undefined);
 // Also test-only: hold the first pass back for N ms (so a test can request pages while the table is still empty), and
 // (no other hooks).
+/** Test only: hold the pass before it writes `slug` until the file STORY_SYNC_TEST_PAUSE_FILE exists (max 30 s). */
+async function testPause(slug: string): Promise<void> {
+  if (!testHooks || process.env.STORY_SYNC_TEST_PAUSE_SLUG !== slug || !process.env.STORY_SYNC_TEST_PAUSE_FILE) return;
+  console.log(`[stories] test: pass paused before writing ${slug}`);
+  for (let i = 0; i < 600 && !fs.existsSync(process.env.STORY_SYNC_TEST_PAUSE_FILE); i++) await new Promise((r) => setTimeout(r, 50));
+}
 const testDelayMs = testHooks ? Number(process.env.STORY_SYNC_TEST_DELAY_MS) || 0 : 0;
 
 /**
@@ -164,7 +169,7 @@ export function isAdopted(): boolean {
 interface HoldRow { slug: string; build_marker: string | null; unpublish_sha: string | null; unpublish_time: number | null; released_at: number | null }
 /** Holds still in force in migration 012's table. Read only here, once. */
 function activeHolds(): Map<string, Hold> {
-  const rows = getDb().prepare('SELECT slug, build_marker, unpublish_sha, unpublish_time, released_at FROM story_holds WHERE released_at IS NULL').all() as unknown as HoldRow[];
+  const rows = getDb().prepare('SELECT slug, build_marker, unpublish_sha, unpublish_time, released_at FROM story_holds_retired WHERE released_at IS NULL').all() as unknown as HoldRow[];
   return new Map(rows.map((r) => [r.slug, { marker: r.build_marker, unpublishSha: r.unpublish_sha, unpublishTime: r.unpublish_time === null ? null : Number(r.unpublish_time) }]));
 }
 
@@ -203,7 +208,9 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
   const clientDir = builtClientDir();
   const marker = await currentMarker(clientDir, built);
   const holds = activeHolds();
-  const unpublished = listUnpublishedSlugs();
+  // Edits made through step-4 code after the upgrade (publish, unpublish, Studio) are stamped later than this; the
+  // values migration 015 backfilled from old unpublishes are older and do not protect a row from this pass.
+  const appliedAt = Number((getDb().prepare("SELECT applied_at FROM schema_migrations WHERE name = '015_stories_source_of_truth.sql'").get() as { applied_at: number } | undefined)?.applied_at ?? 0);
   const result: AdoptResult = { inserted: 0, updated: 0, unchanged: 0, unpublished: 0, skipped: 0, hashed: 0, copied: 0, notGit: 0 };
   const seen = new Set<string>();
 
@@ -220,16 +227,17 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
 
       if (failSlug() === slug) throw new Error('test failure');
       const prev = getStoryBySlug(slug, { includeUnpublished: true });
-      if (prev && prev.source !== 'git') { result.notGit++; continue; } // edited in the database: the build is older by definition
+      const protectedRow = (r: { source: string; editedAt?: number } | undefined) => !!r && (r.source !== 'git' || (r.editedAt !== undefined && r.editedAt > appliedAt));
+      if (protectedRow(prev)) { result.notGit++; continue; } // changed in the database: the build is older by definition
       // 1. Files first: stat, hash and copy with no transaction open.
       const known = prev?.photoRows ?? [];
       const prevSrc = prev ? [...(prev.image ? [prev.image] : []), ...prev.photos] : [];
       const photoRows: StoryPhoto[] = [];
       for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], result));
+      await testPause(slug);
       const hold = holds.get(slug);
       let held = false;
       if (hold) { try { held = holdActive(hold, marker); } catch { held = true; } }
-      const status = unpublished.has(slug) || held ? 'unpublished' : 'live';
 
       const base = {
         slug, title: d.title, dek: d.dek, section: d.section, area: d.area, column: d.column, author: d.author, authorTitle: d.authorTitle,
@@ -237,30 +245,52 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
         featured: d.featured, draft: d.draft, body: entry.body ?? '',
       };
       const contentHash = sha256Of(JSON.stringify([base, photoRows]));
-      const story: StoryInput = { ...base, status, source: 'git', publishedAt: Date.parse(date), contentHash, photoRows };
 
-      // 2. Then one short write for this story (a no-op when nothing changed).
-      const cur = getStoryHash(slug);
-      const outcome = cur && cur.hash === contentHash && cur.status === status && cur.source === 'git' ? 'unchanged' : upsertStory(story);
-      result[outcome]++;
-      if (status === 'unpublished' && outcome !== 'unchanged') result.unpublished++;
+      // 2. Then one short write for this story. Everything that decides it is read INSIDE the transaction, because a
+      // person may have published, edited or unpublished this story since `prev` was read (the photo hashing above awaits):
+      // the row must still be git-sourced, unchanged since `prev` and not edited since the upgrade, else it is left alone.
+      const db = getDb();
+      db.exec('BEGIN IMMEDIATE');
+      let outcome: 'inserted' | 'updated' | 'unchanged' | 'protected';
+      try {
+        const now = db.prepare('SELECT source, updated_at, edited_at, status, content_hash FROM stories WHERE slug = ?').get(slug) as { source: string; updated_at: number; edited_at: number | null; status: string; content_hash: string | null } | undefined;
+        if (now && (now.source !== 'git' || (now.edited_at !== null && Number(now.edited_at) > appliedAt) || !prev || Number(now.updated_at) !== prev.updatedAt)) outcome = 'protected';
+        else if (!now && prev) outcome = 'protected'; // vanished meanwhile: not ours to recreate
+        else {
+          const unpublishedNow = !!db.prepare('SELECT 1 FROM drafts WHERE slug = ? AND unpublished_at IS NOT NULL').get(slug);
+          const status = unpublishedNow || held ? 'unpublished' : 'live';
+          if (now && now.content_hash === contentHash && now.status === status) outcome = 'unchanged';
+          else {
+            const story: StoryInput = { ...base, status, source: 'git', publishedAt: Date.parse(date), contentHash, photoRows };
+            outcome = writeStory(story, Date.now(), now ? 'upsert' : 'insert').outcome as 'inserted' | 'updated';
+            if (status === 'unpublished') result.unpublished++;
+          }
+        }
+        db.exec('COMMIT');
+      } catch (err) {
+        try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+        if (err instanceof Error && /UNIQUE/i.test(err.message)) outcome = 'protected'; // someone published this address meanwhile
+        else throw err;
+      }
+      if (outcome === 'protected') result.notGit++;
+      else result[outcome]++;
     } catch (err) {
       result.skipped++;
       console.error(`[stories] could not adopt ${slug}:`, err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
   }
 
-  // A git story that left the build (an unpublish or a delete in git) is no longer live.
   if (result.skipped === 0) {
-    for (const slug of slugsBySource('git', 'live')) {
-      if (!seen.has(slug) && unpublishStory(slug)) result.unpublished++;
-    }
-    // Adopted: set the flag and retire the holds in one transaction. The build is never read again.
+    // A git story that left the build (an unpublish or a delete in git) is no longer live, unless a person has touched it
+    // since the upgrade. Then the flag is set and the holds retired, all in one transaction. The build is never read again.
     const db = getDb();
     const now = Date.now();
     db.exec('BEGIN IMMEDIATE');
     try {
-      db.prepare('UPDATE story_holds SET released_at = ? WHERE released_at IS NULL').run(now);
+      const live = db.prepare("SELECT slug FROM stories WHERE source = 'git' AND status = 'live' AND (edited_at IS NULL OR edited_at <= ?)").all(appliedAt) as { slug: string }[];
+      const off = db.prepare("UPDATE stories SET status = 'unpublished', updated_at = ?, rev = rev + 1 WHERE slug = ? AND status = 'live' AND source = 'git' AND (edited_at IS NULL OR edited_at <= ?)");
+      for (const { slug } of live) if (!seen.has(slug) && Number(off.run(now, slug, appliedAt).changes) > 0) result.unpublished++;
+      db.prepare('UPDATE story_holds_retired SET released_at = ? WHERE released_at IS NULL').run(now);
       db.prepare('INSERT OR IGNORE INTO app_state (key, value, updated_at) VALUES (?, ?, ?)').run(ADOPTED_KEY, new Date(now).toISOString(), now);
       db.exec('COMMIT');
     } catch (err) {

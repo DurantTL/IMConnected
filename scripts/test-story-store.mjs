@@ -151,7 +151,7 @@ try {
     // migration 015, on the step-3 state
     const before15 = JSON.stringify([db.prepare('SELECT * FROM users').all(), db.prepare('SELECT * FROM drafts').all(), db.prepare('SELECT slug, title, source, status FROM stories').all(), db.prepare('SELECT * FROM story_holds').all()]);
     const applied15 = runMigrations(db, all.filter((m) => m.name <= '015_stories_source_of_truth.sql'));
-    check('migration 015 applies on the step-3 state and loses nothing', applied15.at(-1) === '015_stories_source_of_truth.sql' && JSON.stringify([db.prepare('SELECT * FROM users').all(), db.prepare('SELECT * FROM drafts').all(), db.prepare('SELECT slug, title, source, status FROM stories').all(), db.prepare('SELECT * FROM story_holds').all()]) === before15, applied15.join());
+    check('migration 015 applies on the step-3 state and loses nothing', applied15.at(-1) === '015_stories_source_of_truth.sql' && JSON.stringify([db.prepare('SELECT * FROM users').all(), db.prepare('SELECT * FROM drafts').all(), db.prepare('SELECT slug, title, source, status FROM stories').all(), db.prepare('SELECT * FROM story_holds_retired').all()]) === before15, applied15.join());
     const ed = Object.fromEntries(db.prepare('SELECT slug, edited_at FROM stories').all().map((r) => [r.slug, r.edited_at]));
     check('...stories unpublished or held in the dashboard get edited_at; untouched ones keep NULL', Number(ed['old-unpublished']) === 5000 && Number(ed['held-one']) === 777 && ed['still-live'] === null && ed.dup === null, JSON.stringify(ed));
     const st = db.prepare("SELECT name, \"notnull\" AS nn FROM pragma_table_info('app_state')").all().map((r) => r.name).join();
@@ -302,16 +302,16 @@ try {
   run('DELETE FROM app_state');
   // A: unpublished in the dashboard (drafts.unpublished_at) and its row says so
   run("INSERT INTO drafts (status, source, title, section, slug, published_commit, unpublished_at, created_at, updated_at) VALUES ('in_review', 'editor', 'x', 'news', ?, 'c', ?, 1, 1)", A, now);
-  run("UPDATE stories SET status = 'unpublished', edited_at = ? WHERE slug = ?", now, A);
+  run("UPDATE stories SET rev = rev + 1, status = 'unpublished', edited_at = ? WHERE slug = ?", now, A);
   // B: a hold whose unpublish commit is NOT in this image's commit list -> still held
   // C: a hold whose unpublish commit IS in the list -> released, the build's text is live
-  run("INSERT INTO story_holds (slug, unpublish_sha, unpublish_time, created_at) VALUES (?, ?, ?, ?)", B, 'f'.repeat(40), now, now);
-  run("UPDATE stories SET status = 'unpublished' WHERE slug = ?", B);
-  run("INSERT INTO story_holds (slug, unpublish_sha, unpublish_time, created_at) VALUES (?, ?, ?, ?)", C, SHAS[1], now, now);
-  run("UPDATE stories SET status = 'unpublished' WHERE slug = ?", C);
+  run("INSERT INTO story_holds_retired (slug, unpublish_sha, unpublish_time, created_at) VALUES (?, ?, ?, ?)", B, 'f'.repeat(40), now, now);
+  run("UPDATE stories SET rev = rev + 1, status = 'unpublished' WHERE slug = ?", B);
+  run("INSERT INTO story_holds_retired (slug, unpublish_sha, unpublish_time, created_at) VALUES (?, ?, ?, ?)", C, SHAS[1], now, now);
+  run("UPDATE stories SET rev = rev + 1, status = 'unpublished' WHERE slug = ?", C);
   // D: the mirror holds OLD text (the build is newer); E: a story edited in the database (never overwritten)
-  run("UPDATE stories SET title = 'OLD MIRRORED TITLE', content_hash = 'stale' WHERE slug = ?", D);
-  run("UPDATE stories SET title = 'Edited in the database', source = 'editor', edited_at = ? WHERE slug = ?", now, E);
+  run("UPDATE stories SET rev = rev + 1, title = 'OLD MIRRORED TITLE', content_hash = 'stale' WHERE slug = ?", D);
+  run("UPDATE stories SET rev = rev + 1, title = 'Edited in the database', source = 'editor', edited_at = ? WHERE slug = ?", now, E);
   // a mirrored story that left the build
   run("INSERT INTO stories (slug, title, section, author, date, source, published_at, updated_at) VALUES ('gone-from-build', 't', 'news', 'a', '2026-01-01', 'git', 1, 1)");
   const wantLive = builtIds.map((s) => s.id).filter((id) => ![A, B].includes(id));
@@ -334,14 +334,14 @@ try {
     check('transition: a built story newer than the mirror is updated', st[D].title !== 'OLD MIRRORED TITLE' && st[D].title === builtIds[builtIds.findIndex((s) => s.id === D)].fm.title);
     check('transition: a story missing from the database is imported', st['zz-test-newer']?.status === 'live' && st['zz-test-newer'].source === 'git');
     check('transition: a story edited in the database is never overwritten', st[E].title === 'Edited in the database' && st[E].source === 'editor');
-    check('transition: the holds are retired (all released)', q('SELECT COUNT(*) AS n FROM story_holds WHERE released_at IS NULL')[0].n === 0);
+    check('transition: the holds are retired (all released)', q('SELECT COUNT(*) AS n FROM story_holds_retired WHERE released_at IS NULL')[0].n === 0);
     const pg = await (await fetch(BASE + '/')).text();
     check('transition: the home page shows the imported story and not the unpublished ones', pg.includes('Synthetic newer story') && !pg.includes(builtIds.find((s) => s.id === A).fm.title));
     check('transition: search finds the imported story', (await (await fetch(BASE + '/api/search?q=synthetic+newer')).json()).results?.some((r) => r.slug === 'zz-test-newer'));
     await stopServer();
 
     // A later start with an OLDER build (the extra story is not in it) changes nothing.
-    run("UPDATE stories SET title = 'Edited again in the database', source = 'editor' WHERE slug = ?", F);
+    run("UPDATE stories SET rev = rev + 1, title = 'Edited again in the database', source = 'editor' WHERE slug = ?", F);
     const dump3 = dump();
     removeSynthetic();
     build();
@@ -378,6 +378,119 @@ try {
   await startServer();
   await waitForAdoption();
   check('the next start completes the adoption and sets the flag', !!adoptedFlag() && q('SELECT COUNT(*) AS n FROM stories')[0].n === builtIds.length);
+
+  // ================= part 5: people change a story while the adoption pass is running =================
+  // The pass reads a story, hashes its photos (awaits), then writes. A person who publishes, edits or unpublishes in
+  // between must never be overwritten or have their unpublish revived.
+  {
+    await stopServer();
+    const E = (() => {
+      const now = Date.now();
+      const id = Number(run("INSERT INTO users (email, name, role, status, created_at, updated_at) VALUES ('race-editor@example.test', 'Race Editor', 'editor', 'active', ?, ?)", now, now).lastInsertRowid);
+      const token = 'race-' + sha(String(now)).slice(0, 40);
+      run('INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, mfa_passed) VALUES (?, ?, ?, ?, ?, 1)', sha(token), id, now, now, now + 3600_000);
+      return { id, cookie: `__Host-imc_session=${token}` };
+    })();
+    const PUB_TOKEN = 'race-made-up-publish-token-' + 'p'.repeat(24);
+    const post = async (u, fields) => {
+      const fd = new FormData();
+      for (const [k, v] of Object.entries(fields)) fd.append(k, String(v));
+      const res = await fetch(BASE + u, { method: 'POST', headers: { Cookie: E.cookie, Origin: BASE }, body: fd, redirect: 'manual' });
+      await res.arrayBuffer();
+      return new URL(res.headers.get('location') ?? '/', BASE).searchParams;
+    };
+    const envFor = { AUTH_SECRET: 'race-made-up-auth-secret-' + 'a'.repeat(24), PUBLISH_TOKEN: PUB_TOKEN, TRUST_PROXY: 'true', SITE_URL: BASE, RESEND_API_KEY: '' };
+    const resume = path.join(SCRATCH, 'resume');
+    const pausedAt = (slug) => log.some((l) => l.includes(`pass paused before writing ${slug}`));
+    const staleRow = (slug) => run("UPDATE stories SET rev = rev + 1, title = 'STALE MIRROR TITLE', content_hash = 'stale' WHERE slug = ?", slug);
+    const [P1, P2, P3] = [builtIds[1], builtIds[0], builtIds[2]];
+    const FAIL = builtIds[builtIds.length - 1].id;
+    // 5a. Publish changes (dashboard) during the pass
+    run('DELETE FROM app_state');
+    staleRow(P1.id);
+    const now0 = Date.now();
+    const draftId = Number(run("INSERT INTO drafts (status, source, title, dek, section, area, author, date, body, slug, created_at, updated_at) VALUES ('in_review', 'editor', 'Published By The Editor', '', 'news', 'churches', 'Ed Author', '2026-10-20', 'Body written by the editor during the pass.', ?, ?, ?)", P1.id, now0, now0).lastInsertRowid);
+    fs.rmSync(resume, { force: true });
+    await startServer({ ...envFor, STORY_SYNC_TEST_PAUSE_SLUG: P1.id, STORY_SYNC_TEST_PAUSE_FILE: resume });
+    await fetch(BASE + '/');
+    for (let i = 0; i < 100 && !pausedAt(P1.id); i++) await sleep(100);
+    check('(the adoption pass is paused just before it writes the story)', pausedAt(P1.id));
+    const pr = await post(`/api/admin/drafts/${draftId}/publish`, { version: q('SELECT updated_at u FROM drafts WHERE id = ?', draftId)[0].u });
+    check('(an editor publishes changes to that story meanwhile)', pr.get('n') === 'published', pr.toString());
+    fs.writeFileSync(resume, 'go');
+    await waitForAdoption();
+    const r1 = q('SELECT title, source, status, edited_at FROM stories WHERE slug = ?', P1.id)[0];
+    check('"Publish changes" during an adoption pass is not overwritten by the build (title, source editor)', r1.title === 'Published By The Editor' && r1.source === 'editor' && r1.status === 'live' && r1.edited_at > 0, JSON.stringify(r1));
+    check('...the pass still finished and set the flag', !!adoptedFlag());
+    await stopServer();
+
+    // 5b. Studio publish of the same slug during the pass
+    run('DELETE FROM app_state');
+    staleRow(P2.id);
+    fs.rmSync(resume, { force: true });
+    await startServer({ ...envFor, STORY_SYNC_TEST_PAUSE_SLUG: P2.id, STORY_SYNC_TEST_PAUSE_FILE: resume });
+    await fetch(BASE + '/');
+    for (let i = 0; i < 100 && !pausedAt(P2.id); i++) await sleep(100);
+    const studio = await fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${PUB_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ newsletter: { name: 'N', issueDate: P2.id.slice(0, 10) }, stories: [{ ref: 'a', title: P2.fm.title, section: P2.fm.section, area: P2.fm.area, author: 'Studio Author', body: 'Studio text published during the pass.' }] }) });
+    const sj = await studio.json();
+    check('(Studio publishes the same story meanwhile)', studio.status === 200 && sj.stories?.[0]?.slug === P2.id, JSON.stringify(sj).slice(0, 200));
+    fs.writeFileSync(resume, 'go');
+    await waitForAdoption();
+    const r2 = q('SELECT body, source, status FROM stories WHERE slug = ?', P2.id)[0];
+    check('a Studio publish of the same slug during an adoption pass is not overwritten (source stays studio)', r2.body.includes('Studio text published during the pass.') && r2.source === 'studio' && r2.status === 'live', JSON.stringify(r2));
+    await stopServer();
+
+    // 5c. a story with no draft is unpublished between the failed pass and its retry: the retry must not bring it back
+    run('DELETE FROM app_state');
+    run("UPDATE stories SET rev = rev + 1, status = 'live', edited_at = NULL WHERE slug = ?", P3.id);
+    staleRow(P3.id); // the build is "newer" than the table for this story, so a careless pass would rewrite it
+    await startServer({ ...envFor, STORY_SYNC_TEST_FAIL_SLUG: FAIL, STORY_SYNC_TEST_RETRY_MS: '3000' });
+    await fetch(BASE + '/');
+    for (let i = 0; i < 100 && !log.some((l) => l.includes('pass 1 of 5')); i++) await sleep(100);
+    check('(pass 1 fails on purpose; its retry is 3 s away)', log.some((l) => l.includes('pass 1 of 5')) && !adoptedFlag());
+    check('(pass 1 had already re-adopted the story, so it is live from git)', q('SELECT status, source FROM stories WHERE slug = ?', P3.id)[0].status === 'live');
+    const un = await post('/api/admin/stories/unpublish', { slug: P3.id });
+    check('(an editor unpublishes it: it has no draft, so the row stays source git with edited_at set)', un.get('n') === 'unpublished' && q('SELECT source, status, edited_at FROM stories WHERE slug = ?', P3.id)[0].source === 'git' && q('SELECT edited_at e FROM stories WHERE slug = ?', P3.id)[0].e > 0);
+    run('UPDATE stories SET rev = rev + 1, content_hash = ? WHERE slug = ?', 'stale-again', P3.id); // make the retry want to rewrite it
+    for (let i = 0; i < 100 && log.filter((l) => l.includes('adopting the build')).length < 2; i++) await sleep(100);
+    const r3 = q('SELECT status, source FROM stories WHERE slug = ?', P3.id)[0];
+    check('the retry pass leaves it unpublished (an unpublish by step-4 code is never revived by adoption)', log.filter((l) => l.includes('adopting the build')).length >= 2 && r3.status === 'unpublished' && r3.source === 'git', JSON.stringify(r3));
+    await stopServer();
+    await startServer();
+    await waitForAdoption();
+    check('...and once the failure is gone the adoption completes and it is still unpublished', !!adoptedFlag() && q('SELECT status FROM stories WHERE slug = ?', P3.id)[0].status === 'unpublished');
+    await stopServer();
+
+    // ================= part 6: an old (pre-step-4) image started against an adopted database changes nothing =================
+    // main's story-sync.ts, as raw SQL: getHold / listHolds first, upsertStory's UPDATE, and the "left the build" unpublishStory.
+    const dumpAll = () => JSON.stringify([q('SELECT * FROM stories ORDER BY id'), q('SELECT * FROM story_photos ORDER BY id'), q('SELECT * FROM app_state')]);
+    const before = dumpAll();
+    const raw = new DatabaseSync(DB_FILE);
+    raw.exec('PRAGMA busy_timeout = 5000');
+    const tries = [];
+    const attempt = (name, fn) => { try { fn(); tries.push([name, 'allowed']); } catch (e) { tries.push([name, 'refused: ' + String(e.message).slice(0, 60)]); } };
+    const live = raw.prepare("SELECT id, slug FROM stories WHERE status = 'live' ORDER BY id LIMIT 1").get();
+    attempt('getHold', () => raw.prepare('SELECT slug, build_marker, unpublish_sha, unpublish_time, released_at FROM story_holds WHERE slug = ?').get(live.slug));
+    attempt('listHolds', () => raw.prepare('SELECT slug, build_marker, unpublish_sha, unpublish_time, released_at FROM story_holds WHERE released_at IS NULL').all());
+    attempt('unpublishStory (left the build)', () => raw.prepare("UPDATE stories SET status = 'unpublished', updated_at = ? WHERE slug = ? AND status = 'live'").run(Date.now(), live.slug));
+    attempt('upsertStory (revert to the old build text)', () => {
+      raw.exec('BEGIN IMMEDIATE');
+      try {
+        raw.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
+          photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=? WHERE id = ?`)
+          .run('OLD IMAGE TITLE', null, 'news', null, null, 'a', null, null, '2026-01-01', null, null, null, '[]', '[]', 0, 0, 'old text', 'live', 'git', null, 1, Date.now(), null, 'x', live.id);
+        raw.exec('COMMIT');
+      } catch (e) { try { raw.exec('ROLLBACK'); } catch { /* already */ } throw e; }
+    });
+    raw.close();
+    check('an old image\'s mirror against an adopted database: its hold lookups fail and its unpublish and upsert writes are refused', tries.filter(([n]) => n === 'getHold' || n === 'listHolds' || /unpublish|upsert/.test(n)).every(([, r]) => r.startsWith('refused')), JSON.stringify(tries));
+    check('...and nothing in stories, story_photos or app_state changed', dumpAll() === before);
+    // the step-4 code paths still work: the server starts, publishes (rev bumps) and unpublishes through the same rows
+    await startServer({ ...envFor });
+    const probe = await fetch(BASE + '/');
+    check('(the new code still starts and serves the adopted database)', probe.status === 200);
+    await stopServer();
+  }
 
   const leaked = allLog.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|token/i.test(l));
   check('no server log line of any part has contact details or secrets', leaked.length === 0, leaked.join(' | '));
