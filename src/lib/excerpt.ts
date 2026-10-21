@@ -2,12 +2,21 @@
 
 const ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ', '#39': "'" };
 
+/** Control characters (except tab, newline, carriage return), surrogates and bidirectional overrides are never wanted in text. */
+function okCodePoint(n: number): boolean {
+  if (n === 9 || n === 10 || n === 13) return true;
+  if (n < 0x20 || (n >= 0x7f && n <= 0x9f) || (n >= 0xd800 && n <= 0xdfff)) return false;
+  if ((n >= 0x202a && n <= 0x202e) || (n >= 0x2066 && n <= 0x2069)) return false;
+  return true;
+}
+
 function decodeEntities(s: string): string {
   return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
     const k = e.toLowerCase();
     if (k[0] === '#') {
       const n = k[1] === 'x' ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10);
-      return Number.isFinite(n) && n > 31 && n < 0x110000 ? String.fromCodePoint(n) : m;
+      if (!Number.isFinite(n) || n > 0x10ffff || !okCodePoint(n)) return n === 9 || n === 10 || n === 13 ? ' ' : '';
+      return String.fromCodePoint(n);
     }
     return ENTITIES[k] ?? m;
   });
@@ -29,10 +38,11 @@ export function storyExcerpt(body: string | undefined | null, max = 400): string
       .replace(/\[([^\]]*)\]\[[^\]]*\]/g, '$1')
       .replace(/`([^`]*)`/g, '$1')
       .replace(/(\*\*|__|\*|_|~~)/g, '');
-    t = decodeEntities(t.replace(/<[^>]*>/g, '')).replace(/\\([\\`*_{}\[\]()#+\-.!<>&])/g, '$1').replace(/\s+/g, ' ').trim();
+    // Strip tags, decode entities, then remove every < and > (a decoded &lt;img ...&gt; must never become a tag), and any control characters.
+    t = decodeEntities(t.replace(/<[^>]*>/g, '')).replace(/\\([\\`*_{}\[\]()#+\-.!<>&])/g, '$1').replace(/[<>]/g, '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim();
     if (!t || /^[-*_=\s]{3,}$/.test(t)) continue;
     if ([...t].length <= max) return t;
-    const cut = [...t].slice(0, max).join('');
+    const cut = [...t].slice(0, max - 1).join('');
     const sp = cut.lastIndexOf(' ');
     return (sp > max * 0.5 ? cut.slice(0, sp) : cut).replace(/[\s,;:.\-–—]+$/, '') + '…';
   }

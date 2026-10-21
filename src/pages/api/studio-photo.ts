@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import { takeSlot } from '../../lib/rate-window';
 import { clientIp } from '../../lib/request';
 import { studioAuth, studioCors, studioJson } from '../../lib/studio-api';
@@ -36,31 +37,34 @@ export const GET: APIRoute = async ({ request, url, clientAddress }) => {
   const notFound = () => studioJson(request, 404, { ok: false, error: 'Photo not found.' });
   const src = url.searchParams.get('src');
   if (!src) return notFound();
-  const file = resolveStudioPhoto(src, new URL(siteUrl()).origin);
-  if (!file) return notFound();
+  const found = resolveStudioPhoto(src, new URL(siteUrl()).origin);
+  if (!found) return notFound();
+  if ('notBuilt' in found) {
+    return studioJson(request, 404, { ok: false, error: 'This photo isn’t on the website yet. Try again after the site updates (about 3–5 minutes).', code: 'not_built' });
+  }
 
-  const max = LIMITS.maxPhotoMB * 1024 * 1024;
-  let bytes: Buffer;
+  // Open without following a symlink, check the size and the first bytes, then stream like /media/* does.
+  let fh: fs.promises.FileHandle;
   try {
-    const fh = await fs.promises.open(file, 'r');
-    try {
-      const st = await fh.stat();
-      if (!st.isFile() || st.size > max || st.size < 12) return notFound();
-      bytes = Buffer.alloc(st.size);
-      const { bytesRead } = await fh.read(bytes, 0, st.size, 0);
-      if (bytesRead !== st.size) return notFound();
-    } finally {
-      await fh.close();
-    }
+    fh = await fs.promises.open(found.file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
   } catch {
     return notFound();
   }
-  const ext = sniffImage(new Uint8Array(bytes.subarray(0, 16)));
-  if (!ext) return notFound();
-  return new Response(new Uint8Array(bytes), {
-    status: 200,
-    headers: { 'Content-Type': TYPES[ext], 'Content-Length': String(bytes.length), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...studioCors(request) },
-  });
+  try {
+    const st = await fh.stat();
+    if (!st.isFile() || st.size > LIMITS.maxPhotoMB * 1024 * 1024 || st.size < 12) { await fh.close(); return notFound(); }
+    const head = Buffer.alloc(16);
+    const { bytesRead } = await fh.read(head, 0, 16, 0);
+    const ext = sniffImage(new Uint8Array(head.subarray(0, bytesRead)));
+    if (!ext) { await fh.close(); return notFound(); }
+    return new Response(Readable.toWeb(fh.createReadStream({ start: 0 })) as ReadableStream, {
+      status: 200,
+      headers: { 'Content-Type': TYPES[ext], 'Content-Length': String(st.size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...studioCors(request) },
+    });
+  } catch {
+    await fh.close().catch(() => {});
+    return notFound();
+  }
 };
 
 export const ALL: APIRoute = ({ request }) => new Response('Method not allowed', { status: 405, headers: { Allow: 'GET, OPTIONS', ...studioCors(request) } });

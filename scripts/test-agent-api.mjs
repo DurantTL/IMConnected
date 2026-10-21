@@ -34,6 +34,9 @@ fs.mkdirSync(SCRATCH, { recursive: true });
 const DATA_DIR = path.join(SCRATCH, 'data');
 const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 const MOCK_OUT = path.join(SCRATCH, 'mock-prs');
+// A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
+const CLIENT_TMP = path.join(SCRATCH, 'client');
+fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
 const P = { gh: 4510, mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
@@ -153,7 +156,7 @@ delete process.env.SUBMISSIONS_TO;
 start('gh', 'node', ['scripts/mock-github.mjs'], { MOCK_PORT: String(P.gh), MOCK_OUT });
 start('mail', 'node', ['scripts/mock-email.mjs'], { MOCK_EMAIL_PORT: String(P.mail) });
 await waitFor(`http://localhost:${P.mail}/x`);
-start('a', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.a), DATA_DIR, SITE_URL: BASE, AGENT_API_TOKEN: AGENT_TOKEN });
+start('a', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.a), DATA_DIR, SITE_URL: BASE, BUILT_CLIENT_DIR: CLIENT_TMP, AGENT_API_TOKEN: AGENT_TOKEN });
 start('b', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.b), DATA_DIR: path.join(SCRATCH, 'data-b'), SITE_URL: `http://localhost:${P.b}`, PUBLISH_TOKEN: '' }); // no agent token, no publish token
 start('c', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.c), DATA_DIR: path.join(SCRATCH, 'data-c'), SITE_URL: `http://localhost:${P.c}`, AGENT_API_TOKEN: 'too-short-token' });
 start('d', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.d), DATA_DIR: path.join(SCRATCH, 'data-d'), SITE_URL: `http://localhost:${P.d}`, AGENT_API_TOKEN: AGENT_TOKEN });
@@ -592,15 +595,19 @@ try {
     run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Long Excerpt Draft', 'columns', 'Sample Author', '2026-10-12', ?, ?, ?)", Array.from({ length: 200 }, (_, i) => 'word' + i).join(' '), now + 9601, now + 9601);
     r = await S('/api/stories?section=columns', { token: PUBLISH_TOKEN });
     const ex = r.data.drafts.find((x) => x.title === 'Excerpt Draft');
-    check('...Markdown is stripped (headings, emphasis, links keep text, images removed, entities decoded)', ex && ex.excerpt === 'Bold and soft words with a link text and <b> tail & more.', JSON.stringify(ex && ex.excerpt));
+    check('...Markdown is stripped (headings, emphasis, links keep text, images removed, entities decoded)', ex && ex.excerpt === 'Bold and soft words with a link text and b tail & more.', JSON.stringify(ex && ex.excerpt));
     const lx = r.data.drafts.find((x) => x.title === 'Long Excerpt Draft');
-    check('...at most 400 characters, cut at a word boundary with an ellipsis', lx && [...lx.excerpt].length <= 401 && lx.excerpt.endsWith('…') && /word\d+…$/.test(lx.excerpt), lx && lx.excerpt.slice(-30));
+    check('...at most 400 characters including the ellipsis, cut at a word boundary', lx && [...lx.excerpt].length <= 400 && lx.excerpt.endsWith('…') && /word\d+…$/.test(lx.excerpt), lx && lx.excerpt.slice(-30));
+    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Escaped Html Draft', 'columns', 'Sample Author', '2026-10-12', ?, ?, ?)", 'Hello &lt;img src=x onerror=alert(1)&gt; and &#60;script&#62; and &#x202E;bidi&#0; &#x7F;end <b>bold</b>', now + 9602, now + 9602);
+    r = await S('/api/stories?section=columns', { token: PUBLISH_TOKEN });
+    const eh = r.data.drafts.find((x) => x.title === 'Escaped Html Draft');
+    check('...a decoded &lt;img onerror&gt; never leaves a < or > (and control/bidi characters are dropped)', eh && !/[<>]/.test(eh.excerpt) && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(eh.excerpt) && eh.excerpt.includes('Hello img src=x onerror=alert(1)'), JSON.stringify(eh && eh.excerpt));
     const bareDraft = r.data.drafts.find((x) => x.title === 'Bad Date Draft');
     check('...no body: an empty string', bareDraft && bareDraft.excerpt === '');
 
     // GET /api/studio-photo
     {
-      const photoDir = 'dist/client/images/stories';
+      const photoDir = path.relative(ROOT, path.join(CLIENT_TMP, 'images/stories'));
       const sdir = fs.readdirSync(path.join(ROOT, photoDir)).find((n) => fs.statSync(path.join(ROOT, photoDir, n)).isDirectory());
       const file = fs.readdirSync(path.join(ROOT, photoDir, sdir)).find((n) => /\.jpe?g$/i.test(n));
       const rel = `/images/stories/${sdir}/${file}`;
@@ -637,18 +644,30 @@ try {
         ['draft upload path', '/api/admin/photos/1'],
         ['uploads path', `/uploads/stories/${sdir}/${file}`],
         ['wrong extension', `/images/stories/${sdir}/${file}.svg`],
-        ['missing file', `/images/stories/${sdir}/nope.jpg`],
         ['wrong origin', `https://evil.e2e-example.test${rel}`],
         ['protocol-relative', `//evil.e2e-example.test${rel}`],
         ['userinfo origin trick', `${BASE}@evil.e2e-example.test${rel}`],
         ['no src', ''],
       ];
+      // symlinks, in the throwaway copy
+      const sdirPath = path.join(CLIENT_TMP, 'images/stories', sdir);
+      fs.symlinkSync(path.join(sdirPath, file), path.join(sdirPath, 'zz-link.jpg'));
+      fs.symlinkSync(sdirPath, path.join(CLIENT_TMP, 'images/stories', 'zz-linkslug'));
+      bad.push(['symlinked file', `/images/stories/${sdir}/zz-link.jpg`], ['symlinked slug folder', `/images/stories/zz-linkslug/${file}`], ['NUL byte', `/images/stories/${sdir}/${file}%00.jpg`], ['uppercase IMAGES', `/IMAGES/stories/${sdir}/${file}`], ['absolute filesystem path', '/etc/passwd.jpg'], ['absolute filesystem path (2)', '/etc/passwd']);
       for (const [name, src] of bad) {
         r = await P1(src, { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
-        check(`...refused (${name}): 404 JSON 'Photo not found.' with CORS`, r.status === 404 && r.data && r.data.ok === false && r.data.error === 'Photo not found.' && r.headers.get('access-control-allow-origin') === TOOLS_ORIGIN, `${r.status} ${r.text.slice(0, 80)}`);
+        check(`...refused (${name}): 404 JSON 'Photo not found.' with CORS`, r.status === 404 && r.data && r.data.ok === false && r.data.error === 'Photo not found.' && !('code' in r.data) && r.headers.get('access-control-allow-origin') === TOOLS_ORIGIN, `${r.status} ${r.text.slice(0, 80)}`);
       }
       r = await S('/api/studio-photo', { token: PUBLISH_TOKEN });
       check('...a missing src parameter: 404', r.status === 404);
+      r = await P1(`/images/stories/${sdir}/not-built-yet-photo.jpg`, { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
+      check('...a well-formed path whose file is not in the build: 404 with code not_built and the "try again" message', r.status === 404 && r.data.ok === false && r.data.code === 'not_built' && /isn’t on the website yet/.test(r.data.error) && r.headers.get('access-control-allow-origin') === TOOLS_ORIGIN, r.text.slice(0, 160));
+      r = await P1(`/images/stories/${sdir}/not-built-yet-photo.jpg`);
+      check('...and without the token that is still a plain 401 (no existence leak)', r.status === 401 && !('code' in r.data));
+      r = await P1(`/images/stories/zz-no-such-story/photo-1.jpg`, { token: PUBLISH_TOKEN });
+      check('...(also for a story folder that is not in the build)', r.status === 404 && r.data.code === 'not_built');
+      r = await P1(`/media/stories/${sdir}/${'0'.repeat(64)}.jpg`, { token: PUBLISH_TOKEN });
+      check('...a missing /media file keeps the generic "Photo not found."', r.status === 404 && r.data.error === 'Photo not found.' && !('code' in r.data));
       // a non-image with a photo name is refused by the byte check
       const fake = path.join(ROOT, photoDir, sdir, 'zz-e2e-not-an-image.jpg');
       fs.writeFileSync(fake, 'this is plain text, not a picture at all');
@@ -664,10 +683,13 @@ try {
       check('...POST: 405', r.status === 405);
       // a draft's uploaded photo is not reachable through it
       const upl = uploadFiles()[0];
+      check('(a draft upload exists to test against)', !!upl, 'no file under DATA_DIR/uploads');
       if (upl) {
         const rp = path.relative(DATA_DIR, upl).split(path.sep).join('/');
-        r = await P1('/' + rp, { token: PUBLISH_TOKEN });
-        check('...a draft upload (DATA_DIR/uploads/...) is not reachable: 404', r.status === 404);
+        for (const cand of ['/' + rp, `/images/stories/${rp}`, `${BASE}/${rp}`, `/media/${rp.replace(/^uploads\//, '')}`]) {
+          r = await P1(cand, { token: PUBLISH_TOKEN });
+          check(`...a draft upload (${cand.slice(0, 40)}) is not reachable: 404`, r.status === 404 && r.data.error === 'Photo not found.');
+        }
       }
     }
 
