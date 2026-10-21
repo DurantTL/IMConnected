@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // End-to-end check of the story tables, the ONE-TIME adoption of the built site (epic 25 step 4, replacing the step 1
 // mirror) and GET /media. It runs the BUILT server (dist/server/entry.mjs) several times against a throwaway data
-// folder, and rebuilds the site with one synthetic story (zz-test-*) for the transition part. Synthetic data only.
+// folder, and rebuilds the site with synthetic stories (zz-test-*, so it never depends on how many real stories are live).
+// Synthetic data only.
 //   npm run build
 //   SCRATCH=/tmp/imc-story-store node scripts/test-story-store.mjs        # run from the repo root
 // SCRATCH is created fresh (an existing folder is removed first) and deleted at the end unless KEEP=1.
@@ -80,19 +81,26 @@ async function waitForAdoption() {
   return '';
 }
 const adoptedFlag = () => q("SELECT value FROM app_state WHERE key = 'git_adopted_at'")[0]?.value ?? null;
-// The synthetic story (zz-test-*) must never survive a run: it would be committed and published.
-// Removes any such file from the sources and from dist; rebuilds the site when it may have been built in.
+// The synthetic stories (zz-test-*, also with a date in front: 2099-01-01-zz-test-*) must never survive a run: they would be
+// committed and published. This removes any such file from the sources and from dist, and rebuilds the site when one may
+// have been built in. The same patterns are in .gitignore and .dockerignore.
 const SYNTHETIC_DIRS = ['src/content/stories', 'public/images', 'dist/client/images'].map((d) => path.join(ROOT, d));
+const SYNTHETIC_PHOTO_DIRS = ['public/images/stories', 'dist/client/images/stories'].map((d) => path.join(ROOT, d));
+const isSynthetic = (f) => /^(\d{4}-\d{2}-\d{2}-)?zz-test-/.test(f);
 function removeSynthetic() {
   let sources = false, dist = false;
-  for (const dir of SYNTHETIC_DIRS) {
+  for (const dir of [...SYNTHETIC_DIRS, ...SYNTHETIC_PHOTO_DIRS]) {
     for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
-      if (!f.startsWith('zz-test-')) continue;
-      fs.rmSync(path.join(dir, f), { force: true });
+      if (!isSynthetic(f)) continue;
+      fs.rmSync(path.join(dir, f), { recursive: true, force: true });
       if (dir.includes(`${path.sep}dist${path.sep}`)) dist = true; else sources = true;
     }
   }
   return { sources, dist };
+}
+/** Remove only the "newer build" story (the base stories stay for the later parts). */
+function removeNewer() {
+  for (const f of ['src/content/stories/zz-test-newer.md', 'public/images/zz-test-newer.png', 'dist/client/images/zz-test-newer.png']) fs.rmSync(path.join(ROOT, f), { force: true });
 }
 const build = () => execFileSync('npm', ['run', 'build'], { cwd: ROOT, stdio: 'ignore' });
 function restoreSite() {
@@ -165,13 +173,25 @@ try {
     db.close();
   }
 
+  // ---- synthetic base stories: six stories in the build, whatever the real content is today ----
+  const WORDS = ['one', 'two', 'three', 'four', 'five', 'six'];
+  const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16]), Buffer.from('JFIF\0'), Buffer.alloc(80, 5), Buffer.from([0xff, 0xd9])]);
+  fs.mkdirSync(path.join(ROOT, 'public/images/stories/2099-01-06-zz-test-base-six'), { recursive: true });
+  fs.writeFileSync(path.join(ROOT, 'public/images/stories/2099-01-06-zz-test-base-six/photo-1.jpg'), JPG);
+  WORDS.forEach((w, i) => {
+    const photo = i === 5 ? `image: "/images/stories/2099-01-06-zz-test-base-six/photo-1.jpg"\nimageAlt: "A synthetic picture"\n` : '';
+    fs.writeFileSync(path.join(ROOT, `src/content/stories/2099-01-0${i + 1}-zz-test-base-${w}.md`), `---\ntitle: "Zz test base ${w}"\nsection: news\narea: churches\nauthor: "Test Author"\ndate: 2099-01-0${i + 1}\n${photo}featured: false\ndraft: false\n---\nSynthetic story number ${w}, written by the test. It has a few made-up words to make a body.\n`);
+  });
+  build();
+
   // ================= part 1: first start adopts the build =================
   const builtIds = fs.readdirSync(path.join(ROOT, 'src/content/stories')).filter((f) => f.endsWith('.md')).map((f) => {
     const raw = fs.readFileSync(path.join(ROOT, 'src/content/stories', f), 'utf8');
     const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
     const fm = parseYaml(m[1]);
     return { id: f.replace(/\.md$/, ''), fm, body: m[2] };
-  }).filter((s) => !s.fm.draft && !s.id.startsWith('zz-test-'));
+  }).filter((s) => !s.fm.draft);
+  const synth = builtIds.filter((s) => /^2099-01-0\d-zz-test-base-/.test(s.id));
   check('the repo has stories to adopt', builtIds.length > 0, String(builtIds.length));
 
   await startServer();
@@ -299,8 +319,8 @@ try {
   // Step-3 state = mirror rows (source git) + holds + drafts the dashboard unpublished. Emulated by taking the adoption
   // flag away and writing those rows, then starting a NEWER build (one extra story, one changed story).
   await stopServer();
-  const [A, B, C, D, E, F] = builtIds.map((s) => s.id);
-  check('the repo has at least 6 stories for the transition part', builtIds.length >= 6, String(builtIds.length));
+  const [A, B, C, D, E, F] = synth.map((s) => s.id);
+  check('the build has the 6 synthetic stories the transition part uses', synth.length === 6, String(synth.length));
   const SHAS = Array.from({ length: 4 }, (_, i) => String(i + 1).repeat(40));
   const commitsFile = path.join(SCRATCH, 'build-commits');
   fs.writeFileSync(commitsFile, SHAS.map((h, i) => `${h} ${1700000000 + i}`).join('\n') + '\n');
@@ -341,15 +361,15 @@ try {
     check('transition: a story missing from the database is imported', st['zz-test-newer']?.status === 'live' && st['zz-test-newer'].source === 'git');
     check('transition: a story edited in the database is never overwritten', st[E].title === 'Edited in the database' && st[E].source === 'editor');
     check('transition: the holds are retired (all released)', q('SELECT COUNT(*) AS n FROM story_holds_retired WHERE released_at IS NULL')[0].n === 0);
-    const pg = await (await fetch(BASE + '/')).text();
-    check('transition: the home page shows the imported story and not the unpublished ones', pg.includes('Synthetic newer story') && !pg.includes(builtIds.find((s) => s.id === A).fm.title));
+    const pg = await (await fetch(BASE + '/news/')).text();
+    check('transition: the news page shows the imported story and not the unpublished ones', pg.includes('Synthetic newer story') && !pg.includes(builtIds.find((s) => s.id === A).fm.title));
     check('transition: search finds the imported story', (await (await fetch(BASE + '/api/search?q=synthetic+newer')).json()).results?.some((r) => r.slug === 'zz-test-newer'));
     await stopServer();
 
     // A later start with an OLDER build (the extra story is not in it) changes nothing.
     run("UPDATE stories SET rev = rev + 1, title = 'Edited again in the database', source = 'editor' WHERE slug = ?", F);
     const dump3 = dump();
-    removeSynthetic();
+    removeNewer();
     build();
     await sleep(1100);
     await startServer({ BUILD_COMMITS_FILE: commitsFile });
@@ -359,11 +379,11 @@ try {
     check('older build: confirmed that the running build has no zz-test-newer story', !hasZ);
     check('older build: no adoption ran', !log.some((l) => l.includes('adopting the build')), log.join(' | ').slice(0, 300));
     check('older build: the database is byte-identical (the story only the newer build had is still there, edits kept)', dump() === dump3 && q("SELECT status FROM stories WHERE slug = 'zz-test-newer'")[0].status === 'live');
-    const pg2 = await (await fetch(BASE + '/')).text();
-    check('older build: the home page still shows the story that only the newer build had', pg2.includes('Synthetic newer story'));
+    const pg2 = await (await fetch(BASE + '/news/')).text();
+    check('older build: the news page still shows the story that only the newer build had', pg2.includes('Synthetic newer story'));
     await stopServer();
   } finally {
-    removeSynthetic();
+    removeNewer();
     build();
   }
 
@@ -409,8 +429,8 @@ try {
     const resume = path.join(SCRATCH, 'resume');
     const pausedAt = (slug) => log.some((l) => l.includes(`pass paused before writing ${slug}`));
     const staleRow = (slug) => run("UPDATE stories SET rev = rev + 1, title = 'STALE MIRROR TITLE', content_hash = 'stale' WHERE slug = ?", slug);
-    const [P1, P2, P3] = [builtIds[1], builtIds[0], builtIds[2]];
-    const FAIL = builtIds[builtIds.length - 1].id;
+    const [P1, P2, P3] = [synth[1], synth[0], synth[2]];
+    const FAIL = synth[5].id;
     // 5a. Publish changes (dashboard) during the pass
     run('DELETE FROM app_state');
     staleRow(P1.id);

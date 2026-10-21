@@ -531,7 +531,8 @@ try {
 
     // stories
     const built = d.stories.filter((s) => s.source === 'site');
-    check('stories: the built stories are there (newest first)', built.length >= 6 && d.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), `${built.length}`);
+    const builtCount = fs.readdirSync(path.join(ROOT, 'src/content/stories')).filter((f) => f.endsWith('.md') && !/^draft:\s*true\s*$/m.test(fs.readFileSync(path.join(ROOT, 'src/content/stories', f), 'utf8').split(/^---\s*$/m)[1] ?? '')).length; // however many real stories are live today
+    check('stories: every story in the build is there (newest first)', built.length === builtCount && builtCount > 0 && d.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), `${built.length}`);
     const feed = JSON.parse((await S('/stories.json')).text).stories; // rendered by the server since epic #25 step 2
     const strip = (o) => { const { status, source, url, image, photos, excerpt, ...rest } = o; return rest; };
     const sameAsFeed = feed.every((f) => { const s = d.stories.find((b) => b.id === f.id); return s && JSON.stringify(strip(s)) === JSON.stringify(strip(f)); });

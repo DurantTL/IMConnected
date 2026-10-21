@@ -11,3 +11,5 @@ dist/
 src/content/stories/zz-test-*
 public/images/zz-test-*
 .build-commits
+src/content/stories/*zz-test-*
+public/images/stories/*zz-test-*

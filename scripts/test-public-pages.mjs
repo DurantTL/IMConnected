@@ -231,7 +231,7 @@ const listPages = pages.filter((p) => !p.startsWith('/stories/'));
 const first = storyPages[0] ?? null;
 const slugOf = (p) => p.split('/')[2];
 const feedBase = BASELINE ? JSON.parse(fs.readFileSync(path.join(BASELINE, 'stories.json'), 'utf8')) : null;
-if (BASELINE) check(`the baseline has pages to compare (${pages.length} pages, ${storyPages.length} stories)`, pages.length >= 8 && storyPages.length >= 3, `${pages.length}/${storyPages.length}`);
+if (BASELINE) check(`the baseline has pages to compare (${pages.length} pages, ${storyPages.length} stories)`, pages.length >= 1 && storyPages.length >= 1, `${pages.length}/${storyPages.length}`);
 
 /** Compare every page and both feeds with the baseline. `mapped` is true once photo addresses are /media/... */
 async function comparePages(label, mapped) {
