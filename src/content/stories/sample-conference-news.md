@@ -6,6 +6,6 @@ area: conference
 author: IMConnected Editorial Team
 date: 2026-10-14
 featured: false
-draft: false
+draft: true
 ---
 Conference news covers announcements, policy updates, department events and leadership news. Keep the headline specific and the first paragraph complete.
