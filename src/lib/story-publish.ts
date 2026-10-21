@@ -242,9 +242,9 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     const index = photos.findIndex((p) => p.id === block.photoId);
     if (index < 0) { removeFiles(stored.created); throw new EditorError('photo_missing'); }
     const photo = photos[index];
-    return { ...block, photoId: undefined, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50 };
+    return { ...block, photoId: undefined, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50, zoom: photo.zoom ?? 1 };
   });
-  stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; });
+  stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; row.zoom = photos[i].zoom ?? 1; });
   const now = Date.now();
   const story: StoryInput = {
     slug, title, dek: dek || undefined, section, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
@@ -296,7 +296,7 @@ export function unpublishLive(slug: string, userId: number): { title: string } |
 
 export interface LoadedStory {
   fields: DraftFields;
-  photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number }[];
+  photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number; zoom?: number }[];
 }
 
 /** A live story from the database as editor fields and photos. Null when there is no live story with that address. */
@@ -316,7 +316,7 @@ export function loadStory(slug: string): LoadedStory | null {
     },
     photos: sources.map((url, i) => {
       const inline = storyBlocks?.find((b) => b.type === 'image' && b.url === url);
-      return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50 };
+      return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50, zoom: s.photoRows.find((p) => p.position === i)?.zoom ?? inline?.zoom ?? 1 };
     }),
   };
 }

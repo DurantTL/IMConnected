@@ -24,7 +24,7 @@ if (form && blocksField) {
   if (phone.matches) library.open = false;
   phone.addEventListener('change', () => { library.open = !phone.matches; });
   const editable = !form.querySelector('fieldset')?.disabled;
-  type Photo = { id: number; src: string; alt: string; focalX: number; focalY: number };
+  type Photo = { id: number; src: string; alt: string; focalX: number; focalY: number; zoom: number };
   const builderData = JSON.parse(document.getElementById('story-builder-data')?.textContent || '{"photos":[]}');
   const photos: Photo[] = builderData.photos;
   let blocks: StoryBlock[] = JSON.parse(blocksField.value || '[]');
@@ -389,7 +389,7 @@ if (form && blocksField) {
 
   function updateFocus(id: number, x: number, y: number, notify = true) {
     if (!editable) return;
-    x = Math.round(Math.max(0, Math.min(100, x))); y = Math.round(Math.max(0, Math.min(100, y)));
+    x = Math.round(Math.max(0, Math.min(100, x)) * 100) / 100; y = Math.round(Math.max(0, Math.min(100, y)) * 100) / 100;
     const xInput = form!.elements.namedItem(`photo_${id}_focalX`) as HTMLInputElement;
     const yInput = form!.elements.namedItem(`photo_${id}_focalY`) as HTMLInputElement;
     if (!xInput || !yInput) return;
@@ -397,10 +397,15 @@ if (form && blocksField) {
     const surface = document.querySelector<HTMLElement>(`[data-focal="${id}"]`);
     const marker = surface?.querySelector<HTMLElement>('.sb-focal-marker');
     if (marker) { marker.style.left = `${x}%`; marker.style.top = `${y}%`; }
-    for (const img of document.querySelectorAll<HTMLElement>(`[data-focus-preview="${id}"]`)) img.style.objectPosition = `${x}% ${y}%`;
+    const photo = photos.find((p) => p.id === id);
+    for (const img of document.querySelectorAll<HTMLElement>(`[data-focus-preview="${id}"]`)) {
+      img.style.objectPosition = `${x}% ${y}%`;
+      img.style.scale = (photo?.zoom ?? 1) === 1 ? '' : String(photo!.zoom);
+      img.style.transformOrigin = `${x}% ${y}%`;
+    }
     const output = document.querySelector(`[data-focus-output="${id}"]`);
     if (output) output.textContent = `${x}% horizontal, ${y}% vertical`;
-    const photo = photos.find((p) => p.id === id); if (photo) { photo.focalX = x; photo.focalY = y; }
+    if (photo) { photo.focalX = x; photo.focalY = y; }
     if (notify) changed();
   }
   for (const surface of document.querySelectorAll<HTMLElement>('[data-focal]')) {
@@ -424,6 +429,57 @@ if (form && blocksField) {
     });
   }
   for (const center of document.querySelectorAll<HTMLButtonElement>('[data-center-focus]')) center.addEventListener('click', () => updateFocus(Number(center.dataset.centerFocus), 50, 50));
+  function updateZoom(id: number, value: number, notify = true) {
+    if (!editable) return;
+    const photo = photos.find((p) => p.id === id);
+    const input = form!.elements.namedItem(`photo_${id}_zoom`) as HTMLInputElement;
+    if (!photo || !input) return;
+    photo.zoom = Math.round(Math.max(1, Math.min(3, value)) * 100) / 100;
+    input.value = String(photo.zoom);
+    input.setAttribute('aria-valuetext', `${Math.round(photo.zoom * 100)} percent`);
+    const output = document.querySelector(`[data-zoom-output="${id}"]`);
+    if (output) output.textContent = `${Math.round(photo.zoom * 100)}%`;
+    updateFocus(id, photo.focalX, photo.focalY, notify);
+  }
+  for (const photo of photos) {
+    (form.elements.namedItem(`photo_${photo.id}_zoom`) as HTMLInputElement)?.addEventListener('input', (event) => updateZoom(photo.id, Number((event.target as HTMLInputElement).value), false));
+  }
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-zoom-photo]')) button.addEventListener('click', () => {
+    const photo = photos.find((p) => p.id === Number(button.dataset.zoomPhoto));
+    if (photo) updateZoom(photo.id, photo.zoom + Number(button.dataset.zoomStep));
+  });
+  for (const reset of document.querySelectorAll<HTMLButtonElement>('[data-reset-crop]')) reset.addEventListener('click', () => {
+    const id = Number(reset.dataset.resetCrop);
+    updateZoom(id, 1, false); updateFocus(id, 50, 50);
+  });
+  for (const surface of document.querySelectorAll<HTMLElement>('[data-pan-photo]')) {
+    const photo = photos.find((p) => p.id === Number(surface.dataset.panPhoto));
+    const image = surface.querySelector('img')!;
+    if (!photo) continue;
+    let start: { x: number; y: number; focalX: number; focalY: number; overflowX: number; overflowY: number } | undefined;
+    surface.addEventListener('pointerdown', (event) => {
+      if (!editable || event.button !== 0 || !image.naturalWidth || !image.naturalHeight) return;
+      const rect = surface.getBoundingClientRect();
+      const cover = Math.max(rect.width / image.naturalWidth, rect.height / image.naturalHeight) * photo.zoom;
+      start = { x: event.clientX, y: event.clientY, focalX: photo.focalX, focalY: photo.focalY,
+        overflowX: Math.max(0, image.naturalWidth * cover - rect.width), overflowY: Math.max(0, image.naturalHeight * cover - rect.height) };
+      event.preventDefault(); surface.focus(); surface.setPointerCapture(event.pointerId);
+    });
+    surface.addEventListener('pointermove', (event) => {
+      if (!start) return;
+      updateFocus(photo.id,
+        start.overflowX > .5 ? start.focalX - (event.clientX - start.x) / start.overflowX * 100 : start.focalX,
+        start.overflowY > .5 ? start.focalY - (event.clientY - start.y) / start.overflowY * 100 : start.focalY);
+    });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) surface.addEventListener(name, () => { start = undefined; });
+    surface.addEventListener('keydown', (event) => {
+      const direction: Record<string, number[]> = { ArrowLeft: [1, 0], ArrowRight: [-1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+      const step = direction[event.key];
+      if (!editable || !step) return;
+      event.preventDefault(); const amount = event.shiftKey ? 10 : 1;
+      updateFocus(photo.id, photo.focalX + step[0] * amount, photo.focalY + step[1] * amount);
+    });
+  }
   const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-studio-panel]'));
   const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-studio-tab]'));
   function setPanel(name: string, focus = false) {

@@ -12,7 +12,7 @@ interface Props {
   layout: string;
   plan: PhotoPlan;
   /** Every photo, lead first. */
-  photos: { src: string; alt: string; focalX?: number; focalY?: number }[];
+  photos: { src: string; alt: string; focalX?: number; focalY?: number; zoom?: number }[];
   credit?: string;
 }
 const { layout, plan, photos, credit } = Astro.props;

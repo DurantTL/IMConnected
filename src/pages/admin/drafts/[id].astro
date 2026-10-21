@@ -1,5 +1,6 @@
 ---
 import Admin from '../../../layouts/Admin.astro';
+import { photoFocusStyle } from '../../../lib/story-blocks';
 import { SECTIONS } from '../../../lib/site';
 import { LIMITS } from '../../../lib/limits';
 import { PHOTO_LAYOUTS } from '../../../lib/photo-layouts';
@@ -258,7 +259,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               <ol class="ed-photos">
                 {photos.map((p, i) => (
                   <li class="ed-photo">
-                    <div class="sb-photo-preview"><span class="sb-crop-label">Reader crop preview</span>{p.path ? <img data-focus-preview={p.id} src={`/api/admin/photos/${p.id}`} alt="" width="160" height="100" style={`object-position:${p.focalX ?? 50}% ${p.focalY ?? 50}%`} /> : p.url && safeImg(p.url) ? <img data-focus-preview={p.id} src={p.url} alt="" width="160" height="100" style={`object-position:${p.focalX ?? 50}% ${p.focalY ?? 50}%`} referrerpolicy="no-referrer" /> : <div></div>}</div>
+                    <div class="sb-photo-preview"><span class="sb-crop-label">Reader crop preview</span>{(p.path || p.url && safeImg(p.url)) ? <div class="sb-pan-crop" data-pan-photo={p.id} tabindex={editable ? 0 : -1} role="group" aria-label={`Pan crop for photo ${i + 1}. Drag the image or use arrow keys. Shift moves ten percent.`}><img data-focus-preview={p.id} src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt="" draggable="false" style={photoFocusStyle(p)} referrerpolicy="no-referrer" /></div> : <div></div>}<p class="admin-note">Drag the crop to move the image. Arrow keys pan; Shift moves faster.</p></div>
                     <div class="fields">
                       <strong>{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
                       <label>Alt text (describe the photo for readers who can't see it)
@@ -274,6 +275,10 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                           <label>Horizontal focus<input type="range" min="0" max="100" step="any" name={`photo_${p.id}_focalX`} value={p.focalX ?? 50} aria-label={`Photo ${i + 1} horizontal focus`} /></label>
                           <label>Vertical focus<input type="range" min="0" max="100" step="any" name={`photo_${p.id}_focalY`} value={p.focalY ?? 50} aria-label={`Photo ${i + 1} vertical focus`} /></label>
                           <button type="button" data-center-focus={p.id}>Center focus</button>
+                        </div>
+                        <div class="sb-zoom-controls">
+                          <label>Zoom <output data-zoom-output={p.id}>{Math.round(p.zoom * 100)}%</output><input type="range" min="1" max="3" step="0.01" name={`photo_${p.id}_zoom`} value={p.zoom} aria-valuetext={`${Math.round(p.zoom * 100)} percent`} aria-label={`Photo ${i + 1} zoom`} /></label>
+                          <div><button type="button" data-zoom-photo={p.id} data-zoom-step="-0.1" aria-label={`Zoom photo ${i + 1} out`}>−</button><button type="button" data-zoom-photo={p.id} data-zoom-step="0.1" aria-label={`Zoom photo ${i + 1} in`}>+</button><button type="button" data-reset-crop={p.id}>Reset crop</button></div>
                         </div>
                         <output data-focus-output={p.id} aria-live="polite">{p.focalX ?? 50}% horizontal, {p.focalY ?? 50}% vertical</output>
                       </details>}
@@ -348,5 +353,5 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
     </div>
   )}
 </Admin>
-<script type="application/json" id="story-builder-data" set:html={JSON.stringify({ emptyStory: !draft?.body.trim() && !(draft?.storyBlocks?.length), photos: photos.map((p) => ({ id: p.id, src: p.path ? `/api/admin/photos/${p.id}` : p.url && safeImg(p.url) ? p.url : '', alt: p.alt, focalX: p.focalX ?? 50, focalY: p.focalY ?? 50 })) }).replace(/</g, '\\u003c')}></script>
+<script type="application/json" id="story-builder-data" set:html={JSON.stringify({ emptyStory: !draft?.body.trim() && !(draft?.storyBlocks?.length), photos: photos.map((p) => ({ id: p.id, src: p.path ? `/api/admin/photos/${p.id}` : p.url && safeImg(p.url) ? p.url : '', alt: p.alt, focalX: p.focalX ?? 50, focalY: p.focalY ?? 50, zoom: p.zoom })) }).replace(/</g, '\\u003c')}></script>
 <script>import '../../../scripts/draft-editor';</script>

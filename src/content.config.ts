@@ -30,7 +30,7 @@ const stories = defineCollection({
     /** How the story page arranges the photos (Studio's story layouts). Missing means one: the lead photo, the others in a row. Values live in src/lib/photo-layouts.ts. */
     photoLayout: z.enum(['one', 'twoUp', 'heroGrid', 'mosaic', 'stack']).default('one'),
     storyBlocks: z.unknown().optional().transform((value) => normalizeStoryBlocks(value)),
-    photoFocus: z.array(z.object({ focalX: z.number().min(0).max(100), focalY: z.number().min(0).max(100) })).default([]),
+    photoFocus: z.array(z.object({ focalX: z.number().min(0).max(100), focalY: z.number().min(0).max(100), zoom: z.number().min(1).max(3).default(1) })).default([]),
     featured: z.boolean().default(false),
     draft: z.boolean().default(false),
   }).superRefine((d, ctx) => {

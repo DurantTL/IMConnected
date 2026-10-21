@@ -187,6 +187,17 @@ const EXPECT = {
   try { db.prepare("UPDATE stories SET photo_layout = 'mosaic'").run(); } catch { guard = true; }
   check('...and migration 015\'s rev guard still stops a write that does not bump rev', guard);
   check('...with a clean foreign key check', db.prepare('PRAGMA foreign_key_check').all().length === 0);
+  runMigrations(db, all.filter((m) => m.name < '018'));
+  db.prepare("INSERT INTO draft_photos (draft_id, url, created_at, focal_x, focal_y) SELECT id, 'https://example.invalid/synthetic.png', ?, 17, 83 FROM drafts").run(now);
+  db.prepare("INSERT INTO story_photos (story_id, position, kind, url, focal_x, focal_y) SELECT id, 0, 'lead', 'https://example.invalid/synthetic.png', 17, 83 FROM stories").run();
+  const cropMigration = runMigrations(db, all);
+  check('migration 018 preserves existing draft and published photo crops at 100% zoom', cropMigration.length === 1 && cropMigration[0].startsWith('018_') && ['draft_photos', 'story_photos'].every((table) => {
+    const photo = db.prepare(`SELECT focal_x, focal_y, zoom FROM ${table}`).get();
+    return photo.focal_x === 17 && photo.focal_y === 83 && photo.zoom === 1;
+  }));
+  let invalidZoom = false;
+  try { db.prepare('UPDATE story_photos SET zoom = .99').run(); } catch { invalidZoom = true; }
+  check('published photo zoom is constrained to 100–300% by the database', invalidZoom && db.prepare('PRAGMA foreign_key_check').all().length === 0);
   db.close();
 }
 
