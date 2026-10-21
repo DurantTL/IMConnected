@@ -14,6 +14,7 @@ process.emitWarning = function (warning, ...args) {
 };
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite');
 process.emitWarning = emit;
+export { DatabaseSync };
 
 /** Migration files are named like 001_init.sql. */
 export const MIGRATION_NAME = /^\d{3}_.*\.sql$/;

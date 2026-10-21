@@ -184,3 +184,24 @@ export function buildInviteEmail(inviterName: string, link: string) {
 </body></html>`;
   return { subject: `You're invited to the ${SITE.name} editors`, text, html };
 }
+
+/** The "no backup for a while" email to the administrators: hours, a short secret-free error and a link. */
+export function buildBackupAlert(hours: number | null, lastError: string | null, link: string) {
+  const when = hours === null ? 'There has not been a successful backup yet.' : `There has been no successful backup for about ${hours} hours.`;
+  const err = lastError ? oneLine(lastError).slice(0, 300) : '';
+  const text = [
+    `${when} Nightly backups protect the stories, photos and editor accounts of ${SITE.name}.`,
+    ...(err ? ['', `Last error: ${err}`] : []),
+    '',
+    `See the backup status: ${link}`,
+    '',
+    'You get this email once a day while backups keep failing, because you are an administrator.',
+  ].join('\n');
+  const html = `<!doctype html><html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1d2433;max-width:560px;margin:0 auto;padding:24px;line-height:1.5">
+<p>${escHtml(when)} Nightly backups protect the stories, photos and editor accounts of ${escHtml(SITE.name)}.</p>
+${err ? `<p>Last error: <code>${escHtml(err)}</code></p>` : ''}
+<p style="margin:28px 0"><a href="${escHtml(link)}" style="background:#1f4e79;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;display:inline-block;font-weight:600">See the backup status</a></p>
+<p style="font-size:14px;color:#555">You get this email once a day while backups keep failing, because you are an administrator.</p>
+</body></html>`;
+  return { subject: `${SITE.name}: backups need attention`, text, html };
+}

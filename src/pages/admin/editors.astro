@@ -102,6 +102,7 @@ const twoFa = (p: (typeof people)[number]) => {
   <div class="cms-bar">
     <h1>Editors</h1>
     {isAdmin && <a class="cms-btn secondary" href="/admin/audit">Audit log</a>}
+    {isAdmin && <a class="cms-btn secondary" href="/admin/backups">Backups</a>}
   </div>
   {message && <p class="admin-ok" role="status">{message}</p>}
   {error && <p class="admin-error" role="alert">{error}</p>}

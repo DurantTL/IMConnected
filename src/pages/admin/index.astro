@@ -4,6 +4,7 @@ import { SECTIONS } from '../../lib/site';
 import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, listRecentPublished, type StatusFilter } from '../../lib/drafts';
 import { fmtTime, sectionLabel } from '../../lib/admin-ui';
 import { siteUrl } from '../../lib/draft-http';
+import { driveConfig } from '../../lib/db/gdrive.mjs';
 export const prerender = false;
 
 cleanupRejectedPhotos();
@@ -18,6 +19,8 @@ const showHome = !q.has('status') && !q.has('section') && !q.has('source');
 const newest = showHome ? drafts.slice(0, 5) : [];
 const recentPublished = showHome ? listRecentPublished(5) : [];
 const base = siteUrl();
+// Administrators are told when nightly backups are not set up (no email is sent for that).
+const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
 const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
 ---
 <Admin title="Drafts" current="drafts" wide>
@@ -25,6 +28,10 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
     <h1>Drafts</h1>
     <form method="post" action="/api/admin/drafts/new"><button class="cms-btn" type="submit">New story</button></form>
   </div>
+
+  {showHome && backupsOff && (
+    <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Stories, photos and editor accounts are only on this server. <a href="/admin/backups">See how</a>.</p>
+  )}
 
   {showHome && <div class="cms-home">
     <section class="admin-card" aria-labelledby="home-new">
