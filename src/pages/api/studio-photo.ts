@@ -57,7 +57,7 @@ export const GET: APIRoute = async ({ request, url, clientAddress }) => {
     const { bytesRead } = await fh.read(head, 0, 16, 0);
     const ext = sniffImage(new Uint8Array(head.subarray(0, bytesRead)));
     if (!ext) { await fh.close(); return notFound(); }
-    return new Response(Readable.toWeb(fh.createReadStream({ start: 0 })) as ReadableStream, {
+    return new Response(Readable.toWeb(fh.createReadStream({ start: 0, end: st.size - 1 })) as ReadableStream, {
       status: 200,
       headers: { 'Content-Type': TYPES[ext], 'Content-Length': String(st.size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...studioCors(request) },
     });
