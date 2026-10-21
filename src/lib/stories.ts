@@ -32,6 +32,8 @@ export interface PublicStory {
     photoCredit?: string;
     photos: string[];
     photoAlts: string[];
+    /** How the photos are arranged on the page (src/lib/photo-layouts.ts). Missing means 'one', the original look. */
+    photoLayout?: string;
     featured: boolean;
   };
 }

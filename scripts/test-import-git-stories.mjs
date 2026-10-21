@@ -106,6 +106,15 @@ try {
   check('more than the photo count limit, or a photo over the size limit, is refused', /ERROR\s+zz-many-photos.*more than 6 photos/.test(r.out) && /ERROR\s+zz-big-photo.*larger than 10 MB/.test(r.out) && !q("SELECT 1 FROM stories WHERE slug IN ('zz-many-photos','zz-big-photo')").length, r.out);
   const unknown = imp('--bogus');
   check('an unknown option is refused', unknown.code === 2);
+  // photoLayout (issue #35): a valid one is imported, an unknown one is an error that names the file, a missing one reads "one"
+  write('zz-layout-good', md('Layout Good', 'photoLayout: mosaic\n'));
+  write('zz-layout-bad', md('Layout Bad', 'photoLayout: carousel\n'));
+  write('zz-layout-none', md('Layout None'));
+  r = imp('--apply');
+  check('photoLayout in a story file: a valid value is imported, an unknown value is an error naming the file, a missing one means "one"',
+    /ERROR\s+zz-layout-bad.*photoLayout/.test(r.out) && q("SELECT photo_layout p FROM stories WHERE slug = 'zz-layout-good'")[0]?.p === 'mosaic' && q("SELECT photo_layout p FROM stories WHERE slug = 'zz-layout-none'")[0]?.p === 'one' && q("SELECT COUNT(*) n FROM stories WHERE slug = 'zz-layout-bad'")[0].n === 0, r.out);
+  r = imp('--apply');
+  check('...and a second run reports the layout story as unchanged', /same\s+zz-layout-good/.test(r.out), r.out);
 } catch (err) {
   console.error('ERROR', err);
   fails++;

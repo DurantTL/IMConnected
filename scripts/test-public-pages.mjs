@@ -259,8 +259,12 @@ async function comparePages(label, mapped) {
   const live = JSON.parse(js.text);
   const { generated: g1, stories: s1, ...rest1 } = live;
   const { generated: g2, stories: s2, ...rest2 } = feedBase;
-  const mapStories = (list) => JSON.parse(unmedia(JSON.stringify(list), map));
-  check(`${label}: /stories.json is identical apart from image addresses (same version, fields, order, key order)`,
+  // Issue #35 added one field, `photoLayout` (right after `photoAlts`, no version bump). Every adopted story has the default; it is
+  // taken out before the comparison so the rest of the item is still compared field for field, in order.
+  const mapStories = (list) => JSON.parse(unmedia(JSON.stringify(list.map(({ photoLayout: _layout, ...item }) => item)), map));
+  check(`${label}: /stories.json items have photoLayout "one" right after photoAlts (a new field, same version)`,
+    s1.length > 0 && s1.every((s) => s.photoLayout === 'one' && Object.keys(s).indexOf('photoLayout') === Object.keys(s).indexOf('photoAlts') + 1), JSON.stringify(s1[0]).slice(0, 200));
+  check(`${label}: /stories.json is identical apart from image addresses and photoLayout (same version, fields, order, key order)`,
     js.status === 200 && JSON.stringify(rest1) === JSON.stringify(rest2) && live.version === 1 && JSON.stringify(mapStories(s1)) === JSON.stringify(s2) && typeof g1 === 'string' && !!g2,
     `${js.status} ${JSON.stringify(mapStories(s1)).slice(0, 200)}`);
   check(`${label}: /stories.json is JSON with the public cache header`, /application\/json/.test(js.headers.get('content-type')) && js.headers.get('cache-control') === 'public, max-age=60, stale-while-revalidate=300');

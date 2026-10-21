@@ -26,6 +26,8 @@ const stories = defineCollection({
     photos: z.array(z.string()).default([]),
     /** Alt text for each of `photos`, in the same order (shorter or missing entries fall back to a generic description) */
     photoAlts: z.array(z.string()).default([]),
+    /** How the story page arranges the photos (Studio's story layouts). Missing means one: the lead photo, the others in a row. Values live in src/lib/photo-layouts.ts. */
+    photoLayout: z.enum(['one', 'twoUp', 'heroGrid', 'mosaic', 'stack']).default('one'),
     featured: z.boolean().default(false),
     draft: z.boolean().default(false),
   }),

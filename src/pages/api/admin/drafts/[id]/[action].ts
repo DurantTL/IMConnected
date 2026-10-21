@@ -58,7 +58,7 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     } catch (err) {
       return jsonResponse(400, { ok: false, error: (err as Error).message });
     }
-    const r = saveDraft(draft.id, version, parsed.fields, parsed.photoAlts, user.id);
+    const r = saveDraft(draft.id, version, parsed.fields, parsed.photoAlts, user.id, parsed.layout);
     if (!r.ok) return jsonResponse(r.reason === 'conflict' ? 409 : r.reason === 'locked' ? 423 : 400, { ok: false, conflict: r.reason === 'conflict', error: r.message });
     if (saveAuditDue(user.id, draft.id)) audit('draft.save', { userId: user.id, target: `draft:${draft.id}`, ip });
     return jsonResponse(200, { ok: true, updatedAt: r.updatedAt, savedBy: user.name, savedAt: r.updatedAt });

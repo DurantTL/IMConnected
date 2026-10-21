@@ -6,6 +6,7 @@ import { LIMITS } from './limits';
 import { sniffImage } from './submission';
 import { clean, escapeHtmlInMarkdown, validDate } from './storyfile';
 import { takeSlot } from './rate-window';
+import { isPhotoLayout, PHOTO_LAYOUT_VALUES, type PhotoLayout } from './photo-layouts';
 
 export class AgentError extends Error {
   constructor(public code: string, message: string) {
@@ -35,6 +36,8 @@ export interface AgentStory {
   date: string;
   sourceUrl: string | null;
   note: string;
+  /** null = not sent: a new draft gets the default look, an updated one keeps its layout. */
+  photoLayout: PhotoLayout | null;
   /** null = the request had no `photos` key: an update leaves the draft's photos alone. */
   photos: AgentPhoto[] | null;
 }
@@ -99,6 +102,11 @@ export function parseAgentStory(input: unknown): AgentStory {
   if (section && !getSection(section)) throw new AgentError('bad_section', 'That section does not exist. GET /api/agent/sections lists the valid ones.');
   if (area && !section) throw new AgentError('bad_area', 'Send a section together with an area.');
   if (area && !isValidArea(section, area)) throw new AgentError('bad_area', 'That area is not valid for this section.');
+  let photoLayout: PhotoLayout | null = null;
+  if (o.photoLayout !== undefined && o.photoLayout !== null) {
+    if (!isPhotoLayout(o.photoLayout)) throw new AgentError('bad_photo_layout', `photoLayout must be one of: ${PHOTO_LAYOUT_VALUES.join(', ')}.`);
+    photoLayout = o.photoLayout;
+  }
   if (date && !validDate(date)) throw new AgentError('bad_date', 'The date must look like 2026-10-19.');
 
   let sourceUrl: string | null = null;
@@ -122,7 +130,7 @@ export function parseAgentStory(input: unknown): AgentStory {
     photos = o.photos.map(parsePhoto);
   }
 
-  return { title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photos };
+  return { title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos };
 }
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----

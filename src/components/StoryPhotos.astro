@@ -1,0 +1,30 @@
+---
+// A story's laid-out photos (issue #35): the lead photo plus the others in the arrangement the story asks for
+// (src/lib/photo-layouts.ts), in plain CSS grid. Only used for a layout other than "one" with two or more photos; the
+// original lead figure and gallery row (StoryPage.astro) cover everything else and are left exactly as they were.
+// Every photo is a link to the full image, so it works without JavaScript; the viewer script (src/scripts/photo-viewer.ts)
+// turns the links into click-to-enlarge. Photos have a fixed aspect ratio (cropped to fit, like the newsletter) so the
+// page does not move while they load. No captions per photo: the credit is the only line under the group.
+import type { PhotoPlan } from '../lib/photo-layouts';
+
+interface Props {
+  layout: string;
+  plan: PhotoPlan;
+  /** Every photo, lead first. */
+  photos: { src: string; alt: string }[];
+  credit?: string;
+}
+const { layout, plan, photos, credit } = Astro.props;
+---
+<figure class={`photos photos-${layout}`} data-photo-layout={layout}>
+  {plan.rows.map((row) => (
+    <div class={`photos-row photos-${row.kind}`}>
+      {row.photos.map((i) => (
+        <a href={photos[i].src} data-photo>
+          <img src={photos[i].src} alt={photos[i].alt} loading={i === 0 ? 'eager' : 'lazy'} decoding="async" />
+        </a>
+      ))}
+    </div>
+  ))}
+  {credit && <figcaption>Photo: {credit}</figcaption>}
+</figure>

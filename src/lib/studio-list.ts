@@ -57,6 +57,7 @@ function draftAsFeedSource(slugOrId: string, d: Draft, photos: DraftPhoto[]): Fe
       photoCredit: lead && d.photoCredit ? d.photoCredit : undefined,
       photos: rest.map((p) => p.url as string),
       photoAlts: rest.map((p) => p.alt),
+      photoLayout: d.photoLayout,
       featured: d.featured,
     },
   };

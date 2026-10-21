@@ -4,7 +4,9 @@
 import Base from '../layouts/Base.astro';
 import StoryCard from './StoryCard.astro';
 import { getSection, areaLabel, formatDate, SITE } from '../lib/site';
+import StoryPhotos from './StoryPhotos.astro';
 import type { PublicStory } from '../lib/stories';
+import { photoLayoutOrDefault, planPhotos } from '../lib/photo-layouts';
 
 interface Props {
   story: PublicStory;
@@ -17,6 +19,16 @@ const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
 const subHref = d.area ? `/${d.section}/${d.area}/` : undefined;
 const url = new URL(`/stories/${story.id}/`, Astro.site).href;
 const enc = encodeURIComponent;
+
+// Photo layout (issue #35). "one" (the default, and every story that has none) keeps the original look: the lead photo above
+// the text and the others in a row under it. Another layout puts the lead and the others together above the text; photos it
+// has no place for (a fifth in Hero + grid, a third in Two up) stay in the row under the text.
+const layout = photoLayoutOrDefault(d.photoLayout);
+const allPhotos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] || '' }))]
+  .map((p, i) => ({ ...p, alt: p.alt || `Photo ${i + 1} from “${d.title}”` }));
+const plan = planPhotos(layout, allPhotos.length);
+const laid = plan.mode === 'layout' && !!d.image;
+const galleryPhotos = laid ? plan.rest.map((i) => ({ src: allPhotos[i].src, alt: allPhotos[i].alt })) : null;
 ---
 <Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section}>
   <script type="application/ld+json" slot="head" set:html={JSON.stringify({
@@ -43,7 +55,9 @@ const enc = encodeURIComponent;
         <time datetime={d.date.toISOString()}>{formatDate(d.date)}</time>
       </div>
 
-      {d.image && (
+      {laid && <StoryPhotos layout={layout} plan={plan} photos={allPhotos} credit={d.photoCredit} />}
+
+      {d.image && !laid && (
         <figure>
           <img src={d.image} alt={d.imageAlt ?? ''} loading="eager" />
           {(d.imageAlt || d.photoCredit) && (
@@ -56,7 +70,13 @@ const enc = encodeURIComponent;
         <slot />
       </div>
 
-      {d.photos.length > 0 && (
+      {galleryPhotos && galleryPhotos.length > 0 && (
+        <section class="gallery" aria-label="More photos">
+          {galleryPhotos.map((p) => <a href={p.src}><img src={p.src} alt={p.alt} loading="lazy" decoding="async" /></a>)}
+        </section>
+      )}
+
+      {!laid && d.photos.length > 0 && (
         <section class="gallery" aria-label="Photos">
           {d.photos.map((p, i) => <a href={p}><img src={p} alt={d.photoAlts[i] || `Photo ${i + 2} from “${d.title}”`} loading="lazy" /></a>)}
         </section>
@@ -90,6 +110,8 @@ const enc = encodeURIComponent;
   </div>
 </Base>
 <script>
+  import '../scripts/photo-viewer';
+
   document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((b) =>
     b.addEventListener('click', async () => {
       try {

@@ -27,6 +27,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { mediaDir, MEDIA_TYPES } from './media';
 import { buildCommits, holdActive, type Hold } from './story-holds';
+import { photoLayoutOrDefault } from './photo-layouts';
 import { getStoryBySlug, writeStory, type StoryInput, type StoryPhoto } from './story-store';
 import { invalidateStories } from './public-cache';
 import { getDb } from './db';
@@ -244,6 +245,8 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
         church: d.church, date, image: d.image, imageAlt: d.imageAlt, photoCredit: d.photoCredit, photos: d.photos, photoAlts: d.photoAlts,
         featured: d.featured, draft: d.draft, body: entry.body ?? '',
       };
+      // The layout joins the hash only when it is not the default, so every already-adopted story keeps its hash.
+      if (d.photoLayout && d.photoLayout !== 'one') (base as Record<string, unknown>).photoLayout = d.photoLayout;
       const contentHash = sha256Of(JSON.stringify([base, photoRows]));
 
       // 2. Then one short write for this story. Everything that decides it is read INSIDE the transaction, because a
@@ -261,7 +264,7 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
           const status = unpublishedNow || held ? 'unpublished' : 'live';
           if (now && now.content_hash === contentHash && now.status === status) outcome = 'unchanged';
           else {
-            const story: StoryInput = { ...base, status, source: 'git', publishedAt: Date.parse(date), contentHash, photoRows };
+            const story: StoryInput = { ...base, status, source: 'git', publishedAt: Date.parse(date), contentHash, photoRows, photoLayout: photoLayoutOrDefault(d.photoLayout) };
             outcome = writeStory(story, Date.now(), now ? 'upsert' : 'insert').outcome as 'inserted' | 'updated';
             if (status === 'unpublished') result.unpublished++;
           }

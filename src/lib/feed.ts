@@ -3,6 +3,7 @@
 import { storyUrl } from './stories';
 import { getPublicStories } from './public-stories';
 import { getSection, areaLabel } from './site';
+import { photoLayoutOrDefault } from './photo-layouts';
 
 /** How many of the newest stories the feeds include. */
 export const FEED_LIMIT = 50;
@@ -28,6 +29,8 @@ export interface FeedItem {
   photos: string[];
   /** Alt text for each of `photos`, same order; entries may be empty */
   photoAlts: string[];
+  /** How the story page arranges the photos: one, twoUp, heroGrid, mosaic or stack (one = lead photo, others in a row) */
+  photoLayout: string;
   featured: boolean;
 }
 
@@ -49,6 +52,7 @@ export interface FeedSource {
     photoCredit?: string;
     photos: string[];
     photoAlts: string[];
+    photoLayout?: string;
     featured: boolean;
   };
 }
@@ -75,6 +79,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     photoCredit: d.photoCredit,
     photos: d.photos.map(abs),
     photoAlts: d.photos.map((_, i) => d.photoAlts[i] ?? ''),
+    photoLayout: photoLayoutOrDefault(d.photoLayout),
     featured: d.featured,
   };
 }

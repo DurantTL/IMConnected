@@ -6,6 +6,7 @@
 import { getDb } from './db';
 import { invalidateStories } from './public-cache';
 import { indexStory } from './search-index';
+import { photoLayoutOrDefault, type PhotoLayout } from './photo-layouts';
 
 export type StoryStatus = 'live' | 'unpublished';
 export type StorySource = 'git' | 'form' | 'studio' | 'editor' | 'agent';
@@ -41,6 +42,8 @@ export interface StoryInput {
   photoCredit?: string;
   photos: string[];
   photoAlts: string[];
+  /** How the photos are arranged on the story page (migration 016); 'one' is the original look. */
+  photoLayout?: PhotoLayout;
   featured: boolean;
   draft: boolean;
   body: string;
@@ -83,6 +86,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
     photoCredit: opt(r.photo_credit),
     photos: JSON.parse(String(r.photos)) as string[],
     photoAlts: JSON.parse(String(r.photo_alts)) as string[],
+    photoLayout: photoLayoutOrDefault(r.photo_layout),
     featured: Number(r.featured) === 1,
     draft: Number(r.draft) === 1,
     body: String(r.body),
@@ -196,18 +200,18 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source) return { outcome: 'unchanged', id: Number(cur.id) };
   const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
     JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
-    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null];
+    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout)];
   const editedAt = s.editedAt === undefined ? null : editStamp(s.editedAt);
   let id: number;
   if (cur) {
     id = Number(cur.id);
     db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
     db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
   } else {
     const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, edited_at, slug)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, editedAt, s.slug);
+      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, edited_at, slug)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, editedAt, s.slug);
     id = Number(r.lastInsertRowid);
   }
   const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');

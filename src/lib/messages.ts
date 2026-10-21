@@ -6,6 +6,7 @@ export const ERRORS = {
   closed: 'This draft is closed. Restore or reopen it to edit.',
   draft_gone: 'That draft no longer exists.',
   bad_date: 'The date is not valid.',
+  bad_layout: 'That photo layout is not one of the choices.',
   bad_section: 'That section does not exist.',
   photo_gone: 'That photo is no longer on this draft.',
   too_big: 'That is too much to send at once.',
