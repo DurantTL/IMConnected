@@ -1,0 +1,12 @@
+export const BACKUP_NAME: RegExp;
+export const KEEP_DAILY: number;
+export const KEEP_WEEKLY: number;
+export function utcDay(ms?: number): string;
+export function backupFileName(day: string, kind: 'db' | 'media'): string;
+export function parseBackupName(name: string): { day: string; kind: 'db' | 'media' } | null;
+export function retentionPlan(days: string[], today?: string): { keep: Set<string>; ignored: Set<string> };
+export function expiredEntries<T extends { name: string }>(entries: T[], today?: string): T[];
+export function redact(text: unknown, secrets?: string[]): string;
+export function snapshotDatabase(dataDir: string, dest: string): number;
+export function createMediaArchive(dataDir: string, dest: string): Promise<number>;
+export function extractMediaArchive(archive: string, destDir: string): Promise<{ files: number; bytes: number }>;

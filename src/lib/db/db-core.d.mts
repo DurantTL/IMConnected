@@ -1,4 +1,5 @@
-import type { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from 'node:sqlite';
+export { DatabaseSync };
 export const MIGRATION_NAME: RegExp;
 export function dataDir(): string;
 export function openDatabase(dir?: string): DatabaseSync;

@@ -85,11 +85,13 @@ function harden(res: Response): Response {
   }
 }
 
-// Admin-only: the audit log, and every state-changing request to the Editors page. Editors may read
+// Admin-only: the audit log, the backup status, and every state-changing request to the Editors page. Editors may read
 // /admin/editors (names only). The pages and the actions check the role again.
 const adminOnly = (path: string, method: string) =>
   path === '/admin/audit' ||
   path === '/api/admin/audit' ||
+  path === '/admin/backups' ||
+  path === '/api/admin/backups' || path.startsWith('/api/admin/backups/') ||
   path === '/api/admin/editors' || path.startsWith('/api/admin/editors/') ||
   (!SAFE_METHODS.has(method) && path === '/admin/editors');
 

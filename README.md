@@ -3,7 +3,7 @@
 A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission lands as a draft in the editor dashboard at `/admin`, where an editor edits and publishes it.
 
 - **Astro 7**: the story pages, section pages, home page, `/stories.json` and `/rss.xml` are rendered on the server from the database and kept in a small in-memory cache (see Stories in the database); the other pages are prerendered to static HTML. The other server code is `/api/submit`, `/api/publish`, `/api/confirm`, `/media/*` (photos from the data folder), and the editor dashboard (`/admin*` and `/api/admin/*`).
-- **Stories are Markdown files** in `src/content/stories/`. Accounts, sessions, drafts and the audit log for the editor dashboard live in a small SQLite file (see Editor dashboard). Git is still the source of truth for stories; until step 4 of epic #25 the same SQLite file only holds a mirror of them (see Stories in the database).
+- **Stories are Markdown files** in `src/content/stories/`. Accounts, sessions, drafts and the audit log for the editor dashboard live in a small SQLite file (see Editor dashboard). Git is still the source of truth for stories; until step 4 of epic #25 the same SQLite file only holds a mirror of them (see Stories in the database). A nightly backup of the database and photos goes to Google Drive (see Setup, step 7).
 - **Docker image**: on every push to `main`, an image is built and pushed to `ghcr.io/<owner>/imconnected`.
 - **Search** runs on the server: `GET /api/search` queries a SQLite FTS5 index of the stories table (see Stories in the database).
 - **Pages CMS** (optional) gives editors a web form for stories, so they don't have to edit files on GitHub.
@@ -88,6 +88,60 @@ Every build publishes the 50 newest published stories in two formats:
 - **`/stories.json`**: for the IMConnected Studio newsletter builder. Every story has `id`, `url`, `title`, `section`, `sectionLabel`, `author`, `date` (YYYY-MM-DD), `photos`, `photoAlts` (alt text for each photo in `photos`, same order; entries may be empty) and `featured`. `dek`, `area`, `areaLabel`, `column`, `authorTitle`, `church`, `image`, `imageAlt` and `photoCredit` appear only when the story has them. `FeedItem` in `src/lib/feed.ts` is the definitive list. All links and photo addresses are absolute, so they work inside an email.
 
 `/stories.json` is the public feed and is only the last build. IMConnected Studio's "Import from IMConnected" button doesn't use it: it reads the authenticated, CORS-enabled `GET /api/stories` (see "Story list for Studio" below), which also sees stories published since the last build and the drafts still waiting for an editor, so no proxy header is needed. See `docs/STUDIO-IMPORT.md` for the newsletter builder plan.
+
+### 7. Nightly backups to Google Drive
+
+Epic #25 moves published stories into the database, so the data folder (`/data`, the Docker volume) becomes the only live copy of the stories, photos, drafts and editor accounts. The site backs itself up every night and uploads the copies to a Google Drive folder. (xCloud's own Google Drive backup only covers WordPress sites, so the site does the upload itself.) **Only the owner sets this up; nobody else should handle the Google key.**
+
+What a night's backup is, and where it goes:
+
+- `imconnected-YYYY-MM-DD.db`: a consistent snapshot of the SQLite database (`VACUUM INTO`): stories, drafts, accounts, sessions, the audit log, the backup history.
+- `imconnected-YYYY-MM-DD.media.tar.gz`: the photos, `DATA_DIR/media` (published) and `DATA_DIR/uploads` (draft photos), streamed straight into a gzip file, never held in memory.
+- Both go to `DATA_DIR/backups/` (UTC date in the name) and are uploaded to the Drive folder. **7 daily and 4 weekly (Sunday) copies** are kept in both places; older copies are deleted. On Drive it only deletes files this service account created whose names match `imconnected-YYYY-MM-DD.db` / `.media.tar.gz`.
+- It runs once a day after `BACKUP_HOUR` (UTC, default `9` = early morning US Central). A restart does not repeat a backup that already succeeded. A failed upload is retried 3 times, then again every 30 minutes until the day's backup succeeds.
+- **Backups are off until both `GDRIVE_SERVICE_ACCOUNT_JSON` and `GDRIVE_FOLDER_ID` are set.** `/admin/backups` (administrators only; linked from Editors) shows whether they are on, the last success, the last error and the copies on the server. If no backup succeeds for 48 hours, every active administrator gets one email a day until one does.
+
+**Set it up (about 15 minutes, once):**
+
+1. Open <https://console.cloud.google.com/> signed in with a conference Google Workspace account and create a project (top bar, project picker, **New project**), e.g. `imconnected-backups`.
+2. In that project, **APIs & Services, Library**, search for **Google Drive API** and click **Enable**.
+3. **IAM & Admin, Service accounts, Create service account.** Name it `imconnected-backup`; skip the optional role and user-access steps. Copy the account's email (`imconnected-backup@<project>.iam.gserviceaccount.com`).
+4. Open the new account, **Keys, Add key, Create new key, JSON, Create**. A `.json` file downloads. This is the secret; keep it off chat, email and git.
+   - If the organisation blocks key creation ("Service account key creation is disabled"), a Workspace admin has to allow it for this project under **IAM & Admin, Organisation policies, Disable service account key creation**.
+5. In Google Drive, create a folder (e.g. `IMConnected backups`), **Share** it with the service account's email as **Editor**, and untick "Notify people".
+   - **Shared Drive (team drive) instead of a folder in My Drive:** add the service account's email as a member of the Shared Drive with the **Content manager** role (Contributor cannot delete old copies), and use a folder inside it. The key and folder ID are used exactly the same way.
+6. Open the folder in the browser. The folder ID is the end of the address: `https://drive.google.com/drive/folders/<FOLDER ID>`.
+7. Turn the key file into one line of base64 and put both values in the server's `.env` (next to the other secrets), never in git:
+
+   ```bash
+   base64 -w0 imconnected-backups-*.json        # on a Mac: base64 -i imconnected-backups-*.json
+   ```
+
+   ```
+   GDRIVE_SERVICE_ACCOUNT_JSON=<the base64 output, one line>
+   GDRIVE_FOLDER_ID=<FOLDER ID>
+   # BACKUP_HOUR=9
+   ```
+
+8. `docker compose up -d` to restart with the new `.env`, then delete the downloaded `.json` file. Open `/admin/backups` as an administrator: it should say "Backups are on". If the day's backup is already due it runs within a few minutes and the page shows the result; otherwise it runs after `BACKUP_HOUR`. Check the Drive folder for the two files.
+
+**Which Google permission it asks for.** The site signs in with the narrow `drive.file` scope (it can only see files it created itself). If the first backup fails with *File not found* for the folder, Google did not let that scope see a folder you shared with the account; add `GDRIVE_SCOPE=drive` to `.env` and restart. A service account has an empty Drive of its own, so even the full scope only reaches what you shared with it. `/admin/backups` shows which one is in use.
+
+**Restore** (a lost server, a new volume, a bad deploy). Only a person with access to the server does this.
+
+1. Get the two files of the day you want: from `/data/backups/` on the server if they are still there, otherwise download `imconnected-YYYY-MM-DD.db` and `imconnected-YYYY-MM-DD.media.tar.gz` from the Drive folder and copy them to the server (into a folder outside the data volume, e.g. `/root/restore`).
+2. Stop the site: `docker compose stop imconnected`.
+3. Restore into an **empty** data folder (a new volume, or an emptied one), as the container's normal user so the files belong to it:
+
+   ```bash
+   docker compose run --rm -v /root/restore:/restore:ro imconnected \
+     node scripts/restore-backup.mjs /restore/imconnected-2026-10-21.db /restore/imconnected-2026-10-21.media.tar.gz
+   ```
+
+   (To use the copies already in the volume, leave out `-v` and use `/data/backups/imconnected-2026-10-21.db ...`.) The script checks the database first, refuses a folder that already holds data (a leftover `backups/` folder does not count), and prints how many stories, drafts and accounts it restored. Add `--force` to restore over a folder that has data: it first moves everything except `backups/` into `restore-aside-<time>/` inside the data folder (nothing is deleted; remove that folder yourself later). The media archive is optional; without it the photos are not restored.
+4. Start the site: `docker compose up -d`. Migrations newer than the backup apply on start. Sign in and check `/admin/backups`.
+
+- **Tests.** `npm run build`, then `SCRATCH=/tmp/imc-backups node scripts/test-backups.mjs`. It starts `scripts/mock-gdrive.mjs` (a local stand-in for Google's token endpoint, resumable upload, files.list and files.delete; real Google is never contacted), the mock email API and the built server, with a throwaway RSA key. It covers both uploads, 40 days of retention on Drive and on disk, a failed upload retried and reported, the key and tokens never in logs, the 48-hour email, a full restore into an empty folder (and the refusals), and the admin-only status page. `GDRIVE_API_URL` and `GOOGLE_OAUTH_TOKEN_URL` point the site at the mock, like `EMAIL_API_URL`.
 
 ## Publishing from IMConnected Studio
 

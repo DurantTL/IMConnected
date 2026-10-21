@@ -1,0 +1,71 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { getBackupStatus } from '../../lib/backup';
+import { fmtTime } from '../../lib/admin-ui';
+export const prerender = false;
+
+// Administrators only (the middleware answers 403 first; this is the second check).
+if (Astro.locals.user?.role !== 'admin') {
+  return new Response('Administrators only.', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+const s = getBackupStatus();
+const mb = (n: number | null) => (n == null ? '–' : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+const last = s.lastRun;
+---
+<Admin title="Backups" current="editors">
+  <div class="cms-bar">
+    <h1>Backups</h1>
+    <a class="cms-btn secondary" href="/admin/editors">Editors</a>
+  </div>
+  <p class="admin-note">Every night the site saves a copy of its database (stories, drafts, editor accounts, the audit log) and of the photos folder, keeps 7 daily and 4 weekly copies on the server, and uploads them to a Google Drive folder with the same keep rule. Times are UTC.</p>
+
+  {!s.configured ? (
+    <div class="admin-error" role="alert" id="backup-state">
+      <strong>Backups are off.</strong>
+      {s.missing.length > 0 && <span> Not set: {s.missing.join(', ')}.</span>}
+      {s.problems.map((p) => <span> {p}.</span>)}
+      <span> The owner sets these in the server's <code>.env</code> (see the README, "Nightly backups to Google Drive").</span>
+    </div>
+  ) : s.overdue ? (
+    <p class="admin-error" role="alert" id="backup-state"><strong>No successful backup in the last 48 hours.</strong> The administrators are emailed once a day until one succeeds.</p>
+  ) : (
+    <p class="admin-ok" role="status" id="backup-state"><strong>Backups are on.</strong> The next one is due after {String(s.hourUtc).padStart(2, '0')}:00 UTC.</p>
+  )}
+
+  <dl class="bk-meta">
+    <div><dt>Last success</dt><dd id="backup-last-ok">{s.lastOk?.finished_at ? <>{fmtTime(s.lastOk.finished_at)} · database {mb(s.lastOk.db_bytes)}, photos {mb(s.lastOk.media_bytes)}</> : 'None yet'}</dd></div>
+    <div><dt>Last attempt</dt><dd id="backup-last-run">{last ? (last.finished_at ? `${fmtTime(last.started_at)} · ${last.ok ? 'succeeded' : 'failed'}` : `${fmtTime(last.started_at)} · running`) : 'None yet'}</dd></div>
+    <div><dt>Last error</dt><dd id="backup-last-error">{last?.error ? <code>{last.error}</code> : 'None'}</dd></div>
+    <div><dt>Google access</dt><dd>{s.scope.endsWith('/drive.file') ? 'Only files this site created (drive.file)' : 'Everything shared with the service account (drive)'}</dd></div>
+  </dl>
+
+  {s.recent.length > 0 && (
+    <>
+      <h2>Recent attempts</h2>
+      <ul class="cms-list">
+        {s.recent.map((r) => (
+          <li class="cms-item">
+            <strong>{r.day}</strong> · {fmtTime(r.started_at)} · {r.finished_at ? (r.ok ? 'succeeded' : 'failed') : 'running'}
+            {r.finished_at && r.ok === 1 && <> · {r.uploads} files uploaded</>}
+            {r.attempts > 1 && <> · {r.attempts} upload tries</>}
+            {r.error && <div><code>{r.error}</code></div>}
+          </li>
+        ))}
+      </ul>
+    </>
+  )}
+
+  <h2>Copies on the server</h2>
+  {s.local.length === 0 ? <p class="admin-note">None yet.</p> : (
+    <ul class="cms-list">
+      {s.local.map((f) => <li class="cms-item"><code>{f.name}</code> · {mb(f.bytes)}</li>)}
+    </ul>
+  )}
+</Admin>
+<style is:global>
+  .bk-meta { display: grid; gap: 6px; margin: 16px 0; }
+  .bk-meta div { display: flex; flex-wrap: wrap; gap: 0 8px; }
+  .bk-meta dt { font-weight: 600; min-width: 8em; color: var(--ink-2); }
+  .bk-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .bk-meta code, .cms-item code { font-size: .85rem; word-break: break-word; }
+</style>
