@@ -535,7 +535,7 @@ try {
     const built = d.stories.filter((s) => s.source === 'site');
     check('stories: the built stories are there (newest first)', built.length >= 6 && d.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), `${built.length}`);
     const feed = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist/client/stories.json'), 'utf8')).stories;
-    const strip = (o) => { const { status, source, url, image, photos, ...rest } = o; return rest; };
+    const strip = (o) => { const { status, source, url, image, photos, excerpt, ...rest } = o; return rest; };
     const sameAsFeed = feed.every((f) => { const s = built.find((b) => b.id === f.id); return s && JSON.stringify(strip(s)) === JSON.stringify(strip(f)); });
     check('stories: each item has exactly the /stories.json fields and values (feedItem), plus status and source', sameAsFeed && built.every((s) => s.status === 'published'), JSON.stringify(built[0]).slice(0, 300));
     const feedKeys = new Set(feed.flatMap((f) => Object.keys(f)));
@@ -584,6 +584,92 @@ try {
     check('a stored bad-date draft still lists, with its created date, next to the others', r.status === 200 && r.data.drafts.length === 20 && !!bd && bd.date === new Date(now + 9500).toISOString().slice(0, 10) && r.data.drafts.some((x) => x.title === 'Bulk draft 21'), r.text.slice(0, 200));
     const cal = await adminForm(`/api/admin/drafts/${urlDraft}/save`, E1, { version: String(q('SELECT updated_at FROM drafts WHERE id = ?', urlDraft)[0].updated_at), title: 'Cal', section: 'features', date: '2026-02-31', body: 'x' });
     check('saving a draft with a date that is not a real day (2026-02-31) is refused', cal.status === 400 && cal.data.ok === false, `${cal.status} ${cal.text.slice(0, 100)}`);
+
+    // excerpt
+    check('excerpt: every story and draft item has a string excerpt', d.stories.every((s) => typeof s.excerpt === 'string') && d.drafts.every((x) => typeof x.excerpt === 'string'));
+    check('...a story published from Studio gets its body as plain text', live && live.excerpt === 'A made-up story body for the list.', JSON.stringify(live && live.excerpt));
+    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Excerpt Draft', 'columns', 'Sample Author', '2026-10-12', ?, ?, ?)", '\n## A heading\n\n**Bold** and *soft* words with a [link text](https://example.test/x) and ![pic](/images/x.jpg) &lt;b&gt; tail &amp; more.\n\nSecond paragraph.', now + 9600, now + 9600);
+    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Long Excerpt Draft', 'columns', 'Sample Author', '2026-10-12', ?, ?, ?)", Array.from({ length: 200 }, (_, i) => 'word' + i).join(' '), now + 9601, now + 9601);
+    r = await S('/api/stories?section=columns', { token: PUBLISH_TOKEN });
+    const ex = r.data.drafts.find((x) => x.title === 'Excerpt Draft');
+    check('...Markdown is stripped (headings, emphasis, links keep text, images removed, entities decoded)', ex && ex.excerpt === 'Bold and soft words with a link text and <b> tail & more.', JSON.stringify(ex && ex.excerpt));
+    const lx = r.data.drafts.find((x) => x.title === 'Long Excerpt Draft');
+    check('...at most 400 characters, cut at a word boundary with an ellipsis', lx && [...lx.excerpt].length <= 401 && lx.excerpt.endsWith('…') && /word\d+…$/.test(lx.excerpt), lx && lx.excerpt.slice(-30));
+    const bareDraft = r.data.drafts.find((x) => x.title === 'Bad Date Draft');
+    check('...no body: an empty string', bareDraft && bareDraft.excerpt === '');
+
+    // GET /api/studio-photo
+    {
+      const photoDir = 'dist/client/images/stories';
+      const sdir = fs.readdirSync(path.join(ROOT, photoDir)).find((n) => fs.statSync(path.join(ROOT, photoDir, n)).isDirectory());
+      const file = fs.readdirSync(path.join(ROOT, photoDir, sdir)).find((n) => /\.jpe?g$/i.test(n));
+      const rel = `/images/stories/${sdir}/${file}`;
+      const P1 = (src, o = {}) => S(`/api/studio-photo?src=${encodeURIComponent(src)}`, o);
+      r = await P1(rel);
+      check('studio-photo: no token: 401', r.status === 401);
+      r = await P1(rel, { token: 'x'.repeat(PUBLISH_TOKEN.length) });
+      check('...wrong token: 401', r.status === 401);
+      r = await call(`http://localhost:${P.b}`, 'GET', `/api/studio-photo?src=${encodeURIComponent(rel)}`, { token: PUBLISH_TOKEN });
+      check('...PUBLISH_TOKEN unset: 503', r.status === 503);
+      r = await P1(rel, { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
+      const bytes = fs.readFileSync(path.join(ROOT, photoDir, sdir, file));
+      check('...a built story photo (root-relative): 200 image/jpeg, the exact bytes, no-store, nosniff, CORS', r.status === 200 && r.headers.get('content-type') === 'image/jpeg' && r.headers.get('cache-control') === 'no-store' && r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('access-control-allow-origin') === TOOLS_ORIGIN && Number(r.headers.get('content-length')) === bytes.length, `${r.status} ${r.headers.get('content-type')}`);
+      r = await P1(`${BASE}${rel}`, { token: PUBLISH_TOKEN, headers: { Origin: EVIL_ORIGIN } });
+      check('...the absolute URL on the site origin works, and a foreign Origin gets no Allow-Origin', r.status === 200 && r.headers.get('access-control-allow-origin') === null);
+      // the /media/ copy the mirror made
+      const mediaRoot = path.join(DATA_DIR, 'media', 'stories');
+      await until(() => fs.existsSync(mediaRoot) && fs.readdirSync(mediaRoot).length > 0, 15000);
+      const mslug = fs.existsSync(mediaRoot) ? fs.readdirSync(mediaRoot)[0] : null;
+      const mfile = mslug ? fs.readdirSync(path.join(mediaRoot, mslug)).find((n) => /\.(jpg|png|webp)$/.test(n)) : null;
+      if (mfile) {
+        r = await P1(`/media/stories/${mslug}/${mfile}`, { token: PUBLISH_TOKEN });
+        check('...a /media/stories copy: 200 with an image type', r.status === 200 && /^image\//.test(r.headers.get('content-type') || ''), String(r.status));
+      } else check('...a /media/stories copy: 200 with an image type', false, 'the mirror made no /media/stories file');
+      const bad = [
+        ['traversal', `/images/stories/${sdir}/../../../favicon.svg`],
+        ['encoded traversal', `/images/stories/${sdir}/%2e%2e/%2e%2e/favicon.svg`],
+        ['encoded slash', `/images/stories/${sdir}%2f${file}`],
+        ['backslash', `/images/stories/${sdir}\\${file}`],
+        ['query trick', `${rel}?x=1`],
+        ['fragment', `${rel}#x`],
+        ['other folder', '/images/favicon.svg'],
+        ['site root file', '/favicon.svg'],
+        ['draft upload path', '/api/admin/photos/1'],
+        ['uploads path', `/uploads/stories/${sdir}/${file}`],
+        ['wrong extension', `/images/stories/${sdir}/${file}.svg`],
+        ['missing file', `/images/stories/${sdir}/nope.jpg`],
+        ['wrong origin', `https://evil.e2e-example.test${rel}`],
+        ['protocol-relative', `//evil.e2e-example.test${rel}`],
+        ['userinfo origin trick', `${BASE}@evil.e2e-example.test${rel}`],
+        ['no src', ''],
+      ];
+      for (const [name, src] of bad) {
+        r = await P1(src, { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
+        check(`...refused (${name}): 404 JSON 'Photo not found.' with CORS`, r.status === 404 && r.data && r.data.ok === false && r.data.error === 'Photo not found.' && r.headers.get('access-control-allow-origin') === TOOLS_ORIGIN, `${r.status} ${r.text.slice(0, 80)}`);
+      }
+      r = await S('/api/studio-photo', { token: PUBLISH_TOKEN });
+      check('...a missing src parameter: 404', r.status === 404);
+      // a non-image with a photo name is refused by the byte check
+      const fake = path.join(ROOT, photoDir, sdir, 'zz-e2e-not-an-image.jpg');
+      fs.writeFileSync(fake, 'this is plain text, not a picture at all');
+      try {
+        r = await P1(`/images/stories/${sdir}/zz-e2e-not-an-image.jpg`, { token: PUBLISH_TOKEN });
+        check('...a file that is not an image is refused: 404', r.status === 404);
+      } finally { fs.rmSync(fake, { force: true }); }
+      r = await call(BASE, 'OPTIONS', '/api/studio-photo', { headers: { Origin: TOOLS_ORIGIN, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization' } });
+      check('...preflight from an allowed origin: 204 with CORS', r.status === 204 && r.headers.get('access-control-allow-origin') === TOOLS_ORIGIN);
+      r = await call(BASE, 'OPTIONS', '/api/studio-photo', { headers: { Origin: EVIL_ORIGIN, 'Access-Control-Request-Method': 'GET' } });
+      check('...preflight from a foreign origin: no CORS headers', ![...r.headers.keys()].some((k) => k.startsWith('access-control-')));
+      r = await call(BASE, 'POST', '/api/studio-photo', { token: PUBLISH_TOKEN, json: {} });
+      check('...POST: 405', r.status === 405);
+      // a draft's uploaded photo is not reachable through it
+      const upl = uploadFiles()[0];
+      if (upl) {
+        const rp = path.relative(DATA_DIR, upl).split(path.sep).join('/');
+        r = await P1('/' + rp, { token: PUBLISH_TOKEN });
+        check('...a draft upload (DATA_DIR/uploads/...) is not reachable: 404', r.status === 404);
+      }
+    }
 
     // privacy
     const whole = (await S('/api/stories?limit=100', { token: PUBLISH_TOKEN })).text;

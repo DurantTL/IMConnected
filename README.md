@@ -117,11 +117,12 @@ The communication director builds each newsletter in IMConnected Studio. Clickin
 
 ```json
 { "ok": true, "version": 1, "site": "https://stories.imadventist.org/", "generated": "…",
-  "stories": [ { "id": "…", "url": "…", "title": "…", "…": "every /stories.json field", "status": "published", "source": "site" } ],
-  "drafts":  [ { "id": 12, "status": "new", "source": "agent", "title": "…", "…": "the same fields, no url" } ] }
+  "stories": [ { "id": "…", "url": "…", "title": "…", "…": "every /stories.json field", "status": "published", "source": "site", "excerpt": "…" } ],
+  "drafts":  [ { "id": 12, "status": "new", "source": "agent", "title": "…", "…": "the same fields, no url", "excerpt": "…" } ] }
 ```
 
 - **`stories`** are the live stories, newest first, each with exactly the `/stories.json` fields (`feedItem` in `src/lib/feed.ts`) plus `status: "published"` and `source` (`site` for a story that came from git, otherwise the dashboard draft's source: `form`, `studio`, `editor` or `agent`). Nothing is renamed, so `/stories.json` stays the public contract.
+- **`excerpt`** (on every story and draft, Studio list only; `/stories.json` and `/rss.xml` are unchanged) is the body's first non-empty paragraph as plain text: Markdown headings, emphasis, blockquote markers and images removed, link text kept, HTML entities decoded (`&lt;` becomes `<`), whitespace collapsed, at most 400 characters cut at a word boundary with `…`. It is an empty string when there is no body. Studio treats it as text, never as HTML (`src/lib/excerpt.ts`).
 - **How "live" is read.** The built content collection is the base (the same data the site was built from), minus stories an editor unpublished, with the dashboard's `published` drafts laid over it. That's how `/admin/published` works too, and it means a story published a minute ago is in the list even though the site hasn't rebuilt yet. It needs no GitHub call, so it also works when GitHub is down. A draft that is being edited again keeps its live text (the built copy), never its unpublished edits. The one thing it can't see is a story committed straight to git by hand that hasn't been deployed yet.
 - **`drafts`** are the 20 newest `new` and `in_review` drafts (the same item shape, `id` is the draft id, no `url` because they aren't live), so Studio can show "not published yet". Only whitelisted fields are copied: a submitter's name, email, phone and church are never included, and neither are the agent's note or source link. A draft gets an `image` only when its lead photo is a file the site serves without a login (an `/images/...` path); photos uploaded to a draft live outside `public/` and are only served to signed-in editors, so they are left out.
 
@@ -250,6 +251,11 @@ Editors sign in at `/admin` with email + password and a required second factor (
 
   Only a hash of the invite token is stored, so the link can't be shown again. Run the command again to get a fresh one.
 - **Local testing.** `DATA_DIR=/tmp/imc-data npm start`, then `DATA_DIR=/tmp/imc-data node scripts/create-admin.mjs test@example.com "Test Admin"`. Session cookies are always `Secure`, so local sign-in needs Chrome or Firefox on `localhost` (they accept Secure cookies there). Use synthetic data and delete the folder afterwards.
+
+
+#### Photo bytes for Studio
+
+`GET /api/studio-photo?src=<url>` returns a live story's photo so Studio can upload it to the WordPress media library (browsers can't read the static photo files, which have no CORS headers). Same bearer token (`PUBLISH_TOKEN`) and CORS rules as `/api/stories` (503 unconfigured, 401 wrong token, `OPTIONS` preflight 204, other methods 405), 300 requests per IP per hour (429). `src` is one of the photo URLs `/api/stories` returns (`image` or an entry of `photos`): an absolute URL on the site's own origin (`SITE_URL`) or a root-relative path, and only `/images/stories/<slug>/<file>` (the built static copy) or `/media/stories/<slug>/<file>` with plain `[A-Za-z0-9._-]` names and a `.jpg`, `.jpeg`, `.png` or `.webp` extension. Anything else, a missing file, a symlink, a file whose bytes aren't a JPEG, PNG or WebP, or one over the photo size limit is a `404 {"ok": false, "error": "Photo not found."}`. A draft's uploaded photos are served only to signed-in editors and can't be reached here. The 200 carries the sniffed `Content-Type`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 
 ### Sign-in, 2FA and recovery codes
 
