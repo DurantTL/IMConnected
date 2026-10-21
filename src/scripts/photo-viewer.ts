@@ -39,10 +39,10 @@ function init(): void {
     index = (i + total) % total;
     const a = links[index];
     const alt = altOf(a, index);
-    dialog!.setAttribute('aria-label', alt);
     stageImg.src = a.href;
-    stageImg.alt = '';
-    counter.textContent = total > 1 ? `${index + 1} of ${total}` : '';
+    stageImg.alt = alt;
+    // The live region announces each photo as it appears: its alt text and the position.
+    counter.textContent = total > 1 ? `${alt} (${index + 1} of ${total})` : alt;
     // Warm the neighbours so the next swipe is instant.
     if (total > 1) for (const n of [index + 1, index - 1]) new Image().src = links[(n + total) % total].href;
   }
@@ -51,6 +51,7 @@ function init(): void {
     const d = document.createElement('dialog');
     d.className = 'viewer';
     d.setAttribute('aria-modal', 'true');
+    d.setAttribute('aria-label', 'Photo viewer');
     d.innerHTML =
       '<div class="viewer-stage"><img class="viewer-img" alt="" decoding="async"></div>' +
       '<button type="button" class="viewer-btn viewer-close" aria-label="Close photo viewer"><span aria-hidden="true">&times;</span></button>' +
@@ -69,7 +70,9 @@ function init(): void {
     prev?.addEventListener('click', () => show(index - 1));
     next?.addEventListener('click', () => show(index + 1));
     // A click on the dark area (not the photo or a button) closes it.
+    let swiped = false; // a swipe that ends on the dark area must not also count as a click that closes it
     d.addEventListener('click', (e) => {
+      if (swiped) { swiped = false; return; }
       if (e.target === d || (e.target as HTMLElement).classList.contains('viewer-stage')) d.close();
     });
     d.addEventListener('keydown', (e) => {
@@ -101,6 +104,7 @@ function init(): void {
       tracking = false;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
+      if (Math.abs(dx) >= 10 || Math.abs(dy) >= 10) { swiped = true; setTimeout(() => { swiped = false; }, 400); }
       if (total > 1 && Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy) * 1.5) show(dx < 0 ? index + 1 : index - 1);
     });
     d.addEventListener('pointercancel', () => { tracking = false; });

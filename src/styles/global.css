@@ -258,13 +258,13 @@ a { color: inherit; }
 .article .photos img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
 .article .photos figcaption { margin-top: -2px; }
 .article > figure > a, .gallery a { cursor: zoom-in; }
-.article > figure > a { display: inline; }
+.article > figure > a { display: block; } /* a block link around the inline image keeps the figure's height, and gives the focus ring a box to draw around */
 
 html.viewer-open { overflow: hidden; }
 .viewer { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100vh; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; background: rgba(8, 10, 14, 0.94); color: #fff; overflow: hidden; touch-action: pinch-zoom; }
 .viewer[open] { display: grid; place-items: center; }
 .viewer::backdrop { background: rgba(8, 10, 14, 0.94); }
-.viewer-stage { display: grid; place-items: center; width: 100%; height: 100%; padding: 56px 64px; box-sizing: border-box; }
+.viewer-stage { display: grid; place-items: center; width: 100%; height: 100%; padding: 56px 64px 76px; box-sizing: border-box; }
 .viewer-img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; user-select: none; -webkit-user-drag: none; }
 .viewer-btn { position: absolute; display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid rgba(255, 255, 255, 0.45); border-radius: 50%; background: rgba(20, 24, 30, 0.8); color: #fff; font: 400 2rem/1 var(--sans); cursor: pointer; padding: 0 0 4px; }
 .viewer-btn:hover { background: rgba(60, 68, 80, 0.95); }
@@ -272,5 +272,5 @@ html.viewer-open { overflow: hidden; }
 .viewer-close { top: 12px; right: 12px; }
 .viewer-prev { left: 12px; top: 50%; transform: translateY(-50%); }
 .viewer-next { right: 12px; top: 50%; transform: translateY(-50%); }
-.viewer-count { position: absolute; left: 0; right: 0; bottom: 14px; margin: 0; text-align: center; font: 500 0.88rem/1 var(--sans); color: rgba(255, 255, 255, 0.85); pointer-events: none; }
-@media (max-width: 600px) { .viewer-stage { padding: 56px 8px; } .viewer-prev, .viewer-next { top: auto; bottom: 8px; transform: none; } .viewer-prev { left: 12px; } .viewer-next { right: 12px; } }
+.viewer-count { position: absolute; left: 0; right: 0; bottom: 14px; margin: 0; text-align: center; padding: 0 72px; box-sizing: border-box; font: 500 0.88rem/1.3 var(--sans); color: rgba(255, 255, 255, 0.85); pointer-events: none; }
+@media (max-width: 600px) { .viewer-stage { padding: 56px 8px 76px; } .viewer-prev, .viewer-next { top: auto; bottom: 8px; transform: none; } .viewer-prev { left: 12px; } .viewer-next { right: 12px; } }

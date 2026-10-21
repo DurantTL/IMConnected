@@ -303,6 +303,9 @@ try {
   check('...an update that leaves photoLayout out keeps the draft\'s layout', a3.status < 300 && a3.data.status === 'updated' && q("SELECT photo_layout p FROM drafts WHERE source = 'agent'")[0].p === 'stack', `${a3.status} ${a3.text.slice(0, 200)}`);
   const a4 = await agentPost(agentStory({ photoLayout: 'twoUp' }));
   check('...and one that sends it changes it', a4.status < 300 && q("SELECT photo_layout p FROM drafts WHERE source = 'agent'")[0].p === 'twoUp');
+  run("UPDATE drafts SET updated_by = ?, updated_at = updated_at + 1 WHERE source = 'agent' AND source_url = 'https://example.test/posts/1'", Number(run("INSERT INTO users (email, name, role, status, created_at, updated_at) VALUES ('editor-zero@example.test', 'Zero Editor', 'editor', 'active', 1, 1)").lastInsertRowid));
+  const a4b = await agentPost(agentStory({ photoLayout: 'stack' }));
+  check('...an agent update with photoLayout on a draft an editor has touched is a 409 and the layout stays', a4b.status === 409 && q("SELECT photo_layout p FROM drafts WHERE source_url = 'https://example.test/posts/1'")[0].p === 'twoUp', `${a4b.status} ${a4b.text.slice(0, 160)}`);
   const a5 = await agentPost(agentStory({ title: 'Zz agent default', sourceUrl: 'https://example.test/posts/3' }));
   check('...a new draft without photoLayout gets one', a5.status < 300 && q("SELECT photo_layout p FROM drafts WHERE source_url = 'https://example.test/posts/3'")[0].p === 'one');
 
@@ -318,12 +321,15 @@ try {
   const version = () => q('SELECT updated_at u FROM drafts WHERE id = ?', draftId)[0].u;
   check('set-up: a dashboard draft can be created', Number.isInteger(draftId), `${mk.status} ${mk.loc}`);
   const fields = (over = {}) => ({ version: version(), title: 'Zz dashboard layout story', dek: '', section: 'news', area: 'churches', column: '', author: 'Test Author', authorTitle: '', church: '', date: '2099-02-01', photoCredit: 'Test Photographer', body: 'Synthetic dashboard text.\n\nA second paragraph.', ...over });
-  const badSave = await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields({ photoLayout: 'carousel' })) });
-  check('saving a draft with an unknown photo layout is refused (400) and the draft keeps its layout', badSave.status === 400 && badSave.data.ok === false && /photo layout/i.test(badSave.data.error) && q('SELECT photo_layout p FROM drafts WHERE id = ?', draftId)[0].p === 'one', `${badSave.status} ${badSave.text.slice(0, 200)}`);
   const okSave = await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields({ photoLayout: 'mosaic' })) });
   check('saving with a valid layout stores it', okSave.status === 200 && okSave.data.ok === true && q('SELECT photo_layout p FROM drafts WHERE id = ?', draftId)[0].p === 'mosaic', `${okSave.status} ${okSave.text.slice(0, 200)}`);
-  const noLayoutSave = await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields()) });
-  check('...a save from a form without the picker (an old page) puts the default back rather than failing', noLayoutSave.status === 200 && q('SELECT photo_layout p FROM drafts WHERE id = ?', draftId)[0].p === 'one');
+  for (const badValue of ['carousel', ' mosaic ', 'MOSAIC', '']) {
+    const badSave = await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields({ photoLayout: badValue })) });
+    check(`saving a draft with the photo layout ${JSON.stringify(badValue)} is refused (400) and the draft keeps its layout (mosaic)`, badSave.status === 400 && badSave.data.ok === false && /photo layout/i.test(badSave.data.error) && q('SELECT photo_layout p FROM drafts WHERE id = ?', draftId)[0].p === 'mosaic', `${badSave.status} ${badSave.text.slice(0, 200)}`);
+  }
+  const noLayoutSave = await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields({ title: 'Zz dashboard layout story (old page save)' })) });
+  check('a save from a form without the picker (a page opened before this existed) keeps the draft\'s layout and saves the rest', noLayoutSave.status === 200 && q('SELECT photo_layout p, title FROM drafts WHERE id = ?', draftId).every((r) => r.p === 'mosaic' && /old page save/.test(r.title)), noLayoutSave.text.slice(0, 200));
+  await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields({ photoLayout: 'mosaic' })) });
   await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields({ photoLayout: 'heroGrid' })) });
   for (const [i, pic] of [PICS[0], PICS[1], PICS[2]].entries()) {
     const fd = form({ version: version(), op: 'upload' });
@@ -399,26 +405,30 @@ try {
         if (touch) await first.tap(); else await first.click();
         const dlg = page.locator('dialog.viewer');
         await dlg.waitFor({ state: 'visible' });
-        const st = await page.evaluate(() => { const d = document.querySelector('dialog.viewer'); return { open: d.open, modal: d.getAttribute('aria-modal'), label: d.getAttribute('aria-label'), active: document.activeElement?.getAttribute('aria-label'), count: d.querySelector('.viewer-count').textContent, src: d.querySelector('.viewer-img').getAttribute('src') }; });
-        check(`${tag}: clicking a photo opens the dialog (aria-modal, labelled with the photo's alt text), focus on the close button`, st.open && st.modal === 'true' && st.label === 'Synthetic heroGrid photo 1' && st.active === 'Close photo viewer' && st.count === '1 of 6' && /\/media\/stories\//.test(st.src), JSON.stringify(st));
+        const st = await page.evaluate(() => { const d = document.querySelector('dialog.viewer'); return { open: d.open, modal: d.getAttribute('aria-modal'), label: d.getAttribute('aria-label'), active: document.activeElement?.getAttribute('aria-label'), count: d.querySelector('.viewer-count').textContent, alt: d.querySelector('.viewer-img').getAttribute('alt'), src: d.querySelector('.viewer-img').getAttribute('src') }; });
+        check(`${tag}: clicking a photo opens the dialog (aria-modal, labelled with the photo's alt text), focus on the close button`, st.open && st.modal === 'true' && st.label === 'Photo viewer' && st.alt === 'Synthetic heroGrid photo 1' && st.active === 'Close photo viewer' && st.count === 'Synthetic heroGrid photo 1 (1 of 6)' && /\/media\/stories\//.test(st.src), JSON.stringify(st));
         const names = await page.evaluate(() => [...document.querySelectorAll('dialog.viewer button')].map((b) => b.getAttribute('aria-label')));
         check(`${tag}: the buttons are named`, JSON.stringify(names) === JSON.stringify(['Close photo viewer', 'Previous photo', 'Next photo']), JSON.stringify(names));
         await page.keyboard.press('ArrowRight');
-        check(`${tag}: ArrowRight shows the next photo (label and counter follow)`, (await dlg.getAttribute('aria-label')) === 'Synthetic heroGrid photo 2' && (await page.locator('.viewer-count').textContent()) === '2 of 6');
+        check(`${tag}: ArrowRight shows the next photo (label and counter follow)`, (await dlg.getAttribute('aria-label')) === 'Photo viewer' && (await page.locator('.viewer-img').getAttribute('alt')) === 'Synthetic heroGrid photo 2' && (await page.locator('.viewer-count').textContent()) === 'Synthetic heroGrid photo 2 (2 of 6)');
         await page.keyboard.press('ArrowLeft');
         await page.keyboard.press('ArrowLeft');
-        check(`${tag}: ArrowLeft goes back and wraps round to the last photo`, (await dlg.getAttribute('aria-label')) === 'Synthetic heroGrid photo 6');
+        check(`${tag}: ArrowLeft goes back and wraps round to the last photo`, (await page.locator('.viewer-img').getAttribute('alt')) === 'Synthetic heroGrid photo 6');
         await page.keyboard.press('Home');
         await page.keyboard.press('End');
-        check(`${tag}: Home and End jump to the ends`, (await page.locator('.viewer-count').textContent()) === '6 of 6');
+        check(`${tag}: Home and End jump to the ends`, (await page.locator('.viewer-count').textContent()).endsWith('(6 of 6)'));
         // swipe: a synthetic touch pointer drag on the dialog
         const swipe = (dx) => page.evaluate((d) => { const el = document.querySelector('dialog.viewer'); const ev = (type, x) => el.dispatchEvent(new PointerEvent(type, { pointerType: 'touch', clientX: x, clientY: 300, bubbles: true })); ev('pointerdown', 200); ev('pointerup', 200 + d); }, dx);
         await swipe(-120);
-        check(`${tag}: a swipe left shows the next photo`, (await page.locator('.viewer-count').textContent()) === '1 of 6');
+        check(`${tag}: a swipe left shows the next photo`, (await page.locator('.viewer-count').textContent()).endsWith('(1 of 6)'));
         await swipe(120);
-        check(`${tag}: a swipe right shows the previous photo`, (await page.locator('.viewer-count').textContent()) === '6 of 6');
+        check(`${tag}: a swipe right shows the previous photo`, (await page.locator('.viewer-count').textContent()).endsWith('(6 of 6)'));
         await swipe(20);
-        check(`${tag}: a short or sideways drag does nothing`, (await page.locator('.viewer-count').textContent()) === '6 of 6');
+        check(`${tag}: a short or sideways drag does nothing`, (await page.locator('.viewer-count').textContent()).endsWith('(6 of 6)'));
+        // a swipe that ends on the dark area must not also close the dialog (the browser follows a touch with a click)
+        await page.evaluate(() => { const el = document.querySelector('dialog.viewer'); el.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', clientX: 200, clientY: 300, bubbles: true })); el.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', clientX: 60, clientY: 300, bubbles: true })); el.click(); });
+        check(`${tag}: the click that follows a swipe does not close the viewer (a plain click on the dark area still does, below)`, await dlg.isVisible() && (await page.locator('.viewer-count').textContent()).endsWith('(1 of 6)'));
+        await page.waitForTimeout(450);
         // focus trap: tabbing never leaves the dialog
         let escaped = false;
         for (let i = 0; i < 8; i++) { await page.keyboard.press('Tab'); if (!(await page.evaluate(() => !!document.activeElement?.closest('dialog.viewer')))) escaped = true; }
@@ -434,7 +444,7 @@ try {
         await page.locator('a[data-photo]').nth(2).focus();
         await page.keyboard.press('Enter');
         await dlg.waitFor({ state: 'visible' });
-        check(`${tag}: Enter on a focused photo opens it at that photo`, (await page.locator('.viewer-count').textContent()) === '3 of 6');
+        check(`${tag}: Enter on a focused photo opens it at that photo`, (await page.locator('.viewer-count').textContent()).endsWith('(3 of 6)'));
         await page.getByRole('button', { name: 'Close photo viewer' }).click();
         const back3 = await page.evaluate(() => document.activeElement === document.querySelectorAll('a[data-photo]')[2]);
         check(`${tag}: the close button closes it and returns focus to photo 3`, !(await dlg.isVisible()) && back3);
@@ -465,14 +475,34 @@ try {
         await page.keyboard.press('Escape');
         await page.locator('.gallery a').nth(1).click();
         const second = await page.evaluate(() => document.querySelector('.viewer-count').textContent);
-        check('a "One hero" story: the lead photo and the photos under the text all open in the viewer, in order', n === 4 && lead === '1 of 4' && second === '3 of 4', JSON.stringify([n, lead, second]));
+        check('a "One hero" story: the lead photo and the photos under the text all open in the viewer, in order', n === 4 && /\(1 of 4\)$/.test(lead) && /\(3 of 4\)$/.test(second), JSON.stringify([n, lead, second]));
+        await page.goto(`${BASE}/stories/${published.get('one/4')}/`); // fresh page, focus at the top
+        for (let i = 0; i < 60 && !(await page.evaluate(() => document.activeElement?.matches('.article > figure > a'))); i++) await page.keyboard.press('Tab'); // real keyboard focus, so :focus-visible applies
+        const ring = await page.evaluate(() => { const a = document.querySelector('.article > figure > a'); const r = a.getBoundingClientRect(); const cs = getComputedStyle(a); return { w: r.width, h: r.height, outline: cs.outlineStyle, ow: cs.outlineWidth }; });
+        check('a "One hero" lead link has a real box and a visible keyboard focus outline', ring.w > 100 && ring.h > 50 && ring.outline !== 'none' && parseFloat(ring.ow) > 0, JSON.stringify(ring));
         await ctx.close();
+      }
+      // the same One hero story looks the same before and after the script wraps its lead photo in a link
+      {
+        const shot = async (js) => {
+          const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, javaScriptEnabled: js, reducedMotion: 'reduce' });
+          const page = await ctx.newPage();
+          await page.goto(`${BASE}/stories/${published.get('one/4')}/`, { waitUntil: 'load' });
+          await page.evaluate(() => Promise.all(Array.from(document.images).map((i) => i.decode().catch(() => {})))).catch(() => {});
+          await page.waitForTimeout(200);
+          const box = await page.locator('.article > figure').first().boundingBox();
+          const buf = await page.screenshot({ clip: box });
+          await ctx.close();
+          return { buf, box };
+        };
+        const [off, on] = [await shot(false), await shot(true)];
+        check('a "One hero" story\'s lead figure is pixel-identical with and without JavaScript (same box, same pixels)', off.box.width === on.box.width && off.box.height === on.box.height && Buffer.compare(off.buf, on.buf) === 0, `${JSON.stringify(off.box)} vs ${JSON.stringify(on.box)} bytes ${off.buf.length}/${on.buf.length}`);
       }
 
       // axe, when a copy of axe-core is available (never installed into this repo)
       if (process.env.AXE_JS && fs.existsSync(process.env.AXE_JS)) {
         const axeSrc = fs.readFileSync(process.env.AXE_JS, 'utf8');
-        const scan = async (page) => (await page.evaluate(async () => (await window.axe.run(document, { resultTypes: ['violations'] })).violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, target: v.nodes[0]?.target?.join(' ') })))) ;
+        const scan = async (page) => (await page.evaluate(async () => (await window.axe.run(document, { resultTypes: ['violations'] })).violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, target: v.nodes[0]?.target?.join(' '), targets: v.nodes.map((n) => n.target.join(' ')) })))) ;
         const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
         const page = await ctx.newPage();
         const results = {};
@@ -482,9 +512,18 @@ try {
           if (open) { await page.locator('a[data-photo]').nth(1).click(); await page.locator('dialog.viewer').waitFor({ state: 'visible' }); }
           results[name] = await scan(page);
         }
-        const baselineIds = new Set(results[Object.keys(results)[0]].map((v) => v.id));
-        for (const [name, v] of Object.entries(results)) info(`axe: ${name}: ${v.length ? v.map((x) => `${x.id} (${x.impact}, ${x.nodes}) at ${x.target}`).join('; ') : 'no violations'}`);
-        const fresh = Object.entries(results).flatMap(([name, v]) => v.filter((x) => !baselineIds.has(x.id)).map((x) => `${name}: ${x.id}`));
+        const base0 = results[Object.keys(results)[0]];
+        const baseRule = new Map(base0.map((v) => [v.id, v]));
+        for (const [name, v] of Object.entries(results)) info(`axe: ${name}: ${v.length ? v.map((x) => `${x.id} (${x.impact}, ${x.nodes} nodes) at ${x.target}`).join('; ') : 'no violations'}`);
+        // new = a rule the plain page does not have, more nodes for a rule than the plain page has, or a node whose target the plain page does not have
+        const fresh = Object.entries(results).flatMap(([name, v]) => v.flatMap((x) => {
+          const b = baseRule.get(x.id);
+          if (!b) return [`${name}: ${x.id} (new rule)`];
+          const out = [];
+          if (x.nodes > b.nodes) out.push(`${name}: ${x.id} has ${x.nodes} nodes, the plain page ${b.nodes}`);
+          for (const t of x.targets) if (!b.targets.includes(t)) out.push(`${name}: ${x.id} at ${t}`);
+          return out;
+        }));
         check('axe scan: no violation on a layout page or with the viewer open that the plain story page does not already have', fresh.length === 0, fresh.join(' | '));
         await ctx.close();
       } else {

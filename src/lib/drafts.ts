@@ -310,9 +310,11 @@ export function checkFieldValues(f: DraftFields): ErrorCode | null {
   return null;
 }
 
-export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number): SaveResult {
+export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null): SaveResult {
   const bad = checkFieldValues(f);
   if (bad) return fail('invalid', bad);
+  // null = the form did not carry the picker: keep the draft's layout.
+  if (layout !== null && !isPhotoLayout(layout)) return fail('invalid', 'bad_layout');
   const area = isValidArea(f.section, f.area) ? f.area : '';
   return tx(() => {
     const cur = getDb().prepare('SELECT status FROM drafts WHERE id = ?').get(id) as { status: DraftStatus } | undefined;
@@ -321,8 +323,8 @@ export function saveDraft(id: number, expected: number, f: DraftFields, photoAlt
     const v = takeVersion(id, expected, userId, "status = 'in_review'");
     if (v === null) return CONFLICT;
     getDb()
-      .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = ?, featured = ?, body = ? WHERE id = ?')
-      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, id);
+      .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = COALESCE(?, photo_layout), featured = ?, body = ? WHERE id = ?')
+      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, layout, f.featured ? 1 : 0, f.body, id);
     const upd = getDb().prepare('UPDATE draft_photos SET alt = ? WHERE id = ? AND draft_id = ?');
     for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
     return { ok: true, updatedAt: v } as SaveResult;

@@ -245,6 +245,8 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
         church: d.church, date, image: d.image, imageAlt: d.imageAlt, photoCredit: d.photoCredit, photos: d.photos, photoAlts: d.photoAlts,
         featured: d.featured, draft: d.draft, body: entry.body ?? '',
       };
+      // The layout joins the hash only when it is not the default, so every already-adopted story keeps its hash.
+      if (d.photoLayout && d.photoLayout !== 'one') (base as Record<string, unknown>).photoLayout = d.photoLayout;
       const contentHash = sha256Of(JSON.stringify([base, photoRows]));
 
       // 2. Then one short write for this story. Everything that decides it is read INSIDE the transaction, because a

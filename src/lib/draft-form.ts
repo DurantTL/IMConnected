@@ -1,7 +1,7 @@
 // Reads the editor form (save and preview) into draft fields, refusing oversized values instead of cutting them.
 import { FIELD_MAX, type DraftFields } from './drafts';
 import { clean } from './storyfile';
-import { DEFAULT_PHOTO_LAYOUT, type PhotoLayout } from './photo-layouts';
+import { DEFAULT_PHOTO_LAYOUT } from './photo-layouts';
 
 function text(form: FormData, name: string, max: number, label: string): string {
   const v = form.get(name);
@@ -14,7 +14,7 @@ function text(form: FormData, name: string, max: number, label: string): string 
 const line = (form: FormData, name: string, max: number, label: string) => text(form, name, max, label).replace(/\s+/g, ' ').trim();
 
 /** Throws an Error with an editor-readable message. */
-export function readDraftFields(form: FormData): { fields: DraftFields; photoAlts: Map<number, string> } {
+export function readDraftFields(form: FormData): { fields: DraftFields; photoAlts: Map<number, string>; layout: string | null } {
   const fields: DraftFields = {
     title: line(form, 'title', FIELD_MAX.title, 'The title'),
     dek: line(form, 'dek', FIELD_MAX.dek, 'The summary'),
@@ -26,8 +26,7 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
     church: line(form, 'church', FIELD_MAX.short, 'The church'),
     date: line(form, 'date', 10, 'The date'),
     photoCredit: line(form, 'photoCredit', FIELD_MAX.short, 'The photo credit'),
-    // An unknown value is kept as sent so that saving it is refused (checkFieldValues -> bad_layout), never silently changed.
-    photoLayout: (form.has('photoLayout') ? line(form, 'photoLayout', 40, 'The photo layout') : DEFAULT_PHOTO_LAYOUT) as PhotoLayout,
+    photoLayout: DEFAULT_PHOTO_LAYOUT, // placeholder: the real choice is `layout` below (null = the form did not send it)
     featured: form.get('featured') === '1',
     body: text(form, 'body', FIELD_MAX.body, 'The story text'),
   };
@@ -38,7 +37,11 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
     const id = Number(m[1]);
     photoAlts.set(id, line(form, key, 300, 'Photo text'));
   }
-  return { fields, photoAlts };
+  // The photo layout is taken exactly as sent (no trimming), so " mosaic " is refused like the APIs refuse it. A form that does not
+  // have the field at all (a page opened before this existed) means "keep what the draft has": null.
+  const rawLayout = form.get('photoLayout');
+  if (rawLayout !== null && typeof rawLayout !== 'string') throw new Error('The photo layout could not be read.');
+  return { fields, photoAlts, layout: rawLayout };
 }
 
 export const intParam = (v: unknown): number | null => {
