@@ -27,7 +27,8 @@ const clean = (v: string) => v.replace(CONTROL, '');
 const error = (message: string): never => { throw new Error(message); };
 const text = (value: unknown, limit: number, label: string): string => {
   if (value === undefined) return '';
-  if (typeof value !== 'string' || value.length > limit) return error(`${label} must be text of at most ${limit.toLocaleString('en-US')} characters.`);
+  // Limits count the text as typed: a stored "<" is &lt; (4 characters), which must never push a field over its limit.
+  if (typeof value !== 'string' || value.replace(/&lt;/g, '<').length > limit) return error(`${label} must be text of at most ${limit.toLocaleString('en-US')} characters.`);
   return clean(value);
 };
 
@@ -192,4 +193,20 @@ export function splitMarkdownIntoModules(markdown: string, max = 20_000): string
   }
   out.push(rest);
   return out;
+}
+
+/**
+ * Plain-text fields (heading, list items, button label, alt) back to what the editor typed: stored "&lt;" shown as "<".
+ * Paragraph and quote text stay as stored (Markdown, where &lt; is already shown as "<"). Output is escaped again on write.
+ */
+export function unescapeStoryBlockPlainText(blocks: StoryBlock[]): StoryBlock[] {
+  const un = (v: string) => v.replace(/&lt;/g, '<');
+  return blocks.map((b) => {
+    const o: StoryBlock = { ...b };
+    if (o.type === 'heading' && o.text !== undefined) o.text = un(o.text);
+    if (o.items) o.items = o.items.map(un);
+    if (o.alt !== undefined) o.alt = un(o.alt);
+    if (o.label !== undefined) o.label = un(o.label);
+    return o;
+  });
 }

@@ -409,12 +409,22 @@ let H, slugH;
   check('the story page shows every module text literally (paragraph, heading, list, quote, label)', shown >= 5, String(shown));
   check('...with no element created from it and no double-escaped entity', !/<script>alert|<img src=x|<svg onload/.test(pageM.replace(/="[^"]*"/g, '=""')) && !pageM.includes('&amp;lt;'));
   check('...the search index holds no doubled backslash-entity text', !(await anon.get('/api/search?q=' + encodeURIComponent('alert'))).text.includes('\\&lt;'));
+  // L2: editing the live modular story shows what was typed ("<"), and republishing keeps the page literal and the feed escaped
+  await c1.form('/api/admin/stories/edit', { slug: slugM });
+  const reopened = JSON.parse(draftRow(M).story_blocks);
+  check('editing a live modular story: heading, list item, label and alt show "<", not &lt;', reopened[1].text === evil && reopened[2].items[0] === evil && reopened[5].label === evil && reopened[4].alt === evil, JSON.stringify(reopened.slice(1, 3)));
+  r = await c1.form(`/api/admin/drafts/${M}/publish`, { version: version(M) });
+  const feed2 = JSON.stringify(JSON.parse((await getPub('/stories.json')).text).stories.find((x) => x.url.includes(slugM))?.storyBlocks ?? null);
+  const page2 = (await getPub(`/stories/${slugM}/`)).text;
+  check('...after edit and republish the feed still has &lt; and the page still shows the text literally', r.params.get('n') === 'published' && !feed2.includes('<') && feed2.includes('&lt;script>') && !page2.includes('&amp;lt;') && (page2.match(/&lt;script&gt;alert\(1\)&lt;\/script&gt;/g) || []).length >= 5, r.loc);
   await c1.form('/api/admin/stories/unpublish', { slug: slugM });
 
   // the private preview may load only the story's own photos
   const pv = await c1.json(`/api/admin/drafts/${M}/preview`, { title: 'T', body: '![a](/api/admin/users) ![b](/admin/drafts/1) ![c](/api/admin/photos/1) ![d](/media/stories/x/y.jpg) ![e](https://example.test/p.jpg)' });
   const pdoc = pv.data.doc || '';
   check('preview: an image pointing at another same-origin path is removed', !pdoc.includes('/api/admin/users') && !pdoc.includes('/admin/drafts/1'), pdoc.slice(-400));
+  const own = await c1.json(`/api/admin/drafts/${M}/preview`, { title: 'T', body: `![x](${BASE}/api/admin/users) ![y](${BASE.replace('http:', 'https:')}/api/admin/users) ![z](https://example.test/p.jpg)` });
+  check('preview: an https address on the site\'s own host is removed, another host\'s image is kept', !(own.data.doc || '').includes('/api/admin/users') && (own.data.doc || '').includes('https://example.test/p.jpg'), (own.data.doc || '').slice(-300));
   check('...the story\'s own photo paths are kept', pdoc.includes('src="/api/admin/photos/1"') && pdoc.includes('src="/media/stories/x/y.jpg"'));
 }
 

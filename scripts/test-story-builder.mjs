@@ -48,6 +48,7 @@ try {
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-publish.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-store.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-blocks.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/story-block-render.ts'))};`,
         ].join('\n');
       },
     }],
@@ -168,6 +169,32 @@ try {
   assert.ok(!raw.body.includes('onerror=alert(1)\n\n<'), 'no raw tag');
   assert.equal(raw.body, raw.body.trim(), 'the stored body is trimmed');
   assert.ok(!JSON.stringify(m.getStoryBySlug(hpub.slug).storyBlocks).includes('<'));
+
+  // L1: escaping must never push a field past its limit. Fields at their limit that contain "<" save, publish and render.
+  const edge = async (title, blocksFor) => {
+    const eid = m.createDraft({ source: 'editor', userId: user, fields: { title, author: 'Synthetic Editor', section: 'news', area: 'conference', date: '2026-01-04', body: 'x' } });
+    const ephoto = addPhoto(eid, '<' + 'a'.repeat(299), 90);
+    const eblocks = blocksFor(ephoto);
+    const esave = m.saveDraft(eid, m.getDraft(eid).updatedAt, { ...m.getDraft(eid), storyBlocks: eblocks }, new Map(), user);
+    assert.equal(esave.ok, true, `${title}: ${esave.message}`);
+    const epub = await m.publishDraft(m.getDraft(eid), m.listPhotos(eid), esave.updatedAt, user);
+    const estory = m.getStoryBySlug(epub.slug);
+    assert.ok(!JSON.stringify(estory.storyBlocks).includes('<'));
+    assert.ok((await m.renderStoryBlocksSafe(estory.storyBlocks)).length > 0, 'the stored escaped row renders without throwing');
+    return estory;
+  };
+  const e1 = await edge('Edge fields at their limits', (p) => [
+    { id: 'h', type: 'heading', level: 2, text: '<' + 'h'.repeat(299) }, { id: 'l', type: 'list', items: ['<' + 'i'.repeat(1999)] },
+    { id: 'i', type: 'image', photoId: p.id, alt: '<' + 'a'.repeat(299) }, { id: 'b', type: 'button', label: '<' + 'b'.repeat(119), url: 'https://example.invalid/x' },
+  ]);
+  assert.equal(e1.storyBlocks[0].text.length, 300 + 3, 'heading stored escaped (300 typed characters)');
+  await edge('Edge long paragraph', () => [{ id: 'p', type: 'text', text: 'p'.repeat(19_990) + '<<<<<' + 'q'.repeat(5) }]);
+
+  // L2: loading a live story into the editor shows what was typed ("<"), and writing escapes it again.
+  const loadedEdge = m.loadStory(e1.slug);
+  assert.equal(loadedEdge.fields.storyBlocks[0].text, '<' + 'h'.repeat(299));
+  assert.equal(loadedEdge.fields.storyBlocks[1].items[0], '<' + 'i'.repeat(1999));
+  assert.equal(loadedEdge.fields.storyBlocks[3].label, '<' + 'b'.repeat(119));
 
   console.log('PASS modules: migration, persistence, legacy save, conflict, publishing, focus, live edit remapping, photo deletion');
 } finally {

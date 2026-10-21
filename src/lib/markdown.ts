@@ -53,10 +53,15 @@ export async function renderMarkdownSafe(markdown: string): Promise<{ html: stri
 
 /** Image addresses the private editor preview may load: the story's own photos only, never another same-origin path. */
 const PREVIEW_IMG = /^(?:\/api\/admin\/photos\/\d{1,12}|\/(?:media|images)\/stories\/[A-Za-z0-9._/-]+|https:\/\/[^\s"'<>]+)$/;
-export function restrictPreviewImages(html: string): string {
+export function restrictPreviewImages(html: string, ownHosts: string[] = []): string {
+  const own = new Set(ownHosts.map((h) => h.toLowerCase().replace(/:\d+$/, '')));
   return html.replace(/<img\b[^>]*>/gi, (tag) => {
     const m = /\bsrc=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
     const src = m ? (m[1] ?? m[2] ?? m[3] ?? '') : '';
-    return PREVIEW_IMG.test(src) && !src.split('/').includes('..') && !/\bsrcset=/i.test(tag) ? tag : '';
+    if (!PREVIEW_IMG.test(src) || src.split('/').includes('..') || /\bsrcset=/i.test(tag)) return '';
+    if (src.startsWith('https:')) { // the site's own absolute address is the same origin, so it is as private as a relative path
+      try { if (own.has(new URL(src).hostname.toLowerCase())) return ''; } catch { return ''; }
+    }
+    return tag;
   });
 }

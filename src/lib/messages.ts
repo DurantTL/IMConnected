@@ -30,6 +30,7 @@ export const ERRORS = {
   author_long: 'The author name is too long.',
   dek_long: 'The summary is longer than 240 characters.',
   body_required: 'Add the story text before publishing.',
+  blocks_bad: 'A story module is not valid. Open each module and check its text, address and photo.',
   body_long: 'The story is longer than 20000 characters.',
   section_required: 'Choose a section.',
   area_bad: 'Choose a category that belongs to this section.',

@@ -41,7 +41,7 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
       const projection = storyBlocksToMarkdown(fields.storyBlocks);
       // The modules own the text. Without JavaScript the Markdown box could still be edited, and that edit would be silently dropped: refuse it.
       if (form.get('body') !== null && fields.body.trim() !== clean(projection).trim()) { // a client that sends no Markdown box edited nothing there
-        throw new Error('This story is built from modules, so its text is edited in the modules, which need JavaScript. Your change to the Markdown box was not saved. Reload the page, or switch the story to Markdown first.');
+        throw new Error('This story is built from modules, so its text is edited in the modules, which need JavaScript. Your change to the Markdown box was not saved. Open the editor with JavaScript turned on to edit the text of this story.');
       }
       checkStoryBlockLength(fields.storyBlocks);
       fields.body = projection;

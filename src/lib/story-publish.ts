@@ -8,7 +8,7 @@
 // interleave with another publish in this process; a second process is stopped by the UNIQUE indexes on
 // stories.slug and drafts.slug.
 import fs from 'node:fs';
-import { checkStoryBlockLength, escapeStoryBlocks, normalizeStoryBlocks, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
+import { checkStoryBlockLength, normalizeStoryBlocks, unescapeStoryBlockPlainText, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { LIMITS } from './limits';
@@ -184,11 +184,12 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   const title = oneLine(draft.title);
   const author = oneLine(draft.author);
   const dek = oneLine(draft.dek);
-  const draftBlocks = normalizeStoryBlocks(draft.storyBlocks ?? []);
+  let draftBlocks: StoryBlock[];
+  try { draftBlocks = normalizeStoryBlocks(draft.storyBlocks ?? []); } catch { throw new EditorError('blocks_bad'); }
   if (draftBlocks.some((b) => b.type === 'button' && !b.url)) throw new EditorError('link_unsafe');
-  // The module text goes through the same contract as the body: control characters out, every "<" as &lt; (once, here and in writeStory).
-  const escapedBlocks = escapeStoryBlocks(draftBlocks);
-  const body = clean(draftBlocks.length ? storyBlocksToMarkdown(escapedBlocks) : draft.body).trim();
+  // The Markdown is built and measured as typed (the same rule as saving); every "<" becomes &lt; only when it is written
+  // (here for the body, in writeStory for the modules), so escaping can never push a field over its limit.
+  const body = clean(draftBlocks.length ? storyBlocksToMarkdown(draftBlocks) : draft.body).trim();
   const section = draft.section;
   const area = draft.area || undefined;
 
@@ -199,7 +200,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   if (dek.length > LIMITS.dek) throw new EditorError('dek_long');
   if (!body) throw new EditorError('body_required');
   if (body.length > LIMITS.bodyMax) throw new EditorError('body_long');
-  try { checkStoryBlockLength(draftBlocks); } catch { throw new EditorError('body_long'); }
+  try { checkStoryBlockLength(draftBlocks); } catch { throw new EditorError('body_long'); } // same rule as saving
   if (!getSection(section)) throw new EditorError('section_required');
   if (!isValidArea(section, area)) throw new EditorError('area_bad');
   if (!validDate(draft.date)) throw new EditorError('date_required');
@@ -236,7 +237,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
 
   const existing = getStoryBySlug(slug, { includeUnpublished: true });
   const stored = await storePhotos(slug, items, existing);
-  const storyBlocks: StoryBlock[] = escapedBlocks.map((block) => {
+  const storyBlocks: StoryBlock[] = draftBlocks.map((block) => {
     if (block.type !== 'image') return block;
     const index = photos.findIndex((p) => p.id === block.photoId);
     if (index < 0) { removeFiles(stored.created); throw new EditorError('photo_missing'); }
@@ -306,7 +307,7 @@ export function loadStory(slug: string): LoadedStory | null {
   if (!getSection(s.section)) throw new EditorError('section_unknown');
   const sources = [...(s.image ? [s.image] : []), ...s.photos];
   // Image modules can only show the story's own photos (writes refuse anything else); drop one that does not, never add a source.
-  const storyBlocks = s.storyBlocks?.filter((b) => b.type !== 'image' || (b.url && sources.includes(b.url)));
+  const storyBlocks = s.storyBlocks && unescapeStoryBlockPlainText(s.storyBlocks).filter((b) => b.type !== 'image' || (b.url && sources.includes(b.url)));
   const alts = [s.imageAlt ?? '', ...s.photoAlts];
   return {
     fields: {
