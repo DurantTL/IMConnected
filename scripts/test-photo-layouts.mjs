@@ -405,8 +405,9 @@ try {
         if (touch) await first.tap(); else await first.click();
         const dlg = page.locator('dialog.viewer');
         await dlg.waitFor({ state: 'visible' });
-        const st = await page.evaluate(() => { const d = document.querySelector('dialog.viewer'); return { open: d.open, modal: d.getAttribute('aria-modal'), label: d.getAttribute('aria-label'), active: document.activeElement?.getAttribute('aria-label'), count: d.querySelector('.viewer-count').textContent, alt: d.querySelector('.viewer-img').getAttribute('alt'), src: d.querySelector('.viewer-img').getAttribute('src') }; });
+        const st = await page.evaluate(() => { const d = document.querySelector('dialog.viewer'); return { open: d.open, modal: d.getAttribute('aria-modal'), label: d.getAttribute('aria-label'), active: document.activeElement?.getAttribute('aria-label'), count: d.querySelector('.viewer-count').textContent, alt: d.querySelector('.viewer-img').getAttribute('alt'), describedby: d.getAttribute('aria-describedby'), desc: document.getElementById(d.getAttribute('aria-describedby') ?? 'none')?.textContent, live: document.getElementById(d.getAttribute('aria-describedby') ?? 'none')?.getAttribute('aria-live'), src: d.querySelector('.viewer-img').getAttribute('src') }; });
         check(`${tag}: clicking a photo opens the dialog (aria-modal, labelled with the photo's alt text), focus on the close button`, st.open && st.modal === 'true' && st.label === 'Photo viewer' && st.alt === 'Synthetic heroGrid photo 1' && st.active === 'Close photo viewer' && st.count === 'Synthetic heroGrid photo 1 (1 of 6)' && /\/media\/stories\//.test(st.src), JSON.stringify(st));
+        check(`${tag}: on open the dialog's accessible description is the opened photo's alt text and "1 of 6" (what a screen reader reads), and the region stays live for moves`, st.desc === 'Synthetic heroGrid photo 1 (1 of 6)' && st.live === 'polite', JSON.stringify(st));
         const names = await page.evaluate(() => [...document.querySelectorAll('dialog.viewer button')].map((b) => b.getAttribute('aria-label')));
         check(`${tag}: the buttons are named`, JSON.stringify(names) === JSON.stringify(['Close photo viewer', 'Previous photo', 'Next photo']), JSON.stringify(names));
         await page.keyboard.press('ArrowRight');
@@ -429,6 +430,16 @@ try {
         await page.evaluate(() => { const el = document.querySelector('dialog.viewer'); el.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', clientX: 200, clientY: 300, bubbles: true })); el.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', clientX: 60, clientY: 300, bubbles: true })); el.click(); });
         check(`${tag}: the click that follows a swipe does not close the viewer (a plain click on the dark area still does, below)`, await dlg.isVisible() && (await page.locator('.viewer-count').textContent()).endsWith('(1 of 6)'));
         await page.waitForTimeout(450);
+        // a real click on the dark area (outside the photo) closes it and focus goes back to the photo that was opened
+        if (!touch) {
+          const sb = await page.locator('.viewer-stage').boundingBox();
+          await page.mouse.click(sb.x + 6, sb.y + sb.height / 2);
+          const back = await page.evaluate(() => ({ open: document.querySelector('dialog.viewer').open, focusHref: document.activeElement?.getAttribute('href'), isFirst: document.activeElement === document.querySelectorAll('a[data-photo]')[0] }));
+          check('desktop: a mouse click on the dark area closes the viewer and focus returns to the photo that was opened', !back.open && back.isFirst, JSON.stringify(back));
+          await page.locator('a[data-photo]').first().click();
+          await page.locator('dialog.viewer').waitFor({ state: 'visible' });
+          await page.keyboard.press('End'); await page.keyboard.press('Home');
+        }
         // focus trap: tabbing never leaves the dialog
         let escaped = false;
         for (let i = 0; i < 8; i++) { await page.keyboard.press('Tab'); if (!(await page.evaluate(() => !!document.activeElement?.closest('dialog.viewer')))) escaped = true; }
@@ -449,6 +460,25 @@ try {
         const back3 = await page.evaluate(() => document.activeElement === document.querySelectorAll('a[data-photo]')[2]);
         check(`${tag}: the close button closes it and returns focus to photo 3`, !(await dlg.isVisible()) && back3);
         await page.locator('a[data-photo]').nth(1).click({ modifiers: ['Control'] }).catch(() => {});
+        await ctx.close();
+      }
+
+      // a long alt text (about 250 characters) must not run over the photo at 390 px: the visible caption is clamped to two lines
+      {
+        const longAlt = ('A synthetic description of a long photo caption written for the test. ').repeat(4).slice(0, 250);
+        const pr = await studioPublish([{ ref: 'long', title: 'Zz layout long alt', section: 'news', area: 'churches', author: 'Test Author', body: 'Synthetic text.', photoLayout: 'stack', photos: [{ url: dataUrl(PICS[0]), alt: longAlt }, { url: dataUrl(PICS[1]), alt: 'Second' }] }], '2099-01-03');
+        const ctx = await browser.newContext({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
+        const page = await ctx.newPage();
+        await page.goto(`${BASE}/stories/${pr.data.stories?.[0]?.slug}/`);
+        await page.locator('a[data-photo]').first().tap();
+        await page.locator('dialog.viewer').waitFor({ state: 'visible' });
+        await page.waitForTimeout(300);
+        const m = await page.evaluate(() => { const c = document.querySelector('.viewer-count').getBoundingClientRect(); const i = document.querySelector('.viewer-img').getBoundingClientRect(); return { capTop: c.top, capH: c.height, imgBottom: i.bottom, full: document.querySelector('.viewer-count').textContent.length }; });
+        if (SHOTS) await page.screenshot({ path: path.join(SHOTS, 'viewer-long-alt-390.png') });
+        check('a 250-character alt text: the visible caption is at most two lines and does not overlap the photo at 390 px, and the full text is still in the page', m.capH < 45 && m.capTop >= m.imgBottom - 1 && m.full > 250, JSON.stringify(m));
+        // a tap that drifts a little (under the swipe threshold) on the dark area still closes the viewer
+        await page.evaluate(() => { const el = document.querySelector('dialog.viewer'); el.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', clientX: 100, clientY: 300, bubbles: true })); el.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', clientX: 120, clientY: 300, bubbles: true })); el.querySelector('.viewer-stage').click(); });
+        check('a tap that drifts 20 px on the dark area still closes the viewer (it is not mistaken for a swipe)', !(await page.locator('dialog.viewer').isVisible()));
         await ctx.close();
       }
 

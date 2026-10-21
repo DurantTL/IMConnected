@@ -161,7 +161,7 @@ const nav = [
   .ed-layout:has(input:checked) { box-shadow: inset 0 0 0 1px var(--brand); }
   @media (forced-colors: active) {
     .ed-layout { border-color: CanvasText; }
-    .ed-layout:has(input:checked) { border: 4px solid Highlight; box-shadow: none; }
+    .ed-layout:has(input:checked) { border-color: Highlight; box-shadow: none; outline: 3px solid Highlight; outline-offset: -6px; } /* an outline, so nothing moves */
     .ed-layout .lay-name::before { border-color: CanvasText; }
     .ed-layout:has(input:checked) .lay-name::before { background: Highlight; border-color: Highlight; box-shadow: inset 0 0 0 2px Canvas; }
     .lay-mini i, .ed-layout:has(input:checked) .lay-mini i { background: CanvasText; opacity: 1; }

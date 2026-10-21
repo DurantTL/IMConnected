@@ -52,6 +52,7 @@ function init(): void {
     d.className = 'viewer';
     d.setAttribute('aria-modal', 'true');
     d.setAttribute('aria-label', 'Photo viewer');
+    d.setAttribute('aria-describedby', 'viewer-desc'); // read on open: the photo's alt text and "n of total"
     d.innerHTML =
       '<div class="viewer-stage"><img class="viewer-img" alt="" decoding="async"></div>' +
       '<button type="button" class="viewer-btn viewer-close" aria-label="Close photo viewer"><span aria-hidden="true">&times;</span></button>' +
@@ -59,7 +60,7 @@ function init(): void {
         ? '<button type="button" class="viewer-btn viewer-prev" aria-label="Previous photo"><span aria-hidden="true">&#8249;</span></button>' +
           '<button type="button" class="viewer-btn viewer-next" aria-label="Next photo"><span aria-hidden="true">&#8250;</span></button>'
         : '') +
-      '<p class="viewer-count" aria-live="polite"></p>';
+      '<p class="viewer-count" id="viewer-desc" aria-live="polite"></p>';
     document.body.append(d);
     stageImg = d.querySelector('.viewer-img')!;
     counter = d.querySelector('.viewer-count')!;
@@ -104,8 +105,12 @@ function init(): void {
       tracking = false;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      if (Math.abs(dx) >= 10 || Math.abs(dy) >= 10) { swiped = true; setTimeout(() => { swiped = false; }, 400); }
-      if (total > 1 && Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy) * 1.5) show(dx < 0 ? index + 1 : index - 1);
+      if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        // Only a real swipe swallows the click the browser sends after it; a tap that drifted a little still closes.
+        swiped = true;
+        setTimeout(() => { swiped = false; }, 400);
+        if (total > 1) show(dx < 0 ? index + 1 : index - 1);
+      }
     });
     d.addEventListener('pointercancel', () => { tracking = false; });
     d.addEventListener('close', () => {
