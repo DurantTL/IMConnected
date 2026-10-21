@@ -89,7 +89,7 @@ await until(async () => { try { await fetch(`${G}/__state`); return true; } catc
 const allServerLog = []; // every line any site process printed
 let server;
 let serverLog = [];
-async function startServer(dataDir, env = {}) {
+async function startServer(dataDir, env = {}, probe = true) {
   serverLog = [];
   server = spawn('node', ['dist/server/entry.mjs'], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
@@ -105,7 +105,15 @@ async function startServer(dataDir, env = {}) {
   const sink = (d) => { const lines = String(d).split('\n').filter(Boolean); serverLog.push(...lines); allServerLog.push(...lines); };
   server.stdout.on('data', sink);
   server.stderr.on('data', sink);
-  for (let i = 0; i < 80; i++) { try { await fetch(BASE + '/admin/login', { redirect: 'manual' }); return; } catch { await sleep(250); } }
+  const net = await import('node:net');
+  for (let i = 0; i < 80; i++) {
+    try {
+      if (probe) { await fetch(BASE + '/admin/login', { redirect: 'manual' }); return; }
+      // no HTTP request at all: only see that the port accepts a connection
+      await new Promise((ok, no) => { const c = net.connect(PORT, '127.0.0.1', () => { c.destroy(); ok(); }); c.on('error', no); });
+      return;
+    } catch { await sleep(250); }
+  }
   throw new Error('server did not start');
 }
 async function stopServer() {
@@ -156,16 +164,14 @@ const get = async (url, cookie) => {
   sdb.exec('BEGIN IMMEDIATE');
   sdb.prepare("INSERT INTO users (id, email, name, role, status, created_at, updated_at) VALUES (2, 'b@example.test', 'B', 'editor', 'active', ?, ?)").run(now0, now0);
   const snapFile = path.join(SCRATCH, 'snap.db');
-  const t0 = Date.now();
-  const bytes = core.snapshotDatabase(sd, snapFile);
-  const snapMs = Date.now() - t0;
+  const bytes = await core.snapshotDatabase(sd, snapFile);
   sdb.exec('COMMIT');
   sdb.close();
   const snapUsers = q(snapFile, 'SELECT COUNT(*) n FROM users')[0].n;
   check('snapshot (VACUUM INTO on its own connection) is consistent: committed rows yes, an open transaction no', Number(snapUsers) === 1 && bytes > 0 && q(snapFile, 'PRAGMA integrity_check')[0].integrity_check === 'ok');
-  check('snapshot of a small database is quick (event loop blocked well under a second)', snapMs < 1000, `${snapMs} ms`);
+  check('the snapshot file is private (0600)', (fs.statSync(snapFile).mode & 0o777) === 0o600, (fs.statSync(snapFile).mode & 0o777).toString(8));
   let threw = false;
-  try { core.snapshotDatabase(path.join(SCRATCH, 'nowhere'), path.join(SCRATCH, 'x.db')); } catch { threw = true; }
+  try { await core.snapshotDatabase(path.join(SCRATCH, 'nowhere'), path.join(SCRATCH, 'x.db')); } catch { threw = true; }
   check('snapshot of a missing database fails loudly', threw);
 
   // tar round trip
@@ -231,6 +237,72 @@ const get = async (url, cookie) => {
   try { await core.extractMediaArchive(cut, path.join(SCRATCH, 'cut-out')); } catch { cutErr = true; }
   check('a truncated archive is refused', cutErr);
 
+  // pax edge cases, with hand-built archives
+  const tarEntry = (name, type, body = Buffer.alloc(0)) => {
+    const h = evilHeader(name, type, body.length);
+    return Buffer.concat([h, body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
+  };
+  const END = Buffer.alloc(1024);
+  const archiveOf = (label, ...parts) => { const f = path.join(SCRATCH, `pax-${label}.tar.gz`); fs.writeFileSync(f, zlib.gzipSync(Buffer.concat([...parts, END]))); return f; };
+  const tryExtract = async (label, file, opts) => {
+    const dest = path.join(SCRATCH, `pax-out-${label}`);
+    fs.mkdirSync(dest);
+    let err = null, res = null;
+    try { res = await core.extractMediaArchive(file, dest, opts); } catch (e) { err = e; }
+    return { err, res, dest };
+  };
+  const A = Buffer.from('contents of a'), B = Buffer.from('contents of b');
+  const p0 = await tryExtract('zero', archiveOf('zero', tarEntry('PaxHeader', 'x', Buffer.alloc(0)), tarEntry('media/a.txt', '0', A), tarEntry('media/b.txt', '0', B)));
+  check('a pax header of size 0 is a no-op: the next files keep their contents (nothing lost, no leaked handle)',
+    !p0.err && fs.readFileSync(path.join(p0.dest, 'media/a.txt')).equals(A) && fs.readFileSync(path.join(p0.dest, 'media/b.txt')).equals(B), p0.err?.message);
+  const rec = (k, v) => { const body = ` ${k}=${v}\n`; let len = body.length + 1; while (String(len).length + body.length !== len) len = String(len).length + body.length; return Buffer.from(`${len}${body}`); };
+  const pOk = await tryExtract('ok', archiveOf('ok', tarEntry('PaxHeader', 'x', rec('path', 'media/' + 'q'.repeat(150) + '.txt')), tarEntry('media/placeholder', '0', A)));
+  check('a normal pax path header still works', !pOk.err && fs.existsSync(path.join(pOk.dest, 'media/' + 'q'.repeat(150) + '.txt')), pOk.err?.message);
+  const pTwo = await tryExtract('two', archiveOf('two', tarEntry('PaxHeader', 'x', rec('path', 'media/x')), tarEntry('PaxHeader', 'x', rec('path', 'media/y')), tarEntry('media/z', '0', A)));
+  const pEnd = await tryExtract('end', archiveOf('end', tarEntry('PaxHeader', 'x', rec('path', 'media/x'))));
+  check('a pax header followed by another pax header, or by the end of the archive, is refused', pTwo.err instanceof Error && pEnd.err instanceof Error, `${pTwo.err?.message} | ${pEnd.err?.message}`);
+  const bigPax = Buffer.alloc(70 * 1024, 0x61);
+  const pBig = await tryExtract('big', archiveOf('big', tarEntry('PaxHeader', 'x', bigPax), tarEntry('media/a', '0', A)));
+  check('an oversized pax header (over 64 KB) is refused', pBig.err instanceof Error && /oversized/.test(pBig.err.message), pBig.err?.message);
+  const badSum = tarEntry('media/a.txt', '0', A);
+  badSum[0] ^= 0x01; // flip a bit of the name without fixing the checksum
+  const pSum = await tryExtract('sum', archiveOf('sum', badSum));
+  check('a header with a wrong checksum is refused', pSum.err instanceof Error && /damaged/.test(pSum.err.message), pSum.err?.message);
+
+  // extraction caps
+  const capBytes = await tryExtract('capbytes', archiveOf('capbytes', tarEntry('media/a', '0', A), tarEntry('media/b', '0', B)), { maxBytes: 20 });
+  check('total extracted bytes are capped (here 20 bytes: the second file is refused)', capBytes.err instanceof Error && /more data than fits/.test(capBytes.err.message), capBytes.err?.message);
+  const capEntries = await tryExtract('capent', archiveOf('capent', tarEntry('media/a', '0', A), tarEntry('media/b', '0', B), tarEntry('media/c', '0', B)), { maxEntries: 2 });
+  check('the entry count is capped (here 2)', capEntries.err instanceof Error && /more than 2 entries/.test(capEntries.err.message), capEntries.err?.message);
+  const hugeDecl = Buffer.concat([evilHeader('media/huge.bin', '0', 60 * 1024 ** 3)]);
+  const capHuge = await tryExtract('caphuge', archiveOf('caphuge', hugeDecl));
+  check('a file that declares more than the default cap (50 GB, or the free space) is refused before anything is written', capHuge.err instanceof Error && /more data than fits/.test(capHuge.err.message) && !fs.existsSync(path.join(capHuge.dest, 'media/huge.bin')), capHuge.err?.message);
+  // the restore script leaves nothing behind when the archive is refused
+  const R0 = path.join(SCRATCH, 'restore-caps');
+  fs.mkdirSync(R0);
+  const rcap = spawnSync('node', ['scripts/restore-backup.mjs', snapFile, archiveOf('capres', hugeDecl)], { cwd: ROOT, env: { ...process.env, DATA_DIR: R0 }, encoding: 'utf8' });
+  check('restoring an archive over the caps fails cleanly and leaves the data folder empty', rcap.status === 1 && fs.readdirSync(R0).length === 0, rcap.stderr + fs.readdirSync(R0));
+
+  // writer edges
+  const ed = path.join(SCRATCH, 'edge-data');
+  fs.mkdirSync(path.join(ed, 'media'), { recursive: true });
+  fs.writeFileSync(path.join(ed, 'media/old.jpg'), 'old file');
+  let oldOk = true;
+  try { fs.utimesSync(path.join(ed, 'media/old.jpg'), -5000, -5000); } catch { oldOk = false; }
+  fs.writeFileSync(path.join(ed, 'media/small.jpg'), 'small');
+  const hugePath = path.join(ed, 'media/huge.jpg');
+  fs.closeSync(fs.openSync(hugePath, 'w'));
+  fs.truncateSync(hugePath, 8 * 1024 ** 3 + 5); // sparse: takes no disk
+  const skipped = [];
+  const edgeArchive = path.join(SCRATCH, 'edge.tar.gz');
+  await core.createMediaArchive(ed, edgeArchive, { onSkip: (rel) => skipped.push(rel) });
+  const edgeOut = path.join(SCRATCH, 'edge-out');
+  fs.mkdirSync(edgeOut);
+  await core.extractMediaArchive(edgeArchive, edgeOut);
+  check('a file of 8 GiB or more is left out with a warning, and the rest is archived', skipped.join() === 'media/huge.jpg' && !fs.existsSync(path.join(edgeOut, 'media/huge.jpg')) && fs.readFileSync(path.join(edgeOut, 'media/small.jpg'), 'utf8') === 'small');
+  check('a negative modification time is clamped, not an error', oldOk ? fs.readFileSync(path.join(edgeOut, 'media/old.jpg'), 'utf8') === 'old file' : true);
+  rmrf(ed);
+
   // streaming: a 64 MB file is archived without holding it in memory
   const bd = path.join(SCRATCH, 'big-data');
   fs.mkdirSync(path.join(bd, 'media'), { recursive: true });
@@ -244,6 +316,27 @@ const get = async (url, cookie) => {
   clearInterval(sampler);
   check('a 64 MB media file is archived as a stream (extra memory stayed under 24 MB)', bigSize > 60e6 && peak < 24e6, `${Math.round(peak / 1e6)} MB extra, archive ${bigSize} bytes`);
   rmrf(bd);
+
+  // the snapshot must not stall the event loop: ~200 MB database
+  const bigdb = path.join(SCRATCH, 'bigdb-data');
+  const bdb = openDatabase(bigdb);
+  runMigrations(bdb, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')));
+  bdb.exec('CREATE TABLE ballast (id INTEGER PRIMARY KEY, data BLOB)');
+  const ins = bdb.prepare('INSERT INTO ballast (data) VALUES (?)');
+  bdb.exec('BEGIN');
+  for (let i = 0; i < 200; i++) ins.run(randomBytes(1 << 20));
+  bdb.exec('COMMIT');
+  bdb.close();
+  let lastBeat = Date.now(), worst = 0;
+  const beat = setInterval(() => { const n = Date.now(); worst = Math.max(worst, n - lastBeat - 10); lastBeat = n; }, 10);
+  const tBig = Date.now();
+  const bigBytes = await core.snapshotDatabase(bigdb, path.join(SCRATCH, 'big-snap.db'));
+  const bigMs = Date.now() - tBig;
+  clearInterval(beat);
+  console.log(`      (200 MB snapshot: ${Math.round(bigBytes / 1e6)} MB in ${bigMs} ms, longest event-loop stall ${worst} ms)`);
+  check('snapshotting a ~200 MB database does not stall the event loop (longest stall under 150 ms)', bigBytes > 190e6 && worst < 150, `${worst} ms`);
+  rmrf(bigdb);
+  fs.rmSync(path.join(SCRATCH, 'big-snap.db'), { force: true });
 }
 
 // ======================================================================================================
@@ -251,15 +344,15 @@ const get = async (url, cookie) => {
 // ======================================================================================================
 {
   const cfg = gdrive.driveConfig({ GDRIVE_SERVICE_ACCOUNT_JSON: KEY_B64, GDRIVE_FOLDER_ID: FOLDER, GDRIVE_API_URL: G, GOOGLE_OAUTH_TOKEN_URL: `${G}/token` });
-  check('config: key + folder present -> configured, drive.file scope by default', cfg.configured && cfg.scope === gdrive.SCOPE_FILE && cfg.apiUrl === G);
+  check('config: key + folder present -> configured, full drive scope by default', cfg.configured && cfg.scope === gdrive.SCOPE_FULL && cfg.apiUrl === G);
   const off1 = gdrive.driveConfig({ GDRIVE_FOLDER_ID: FOLDER });
   const off2 = gdrive.driveConfig({ GDRIVE_SERVICE_ACCOUNT_JSON: KEY_B64 });
   const off3 = gdrive.driveConfig({ GDRIVE_SERVICE_ACCOUNT_JSON: 'not base64 json', GDRIVE_FOLDER_ID: 'x' });
   check('config: either setting missing (or malformed) -> not configured, naming what is missing',
     !off1.configured && off1.missing.join() === 'GDRIVE_SERVICE_ACCOUNT_JSON' && !off2.configured && off2.missing.join() === 'GDRIVE_FOLDER_ID' && !off3.configured && off3.problems.length === 2);
-  check('config: GDRIVE_SCOPE=drive selects the full scope, anything else stays drive.file',
-    gdrive.driveConfig({ GDRIVE_SERVICE_ACCOUNT_JSON: KEY_B64, GDRIVE_FOLDER_ID: FOLDER, GDRIVE_SCOPE: 'drive' }).scope === gdrive.SCOPE_FULL &&
-    gdrive.driveConfig({ GDRIVE_SERVICE_ACCOUNT_JSON: KEY_B64, GDRIVE_FOLDER_ID: FOLDER, GDRIVE_SCOPE: 'everything' }).scope === gdrive.SCOPE_FILE);
+  check('config: GDRIVE_SCOPE=drive.file opts in to the narrow scope, anything else stays the full scope',
+    gdrive.driveConfig({ GDRIVE_SERVICE_ACCOUNT_JSON: KEY_B64, GDRIVE_FOLDER_ID: FOLDER, GDRIVE_SCOPE: 'drive.file' }).scope === gdrive.SCOPE_FILE &&
+    gdrive.driveConfig({ GDRIVE_SERVICE_ACCOUNT_JSON: KEY_B64, GDRIVE_FOLDER_ID: FOLDER, GDRIVE_SCOPE: 'everything' }).scope === gdrive.SCOPE_FULL);
 
   // a wrong key is rejected by the mock's signature check, and the error leaks nothing
   const other = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -332,7 +425,64 @@ const get = async (url, cookie) => {
   check('when every try fails the run throws a message naming the file and HTTP status, with the partial counts',
     failure && /after 3 tries/.test(failure.message) && /503/.test(failure.message) && failure.partial.uploads === 0 && failure.partial.attempts === 3 && failure.partial.dbBytes > 0, failure?.message);
   check('the error message holds no key material', failure && !failure.message.includes(KEY_B64) && !PEM_BODY_LINES.some((l) => failure.message.includes(l)));
+
+  // an earlier attempt's local files are reused: only the upload is retried
+  const reDay = START + (N + 1) * 86400000;
+  const reDb = path.join(dd, 'backups', core.backupFileName(core.utcDay(reDay), 'db'));
+  const reMedia = path.join(dd, 'backups', core.backupFileName(core.utcDay(reDay), 'media'));
+  const stamp = () => [reDb, reMedia].map((f) => `${fs.statSync(f).mtimeMs}:${fs.statSync(f).size}`).join();
+  const before = stamp();
+  await sleep(30);
+  const rr = await runner.performBackup({ dataDir: dd, drive: gdrive.createDriveClient(cfg), now: reDay + 1000, attemptDelayMs: 10 });
+  check('after a failed upload, the next attempt reuses the same day\'s finished local files and only uploads', rr.reused === true && rr.uploads === 2 && stamp() === before, JSON.stringify(rr));
+  const rr2 = await runner.performBackup({ dataDir: dd, drive: gdrive.createDriveClient(cfg), now: reDay + 2000, attemptDelayMs: 10, reuseLocal: false });
+  check('...and reuseLocal:false builds them again', rr2.reused === false && stamp() !== before);
+
+  // permanent failures: no retries inside the run, flagged for the scheduler
+  await gget('/__mode?quota=1');
+  const upBefore = (await gstate()).counters.uploadsStarted;
+  let quota = null;
+  try { await runner.performBackup({ dataDir: dd, drive: gdrive.createDriveClient(cfg), now: START + (N + 2) * 86400000, attemptDelayMs: 10 }); } catch (e) { quota = e; }
+  await gget('/__mode?quota=0');
+  check('a 403 "storage quota" failure is permanent: one try, no retries, a clear message', quota?.permanent === true && /storage quota/.test(quota.message) && quota.partial.attempts === 1 && (await gstate()).counters.uploadsStarted === upBefore, quota?.message);
+  await gget('/__mode?folder404=1');
+  let nf = null;
+  try { await runner.performBackup({ dataDir: dd, drive: gdrive.createDriveClient(cfg), now: START + (N + 3) * 86400000, attemptDelayMs: 10 }); } catch (e) { nf = e; }
+  await gget('/__mode?folder404=0');
+  check('a 404 on the folder is permanent too', nf?.permanent === true && /404/.test(nf.message) && nf.partial.uploads === 0, nf?.message);
+  check('a 503 is not permanent (it is retried)', failure?.permanent === false);
+  check('permanent classification: 400/401/404 and 403 (not a rate limit) yes; 429, 5xx, rate-limit 403 and network errors no',
+    [400, 401, 404, 403].every((st) => gdrive.isPermanentDriveError(Object.assign(new Error('x'), { status: st }))) &&
+    [429, 500, 503, undefined].every((st) => !gdrive.isPermanentDriveError(Object.assign(new Error('x'), { status: st }))) &&
+    !gdrive.isPermanentDriveError(Object.assign(new Error('User rate limit exceeded'), { status: 403 })));
   rmrf(dd);
+
+  // Shared Drive mode: files are never "owned by me"; every request must say supportsAllDrives
+  await fetch(`${G}/__reset`);
+  await gget('/__mode?shared=1');
+  await gget(`/__seed?name=imconnected-2020-01-01.media.tar.gz&folder=${FOLDER}&owned=0`); // someone else's, matching name
+  await gget(`/__seed?name=imconnected-2020-01-03.db&folder=${FOLDER}&owned=0`);
+  await gget(`/__seed?name=minutes.pdf&folder=${FOLDER}&owned=0`);
+  const sd2 = path.join(SCRATCH, 'shared-data');
+  const sdb2 = openDatabase(sd2);
+  runMigrations(sdb2, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')));
+  sdb2.close();
+  const N2 = 16;
+  const shWarn = [];
+  let shErr = null;
+  try {
+    for (let i = 0; i < N2; i++) shWarn.push(...(await runner.performBackup({ dataDir: sd2, drive: gdrive.createDriveClient(cfg), now: START + i * 86400000, attemptDelayMs: 10 })).warnings);
+  } catch (e) { shErr = e; }
+  const days2 = Array.from({ length: N2 }, (_, i) => core.utcDay(START + i * 86400000)).reverse();
+  const keep2 = new Set([...days2.slice(0, 7), ...days2.filter((d) => new Date(d + 'T00:00:00Z').getUTCDay() === 0).slice(0, 4)]);
+  const exp2 = [...keep2].flatMap((d) => [core.backupFileName(d, 'db'), core.backupFileName(d, 'media')]).sort();
+  const st2 = await gstate();
+  const mine = st2.files.filter((f) => f.owned).map((f) => f.name).sort();
+  check('Shared Drive mode: uploads, lists and deletes work (supportsAllDrives sent, files not "owned by me")', !shErr && shWarn.length === 0, shErr?.message || shWarn.join(' | '));
+  check('Shared Drive mode: retention keeps exactly the expected days', JSON.stringify(mine.filter((n) => core.parseBackupName(n))) === JSON.stringify(exp2) && keep2.size >= 8, `${mine.length} files`);
+  check('Shared Drive mode: other people\'s files (even with matching names) are never deleted or even attempted', st2.files.filter((f) => !f.owned).map((f) => f.name).sort().join() === 'imconnected-2020-01-01.media.tar.gz,imconnected-2020-01-03.db,minutes.pdf' && st2.counters.deletes > 0);
+  rmrf(sd2);
+  await fetch(`${G}/__reset`);
 }
 
 // ======================================================================================================
@@ -395,6 +545,10 @@ try {
   const off = await get('/admin/backups', cookieOf(ADMIN));
   check('without GDRIVE_SERVICE_ACCOUNT_JSON the admin page says backups are off and names the missing setting',
     off.status === 200 && /Backups are off/.test(off.text) && /GDRIVE_SERVICE_ACCOUNT_JSON/.test(off.text) && !/Backups are on/.test(off.text), off.text.slice(0, 300));
+  const homeAdmin = await get('/admin', cookieOf(ADMIN));
+  const homeEditor = await get('/admin', cookieOf(EDITOR));
+  check('/admin shows administrators "Backups to Google Drive are not set up" with a link to /admin/backups; editors do not see it',
+    homeAdmin.status === 200 && /Backups to Google Drive are not set up/.test(homeAdmin.text) && /href="\/admin\/backups"/.test(homeAdmin.text) && homeEditor.status === 200 && !/not set up/.test(homeEditor.text), `${homeAdmin.status} ${homeEditor.status}`);
   check('...and nothing was backed up (no run recorded, no backups folder, no Drive traffic)', runs().length === 0 && !fs.existsSync(path.join(DATA, 'backups')) && (await gstate()).counters.tokenRequests === 0);
   await stopServer();
   await startServer(DATA, { GDRIVE_SERVICE_ACCOUNT_JSON: KEY_B64, GDRIVE_FOLDER_ID: '' });
@@ -403,16 +557,44 @@ try {
   check('without GDRIVE_FOLDER_ID backups are off too, naming GDRIVE_FOLDER_ID', /Backups are off/.test(off2.text) && /GDRIVE_FOLDER_ID/.test(off2.text) && runs().length === 0 && !fs.existsSync(path.join(DATA, 'backups')));
   await stopServer();
 
-  // ---- 3b. configured: every upload fails first -> failure is recorded and reported, then a retry succeeds ----
-  await gget('/__fail?uploads=100');
+  // ---- 3b. configured, but Google refuses permanently (a My Drive folder: no storage quota) ----
+  await gget('/__mode?quota=1');
   await startServer(DATA, SITE_ENV);
   await get('/admin/login');
-  const failed = await until(() => runs().find((r) => r.finished_at && r.ok === 0));
-  check('a backup whose uploads all fail is recorded as failed, with the error and the partial sizes', !!failed && /after 3 tries/.test(failed.error) && /503/.test(failed.error) && failed.attempts === 3 && failed.db_bytes > 0 && failed.media_bytes > 0 && failed.uploads === 0, JSON.stringify(failed));
+  const perm = await until(() => runs().find((r) => r.finished_at && r.ok === 0));
+  check('a permanent failure (403 storage quota) is recorded once, flagged permanent, after a single try', !!perm && perm.permanent === 1 && /storage quota/.test(perm.error) && perm.attempts === 1 && perm.db_bytes > 0, JSON.stringify(perm));
+  check('...logged as "will not retry today"', serverLog.some((l) => l.startsWith('[backup] failed (will not retry today):') && /storage quota/.test(l)));
+  const pagePerm = await get('/admin/backups', cookieOf(ADMIN));
+  check('...and the admin page shows the Shared Drive hint', /id="backup-hint"[^>]*>[^<]*use a folder in a Shared Drive/i.test(pagePerm.text) && /Not retried today/.test(pagePerm.text), pagePerm.text.slice(0, 200));
+  const localDb = path.join(DATA, 'backups', core.backupFileName(today, 'db'));
+  const stampDb = `${fs.statSync(localDb).mtimeMs}:${shaFile(localDb)}`;
+  const startedBefore = (await gstate()).counters.uploadsStarted;
+  await sleep(4500); // longer than BACKUP_RETRY_MS (3 s)
+  check('a permanent failure is not retried that day, even after the retry delay (no new run, no rebuild, no upload attempt)', runs().length === 1 && (await gstate()).counters.uploadsStarted === startedBefore && `${fs.statSync(localDb).mtimeMs}:${shaFile(localDb)}` === stampDb);
+  await stopServer();
+  await startServer(DATA, SITE_ENV);
+  await get('/admin/login');
+  await sleep(1500);
+  check('...and a restart does not retry it either (the failure is in the database)', runs().length === 1);
+
+  // The next "day": move that row away. A missing folder (404) is permanent too and gets its own hint.
+  await gget('/__mode?quota=0&folder404=1');
+  run(DB, "UPDATE backup_runs SET day = '2000-01-01'");
+  const nf = await until(() => runs().find((r) => r.day === today && r.finished_at && r.ok === 0));
+  check('a 404 on the folder is a permanent failure as well', !!nf && nf.permanent === 1 && /404/.test(nf.error) && nf.uploads === 0, JSON.stringify(nf));
+  const page404 = await get('/admin/backups', cookieOf(ADMIN));
+  check('...with the hint to share the Shared Drive as Content manager and check the folder ID', /id="backup-hint"[^>]*>[^<]*Content manager[^<]*folder ID/.test(page404.text), page404.text.slice(0, 200));
+
+  // ---- 3c. configured: transient failures (503) are retried, then a retry succeeds ----
+  await gget('/__mode?folder404=0');
+  await gget('/__fail?uploads=100');
+  run(DB, "UPDATE backup_runs SET day = '2000-01-02' WHERE day = ?", today);
+  const failed = await until(() => runs().find((r) => r.day === today && r.finished_at && r.ok === 0));
+  check('a backup whose uploads all fail with 503 is recorded as failed (not permanent), with the error and the partial sizes', !!failed && /after 3 tries/.test(failed.error) && /503/.test(failed.error) && failed.permanent === 0 && failed.attempts === 3 && failed.db_bytes > 0 && failed.media_bytes > 0 && failed.uploads === 0, JSON.stringify(failed));
   check('...and reported in the server log', serverLog.some((l) => l.startsWith('[backup] failed:') && /503/.test(l)));
   const pageFail = await get('/admin/backups', cookieOf(ADMIN));
   check('...and on the admin page (last error shown, no success yet)', pageFail.status === 200 && /after 3 tries/.test(pageFail.text) && /None yet/.test(pageFail.text), pageFail.text.slice(0, 200));
-  check('a failed attempt is not repeated until the retry delay has passed (at most one new row per 3 s)', runs().filter((r) => r.finished_at).length <= 3);
+  check('a failed attempt is not repeated until the retry delay has passed (at most one new row per 3 s)', runs().filter((r) => r.day === today).length <= 2);
 
   // Now Google works again, except for the first upload try: retried within the run.
   await gget('/__fail?uploads=1');
@@ -420,12 +602,15 @@ try {
   check('the day is retried after the failure and then succeeds (the first try of the next run fails and is retried inside it)', !!okRun && okRun.day === today && okRun.uploads === 2 && okRun.attempts === 3 && !okRun.error, JSON.stringify(okRun));
   check('...recorded with sizes that match the local files',
     okRun && okRun.db_bytes === fs.statSync(path.join(DATA, 'backups', core.backupFileName(today, 'db'))).size && okRun.media_bytes === fs.statSync(path.join(DATA, 'backups', core.backupFileName(today, 'media'))).size);
+  check('every retry reused the finished local files from the first attempt (only the upload was retried)', `${fs.statSync(localDb).mtimeMs}:${shaFile(localDb)}` === stampDb && serverLog.some((l) => l.startsWith('[backup] ok:') && /reused/.test(l)), serverLog.filter((l) => l.includes('[backup]')).join(' / '));
   const gs = await gstate();
   const upDb = gs.files.find((f) => f.name === core.backupFileName(today, 'db'));
   const upMedia = gs.files.find((f) => f.name === core.backupFileName(today, 'media'));
   check('Drive has both files in the folder, byte-identical to the local copies', upDb?.parents[0] === FOLDER && upMedia?.parents[0] === FOLDER &&
     upDb.sha256 === shaFile(path.join(DATA, 'backups', core.backupFileName(today, 'db'))) && upMedia.sha256 === shaFile(path.join(DATA, 'backups', core.backupFileName(today, 'media'))));
-  check('one access token served the whole time (cached)', gs.counters.tokenRequests === 1, String(gs.counters.tokenRequests));
+  check('one access token per server process (cached across the runs)', gs.counters.tokenRequests === 2, String(gs.counters.tokenRequests));
+  const homeOn = await get('/admin', cookieOf(ADMIN));
+  check('with backups configured, /admin shows no "not set up" notice', homeOn.status === 200 && !/Backups to Google Drive are not set up/.test(homeOn.text));
 
   // ---- status page ----
   const page = await get('/admin/backups', cookieOf(ADMIN));
@@ -488,7 +673,21 @@ try {
   await stopServer();
   run(DB, 'UPDATE backup_runs SET finished_at = ? WHERE ok = 1', Date.now() - 3600e3);
 
-  // ---- 3d. restore ----
+  // ---- 3d. the scheduler starts with the server, with no request at all ----
+  const QUIET = path.join(SCRATCH, 'quiet-data');
+  const QDB = path.join(QUIET, 'imconnected.db');
+  await gget('/__reset');
+  await startServer(QUIET, { ...SITE_ENV, GDRIVE_SERVICE_ACCOUNT_JSON: '', GDRIVE_FOLDER_ID: '', BACKUP_START_DELAY_MS: '200' }, false);
+  await sleep(2500);
+  check('unconfigured and untouched: the server never opens the database (no request, no scheduler)', !fs.existsSync(QDB) && !fs.existsSync(QUIET));
+  await stopServer();
+  await startServer(QUIET, { ...SITE_ENV, BACKUP_START_DELAY_MS: '200' }, false);
+  const quietRun = await until(() => { try { return q(QDB, 'SELECT * FROM backup_runs WHERE ok = 1')[0]; } catch { return null; } }, 20000);
+  check('configured and never visited: the scheduler starts by itself and makes the day\'s backup', !!quietRun && quietRun.uploads === 2 && (await gstate()).files.length === 2);
+  await stopServer();
+  rmrf(QUIET);
+
+  // ---- 3e. restore ----
   const BK = path.join(DATA, 'backups');
   const dbFile = path.join(BK, core.backupFileName(today, 'db'));
   const mediaFile = path.join(BK, core.backupFileName(today, 'media'));

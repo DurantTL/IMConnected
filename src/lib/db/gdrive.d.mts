@@ -20,3 +20,4 @@ export interface DriveClient {
 export function driveConfig(env?: Record<string, string | undefined>): DriveConfig;
 export function signJwt(key: { client_email: string; private_key: string }, scope: string, audience: string, nowSec: number): string;
 export function createDriveClient(cfg: DriveConfig, opts?: { now?: () => number }): DriveClient;
+export function isPermanentDriveError(err: unknown): boolean;

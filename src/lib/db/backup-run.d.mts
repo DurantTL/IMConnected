@@ -10,4 +10,5 @@ export function performBackup(opts: {
   maxAttempts?: number;
   attemptDelayMs?: number;
   secrets?: string[];
-}): Promise<{ day: string; dbBytes: number; mediaBytes: number; uploads: number; attempts: number; warnings: string[] }>;
+  reuseLocal?: boolean;
+}): Promise<{ day: string; dbBytes: number; mediaBytes: number; uploads: number; attempts: number; reused: boolean; warnings: string[] }>;

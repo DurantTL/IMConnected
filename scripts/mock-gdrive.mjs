@@ -11,6 +11,10 @@
 //   PUT  /upload/drive/v3/files?upload_id=...          receives the bytes (hashed, not kept unless MOCK_GDRIVE_STORE is set)
 //   GET  /drive/v3/files?q='<folder>' in parents ...   lists a folder (pageSize and pageToken are honoured)
 //   DELETE /drive/v3/files/<id>
+// Shared Drive mode (GET /__mode?shared=1): files report ownedByMe=false and lastModifyingUser.me=true only for files this
+// account wrote; every request must carry supportsAllDrives=true (else 404, as Google does for Shared Drive items).
+// GET /__mode?quota=1 makes uploads answer 403 "Service Accounts do not have storage quota" (a My Drive folder);
+// GET /__mode?folder404=1 makes every use of the folder answer 404 "File not found" (drive.file scope, or not shared).
 // Control endpoints, no auth (test use):
 //   GET /__state                  JSON: files, counters, tokens issued, last upload sizes
 //   GET /__fail?uploads=N         the next N upload PUTs answer 503
@@ -34,10 +38,11 @@ let tokens; // issued access tokens
 let counters;
 let failUploads;
 let lastUploads;
+let mode;
 function reset() {
   files = new Map(); sessions = new Map(); tokens = new Set();
   counters = { tokenRequests: 0, uploadsStarted: 0, uploadsDone: 0, uploadsFailed: 0, deletes: 0, lists: 0 };
-  failUploads = 0; lastUploads = [];
+  failUploads = 0; lastUploads = []; mode = { shared: false, quota: false, folder404: false };
 }
 reset();
 
@@ -51,6 +56,7 @@ const authed = (req) => {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
   return !!m && tokens.has(m[1]);
 };
+const needAllDrives = (url) => mode.shared && url.searchParams.get('supportsAllDrives') !== 'true';
 let counter = 0;
 const newId = () => `mock${(++counter).toString().padStart(4, '0')}${randomBytes(8).toString('hex')}`;
 
@@ -79,6 +85,10 @@ createServer(async (req, res) => {
   try {
     // ---- control ----
     if (url.pathname === '/__reset') { reset(); return send(res, 200, { ok: true }); }
+    if (url.pathname === '/__mode') {
+      for (const k of ['shared', 'quota', 'folder404']) if (url.searchParams.has(k)) mode[k] = url.searchParams.get(k) === '1';
+      return send(res, 200, mode);
+    }
     if (url.pathname === '/__fail') { failUploads = Number(url.searchParams.get('uploads') || 0); return send(res, 200, { ok: true }); }
     if (url.pathname === '/__seed') {
       const id = newId();
@@ -86,7 +96,7 @@ createServer(async (req, res) => {
       return send(res, 200, { id });
     }
     if (url.pathname === '/__state') {
-      return send(res, 200, { files: [...files.values()], counters, tokens: [...tokens], lastUploads, pendingFailures: failUploads });
+      return send(res, 200, { files: [...files.values()], mode, counters, tokens: [...tokens], lastUploads, pendingFailures: failUploads });
     }
 
     // ---- OAuth ----
@@ -110,9 +120,12 @@ createServer(async (req, res) => {
       for await (const c of req) raw += c;
       if (!authed(req)) { log({ route, status: 401 }); return apiError(res, 401, 'Invalid Credentials'); }
       if (url.searchParams.get('uploadType') !== 'resumable') return apiError(res, 400, 'only resumable uploads are mocked');
+      if (needAllDrives(url)) return apiError(res, 404, 'File not found: (supportsAllDrives is required for a Shared Drive)');
       let meta;
       try { meta = JSON.parse(raw); } catch { return apiError(res, 400, 'bad metadata'); }
       if (!meta.name || !Array.isArray(meta.parents) || meta.parents.length !== 1) return apiError(res, 400, 'name and one parent are required');
+      if (mode.folder404) { log({ route, status: 404 }); return apiError(res, 404, `File not found: ${meta.parents[0]}.`); }
+      if (mode.quota) { log({ route, status: 403 }); return apiError(res, 403, 'Service Accounts do not have storage quota. Leverage shared drives or use OAuth delegation instead.'); }
       const uploadId = randomBytes(10).toString('hex');
       sessions.set(uploadId, { name: meta.name, parents: meta.parents, size: Number(req.headers['x-upload-content-length'] || -1) });
       counters.uploadsStarted++;
@@ -146,6 +159,8 @@ createServer(async (req, res) => {
       if (!authed(req)) { log({ route, status: 401 }); return apiError(res, 401, 'Invalid Credentials'); }
       const m = /^'([^']+)' in parents and trashed = false$/.exec(url.searchParams.get('q') || '');
       if (!m) return apiError(res, 400, 'Invalid Value (q)');
+      if (needAllDrives(url)) return apiError(res, 404, 'File not found (supportsAllDrives is required for a Shared Drive)');
+      if (mode.folder404) { log({ route, status: 404 }); return apiError(res, 404, `File not found: ${m[1]}.`); }
       counters.lists++;
       const all = [...files.values()].filter((f) => f.parents.includes(m[1])).sort((a, b) => a.created - b.created);
       const size = Math.min(Number(url.searchParams.get('pageSize') || 100), Number(process.env.MOCK_GDRIVE_MAX_PAGE || 100));
@@ -153,7 +168,7 @@ createServer(async (req, res) => {
       const page = all.slice(start, start + size);
       log({ route, status: 200, count: page.length });
       return send(res, 200, {
-        files: page.map((f) => ({ id: f.id, name: f.name, size: String(f.size), ownedByMe: f.owned })),
+        files: page.map((f) => ({ id: f.id, name: f.name, size: String(f.size), ownedByMe: mode.shared ? false : f.owned, lastModifyingUser: { me: f.owned } })),
         ...(start + size < all.length ? { nextPageToken: String(start + size) } : {}),
       });
     }
@@ -162,6 +177,7 @@ createServer(async (req, res) => {
     const del = /^\/drive\/v3\/files\/([^/]+)$/.exec(url.pathname);
     if (req.method === 'DELETE' && del) {
       if (!authed(req)) { log({ route: 'DELETE /drive/v3/files/:id', status: 401 }); return apiError(res, 401, 'Invalid Credentials'); }
+      if (needAllDrives(url)) return apiError(res, 404, 'File not found (supportsAllDrives is required for a Shared Drive)');
       const f = files.get(del[1]);
       if (!f) return apiError(res, 404, 'File not found');
       if (!f.owned) { log({ route: 'DELETE /drive/v3/files/:id', status: 403 }); return apiError(res, 403, 'The user does not have sufficient permissions for this file.'); }

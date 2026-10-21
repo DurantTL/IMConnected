@@ -41,7 +41,7 @@ const attemptDelayMs = (env = process.env) => num(env.BACKUP_ATTEMPT_DELAY_MS, 5
 
 interface RunRow {
   id: number; day: string; started_at: number; heartbeat_at: number; finished_at: number | null; ok: number;
-  db_bytes: number | null; media_bytes: number | null; uploads: number; attempts: number; error: string | null;
+  db_bytes: number | null; media_bytes: number | null; uploads: number; attempts: number; permanent: number; error: string | null;
 }
 
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -69,8 +69,9 @@ function claimRun(day: string, now: number, env = process.env): number | null {
     db.prepare("UPDATE backup_runs SET finished_at = ?, error = 'interrupted (the server stopped during the backup)' WHERE finished_at IS NULL AND heartbeat_at < ?").run(now, now - STALE_MS);
     const done = db.prepare('SELECT 1 FROM backup_runs WHERE day = ? AND ok = 1').get(day);
     const busy = db.prepare('SELECT 1 FROM backup_runs WHERE finished_at IS NULL').get();
-    const last = db.prepare('SELECT finished_at FROM backup_runs WHERE day = ? ORDER BY id DESC LIMIT 1').get(day) as { finished_at: number | null } | undefined;
-    if (done || busy || (last?.finished_at != null && now - last.finished_at < retryMs(env))) {
+    const last = db.prepare('SELECT finished_at, permanent FROM backup_runs WHERE day = ? ORDER BY id DESC LIMIT 1').get(day) as { finished_at: number | null; permanent: number } | undefined;
+    // A permanent failure (no permission or quota, missing folder) is not retried the same day: it would only rebuild and fail again.
+    if (done || busy || last?.permanent === 1 || (last?.finished_at != null && now - last.finished_at < retryMs(env))) {
       db.exec('COMMIT');
       return null;
     }
@@ -96,15 +97,16 @@ async function runClaimed(id: number, now: number, env = process.env): Promise<v
     const note = out.warnings.length ? redact(out.warnings.join('; '), secrets) : null;
     db.prepare('UPDATE backup_runs SET finished_at = ?, ok = 1, db_bytes = ?, media_bytes = ?, uploads = ?, attempts = ?, error = ? WHERE id = ?')
       .run(Date.now(), out.dbBytes, out.mediaBytes, out.uploads, out.attempts, note, id);
-    console.log(`[backup] ok: ${out.day}, database ${out.dbBytes} bytes, media ${out.mediaBytes} bytes, ${out.uploads} files uploaded${note ? ` (note: ${note})` : ''}`);
+    console.log(`[backup] ok: ${out.day}${out.reused ? ' (reused the local files of an earlier attempt)' : ''}, database ${out.dbBytes} bytes, media ${out.mediaBytes} bytes, ${out.uploads} files uploaded${note ? ` (note: ${note})` : ''}`);
   } catch (err) {
     const message = redact(err instanceof Error ? err.message : String(err), secrets) || 'the backup failed';
     const p = (err as { partial?: { dbBytes: number | null; mediaBytes: number | null; uploads: number; attempts: number } }).partial;
+    const permanent = (err as { permanent?: boolean }).permanent === true ? 1 : 0;
     try {
-      db.prepare('UPDATE backup_runs SET finished_at = ?, ok = 0, db_bytes = ?, media_bytes = ?, uploads = ?, attempts = ?, error = ? WHERE id = ?')
-        .run(Date.now(), p?.dbBytes ?? null, p?.mediaBytes ?? null, p?.uploads ?? 0, p?.attempts ?? 0, message, id);
+      db.prepare('UPDATE backup_runs SET finished_at = ?, ok = 0, db_bytes = ?, media_bytes = ?, uploads = ?, attempts = ?, permanent = ?, error = ? WHERE id = ?')
+        .run(Date.now(), p?.dbBytes ?? null, p?.mediaBytes ?? null, p?.uploads ?? 0, p?.attempts ?? 0, permanent, message, id);
     } catch { /* the log line below still reports it */ }
-    console.error(`[backup] failed: ${message}`);
+    console.error(`[backup] failed${permanent ? ' (will not retry today)' : ''}: ${message}`);
   } finally {
     clearInterval(beat);
   }

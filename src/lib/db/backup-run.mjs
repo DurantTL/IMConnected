@@ -3,6 +3,7 @@
 // logs, so no secret can reach a log from here.
 import fs from 'node:fs';
 import path from 'node:path';
+import { isPermanentDriveError } from './gdrive.mjs';
 import { snapshotDatabase, createMediaArchive, backupFileName, parseBackupName, expiredEntries, utcDay, redact } from './backup-core.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -38,16 +39,21 @@ export function listLocal(dataDir) {
 
 /**
  * Take one backup for the UTC day of `now`. `drive` is a client from createDriveClient (null skips Drive: tests of
- * the local half only). On success returns { day, dbBytes, mediaBytes, uploads, attempts, warnings }. On failure
- * throws an Error (message free of secrets) with `.partial = { dbBytes, mediaBytes, uploads, attempts }`.
+ * the local half only). On success returns { day, dbBytes, mediaBytes, uploads, attempts, reused, warnings }.
+ * On failure throws an Error (message free of secrets) with `.partial = { dbBytes, mediaBytes, uploads, attempts }`
+ * and `.permanent` (true when retrying today cannot help: bad credentials, no permission or quota, missing folder).
+ * If today's local files from an earlier attempt are complete (they are only renamed into place when finished), a
+ * retry reuses them and only uploads.
  */
-export async function performBackup({ dataDir, drive, now = Date.now(), maxAttempts = 3, attemptDelayMs = 5000, secrets = [] }) {
+export async function performBackup({ dataDir, drive, now = Date.now(), maxAttempts = 3, attemptDelayMs = 5000, secrets = [], reuseLocal = true }) {
   const day = utcDay(now);
   const partial = { dbBytes: null, mediaBytes: null, uploads: 0, attempts: 0 };
   const warnings = [];
+  let permanent = false;
   const dir = backupsDir(dataDir);
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(dir, 0o700);
     for (const n of fs.readdirSync(dir)) if (n.startsWith('.tmp-')) fs.rmSync(path.join(dir, n), { force: true });
 
     const dbName = backupFileName(day, 'db');
@@ -55,18 +61,28 @@ export async function performBackup({ dataDir, drive, now = Date.now(), maxAttem
     const dbFile = path.join(dir, dbName);
     const mediaFile = path.join(dir, mediaName);
 
-    // 1. Database first, then the files: a photo written after the snapshot is harmless (an unreferenced file),
-    //    a row that points at a missing photo would not be.
-    const dbTmp = path.join(dir, `.tmp-${dbName}`);
-    partial.dbBytes = snapshotDatabase(dataDir, dbTmp);
-    fs.renameSync(dbTmp, dbFile);
-    const mediaTmp = path.join(dir, `.tmp-${mediaName}`);
-    partial.mediaBytes = await createMediaArchive(dataDir, mediaTmp);
-    fs.renameSync(mediaTmp, mediaFile);
+    // 1. Local files. Database first, then the files: a photo written after the snapshot is harmless (an
+    //    unreferenced file), a row that points at a missing photo would not be.
+    const have = (f) => { try { const st = fs.statSync(f); return st.isFile() && st.size > 0 ? st.size : 0; } catch { return 0; } };
+    let reused = false;
+    if (reuseLocal && drive && have(dbFile) && have(mediaFile)) {
+      partial.dbBytes = have(dbFile);
+      partial.mediaBytes = have(mediaFile);
+      reused = true;
+    } else {
+      const dbTmp = path.join(dir, `.tmp-${dbName}`);
+      partial.dbBytes = await snapshotDatabase(dataDir, dbTmp);
+      fs.renameSync(dbTmp, dbFile);
+      const mediaTmp = path.join(dir, `.tmp-${mediaName}`);
+      partial.mediaBytes = await createMediaArchive(dataDir, mediaTmp, { onSkip: (rel, size) => warnings.push(`left ${rel} out of the archive (${Math.round(size / 1024 ** 3)} GB is too big for it)`) });
+      fs.renameSync(mediaTmp, mediaFile);
+    }
 
     // 2. Drive.
     if (drive) {
-      const before = (await drive.listFolder()).filter((f) => f.owned && parseBackupName(f.name));
+      let listed;
+      try { listed = await drive.listFolder(); } catch (err) { permanent = isPermanentDriveError(err); throw err; }
+      const before = listed.filter((f) => f.owned && parseBackupName(f.name));
       for (const [file, name, type] of [[dbFile, dbName, 'application/vnd.sqlite3'], [mediaFile, mediaName, 'application/gzip']]) {
         let sent = null;
         let last = null;
@@ -76,10 +92,11 @@ export async function performBackup({ dataDir, drive, now = Date.now(), maxAttem
             sent = await drive.uploadFile(file, name, type);
           } catch (err) {
             last = err;
+            if (isPermanentDriveError(err)) { permanent = true; break; }
             if (attempt < maxAttempts) await sleep(attemptDelayMs * attempt);
           }
         }
-        if (!sent) throw new Error(`Uploading ${name} failed after ${maxAttempts} tries: ${last instanceof Error ? last.message : last}`);
+        if (!sent) throw new Error(permanent ? `Uploading ${name} failed: ${last instanceof Error ? last.message : last}` : `Uploading ${name} failed after ${maxAttempts} tries: ${last instanceof Error ? last.message : last}`);
         partial.uploads++;
         // A same-day re-run replaces the earlier copy of the same name.
         for (const old of before.filter((f) => f.name === name && f.id !== sent.id)) {
@@ -99,10 +116,11 @@ export async function performBackup({ dataDir, drive, now = Date.now(), maxAttem
 
     // 4. Retention on disk.
     try { pruneLocal(dataDir, day); } catch (err) { warnings.push(`local cleanup failed: ${err instanceof Error ? err.message : err}`); }
-    return { day, dbBytes: partial.dbBytes, mediaBytes: partial.mediaBytes, uploads: partial.uploads, attempts: partial.attempts, warnings: warnings.map((w) => redact(w, secrets)) };
+    return { day, dbBytes: partial.dbBytes, mediaBytes: partial.mediaBytes, uploads: partial.uploads, attempts: partial.attempts, reused, warnings: warnings.map((w) => redact(w, secrets)) };
   } catch (err) {
     const e = new Error(redact(err instanceof Error ? err.message : String(err), secrets));
     e.partial = partial;
+    e.permanent = permanent;
     throw e;
   }
 }

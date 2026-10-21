@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { Readable } from 'node:stream';
+import { Worker } from 'node:worker_threads';
 import { pipeline } from 'node:stream/promises';
 import { DatabaseSync } from './db-core.mjs';
 
@@ -79,31 +80,47 @@ export function redact(text, secrets = []) {
 
 const sqlQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
-/**
- * A consistent copy of the database at `dest` via VACUUM INTO, taken on its own short-lived connection (not the
- * server's shared one): WAL readers do not block writers, a failure here cannot disturb the shared handle, and
- * scripts and tests can call it without a server. node:sqlite is synchronous, so this blocks the event loop for
- * the duration of the copy (the database holds text and a few thousand rows, so it is quick); nothing awaits in
- * between. The copy is then checked with PRAGMA quick_check. Returns the size in bytes.
- */
-export function snapshotDatabase(dataDir, dest) {
-  const source = path.join(dataDir, 'imconnected.db');
-  if (!fs.existsSync(source)) throw new Error('the database file does not exist');
-  fs.rmSync(dest, { force: true });
-  const db = new DatabaseSync(source);
-  try {
-    db.exec('PRAGMA busy_timeout = 5000;');
-    db.exec(`VACUUM INTO ${sqlQuote(dest)};`);
-  } finally {
-    db.close();
-  }
-  const copy = new DatabaseSync(dest);
+// Runs in a worker thread so the server's event loop is never held: VACUUM INTO and the integrity check of a big
+// database can take seconds. Inline (eval) code on purpose: the server bundles this module, so there is no
+// stable file path to hand to a Worker.
+const SNAPSHOT_WORKER = `
+const { workerData, parentPort } = require('node:worker_threads');
+const emit = process.emitWarning;
+process.emitWarning = function (w, ...a) { const t = typeof a[0] === 'string' ? a[0] : a[0] && a[0].type; if (t === 'ExperimentalWarning') return; return emit.call(process, w, ...a); };
+const { DatabaseSync } = require('node:sqlite');
+process.emitWarning = emit;
+try {
+  const db = new DatabaseSync(workerData.source);
+  try { db.exec('PRAGMA busy_timeout = 5000;'); db.exec('VACUUM INTO ' + workerData.quoted + ';'); } finally { db.close(); }
+  const copy = new DatabaseSync(workerData.dest);
   try {
     const rows = copy.prepare('PRAGMA quick_check').all();
     if (rows.length !== 1 || Object.values(rows[0])[0] !== 'ok') throw new Error('the database snapshot failed its integrity check');
-  } finally {
-    copy.close();
-  }
+  } finally { copy.close(); }
+  parentPort.postMessage({ ok: true });
+} catch (err) {
+  parentPort.postMessage({ ok: false, error: String(err && err.message || err) });
+}
+`;
+
+/**
+ * A consistent copy of the database at `dest` via VACUUM INTO (one read transaction, so committed data only), on its
+ * own connection inside a worker thread: WAL readers do not block writers, a failure cannot disturb the server's
+ * shared handle, and the request thread is not stalled however large the database is. The copy is then checked with
+ * PRAGMA quick_check (also in the worker), made private (0600) and its size returned.
+ */
+export async function snapshotDatabase(dataDir, dest) {
+  const source = path.join(dataDir, 'imconnected.db');
+  if (!fs.existsSync(source)) throw new Error('the database file does not exist');
+  fs.rmSync(dest, { force: true });
+  const result = await new Promise((resolve, reject) => {
+    const w = new Worker(SNAPSHOT_WORKER, { eval: true, workerData: { source, dest, quoted: sqlQuote(dest) } });
+    w.once('message', resolve);
+    w.once('error', reject);
+    w.once('exit', (code) => reject(new Error(`the snapshot worker stopped (${code})`)));
+  });
+  if (!result?.ok) throw new Error(result?.error || 'the database snapshot failed');
+  fs.chmodSync(dest, 0o600);
   return fs.statSync(dest).size;
 }
 
@@ -204,7 +221,9 @@ async function* fileBytes(file, size) {
 }
 
 /** The tar stream of the given top-level folders of dataDir, produced chunk by chunk (never all in memory). */
-async function* tarStream(dataDir, tops) {
+const MAX_FILE = 8 * 1024 ** 3; // an octal size field holds less than 8 GiB
+
+async function* tarStream(dataDir, tops, onSkip) {
   for (const top of tops) {
     for await (const item of walk(dataDir, top)) {
       const abs = path.join(dataDir, item.rel);
@@ -215,12 +234,13 @@ async function* tarStream(dataDir, tops) {
         if (err.code === 'ENOENT') continue; // removed while we were walking
         throw err;
       }
-      const mtime = Math.floor(st.mtimeMs / 1000);
+      const mtime = Math.max(0, Math.floor(st.mtimeMs / 1000));
       if (item.dir) {
         for (const h of entryHeaders(item.rel, 0, mtime, '5', 0o755)) yield h;
         continue;
       }
       if (!st.isFile()) continue;
+      if (st.size >= MAX_FILE) { onSkip?.(item.rel, st.size); continue; }
       for (const h of entryHeaders(item.rel, st.size, mtime, '0', 0o644)) yield h;
       yield* fileBytes(abs, st.size);
       const pad = (BLOCK - (st.size % BLOCK)) % BLOCK;
@@ -234,9 +254,9 @@ async function* tarStream(dataDir, tops) {
  * Write DATA_DIR/media and DATA_DIR/uploads (draft photos too) as a tar.gz at `dest`, streamed through gzip to the
  * file. Memory use stays at a few chunks whatever the size. Returns the size in bytes.
  */
-export async function createMediaArchive(dataDir, dest) {
+export async function createMediaArchive(dataDir, dest, { onSkip } = {}) {
   fs.rmSync(dest, { force: true });
-  await pipeline(Readable.from(tarStream(dataDir, ['media', 'uploads'])), zlib.createGzip({ level: 6 }), fs.createWriteStream(dest, { mode: 0o600 }));
+  await pipeline(Readable.from(tarStream(dataDir, ['media', 'uploads'], onSkip)), zlib.createGzip({ level: 6 }), fs.createWriteStream(dest, { mode: 0o600 }));
   return fs.statSync(dest).size;
 }
 
@@ -275,14 +295,34 @@ function parsePax(buf) {
   return out;
 }
 
+export const MAX_EXTRACT_BYTES = 50 * 1024 ** 3;
+export const MAX_EXTRACT_ENTRIES = 200_000;
+const EXTRACT_MARGIN = 256 * 1024 ** 2; // free space left alone
+const MAX_PAX = 64 * 1024;
+
+function checksumOk(h) {
+  let sum = 0;
+  for (let i = 0; i < BLOCK; i++) sum += i >= 148 && i < 156 ? 0x20 : h[i];
+  const stored = parseInt(h.toString('latin1', 148, 156).replace(/\0.*$/s, '').trim() || 'x', 8);
+  return stored === sum;
+}
+
 /**
  * Unpack a .tar.gz made by createMediaArchive into destDir, streaming. Only regular files and directories under
- * media/ and uploads/ are accepted; links, other types and any path that is absolute or climbs out are refused.
- * Returns { files, bytes }.
+ * media/ and uploads/ are accepted; links, other types and any path that is absolute or climbs out are refused,
+ * every header checksum is verified, a pax header must be followed by exactly one entry, and the totals are capped:
+ * bytes at the smaller of 50 GB and the free space of destDir minus a margin, entries at 200,000 (both can be
+ * overridden with { maxBytes, maxEntries }). Returns { files, bytes }. On error the caller removes destDir.
  */
-export async function extractMediaArchive(archive, destDir) {
+export async function extractMediaArchive(archive, destDir, { maxBytes, maxEntries = MAX_EXTRACT_ENTRIES } = {}) {
   const root = path.resolve(destDir);
+  if (maxBytes === undefined) {
+    let free = Infinity;
+    try { const st = await fs.promises.statfs(root); free = Number(st.bavail) * Number(st.bsize); } catch { /* unknown: only the fixed cap */ }
+    maxBytes = Math.max(0, Math.min(MAX_EXTRACT_BYTES, free - EXTRACT_MARGIN));
+  }
   let files = 0;
+  let entries = 0;
   let bytes = 0;
   let pending = Buffer.alloc(0);
   let state = 'header'; // header | data | pad | end
@@ -291,20 +331,29 @@ export async function extractMediaArchive(archive, destDir) {
   let sink = null; // open file handle for the current entry
   let collect = null; // chunks of a pax record
   let paxPath = null;
-  let current = null;
+  let paxPending = false; // a pax header was read and its entry has not come yet
 
   const finishEntry = async () => {
     if (sink) { await sink.close(); sink = null; }
   };
 
   const startEntry = async (h) => {
+    if (!checksumOk(h)) throw new Error('the archive has a damaged header');
     const typeflag = String.fromCharCode(h[156] || 0x30);
     const size = readOctal(h.subarray(124, 136));
+    if (typeflag === 'x') {
+      if (paxPending) throw new Error('the archive has two extended headers in a row');
+      if (size > MAX_PAX) throw new Error('the archive has an oversized extended header');
+      remaining = size;
+      if (size > 0) { collect = []; paxPending = true; }
+      return;
+    }
     const base = h.toString('utf8', 0, 100).replace(/\0.*$/s, '');
     const prefix = h.toString('utf8', 345, 500).replace(/\0.*$/s, '');
     const name = paxPath ?? (prefix ? `${prefix}/${base}` : base);
-    if (typeflag === 'x') { collect = []; current = { pax: true }; remaining = size; return; }
     paxPath = null;
+    paxPending = false;
+    if (++entries > maxEntries) throw new Error(`the archive has more than ${maxEntries} entries`);
     if (typeflag === '5') {
       const parts = safeEntryPath(name);
       await fs.promises.mkdir(path.join(root, ...parts), { recursive: true });
@@ -312,18 +361,20 @@ export async function extractMediaArchive(archive, destDir) {
       return;
     }
     if (typeflag !== '0' && typeflag !== '\0') throw new Error(`the archive holds an entry type that is not allowed (${JSON.stringify(typeflag)})`);
+    bytes += size;
+    if (bytes > maxBytes) throw new Error(`the archive holds more data than fits (limit ${Math.floor(maxBytes / 1024 ** 2)} MB)`);
     const parts = safeEntryPath(name);
     const target = path.join(root, ...parts);
     if (!target.startsWith(root + path.sep)) throw new Error('unsafe path in archive');
     await fs.promises.mkdir(path.dirname(target), { recursive: true });
     sink = await fs.promises.open(target, 'wx', 0o644);
     files++;
-    bytes += size;
     remaining = size;
-    current = { file: true };
   };
 
+  let refused = null; // our own error, kept so a stream abort cannot hide it
   await pipeline(fs.createReadStream(archive), zlib.createGunzip(), async (source) => {
+   try {
     for await (const chunk of source) {
       pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
       for (;;) {
@@ -332,10 +383,14 @@ export async function extractMediaArchive(archive, destDir) {
           if (pending.length < BLOCK) break;
           const h = pending.subarray(0, BLOCK);
           pending = pending.subarray(BLOCK);
-          if (h.every((b) => b === 0)) { state = 'end'; continue; }
+          if (h.every((b) => b === 0)) {
+            if (paxPending) throw new Error('the archive ends right after an extended header');
+            state = 'end';
+            continue;
+          }
           await startEntry(h);
           if (remaining > 0) { state = 'data'; padLeft = (BLOCK - (remaining % BLOCK)) % BLOCK; }
-          else if (current?.file) { await finishEntry(); current = null; }
+          else await finishEntry();
           continue;
         }
         if (state === 'data') {
@@ -349,7 +404,6 @@ export async function extractMediaArchive(archive, destDir) {
           if (remaining === 0) {
             if (collect) { paxPath = parsePax(Buffer.concat(collect)).path ?? null; collect = null; }
             else await finishEntry();
-            current = null;
             state = 'pad';
           }
           continue;
@@ -364,8 +418,8 @@ export async function extractMediaArchive(archive, destDir) {
         }
       }
     }
-    if (state !== 'end' && state !== 'header') throw new Error('the archive ends early (it may be damaged or cut short)');
-    if (state === 'header' && pending.length) throw new Error('the archive ends early (it may be damaged or cut short)');
-  }).finally(finishEntry);
+    if ((state !== 'end' && state !== 'header') || (state === 'header' && pending.length) || paxPending) throw new Error('the archive ends early (it may be damaged or cut short)');
+   } catch (err) { refused = err; throw err; }
+  }).catch((err) => { throw refused ?? err; }).finally(finishEntry);
   return { files, bytes };
 }

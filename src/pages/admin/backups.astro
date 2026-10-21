@@ -11,6 +11,13 @@ if (Astro.locals.user?.role !== 'admin') {
 const s = getBackupStatus();
 const mb = (n: number | null) => (n == null ? '–' : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 const last = s.lastRun;
+const err = last && last.ok === 0 ? last.error ?? '' : '';
+// A hint for the two failures the owner can fix.
+const hint = /storage quota/i.test(err)
+  ? 'Use a folder in a Shared Drive. A service account has no storage of its own, so it cannot save files in a person\'s My Drive.'
+  : /HTTP 404/.test(err)
+    ? 'Share the Shared Drive with the service account as Content manager, and check the folder ID.'
+    : '';
 ---
 <Admin title="Backups" current="editors">
   <div class="cms-bar">
@@ -36,7 +43,9 @@ const last = s.lastRun;
     <div><dt>Last success</dt><dd id="backup-last-ok">{s.lastOk?.finished_at ? <>{fmtTime(s.lastOk.finished_at)} · database {mb(s.lastOk.db_bytes)}, photos {mb(s.lastOk.media_bytes)}</> : 'None yet'}</dd></div>
     <div><dt>Last attempt</dt><dd id="backup-last-run">{last ? (last.finished_at ? `${fmtTime(last.started_at)} · ${last.ok ? 'succeeded' : 'failed'}` : `${fmtTime(last.started_at)} · running`) : 'None yet'}</dd></div>
     <div><dt>Last error</dt><dd id="backup-last-error">{last?.error ? <code>{last.error}</code> : 'None'}</dd></div>
-    <div><dt>Google access</dt><dd>{s.scope.endsWith('/drive.file') ? 'Only files this site created (drive.file)' : 'Everything shared with the service account (drive)'}</dd></div>
+    {hint && <div><dt>What to do</dt><dd id="backup-hint">{hint}</dd></div>}
+    {last?.permanent === 1 && <div><dt>Retries</dt><dd>Not retried today, because trying again cannot fix this. Fix the cause; the next attempt is tomorrow.</dd></div>}
+    <div><dt>Google access</dt><dd>{s.scope.endsWith('/drive.file') ? 'Only files this site created (drive.file)' : 'Folders shared with the service account (drive)'}</dd></div>
   </dl>
 
   {s.recent.length > 0 && (

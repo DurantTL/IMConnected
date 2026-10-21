@@ -5,9 +5,11 @@
 // text only (and callers pass them through redact() anyway). The key, the JWT and the access token never appear in
 // a message.
 //
-// Scope: drive.file by default (the service account only sees files it created itself). If Google answers
-// "File not found" for a folder that was shared with the account, set GDRIVE_SCOPE to the full drive scope: a
-// service account has an empty Drive of its own, so the full scope only reaches what was shared with it.
+// Scope: the full drive scope by default. drive.file (only files the account created itself) usually cannot see a
+// folder or Shared Drive that was merely shared with the account, so Google answers 404 for the folder. A service
+// account has no files of its own, so the full scope only reaches what was shared with it; deletes are still limited
+// by the caller to the folder, the name pattern and files the account created. GDRIVE_SCOPE=drive.file opts in to the
+// narrow scope (it works when the account created the folder itself).
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -26,6 +28,13 @@ const b64u = (v) => Buffer.from(v).toString('base64url');
  * key, folderId }. `key` is the parsed service-account JSON (never exposed by the status page). Backups are off
  * (configured false) unless both GDRIVE_SERVICE_ACCOUNT_JSON (base64) and GDRIVE_FOLDER_ID are set and usable.
  */
+/** True for a failure that retrying will not fix: bad request, bad credentials, no permission or quota, missing folder. */
+export function isPermanentDriveError(err) {
+  const st = err?.status;
+  if (st === 403) return !/rate ?limit|too many/i.test(String(err.message));
+  return st === 400 || st === 401 || st === 404;
+}
+
 export function driveConfig(env = process.env) {
   const rawKey = (env.GDRIVE_SERVICE_ACCOUNT_JSON || '').trim();
   const rawFolder = (env.GDRIVE_FOLDER_ID || '').trim();
@@ -44,7 +53,7 @@ export function driveConfig(env = process.env) {
     }
   }
   if (rawFolder && !FOLDER_ID.test(rawFolder)) problems.push('GDRIVE_FOLDER_ID does not look like a Drive folder id');
-  const scope = env.GDRIVE_SCOPE === 'drive' || env.GDRIVE_SCOPE === SCOPE_FULL ? SCOPE_FULL : SCOPE_FILE;
+  const scope = env.GDRIVE_SCOPE === 'drive.file' || env.GDRIVE_SCOPE === SCOPE_FILE ? SCOPE_FILE : SCOPE_FULL;
   return {
     configured: missing.length === 0 && problems.length === 0,
     missing,
