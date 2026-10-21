@@ -13,17 +13,21 @@
 import { feedItem, type FeedItem, type FeedSource } from './feed';
 import { getStories } from './stories';
 import { validDate } from './storyfile';
+import { storyExcerpt } from './excerpt';
 import { listLiveDrafts, listOpenDraftsNewestFirst, listPhotos as listPhotosOf, listUnpublishedSlugs, type Draft, type DraftPhoto, type DraftSource } from './drafts';
 
 export const STUDIO_LIST_MAX = 100;
 export const STUDIO_DRAFT_LIMIT = 20;
 
 export interface StudioStory extends FeedItem {
+  /** First paragraph of the body as plain text (at most 400 characters), or an empty string. */
+  excerpt: string;
   status: 'published';
   /** Where it came from: the dashboard draft's source (form, studio, editor, agent), or "site" for a story that was committed to git. */
   source: DraftSource | 'site';
 }
 export interface StudioDraft extends Omit<FeedItem, 'id' | 'url'> {
+  excerpt: string;
   id: number;
   status: 'new' | 'in_review';
   source: DraftSource;
@@ -64,7 +68,7 @@ function draftAsFeedSource(slugOrId: string, d: Draft, photos: DraftPhoto[]): Fe
 export async function listPublishedForStudio(site: URL, opts: { limit: number; section?: string }): Promise<StudioStory[]> {
   const items = new Map<string, StudioStory>();
   try {
-    for (const s of await getStories()) items.set(s.id, { ...feedItem(s, site), status: 'published', source: 'site' });
+    for (const s of await getStories()) items.set(s.id, { ...feedItem(s, site), excerpt: storyExcerpt(s.body), status: 'published', source: 'site' });
   } catch (err) {
     console.error('[stories] could not read the built story list', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
   }
@@ -78,7 +82,7 @@ export async function listPublishedForStudio(site: URL, opts: { limit: number; s
         if (built) items.set(slug, { ...built, source: d.source });
         continue;
       }
-      items.set(slug, { ...feedItem(draftAsFeedSource(slug, d, listPhotosOf(d.id)), site), status: 'published', source: d.source });
+      items.set(slug, { ...feedItem(draftAsFeedSource(slug, d, listPhotosOf(d.id)), site), excerpt: storyExcerpt(d.body), status: 'published', source: d.source });
     }
   } catch (err) {
     // The dashboard database being down must not hide the stories that were in the last build.
@@ -94,6 +98,6 @@ export function listDraftsForStudio(site: URL, opts: { section?: string; limit?:
   return listOpenDraftsNewestFirst(opts.limit ?? STUDIO_DRAFT_LIMIT, opts.section).map(({ draft, photos }) => {
     // A draft is not live: no `url`, and its `id` is the draft's own.
     const { id: _slug, url: _url, ...item } = feedItem(draftAsFeedSource(String(draft.id), draft, photos), site);
-    return { ...item, id: draft.id, status: draft.status as 'new' | 'in_review', source: draft.source };
+    return { ...item, excerpt: storyExcerpt(draft.body), id: draft.id, status: draft.status as 'new' | 'in_review', source: draft.source };
   });
 }
