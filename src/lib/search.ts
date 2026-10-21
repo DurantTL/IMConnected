@@ -12,6 +12,8 @@
 export const MAX_QUERY_CHARS = 200;
 export const MAX_TERMS = 8;
 export const MAX_TERM_CHARS = 40;
+/** Only this many words are searched as prefixes (the rest must match whole words), and one-letter words are never prefixes. */
+export const MAX_PREFIX_TERMS = 4;
 export const MAX_RESULTS = 20;
 const SNIPPET_CHARS = 200;
 
@@ -33,10 +35,31 @@ export function parseQuery(raw: string): ParsedQuery {
   return { ok: true, terms };
 }
 
-/** The FTS5 MATCH string: every word in double quotes, as a prefix match, all required. Words hold letters and digits only. */
+/**
+ * The FTS5 MATCH string: every word in double quotes, all required. The first MAX_PREFIX_TERMS words of two or more
+ * characters are prefix matches; one-letter words and any further words must match a whole word, because a one-letter
+ * prefix scans most of the index. Words hold letters and digits only.
+ */
 export function ftsQuery(terms: string[]): string {
-  return terms.map((t) => `"${t.replace(/"/g, '')}"*`).join(' ');
+  let prefixes = 0;
+  return terms.map((t) => {
+    const prefix = t.length >= 2 && prefixes < MAX_PREFIX_TERMS;
+    if (prefix) prefixes++;
+    return `"${t.replace(/"/g, '')}"${prefix ? '*' : ''}`;
+  }).join(' ');
 }
+
+interface Rule { t: string; prefix: boolean }
+/** How each word is matched, the same rule ftsQuery() gives FTS5, so the in-memory search and the highlights agree with the index. */
+export function matchRules(terms: string[]): Rule[] {
+  let prefixes = 0;
+  return terms.map((raw) => {
+    const prefix = raw.length >= 2 && prefixes < MAX_PREFIX_TERMS;
+    if (prefix) prefixes++;
+    return { t: fold(raw), prefix };
+  });
+}
+const ruleHit = (r: Rule, folded: string) => (r.prefix ? folded.startsWith(r.t) : folded === r.t);
 
 /** Lower case with accents removed, the same folding the FTS tokenizer does (unicode61 remove_diacritics). */
 export function fold(s: string): string {
@@ -50,7 +73,7 @@ const ENTITIES: Record<string, string> = { '&lt;': '<', '&gt;': '>', '&quot;': '
 /**
  * The words of a Markdown story as plain text: links and images keep their text, markup characters and tags go,
  * escapes and entities are turned back into characters. It only ever feeds the index and the snippets, which are
- * escaped again on the way out. The private-use characters are removed so they can never be mistaken for markers.
+ * escaped again on the way out. Control and private-use characters are replaced by spaces.
  */
 export function plainText(markdown: string): string {
   return markdown
@@ -64,14 +87,14 @@ export function plainText(markdown: string): string {
     .replace(/(\*\*|__|~~|`)/g, '')
     .replace(/\\([\\`*_{}[\]()#+\-.!<>&|])/g, '$1')
     .replace(/&(?:lt|gt|quot|#39|#x27|amp);/g, (e) => ENTITIES[e] ?? e)
-    .replace(/[\u0000-\u001f\u007f-]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f\ue000-\uf8ff]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 /** Plain text for an indexed field (title, dek, author, church): control and private-use characters out. */
 export function cleanField(s: string | undefined | null): string {
-  return (s ?? '').replace(/[\u0000-\u001f\u007f-]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (s ?? '').replace(/[\u0000-\u001f\u007f\ue000-\uf8ff]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 export function escapeHtml(s: string): string {
@@ -91,8 +114,8 @@ function wordsOf(text: string): { word: string; index: number; folded: string }[
 export function snippetHtml(text: string, terms: string[]): string {
   if (!text) return '';
   const words = wordsOf(text);
-  const folded = terms.map(fold);
-  const hit = (w: { folded: string }) => folded.some((t) => w.folded.startsWith(t));
+  const rules = matchRules(terms);
+  const hit = (w: { folded: string }) => rules.some((r) => ruleHit(r, w.folded));
   const first = words.find(hit);
   let start = first ? Math.max(0, first.index - 60) : 0;
   if (start > 0) { const sp = text.indexOf(' ', start); if (sp !== -1 && sp < (first?.index ?? start)) start = sp + 1; }
@@ -112,10 +135,17 @@ export function snippetHtml(text: string, terms: string[]): string {
   return out;
 }
 
-/** True when every search word is the start of some word in `text`. */
+/** The folded words of a text (what the in-memory search keeps per story). */
+export const foldedWords = (text: string): string[] => wordsOf(text).map((w) => w.folded);
+/** True when every search word matches one of the folded words. */
+export const matchesWords = (terms: string[], words: string[]): boolean => matchRules(terms).every((r) => words.some((w) => ruleHit(r, w)));
+/** How many search words match a word of the title (the in-memory ranking). */
+export const titleScore = (terms: string[], titleWords: string[]): number => matchRules(terms).filter((r) => titleWords.some((w) => ruleHit(r, w))).length;
+
+/** True when every search word matches some word in `text`. */
 export function matchesAll(text: string, terms: string[]): boolean {
   const folded = wordsOf(text).map((w) => w.folded);
-  return terms.map(fold).every((t) => folded.some((w) => w.startsWith(t)));
+  return matchRules(terms).every((r) => folded.some((w) => ruleHit(r, w)));
 }
 
 export interface SearchableStory {
@@ -148,8 +178,8 @@ export interface SearchHit {
 export function toHit(s: SearchableStory, terms: string[]): SearchHit {
   const body = plainText(s.body);
   const dek = cleanField(s.dek);
-  const folded = terms.map(fold);
-  const has = (text: string) => wordsOf(text).some((w) => folded.some((t) => w.folded.startsWith(t)));
+  const rules = matchRules(terms);
+  const has = (text: string) => wordsOf(text).some((w) => rules.some((r) => ruleHit(r, w.folded)));
   const source = has(body) ? body : has(dek) ? dek : dek || body;
   return {
     slug: s.slug,

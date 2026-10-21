@@ -19,8 +19,9 @@ function rateLimited(ip: string): boolean {
   const now = Date.now();
   const list = hits.get(ip) ?? [];
   const allowed = takeSlot(list, now, MAX_PER_WINDOW, WINDOW_MS);
+  hits.delete(ip); // re-insert so the busiest addresses are the last to be evicted
   hits.set(ip, list);
-  if (hits.size > 5000) hits.clear();
+  if (hits.size > 5000) for (const k of [...hits.keys()].slice(0, 1000)) hits.delete(k); // oldest first (a Map keeps insertion order); never reset everyone's limit
   return !allowed;
 }
 

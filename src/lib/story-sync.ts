@@ -28,6 +28,8 @@ import { getHold, listHolds, releaseHold, getStoryHash, getStoryBySlug, slugsByS
 import { listUnpublishedSlugs } from './drafts';
 import { invalidateStories } from './public-cache';
 import { holdActive } from './story-holds';
+import { getDb } from './db';
+import { reindexAll } from './search-index';
 
 /** The built site's static files (dist/client): next to the server bundle, else ./dist/client, or BUILT_CLIENT_DIR. */
 export function builtClientDir(): string | null {
@@ -278,6 +280,8 @@ export function ensureStorySync(): void {
     try {
       const r = await syncStoriesFromBuild();
       console.log(`[stories] mirrored the build: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged, ${r.unpublished} unpublished, ${r.skipped} skipped, ${r.hashed} photos hashed, ${r.copied} copied`);
+      // Fill the search index for every story (migration 013 leaves it empty) before search starts using it.
+      try { await reindexAll(getDb(), yieldToLoop); } catch (err) { console.error('[stories] could not build the search index:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error'); }
       if (r.skipped === 0) { done = true; invalidateStories(); } // pages cached from the built collection give way to the database
       else { console.error(`[stories] ${r.skipped} stories could not be mirrored; pass ${passes} of ${MAX_PASSES}`); scheduleRetry(); }
     } catch (err) {

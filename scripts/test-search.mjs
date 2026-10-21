@@ -126,7 +126,7 @@ try {
     d.prepare('INSERT INTO story_holds (slug, build_marker, unpublish_sha, unpublish_time, released_at, created_at) VALUES (?, NULL, ?, ?, NULL, ?)').run(B.s.slug, 'a'.repeat(40), now - 6000, now - 6000);
     d.close();
   }
-  const server1 = startServer({ STORY_SYNC_TEST_DELAY_MS: '8000' });
+  const server1 = startServer({ STORY_SYNC_TEST_DELAY_MS: '8000', SEARCH_REPAIR_TEST_MS: '0' });
   await waitFor(BASE + '/submit/');
   {
     const r = await search({ q: C.word });
@@ -138,6 +138,7 @@ try {
     check('fresh start: a held story (unpublished, then published again, old text still in the build) is not returned', b.status === 200 && !slugsOf(b).includes(B.s.slug), b.text.slice(0, 200));
     const t = await search({ q: C.s.title.split(/\s+/).slice(0, 3).join(' ') });
     check('fresh start: a title search finds the story', slugsOf(t).includes(C.s.slug), t.text.slice(0, 200));
+    check('fresh start: a one-letter word must match a whole word, never a prefix', slugsOf(await search({ q: `${C.word} ${C.word[0]}` })).length === 0);
     const nm = await search({ q: 'zzzqqqxxnomatch' });
     check('fresh start: no matches is a 200 with ok: true and an empty list (not an error)', nm.status === 200 && nm.body?.ok === true && nm.body.results.length === 0);
     const sec = await search({ q: C.word, section: C.s.section === 'news' ? 'kids' : 'news' });
@@ -162,6 +163,7 @@ try {
     check('every returned result is a live story in the table (the same set the pages show)', (await search({ q: 'the' })).body.results.every((x) => q("SELECT status FROM stories WHERE slug = ?", x.slug)[0]?.status === 'live'));
     const ft = await search({ q: C.s.title.split(/\s+/).slice(0, 2).join(' ') });
     check('title words find the story, and it ranks first', slugsOf(ft)[0] === C.s.slug, JSON.stringify(slugsOf(ft)));
+    check('a one-letter word must match a whole word, never a prefix', slugsOf(await search({ q: `${C.word} ${C.word[0]}` })).length === 0);
     check('a prefix finds the story (typing the start of a word)', slugsOf(await search({ q: C.word.slice(0, 5) })).includes(C.s.slug));
     check('upper case and extra spaces make no difference', slugsOf(await search({ q: `   ${C.word.toUpperCase()}   ` })).includes(C.s.slug));
     const sec = await search({ q: C.word, section: C.s.section });
@@ -341,7 +343,7 @@ try {
   // ================= part 4: the index cannot be read =================
   {
     await stopServer(server1);
-    const server2 = startServer();
+    const server2 = startServer({ SEARCH_REPAIR_TEST_MS: '0' });
     await waitFor(BASE + '/submit/');
     await search({ q: 'baptism' });
     check('after a restart the index persists and is used', await until(synced, 25000) && (await search({ q: C.word })).source === 'index');
@@ -351,6 +353,63 @@ try {
     check('...and still hides dashboard-unpublished and held stories', !slugsOf(await search({ q: A.word })).includes(A.s.slug) && !slugsOf(await search({ q: B.word })).includes(B.s.slug));
     check('...hostile queries still never give a 500', [await search('q=NEAR('), await search({ q: '<script>' }), await search('q=%22'), await search('q=')].every((x) => x.status === 200 || x.status === 400));
     await stopServer(server2);
+  }
+
+
+  // ================= part 5: upgrade (013 on a populated database), repair limits =================
+  {
+    const DATA2 = path.join(SCRATCH, 'data-upgrade');
+    const DB2 = path.join(DATA2, 'imconnected.db');
+    const db2 = (fn) => { const d = new DatabaseSync(DB2); d.exec('PRAGMA busy_timeout = 5000'); try { return fn(d); } finally { d.close(); } };
+    const now = Date.now();
+    const d0 = openDatabase(DATA2);
+    runMigrations(d0, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')).filter((m) => m.name < '013'));
+    const addStory = (d, slug, body) => d.prepare("INSERT INTO stories (slug, title, section, author, date, body, status, source, published_at, updated_at) VALUES (?, ?, 'news', 'Sam Synthetic', '2026-10-20', ?, 'live', 'editor', ?, ?)").run(slug, 'Upgrade story ' + slug, body, now, now);
+    for (const n of [1, 2, 3]) addStory(d0, `zz-old-${n}`, `Made-up text with the word zzoldword${n} in it.`);
+    d0.close();
+    let srv = startServer({ DATA_DIR: DATA2, STORY_SYNC_TEST_DELAY_MS: '6000' }); // the default repair throttle (once a minute)
+    await waitFor(BASE + '/submit/');
+    const t0 = Date.now();
+    const early = await search({ q: 'zzoldword2' });
+    check('upgrade: right after 013 on a populated database, search answers at once from the in-memory fallback (the index is still empty)', early.status === 200 && early.source === 'build' && Date.now() - t0 < 2000 && db2((d) => d.prepare('SELECT COUNT(*) AS n FROM stories_fts').get().n) === 0, `${early.status} ${early.source}`);
+    check('(wait for the mirror)', await until(synced, 25000), log.slice(-4).join(' | '));
+    const counts = db2((d) => [d.prepare('SELECT COUNT(*) AS n FROM stories').get().n, d.prepare('SELECT COUNT(*) AS n FROM stories s JOIN stories_fts f ON f.rowid = s.id WHERE f.stamp = s.updated_at').get().n]);
+    check('upgrade: the sync pass indexed every story before search switched to the index (no per-request repair needed)', counts[0] >= 3 && counts[0] === counts[1], JSON.stringify(counts));
+    const late = await search({ q: 'zzoldword3' });
+    check('upgrade: after the pass, search uses the index and finds the old story', late.source === 'index' && slugsOf(late).includes('zz-old-3'), `${late.source} ${late.text.slice(0, 150)}`);
+    await stopServer(srv);
+
+    // repair limits: a failing row is logged once, a lock is never waited on, a request repairs at most a few rows
+    srv = startServer({ DATA_DIR: DATA2, SEARCH_REPAIR_TEST_MS: '0', SEARCH_TEST_FAIL_SLUG: 'zz-bad' });
+    await waitFor(BASE + '/submit/');
+    await search({ q: 'zzoldword1' });
+    check('(wait for the mirror)', await until(synced, 25000), log.slice(-4).join(' | '));
+    db2((d) => { addStory(d, 'zz-bad', 'The zzbadword text.'); addStory(d, 'zz-good', 'zzgoodtoken alpha beta.'); });
+    for (let i = 0; i < 6; i++) await search({ q: 'zzgoodtoken' });
+    const fails = log.filter((l) => l.includes('could not index story')).length;
+    check('repair: one failing row is logged once and not retried on every search; the other rows are still indexed', fails === 1 && slugsOf(await search({ q: 'zzgoodtoken' })).includes('zz-good') && slugsOf(await search({ q: 'zzbadword' })).length === 0, `${fails} ${log.slice(-3).join(' | ')}`);
+    check('repair: the failing row is only skipped, nothing else is affected (a search for it is a normal 200)', (await search({ q: 'zzbadword' })).status === 200);
+
+    // prefix rules: one-letter words are whole-word only, and only the first 4 words are prefixes
+    check('a one-letter word is a whole word, not a prefix (zzgoodtoken a: no match; "alpha" is not "a")', slugsOf(await search({ q: 'zzgoodtoken a' })).length === 0 && slugsOf(await search({ q: 'zzgoodtoken al' })).includes('zz-good'));
+    check('only the first 4 words are prefixes: four prefixes match, a fifth must be a whole word', slugsOf(await search({ q: 'zzgoodtoken alp bet zzg' })).includes('zz-good') && slugsOf(await search({ q: 'zzgoodtoken alp bet zzg zzgood' })).length === 0 && slugsOf(await search({ q: 'zzgoodtoken alp bet zzg zzgoodtoken' })).includes('zz-good'));
+
+    db2((d) => addStory(d, 'zz-locked', 'The zzlockedword text.'));
+    const locker = new DatabaseSync(DB2);
+    locker.exec('BEGIN IMMEDIATE');
+    const t1 = Date.now();
+    const locked = await search({ q: 'zzoldword1' });
+    const lockedMs = Date.now() - t1;
+    check('repair: with another writer holding the database lock a search is still answered at once (the request never waits on a lock)', locked.status === 200 && slugsOf(locked).includes('zz-old-1') && lockedMs < 1500, `${locked.status} ${lockedMs}ms`);
+    locker.exec('ROLLBACK');
+    locker.close();
+    await search({ q: 'zzlockedword' });
+    check('...and once the lock is gone the row is repaired by a later search', slugsOf(await search({ q: 'zzlockedword' })).includes('zz-locked'));
+    db2((d) => { for (let i = 0; i < 80; i++) addStory(d, `zz-many-${i}`, `Bulk text zzmanyword${i}.`); });
+    await search({ q: 'zzoldword1' });
+    const indexed = db2((d) => d.prepare("SELECT COUNT(*) AS n FROM stories s JOIN stories_fts f ON f.rowid = s.id WHERE s.slug LIKE 'zz-many-%'").get().n);
+    check('repair: one request repairs at most 50 rows', indexed === 50, String(indexed));
+    await stopServer(srv);
   }
 
   const leaked = log.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|secret/i.test(l));
