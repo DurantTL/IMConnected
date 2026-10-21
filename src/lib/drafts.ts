@@ -439,53 +439,31 @@ export function restoreDraft(id: number, expected: number, userId: number): OpRe
   });
 }
 
+/** The marker stored in drafts.published_commit for a story published to the database (the column predates the move off git). */
+export const DB_PUBLISH_MARKER = 'db';
+
 /**
- * Step 1 of publishing, before anything is committed: take the draft's lock (so saves made from the
- * page the editor is looking at now get a conflict instead of being lost) and reserve the slug (the
- * unique index refuses a slug another draft holds). Returns the new version, or why it failed.
+ * Publish the draft row: under the version check (updated_at must still be `expected`, the draft still new / in
+ * review) mark it published, take the slug (the unique index refuses a slug another draft holds) and move the
+ * version forward. Call inside the same transaction that writes the story, so both happen or neither does.
+ * Throws only on a database error; a lost race is returned as a Failure.
  */
-export function beginPublish(id: number, expected: number, userId: number, slug: string): { ok: true; updatedAt: number } | Failure {
+export function publishDraftRow(id: number, expected: number, info: { slug: string; userId: number }): { ok: true; updatedAt: number } | Failure {
+  const now = Date.now();
+  const next = Math.max(now, expected + 1);
   try {
-    return tx(() => {
-      const next = Math.max(Date.now(), expected + 1);
-      const r = getDb()
-        .prepare("UPDATE drafts SET updated_at = ?, updated_by = ?, slug = ? WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
-        .run(next, userId, slug, id, expected);
-      return Number(r.changes) === 1 ? { ok: true as const, updatedAt: next } : lockFailure(id);
-    }) as { ok: true; updatedAt: number } | Failure;
+    const r = getDb()
+      .prepare("UPDATE drafts SET status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
+      .run(info.slug, DB_PUBLISH_MARKER, now, info.userId, next, info.userId, id, expected);
+    return Number(r.changes) === 1 ? { ok: true, updatedAt: next } : (lockFailure(id) as Failure);
   } catch (err) {
     if (/UNIQUE/i.test(err instanceof Error ? err.message : '')) return fail('conflict', 'slug_taken');
     throw err;
   }
 }
 
-/** The commit failed: give back a slug this publish reserved (a draft that was never live). */
-export function releaseSlug(id: number, slug: string): void {
-  getDb().prepare('UPDATE drafts SET slug = NULL WHERE id = ? AND slug = ? AND published_commit IS NULL').run(id, slug);
-}
-
 /**
- * Step 2, after the commit succeeded. `lockedAt` is the version beginPublish returned. If the draft was
- * saved since (someone reloaded and edited while the commit ran), the commit and slug are still recorded
- * and the story is live, but the draft stays in review and `stale` is true: the newer edits are not live.
- */
-export function markPublished(id: number, info: { slug: string; commit: string; userId: number; lockedAt: number }): { stale: boolean; wasRejected: boolean } {
-  const now = Date.now();
-  const r = getDb()
-    .prepare("UPDATE drafts SET status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
-    .run(info.slug, info.commit, now, info.userId, Math.max(now, info.lockedAt + 1), info.userId, id, info.lockedAt);
-  if (Number(r.changes) === 1) return { stale: false, wasRejected: false };
-  // Changed while the commit ran. The story is live either way. A draft rejected meanwhile goes back to
-  // in review (its note stays) so it can be published again; the editor is told.
-  const wasRejected = (getDb().prepare('SELECT status FROM drafts WHERE id = ?').get(id) as { status: DraftStatus } | undefined)?.status === 'rejected';
-  getDb()
-    .prepare("UPDATE drafts SET slug = ?, published_commit = ?, published_at = ?, published_by = ?, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0, status = CASE WHEN status = 'rejected' THEN 'in_review' ELSE status END, rejected_at = NULL WHERE id = ?")
-    .run(info.slug, info.commit, now, info.userId, id);
-  return { stale: true, wasRejected };
-}
-
-/**
- * After a publish the photos live in the repo. Turn the published uploads into site images (so the draft
+ * After a publish the photos live in the database's media folder. Turn the published uploads into site images (so the draft
  * still shows them) and delete the uploaded files and folder. `published` maps photo id -> public path.
  */
 export function retireUploads(draftId: number, published: Map<number, string>): void {
@@ -629,7 +607,7 @@ export interface StudioStory {
   author: string;
   date: string;
   photoCredit: string;
-  /** The Markdown that was committed. */
+  /** The Markdown that was published. */
   body: string;
   photos: { url: string; alt: string; caption: string }[];
 }
@@ -654,13 +632,14 @@ export function listRecentPublished(limit: number): { slug: string; title: strin
  * Record Studio publishes as `published` drafts (source studio, published_by NULL). A slug that already has a
  * draft is updated in place only when that draft is a Studio one or is closed (published / rejected). A linked
  * draft that is still new / in review (it may hold an editor's unsaved-to-site work, or be mid-publish with the
- * slug reserved) is never touched except for the live markers, and gets a notice. Call after the commit succeeded.
+ * slug reserved) is never touched except for the live markers, and gets a notice. Call it INSIDE the transaction that
+ * writes the stories (no transaction of its own); delete `oldUploads` (a rejected draft's own files) after the commit.
  */
-export function recordStudioPublish(stories: StudioStory[], commit: string): { ids: number[]; overwrote: number[] } {
+export function recordStudioPublish(stories: StudioStory[], commit: string = DB_PUBLISH_MARKER): { ids: number[]; overwrote: number[]; oldUploads: string[] } {
   const ids: number[] = [];
   const overwrote: number[] = [];
   let oldUploads: string[] = [];
-  tx(() => {
+  {
     const now = Date.now();
     for (const st of stories) {
       const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, photoCredit: st.photoCredit, body: st.body });
@@ -689,9 +668,8 @@ export function recordStudioPublish(stories: StudioStory[], commit: string): { i
       }
       ids.push(id);
     }
-  });
-  removeUploadFiles(oldUploads); // only a rejected draft's own uploads can be in here
-  return { ids, overwrote };
+  }
+  return { ids, overwrote, oldUploads };
 }
 
 export interface AgentDraftInput {

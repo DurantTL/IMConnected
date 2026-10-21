@@ -1,20 +1,17 @@
 import type { APIRoute } from 'astro';
 import {
-  addUploadedPhotos, beginPublish, changePhoto, getDraft, isEditable, listPhotos, markPublished, photoCount, rejectDraft, releaseSlug, restoreDraft, retireUploads,
+  addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, photoCount, rejectDraft, restoreDraft, retireUploads,
   saveAuditDue, saveDraft, writeUpload, removeUploadFiles, type OpResult,
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
-import { buildDraftFiles, publishMessage } from '../../../../../lib/draft-publish';
-import { getHold } from '../../../../../lib/story-store';
-import { invalidateStories } from '../../../../../lib/public-cache';
-import { commitToBase } from '../../../../../lib/github';
+import { publishDraft } from '../../../../../lib/story-publish';
 import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
 import { sniffImage } from '../../../../../lib/submission';
 import { renderMarkdownSafe, escapeHtml } from '../../../../../lib/markdown';
 import { audit } from '../../../../../lib/auth/audit';
 import { clientIp } from '../../../../../lib/request';
-import { githubOrNull, jsonResponse, readFormLimited, redirectTo } from '../../../../../lib/draft-http';
+import { jsonResponse, readFormLimited, redirectTo } from '../../../../../lib/draft-http';
 
 export const prerender = false;
 
@@ -115,73 +112,25 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
   // ---- publish ----
   if (!isEditable(draft)) return refuse('not_publishable');
   if (version !== draft.updatedAt) return refuse('conflict');
-  const cfg = githubOrNull();
-  if (!cfg) {
-    console.error('[drafts] GITHUB_TOKEN / GITHUB_REPO not configured');
-    return refuse('no_github');
-  }
-  // Fail closed: a story the editor unpublished must have its hold (a released one counts). Without it the old text
-  // could come back, so the editor is asked to unpublish again first.
-  if (draft.unpublishedAt !== null && draft.slug) {
-    let hold: ReturnType<typeof getHold>;
-    try {
-      hold = getHold(draft.slug);
-    } catch {
-      hold = undefined;
-    }
-    if (!hold) return refuse('hold_missing');
-  }
   if (publishing.has(draft.id)) return refuse('already_publishing');
   publishing.add(draft.id);
-  let reserved: string | null = null;
   try {
-    const photos = listPhotos(draft.id);
-    const built = await buildDraftFiles(cfg, draft, photos);
-    // Lock the draft (saves from the page the editor is looking at now conflict instead of being lost)
-    // and reserve the slug before anything reaches GitHub.
-    const lock = beginPublish(draft.id, version, user.id, built.slug);
-    if (!lock.ok) return redirectTo(page, { e: lock.code });
-    if (!draft.slug) reserved = built.slug;
-
-    const { sha } = await commitToBase(cfg, { files: built.files, message: publishMessage(built.title, user.name) });
-    reserved = null; // the story is live from here on, whatever happens next
-
-    let r: { stale: boolean; wasRejected: boolean };
+    // One transaction: the draft row (version check, slug) and the story, its photos and its search entry. Nothing is
+    // half-written if it fails, and the story is live on the very next request.
+    const out = await publishDraft(draft, listPhotos(draft.id), version, user.id);
+    // Housekeeping after the story is recorded: a failure here must never read as "not published".
     try {
-      r = markPublished(draft.id, { slug: built.slug, commit: sha, userId: user.id, lockedAt: lock.updatedAt });
-    } catch (err) {
-      console.error('[drafts] published but could not record it', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-      return redirectTo(page, { e: 'live_not_recorded' });
-    }
-    // A story that was unpublished stays hidden on the database-rendered pages (a hold, see unpublish.ts) until an image
-    // that contains the unpublish commit runs: the server's build and mirror still have its old text.
-    let held = false;
-    try {
-      const h = getHold(built.slug);
-      held = h !== undefined && h.releasedAt === null;
-    } catch (err) {
-      console.error('[stories] could not read the hold', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    }
-    invalidateStories();
-    // Housekeeping after the story is recorded: a failure here must never read as "not recorded".
-    try {
-      audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: built.slug, commit: sha, newerEditsNotLive: r.stale }, ip });
-      if (r.wasRejected) audit('draft.restore', { userId: user.id, target: `draft:${draft.id}`, detail: { reason: 'rejected while publishing' }, ip });
-      retireUploads(draft.id, built.uploaded);
+      audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: out.slug }, ip });
+      retireUploads(draft.id, out.uploaded);
     } catch (err) {
       console.error('[drafts] published; cleanup afterwards failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
-    return redirectTo(page, { n: held ? 'published_held' : r.stale ? 'published_stale' : 'published' });
+    return redirectTo(page, { n: 'published' });
   } catch (err) {
     if (err instanceof EditorError) return redirectTo(page, { e: err.code });
-    // Give the slug back only when GitHub definitely refused the commit (4xx). After a network error or a
-    // 5xx the commit may still have landed, so the reservation stays and a retry overwrites the same slug.
-    const status = (err as { status?: unknown }).status;
-    if (!(typeof status === 'number' && status >= 400 && status < 500)) reserved = null;
     console.error('[drafts] publish failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     return redirectTo(page, { e: 'publish_failed' });
   } finally {
-    if (reserved) releaseSlug(draft.id, reserved);
     publishing.delete(draft.id);
   }
 };

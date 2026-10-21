@@ -4,7 +4,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-# The commits this image is built from (docker.yml writes the real list; a local build gets an empty file).
+# The commits this image is built from (docker.yml writes the real list; a local build gets an empty file). Only the
+# one-time adoption of the built stories reads it (src/lib/story-adopt.ts); remove it with the story_holds cleanup.
 RUN touch .build-commits
 # Canonical URL baked into pages (og:url, canonical, sitemap). Override with --build-arg.
 ARG SITE_URL=https://stories.imadventist.org
@@ -30,15 +31,19 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/.build-commits ./.build-commits
 COPY package.json ./
-# create-admin.mjs and the migrations it applies (run with `docker compose exec`)
+# create-admin.mjs, import-git-stories.mjs and the migrations they apply (run with `docker compose exec`);
+# site.ts (sections) and limits.ts (photo and body limits) are what the import script validates against.
 COPY scripts ./scripts
 COPY src/lib/db ./src/lib/db
+COPY src/lib/site.ts src/lib/limits.ts ./src/lib/
 # SQLite database lives on a volume at /data
 RUN mkdir -p /data && chown node:node /data
 ENV DATA_DIR=/data
 VOLUME /data
 USER node
 EXPOSE 4321
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+# `/` reads the database, so a database outage shows as "unhealthy" on purpose. The start period covers a first start on a
+# brand new database, where the first request waits (up to 60 s) for the one-time adoption of the built stories.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s \
   CMD wget -qO- http://127.0.0.1:4321/ >/dev/null || exit 1
 CMD ["node", "dist/server/entry.mjs"]

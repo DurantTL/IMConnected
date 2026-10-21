@@ -1,7 +1,6 @@
-// Turns a submit-form payload into a Markdown story + photo files.
+// Parses and validates a submit-form payload; the story becomes a dashboard draft (src/lib/drafts.ts).
 import { getSection, isValidArea } from './site';
 import { LIMITS } from './limits';
-import type { NewFile } from './github';
 
 export interface Submission {
   name: string;
@@ -91,84 +90,3 @@ export function textToMarkdown(text: string): string {
     .trim();
 }
 
-const yaml = (v: string) => JSON.stringify(v); // JSON strings are valid YAML double-quoted scalars
-
-export async function buildFiles(s: Submission, now = new Date()) {
-  const date = now.toISOString().slice(0, 10);
-  const rand = Math.random().toString(36).slice(2, 6);
-  const slug = `${date}-${slugify(s.title)}-${rand}`;
-
-  const files: NewFile[] = [];
-  const photoPaths: string[] = [];
-  for (const [i, p] of s.photos.entries()) {
-    const bytes = new Uint8Array(await p.arrayBuffer());
-    const ext = sniffImage(bytes);
-    if (!ext) throw new ValidationError(`"${p.name}" isn't a JPG, PNG or WebP image.`);
-    const publicPath = `/images/stories/${slug}/photo-${i + 1}.${ext}`;
-    photoPaths.push(publicPath);
-    files.push({ path: `public${publicPath}`, content: Buffer.from(bytes).toString('base64'), encoding: 'base64' });
-  }
-
-  const fm: string[] = [
-    '---',
-    `title: ${yaml(s.title)}`,
-    ...(s.dek ? [`dek: ${yaml(s.dek)}`] : []),
-    `section: ${s.section}`,
-    ...(s.area ? [`area: ${s.area}`] : []),
-    `author: ${yaml(s.name)}`,
-    `church: ${yaml(s.church)}`,
-    `date: ${date}`,
-    ...(photoPaths[0] ? [`image: ${yaml(photoPaths[0])}`, `imageAlt: ${yaml(s.caption || s.title)}`] : []),
-    ...(s.photoCredit ? [`photoCredit: ${yaml(s.photoCredit)}`] : []),
-    ...(photoPaths.length > 1 ? ['photos:', ...photoPaths.slice(1).map((p) => `  - ${yaml(p)}`)] : []),
-    'featured: false',
-    'draft: false',
-    '---',
-    '',
-  ];
-  const md = fm.join('\n') + textToMarkdown(s.body) + '\n';
-  files.unshift({ path: `src/content/stories/${slug}.md`, content: md, encoding: 'utf-8' });
-
-  return { slug, files, photoCount: photoPaths.length };
-}
-
-/** Email verification line for the PR body, e.g. "unverified (confirmation sent)". */
-export const EMAIL_PENDING = 'unverified (confirmation pending)';
-export const emailSent = 'unverified (confirmation sent)';
-export const emailNotSent = (reason: string) => `unverified (not sent: ${reason})`;
-
-export function prBody(s: Submission, slug: string, photoCount: number, emailStatus: string = EMAIL_PENDING): string {
-  const section = getSection(s.section);
-  const area = section?.areas?.find((a) => a.key === s.area)?.label;
-  const words = s.body.split(/\s+/).filter(Boolean).length;
-  const esc = (v: string) => v.replace(/\|/g, '\\|').replace(/[<>]/g, '');
-  return [
-    `## New story submission`,
-    '',
-    `| | |`,
-    `|---|---|`,
-    `| **Submitted by** | ${esc(s.name)} |`,
-    `| **Email** | ${esc(s.email)} |`,
-    `| **Email status** | ${esc(emailStatus)} |`,
-    ...(s.phone ? [`| **Phone** | ${esc(s.phone)} |`] : []),
-    `| **Church / school / club** | ${esc(s.church)} |`,
-    `| **Section** | ${section?.label}${area ? ` → ${area}` : ''} |`,
-    `| **Length** | ${words} words |`,
-    `| **Photos** | ${photoCount} |`,
-    ...(s.caption ? [`| **Caption** | ${esc(s.caption)} |`] : []),
-    ...(s.photoCredit ? [`| **Photo credit** | ${esc(s.photoCredit)} |`] : []),
-    '',
-    `Story file: \`src/content/stories/${slug}.md\``,
-    '',
-    '### Editor checklist',
-    '- [ ] Headline and summary (`dek`) are clear',
-    '- [ ] Lead paragraph covers who, what, when, where, why',
-    '- [ ] Names, titles and SDA terms are correct',
-    '- [ ] Photos are appropriate and permission is confirmed',
-    '- [ ] Set `featured: true` if it should appear at the top of the home page',
-    '',
-    '**Merge to publish. Close to reject.**',
-    '',
-    '_The submitter confirmed accuracy and photo/name permission on the form._',
-  ].join('\n');
-}

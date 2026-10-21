@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // End-to-end check of "public submissions and Studio publishes go into the dashboard" (issue 14).
-// It starts everything itself: the mock GitHub API, the mock email API, a tiny Discord stand-in and three
-// copies of the BUILT server (dashboard mode, SUBMISSIONS_TO=github, and a server whose database can't be opened).
+// It starts everything itself: the mock email API, a tiny Discord stand-in and two copies of the BUILT server
+// (the normal one, and one whose database can't be opened). There is no GitHub mock: publishing is database-only.
 // Synthetic data only; no real email, no Turnstile (unset), DNS answered by scripts/test-dns-preload.cjs.
 //   npm run build
 //   SCRATCH=/tmp/imc-e2e node scripts/test-editor-submissions.mjs     # run from the repo root
@@ -32,11 +32,8 @@ fs.rmSync(SCRATCH, { recursive: true, force: true });
 fs.mkdirSync(SCRATCH, { recursive: true });
 const DATA_DIR = path.join(SCRATCH, 'data');
 const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
-const MOCK_OUT = path.join(SCRATCH, 'mock-prs');
-const DIRECT = path.join(MOCK_OUT, 'direct');
-const P = { gh: 4410, mail: 4411, discord: 4412, a: 4421, b: 4422, c: 4423 };
+const P = { mail: 4411, discord: 4412, a: 4421, c: 4423 };
 const BASE = `http://localhost:${P.a}`;
-const BASE_B = `http://localhost:${P.b}`;
 const BASE_C = `http://localhost:${P.c}`;
 const CONFIRM_SECRET = 'e2e-confirm-secret-' + 'x'.repeat(20);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'y'.repeat(20);
@@ -57,7 +54,7 @@ const until = async (cond, ms = 6000) => { const end = Date.now() + ms; while (D
 
 // ---- processes ----
 const procs = [];
-const logs = { gh: [], mail: [], a: [], b: [], c: [] };
+const logs = { mail: [], a: [], c: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -77,9 +74,6 @@ const discordServer = http.createServer(async (req, res) => { let raw = ''; for 
 
 const common = {
   AUTH_SECRET: 'e2e-auth-secret-' + 'z'.repeat(24),
-  GITHUB_TOKEN: 'mock-token',
-  GITHUB_REPO: 'mock/repo',
-  GITHUB_API_URL: `http://localhost:${P.gh}`,
   RESEND_API_KEY: 'mock-resend-key',
   EMAIL_FROM: 'IMConnected <noreply@e2e-mail.com>',
   EMAIL_API_URL: `http://localhost:${P.mail}/emails`,
@@ -93,15 +87,13 @@ const common = {
 };
 delete process.env.SUBMISSIONS_TO;
 
-start('gh', 'node', ['scripts/mock-github.mjs'], { MOCK_PORT: String(P.gh), MOCK_OUT });
 start('mail', 'node', ['scripts/mock-email.mjs'], { MOCK_EMAIL_PORT: String(P.mail) });
 await waitFor(`http://localhost:${P.mail}/x`);
 start('a', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.a), HOST: '127.0.0.1', DATA_DIR, SITE_URL: BASE });
-start('b', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.b), HOST: '127.0.0.1', DATA_DIR, SITE_URL: BASE_B, SUBMISSIONS_TO: 'github' });
 const notADir = path.join(SCRATCH, 'not-a-folder');
 fs.writeFileSync(notADir, 'a file, so a database folder inside it can never be created');
 start('c', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.c), HOST: '127.0.0.1', DATA_DIR: path.join(notADir, 'data'), SITE_URL: BASE_C });
-for (const port of [P.gh, P.a, P.b, P.c]) await waitFor(`http://localhost:${port}/`);
+for (const port of [P.a, P.c]) await waitFor(`http://localhost:${port}/`);
 
 async function cleanup() {
   for (const p of procs) p.kill();
@@ -125,9 +117,6 @@ try {
 
   // ---- helpers ----
   const emails = () => logs.mail.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((m) => m && m.subject);
-  const ghCalls = () => logs.gh.filter((l) => /^(GET|POST|PATCH|DELETE|PUT) /.test(l));
-  const commits = () => (fs.existsSync(DIRECT) ? fs.readdirSync(DIRECT) : []);
-  const dirs = (d) => (fs.existsSync(d) ? fs.readdirSync(d) : []);
   const batchLines = () => logs.mail.filter((l) => l.startsWith('{"batchRequest"')).map((l) => JSON.parse(l).batchRequest);
   const mailTo = (list, addr) => list.filter((m) => m.to.includes(addr));
 
@@ -185,7 +174,7 @@ try {
   // ================= a form submission becomes a draft =================
   let draftId;
   {
-    const ghBefore = ghCalls().length, mailBefore = emails().length, prBefore = dirs(MOCK_OUT).length;
+    const mailBefore = emails().length;
     const r = await postForm(BASE, '/api/submit', form(), [{ bytes: PNG_A, filename: 'one.png' }, { bytes: PNG_B, filename: 'two.png' }]);
     check('the form submission is accepted (200)', r.status === 200 && r.data.ok === true, r.text.slice(0, 200));
     const rows = q("SELECT * FROM drafts WHERE source = 'form'");
@@ -198,7 +187,7 @@ try {
     const photos = q('SELECT * FROM draft_photos WHERE draft_id = ? ORDER BY position', draftId);
     check('two photos recorded in order, as uploads', photos.length === 2 && photos.every((p) => p.path && !p.url) && photos[0].ext === 'png');
     check('the photo files exist under DATA_DIR/uploads/<draft>/ with their bytes', photos.every((p) => p.path.startsWith(`${draftId}/`) && fs.existsSync(path.join(DATA_DIR, 'uploads', p.path))) && fs.readFileSync(path.join(DATA_DIR, 'uploads', photos[0].path)).equals(PNG_A));
-    check('NO GitHub call and no pull request for a dashboard submission', ghCalls().length === ghBefore && dirs(MOCK_OUT).length === prBefore, ghCalls().slice(ghBefore).join(' | '));
+    check('a submission creates a draft only: nothing is published and no story row exists', q('SELECT COUNT(*) n FROM stories')[0].n === 0 || q("SELECT COUNT(*) n FROM stories WHERE title = ?", TITLE)[0].n === 0);
 
     // editor emails and the Discord ping are sent in the background, after the response
     await until(() => batchLines().length >= 1 && discord.length >= 1);
@@ -284,32 +273,19 @@ try {
     check('a tampered token says "This link isn\'t valid."', r.status === 400 && r.data.error === "This link isn't valid.", JSON.stringify(r));
     r = await post(mk(`d:999999.${Math.floor(Date.now() / 1000) + 3600}`));
     check('a signed token for a draft that does not exist answers 200 and changes nothing', r.status === 200 && q('SELECT COUNT(*) n FROM drafts WHERE email_verified = 1')[0].n === 1);
-    check('confirm-by-draft made no GitHub label call', !ghCalls().some((l) => /labels/.test(l)));
   }
 
-  // ================= SUBMISSIONS_TO=github keeps the PR path =================
-  let prToken, prNumber;
+  // ================= the old pull-request path is gone =================
   {
     const draftsBefore = q('SELECT COUNT(*) n FROM drafts')[0].n;
-    const mailBefore = emails().length;
-    const r = await postForm(BASE_B, '/api/submit', form({ title: 'Github Mode Story' }), [{ bytes: PNG_A, filename: 'one.png' }]);
-    check('SUBMISSIONS_TO=github: submission accepted', r.status === 200 && r.data.ok === true, r.text.slice(0, 200));
-    const prs = dirs(path.join(MOCK_OUT, 'submission'));
-    check('...it opened a pull request (branch submission/<slug> with PR.md, story file and photo)', prs.length === 1 && fs.existsSync(path.join(MOCK_OUT, 'submission', prs[0], 'PR.md')) && fs.existsSync(path.join(MOCK_OUT, 'submission', prs[0], 'src/content/stories')), prs.join(','));
-    check('...and created no draft', q('SELECT COUNT(*) n FROM drafts')[0].n === draftsBefore);
-    await sleep(300);
-    const sent = emails().slice(mailBefore);
-    check('...it sent only the confirmation email (no editor notifications)', sent.length === 1 && sent[0].to[0] === SUBMITTER.email, JSON.stringify(sent.map((m) => m.subject)));
-    prToken = /\/confirm\/\?t=([A-Za-z0-9_.-]+)/.exec(sent[0]?.text ?? '')?.[1] ?? '';
-    const payload = Buffer.from(prToken.split('.')[0], 'base64url').toString();
-    prNumber = Number(/^(\d+)\./.exec(payload)?.[1]);
-    check('...its confirmation token is the old PR-number kind (no d: prefix)', /^\d+\.\d+$/.test(payload), payload);
-    // An old-style PR token, presented to the dashboard server (GitHub configured): still honoured.
+    // SUBMISSIONS_TO=github is no longer read: even set, a submission is a dashboard draft
+    check('the server code has no SUBMISSIONS_TO switch any more', !fs.readFileSync('src/pages/api/submit.ts', 'utf8').includes('SUBMISSIONS_TO'));
+    // an old PR-number confirmation link (from an email sent when submissions opened pull requests)
+    const payload = `41.${Math.floor(Date.now() / 1000) + 3600}`;
+    const prToken = Buffer.from(payload).toString('base64url') + '.' + createHmac('sha256', CONFIRM_SECRET).update(payload).digest().toString('base64url');
     const pr = await fetch(BASE + '/api/confirm', { method: 'POST', headers: { Origin: BASE, 'Content-Type': 'application/json' }, body: JSON.stringify({ t: prToken }) });
-    const labels = fs.readFileSync(path.join(MOCK_OUT, 'submission', prs[0], 'LABELS.txt'), 'utf8');
-    check('an old PR-style token is still accepted and labels the PR email-verified', pr.status === 200 && labels.includes('email-verified') && !labels.includes('email-unverified'), labels);
-    check('...without touching any draft', q('SELECT COUNT(*) n FROM drafts WHERE email_verified = 1')[0].n === 1);
-    // ...and without GitHub configured (server C has no usable database but also uses the shared mock; blank the token instead)
+    check('an old PR-style confirmation link is no longer honoured: "This link isn\'t valid." (400), no GitHub call possible', pr.status === 400 && (await pr.json()).error === "This link isn't valid.");
+    check('...without touching any draft', q('SELECT COUNT(*) n FROM drafts WHERE email_verified = 1')[0].n === 1 && q('SELECT COUNT(*) n FROM drafts')[0].n === draftsBefore);
     const noGh = await fetch(BASE_C + '/api/confirm', { method: 'POST', headers: { Origin: BASE_C, 'Content-Type': 'application/json' }, body: JSON.stringify({ t: 'bad.token' }) });
     check('a malformed token is "This link isn\'t valid." (400)', noGh.status === 400 && (await noGh.json()).error === "This link isn't valid.");
   }
@@ -348,16 +324,26 @@ try {
         { ref: 'b', title: 'Studio Story Two', section: 'features', author: 'Studio Author', body: 'Second story text, plain.' },
       ],
     });
-    const before = commits().length;
+    const storiesBefore = q('SELECT COUNT(*) n FROM stories')[0].n;
     let r = await studio(payload('First version of the story text.'));
-    check('Studio publish succeeds with the same response as before', r.status === 200 && r.data.ok && r.data.commit && r.data.stories.length === 2 && r.data.stories[0].url.endsWith('/stories/2026-10-19-studio-story-one/'), JSON.stringify(r.data).slice(0, 200));
-    const sha1 = r.data.commit;
-    check('...it committed straight to main (a direct commit with the story file and photo)', commits().length === before + 1 && fs.existsSync(path.join(DIRECT, sha1, 'src/content/stories/2026-10-19-studio-story-one.md')) && fs.existsSync(path.join(DIRECT, sha1, 'public/images/stories/2026-10-19-studio-story-one/photo-1.png')));
+    check('Studio publish succeeds with the same response as before', r.status === 200 && r.data.ok && 'commit' in r.data && r.data.commit === null && r.data.stories.length === 2 && r.data.stories[0].url.endsWith('/stories/2026-10-19-studio-story-one/'), JSON.stringify(r.data).slice(0, 200));
+    const slug1 = '2026-10-19-studio-story-one';
+    const sRow = q('SELECT * FROM stories WHERE slug = ?', slug1)[0] ?? {};
+    check('...it wrote both stories to the database, live, source studio (no GitHub token is set on this server)', q('SELECT COUNT(*) n FROM stories')[0].n === storiesBefore + 2 && sRow.status === 'live' && sRow.source === 'studio' && sRow.title === 'Studio Story One' && sRow.section === 'news' && sRow.area === 'conference' && /First version/.test(sRow.body) && sRow.image_alt === 'A box');
+    const sPhoto = q('SELECT p.* FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = ?', slug1);
+    check('...with the photo copied to stories/<slug>/<sha256>.png in the media folder', sPhoto.length === 1 && sPhoto[0].path === `stories/${slug1}/${createHash('sha256').update(PNG_A).digest('hex')}.png` && fs.readFileSync(path.join(DATA_DIR, 'media', sPhoto[0].path)).equals(PNG_A) && sRow.image === `/media/${sPhoto[0].path}`);
+    const pageNow = await fetch(BASE + `/stories/${slug1}/`);
+    const jsonNow = await (await fetch(BASE + '/stories.json')).text();
+    const rssNow = await (await fetch(BASE + '/rss.xml')).text();
+    const found = await (await fetch(BASE + '/api/search?q=studio+story')).json();
+    const listed = await (await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } })).json();
+    check('...and the very next request shows it: story page, /stories.json, /rss.xml, search and /api/stories', pageNow.status === 200 && jsonNow.includes(slug1) && rssNow.includes(slug1) && found.results.some((x) => x.slug === slug1) && listed.stories.some((x) => x.id === slug1 && x.source === 'studio'));
+    check('...the home and section pages list them too, with the photo', (await (await fetch(BASE + '/')).text()).includes(`/media/${sPhoto[0].path}`) && (await (await fetch(BASE + '/features/')).text()).includes('2026-10-19-studio-story-two'));
     let rows = q("SELECT * FROM drafts WHERE source = 'studio' ORDER BY id");
     check('both stories are recorded as drafts: status published, source studio, published_by NULL', rows.length === 2 && rows.every((d) => d.status === 'published' && d.published_by === null && d.published_at));
     const one = rows.find((d) => d.slug === '2026-10-19-studio-story-one') ?? {};
-    check('...with slug, commit, title, author and date set', one.published_commit === sha1 && one.title === 'Studio Story One' && one.author === 'Studio Author' && one.date === '2026-10-19' && one.section === 'news' && one.area === 'conference' && /First version/.test(one.body));
-    check('...and the photo recorded as a site image', q('SELECT url, path, alt FROM draft_photos WHERE draft_id = ?', one.id).some((p) => p.url === '/images/stories/2026-10-19-studio-story-one/photo-1.png' && !p.path && p.alt === 'A box'));
+    check('...with slug, commit, title, author and date set', one.published_commit === 'db' && one.title === 'Studio Story One' && one.author === 'Studio Author' && one.date === '2026-10-19' && one.section === 'news' && one.area === 'conference' && /First version/.test(one.body));
+    check('...and the photo recorded as a site image', q('SELECT url, path, alt FROM draft_photos WHERE draft_id = ?', one.id).some((p) => p.url === `/media/${sPhoto[0].path}` && !p.path && p.alt === 'A box'));
     let pub = await adminGet('/admin/published', E1);
     check('the Published page shows them as published by "IMConnected Studio"', pub.text.includes('Studio Story One') && pub.text.includes('IMConnected Studio'));
     const home = await adminGet('/admin', E1);
@@ -367,13 +353,24 @@ try {
     check('the audit log has a draft.published_studio entry', q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.published_studio'")[0].n === 2);
 
     r = await studio(payload('Second version of the story text, corrected.'));
-    const sha2 = r.data.commit;
     rows = q("SELECT * FROM drafts WHERE source = 'studio' ORDER BY id");
     const one2 = rows.find((d) => d.slug === '2026-10-19-studio-story-one') ?? {};
     check('re-publishing the same slug updates the same row (still 2 rows, same id)', r.status === 200 && r.data.stories[0].status === 'updated' && rows.length === 2 && one2.id === one.id, `${rows.length} rows`);
-    check('...with the new commit and text, still published and not duplicated', one2.published_commit === sha2 && sha2 !== sha1 && /Second version/.test(one2.body) && q('SELECT COUNT(*) n FROM draft_photos WHERE draft_id = ?', one.id)[0].n === 1 && q("SELECT COUNT(*) n FROM drafts WHERE slug = '2026-10-19-studio-story-one'")[0].n === 1);
+    check('...with the new commit and text, still published and not duplicated', /Second version/.test(one2.body) && q('SELECT COUNT(*) n FROM draft_photos WHERE draft_id = ?', one.id)[0].n === 1 && q("SELECT COUNT(*) n FROM drafts WHERE slug = '2026-10-19-studio-story-one'")[0].n === 1);
+    check('...and the story row was updated in place, live at once, with the new text', q('SELECT COUNT(*) n FROM stories WHERE slug = ?', slug1)[0].n === 1 && (await (await fetch(BASE + `/stories/${slug1}/`)).text()).includes('Second version of the story text, corrected.'));
     const bad = await studio({ newsletter: { issueDate: 'nope' }, stories: [] });
-    check('an invalid Studio request is still refused (400) and records nothing', bad.status === 400 && q("SELECT COUNT(*) n FROM drafts WHERE source = 'studio'")[0].n === 2);
+    check('an invalid Studio request is still refused (400) and records nothing', bad.status === 400 && q("SELECT COUNT(*) n FROM drafts WHERE source = 'studio'")[0].n === 2 && q('SELECT COUNT(*) n FROM stories')[0].n === storiesBefore + 2);
+    // all or nothing: a bad second story leaves the good first one unpublished too
+    const mixed = await studio({ newsletter: { name: 'N', issueDate: '2026-10-19' }, stories: [{ ref: 'ok', title: 'Mixed Batch Good', section: 'news', area: 'conference', author: 'A', body: 'Good text.' }, { ref: 'bad', title: 'Mixed Batch Bad', section: 'nonsense', author: 'A', body: 'Bad.' }] });
+    check('a Studio request with one invalid story publishes nothing (400, names the story)', mixed.status === 400 && mixed.data.ref === 'bad' && !q("SELECT 1 FROM stories WHERE slug LIKE '%mixed-batch%'").length);
+    // a database error part-way leaves nothing half-written (a trigger makes the second story's insert fail)
+    run("CREATE TRIGGER zz_fail_studio BEFORE INSERT ON stories WHEN NEW.title = 'Studio Boom' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END");
+    const snap = () => JSON.stringify([q('SELECT * FROM stories ORDER BY id'), q('SELECT * FROM story_photos ORDER BY id'), q('SELECT * FROM drafts ORDER BY id'), q('SELECT rowid, * FROM stories_fts')]);
+    const media = () => { const out = []; const walk = (d) => { if (!fs.existsSync(d)) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) (e.isDirectory() ? walk(path.join(d, e.name)) : out.push(path.join(d, e.name))); }; walk(path.join(DATA_DIR, 'media')); return out.sort().join(); };
+    const snapBefore = snap(), mediaBefore = media();
+    const boom = await studio({ newsletter: { name: 'N', issueDate: '2026-10-19' }, stories: [{ ref: 'g', title: 'Studio Good First', section: 'news', area: 'conference', author: 'A', body: 'Good.', photos: [{ url: 'data:image/png;base64,' + PNG_B.toString('base64'), alt: 'x', caption: '' }] }, { ref: 'b', title: 'Studio Boom', section: 'news', area: 'conference', author: 'A', body: 'Boom.' }] });
+    check('a database error part-way through a Studio publish answers 502 and leaves nothing half-written (no rows, no draft records, no media file)', boom.status === 502 && snap() === snapBefore && media() === mediaBefore, String(boom.status));
+    run('DROP TRIGGER zz_fail_studio');
   }
 
   // ================= Studio publishes over a story that has a linked draft =================
@@ -397,13 +394,13 @@ try {
     const a = q('SELECT * FROM drafts WHERE id = ?', idA)[0];
     check('...the in-review draft keeps its fields and status', a.status === 'in_review' && a.title === 'My Unfinished Edits' && a.dek === 'Edited summary' && a.church === 'Mine Church' && a.author_title === 'Elder' && a.featured === 1 && a.body === 'My unsaved-to-site words.' && a.updated_at === versionA, JSON.stringify(a).slice(0, 300));
     check('...its uploaded photo row and file are untouched', q('SELECT path FROM draft_photos WHERE draft_id = ?', idA).length === 1 && fs.existsSync(path.join(DATA_DIR, 'uploads', relA)));
-    check('...only the live markers are set (commit, published_at) and no second row was made for the slug', a.published_commit === r.data.commit && a.published_at && a.studio_overwrote_at && q('SELECT COUNT(*) n FROM drafts WHERE slug = ?', slugA)[0].n === 1);
+    check('...only the live markers are set (commit, published_at) and no second row was made for the slug', a.published_commit === 'db' && a.published_at && a.studio_overwrote_at && q('SELECT COUNT(*) n FROM drafts WHERE slug = ?', slugA)[0].n === 1);
     check('...an audit entry draft.studio_overwrote_live names the draft', q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.studio_overwrote_live' AND target = ?", `draft:${idA}`)[0].n === 1);
     const pageA = await adminGet(`/admin/drafts/${idA}`, E1);
     check('...the editor sees "IMConnected Studio published over this story on <date>; your saved edits here are not live."', /IMConnected Studio published over this story on[\s\S]*?; your saved edits here are not live\./.test(pageA.text));
     r = await studio(pay('Closed Story', '2026-10-22'));
     const b = q('SELECT * FROM drafts WHERE id = ?', idB)[0];
-    check('a closed linked draft is updated in place with ALL content columns', r.status === 200 && b.title === 'Closed Story' && b.church === '' && b.author_title === '' && b.story_column === '' && b.featured === 0 && b.status === 'published' && b.published_by === null && b.published_commit === r.data.commit && q('SELECT COUNT(*) n FROM drafts WHERE slug = ?', slugB)[0].n === 1, JSON.stringify(b).slice(0, 300));
+    check('a closed linked draft is updated in place with ALL content columns', r.status === 200 && b.title === 'Closed Story' && b.church === '' && b.author_title === '' && b.story_column === '' && b.featured === 0 && b.status === 'published' && b.published_by === null && b.published_commit === 'db' && q('SELECT COUNT(*) n FROM drafts WHERE slug = ?', slugB)[0].n === 1, JSON.stringify(b).slice(0, 300));
     check('...and is credited to IMConnected Studio (flag set, no editor)', b.published_via_studio === 1 && b.published_by === null);
     const pubTab = await adminGet('/admin/published', E1);
     const rowB = pubTab.text.slice(pubTab.text.indexOf('Closed Story'), pubTab.text.indexOf('Closed Story') + 900);
@@ -419,7 +416,7 @@ try {
     check('reloading the story reopens the same draft in review', q('SELECT status FROM drafts WHERE id = ?', idC)[0].status === 'in_review');
     r = await studio(pay('Credit Story', '2026-10-23'));
     const c2 = q('SELECT * FROM drafts WHERE id = ?', idC)[0];
-    check('Studio then publishes the same slug: the in-progress draft is credited to Studio, not the editor', r.status === 200 && c2.published_via_studio === 1 && c2.published_by === null && c2.status === 'in_review' && c2.published_commit === r.data.commit, JSON.stringify(c2).slice(0, 300));
+    check('Studio then publishes the same slug: the in-progress draft is credited to Studio, not the editor', r.status === 200 && c2.published_via_studio === 1 && c2.published_by === null && c2.status === 'in_review' && c2.published_commit === 'db', JSON.stringify(c2).slice(0, 300));
     const pubTab2 = await adminGet('/admin/published', E1);
     const rowC = pubTab2.text.slice(pubTab2.text.indexOf('Credit Story'), pubTab2.text.indexOf('Credit Story') + 900);
     const homeC = await adminGet('/admin', E1);
@@ -443,37 +440,39 @@ try {
 
   // ================= the database is unavailable =================
   {
-    const ghBefore = ghCalls().length, mailBefore = emails().length, dcBefore = discord.length;
+    const mailBefore = emails().length, dcBefore = discord.length;
     const r = await postForm(BASE_C, '/api/submit', form({ title: 'Lost Story' }), [{ bytes: PNG_A, filename: 'one.png' }]);
     check('database unavailable: submit answers 503 "Submissions are temporarily unavailable. Please email us your story."', r.status === 503 && r.data.error === 'Submissions are temporarily unavailable. Please email us your story.', r.text.slice(0, 200));
     await sleep(200);
-    check('...nothing else happened (no email, no Discord ping, no GitHub call)', emails().length === mailBefore && discord.length === dcBefore && ghCalls().length === ghBefore);
+    check('...nothing else happened (no email, no Discord ping)', emails().length === mailBefore && discord.length === dcBefore);
     const noJs = await fetch(BASE_C + '/api/submit', { method: 'POST', headers: { Origin: BASE_C }, body: (() => { const fd = new FormData(); for (const [k, v] of Object.entries(form())) fd.append(k, String(v)); return fd; })() });
     check('...and the no-JavaScript form shows the same message', noJs.status === 503 && (await noJs.text()).includes('Submissions are temporarily unavailable. Please email us your story.'));
 
-    const before = commits().length;
     const pr = await fetch(BASE_C + '/api/publish', {
       method: 'POST', headers: { Authorization: `Bearer ${PUBLISH_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newsletter: { name: 'N', issueDate: '2026-10-20' }, stories: [{ ref: 'z', title: 'Published Without A Database', section: 'news', area: 'conference', author: 'Studio Author', body: 'This text goes live even if the dashboard database is down.' }] }),
+      body: JSON.stringify({ newsletter: { name: 'N', issueDate: '2026-10-20' }, stories: [{ ref: 'z', title: 'Published Without A Database', section: 'news', area: 'conference', author: 'Studio Author', body: 'This text must not go anywhere without a database.' }] }),
     });
     const data = await pr.json();
-    check('database unavailable: Studio publish still succeeds and commits', pr.status === 200 && data.ok && commits().length === before + 1 && fs.existsSync(path.join(DIRECT, data.commit, 'src/content/stories/2026-10-20-published-without-a-database.md')), JSON.stringify(data).slice(0, 200));
-    check('...and the server logged that it could not record it', logs.c.some((l) => l.includes('[publish] could not record the stories in the dashboard')), logs.c.join('\n').slice(-400));
+    check('database unavailable: Studio publish fails cleanly (502) instead of pretending to publish', pr.status === 502 && data.ok === false, JSON.stringify(data).slice(0, 200));
+    // the public pages answer 503 rather than showing stale or empty content
+    const pages = {};
+    for (const u of ['/', '/news/', '/stories/some-story/', '/stories.json', '/rss.xml']) { const res = await fetch(BASE_C + u); pages[u] = [res.status, res.headers.get('cache-control'), (await res.text()).includes('Back in a moment') || u.endsWith('.json') || u.endsWith('.xml')]; }
+    check('database unavailable: home, section, story, /stories.json and /rss.xml answer 503 (no-store), never stale built content', Object.values(pages).every(([st, cc]) => st === 503 && /no-store/.test(cc)), JSON.stringify(pages));
+    const studioList = await fetch(BASE_C + '/api/stories', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } });
+    check('...and /api/stories answers 503 too', studioList.status === 503);
+    const srch = await (await fetch(BASE_C + '/api/search?q=baptism')).json();
+    check('...and search says it is not available instead of "no matches"', srch.ok === false && srch.total === 0);
   }
 
   // ================= no personal data in logs, editor emails or commits =================
   {
-    const all = [...logs.a, ...logs.b, ...logs.c].join('\n');
+    const all = [...logs.a, ...logs.c].join('\n');
     check('no submitter email, phone or name in any server log', ![...PERSONAL, SUBMITTER.name].some((s) => all.includes(s)), PERSONAL.filter((s) => all.includes(s)).join(','));
     const editorMail = emails().filter((m) => !m.to.includes(SUBMITTER.email));
     check('no submitter email or phone in any email sent to editors', editorMail.length >= 1 && !editorMail.some((m) => PERSONAL.some((s) => JSON.stringify(m).includes(s))));
-    const hay = [];
-    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (!/\.(png|jpg|webp)$/.test(f)) hay.push(fs.readFileSync(f, 'utf8')); } };
-    walk(DIRECT);
-    check('no submitter email or phone in any commit to main', !hay.some((t) => PERSONAL.some((s) => t.includes(s))));
-    const subDir = path.join(MOCK_OUT, 'submission');
-    const prStory = hay.length && dirs(subDir).length ? fs.readdirSync(path.join(subDir, dirs(subDir)[0], 'src/content/stories')).map((f) => fs.readFileSync(path.join(subDir, dirs(subDir)[0], 'src/content/stories', f), 'utf8')).join('') : '';
-    check('(github mode) the story file in the PR holds no submitter email or phone either', prStory.length > 0 && !PERSONAL.some((s) => prStory.includes(s)));
+    const rows = JSON.stringify([q('SELECT * FROM stories'), q('SELECT * FROM story_photos')]);
+    const pages = (await Promise.all(['/', '/stories.json', '/rss.xml', '/news/', '/api/search?q=studio'].map(async (u) => (await fetch(BASE + u)).text()))).join('\n');
+    check('no submitter email or phone in any story row or public page or feed', ![...PERSONAL].some((s) => rows.includes(s) || pages.includes(s)));
   }
 } catch (err) {
   check('the run completed without an exception', false, String(err && err.stack ? err.stack : err).slice(0, 800));

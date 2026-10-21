@@ -1,7 +1,7 @@
 ---
 import Admin from '../../layouts/Admin.astro';
-import { getStories } from '../../lib/stories';
-import { listLiveDrafts, listUnpublishedSlugs } from '../../lib/drafts';
+import { listLiveDrafts } from '../../lib/drafts';
+import { listStories, LIST_MAX } from '../../lib/story-store';
 import { noticeText, fmtTime, sectionLabel } from '../../lib/admin-ui';
 import { errorText } from '../../lib/messages';
 import { siteUrl } from '../../lib/draft-http';
@@ -9,19 +9,25 @@ export const prerender = false;
 
 interface Row { slug: string; title: string; section: string; area?: string; date: string; draftId?: number; by?: string | null; at?: number | null }
 const rows = new Map<string, Row>();
+let loadFailed = false;
 try {
-  for (const s of await getStories()) {
-    rows.set(s.id, { slug: s.id, title: s.data.title, section: s.data.section, area: s.data.area, date: s.data.date.toISOString().slice(0, 10) });
+  for (let offset = 0; ; offset += LIST_MAX) {
+    const page = listStories({ limit: LIST_MAX, offset });
+    for (const s of page) rows.set(s.slug, { slug: s.slug, title: s.title, section: s.section, area: s.area, date: s.date });
+    if (page.length < LIST_MAX) break;
   }
 } catch (err) {
+  loadFailed = true;
   console.error('[admin] could not read the story list', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
 }
-// Stories unpublished from the editor may still be in the last site build.
-for (const slug of listUnpublishedSlugs()) rows.delete(slug);
-// Stories published from the editor since the site was last built are not in the built list yet.
-for (const d of listLiveDrafts()) {
-  const slug = d.slug as string;
-  rows.set(slug, { slug, title: d.title, section: d.section, area: d.area, date: d.date, draftId: d.id, by: d.publishedByName, at: d.publishedAt });
+// Who published it and when, from the dashboard's own record.
+try {
+  for (const d of listLiveDrafts()) {
+    const cur = rows.get(d.slug as string);
+    if (cur) Object.assign(cur, { draftId: d.id, by: d.publishedByName, at: d.publishedAt });
+  }
+} catch (err) {
+  console.error('[admin] could not read the draft record', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
 }
 const list = [...rows.values()].sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
 
@@ -34,8 +40,9 @@ const base = siteUrl();
   <div class="cms-bar"><h1>Published stories</h1></div>
   {notice && <p class="admin-ok" role="status">{notice}</p>}
   {error && <p class="admin-error" role="alert">{error}</p>}
-  <p class="admin-note">Editing loads the story's current file from the live branch into a new draft. Publishing that draft overwrites the same story. Changes reach the public site in about 3–5 minutes.</p>
-  {list.length === 0 ? (
+  {loadFailed && <p class="admin-error" role="alert">The story list could not be read. Please reload in a minute.</p>}
+  <p class="admin-note">Editing loads the story's current text into a new draft. Publishing that draft overwrites the same story, and the change is live at once.</p>
+  {list.length === 0 && !loadFailed ? (
     <p class="admin-note">No published stories yet.</p>
   ) : (
     <ul class="cms-list">

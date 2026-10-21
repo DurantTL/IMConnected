@@ -5,6 +5,7 @@ import { studioAuth, studioCors, studioJson } from '../../lib/studio-api';
 import { STUDIO_LIST_MAX, listDraftsForStudio, listPublishedForStudio } from '../../lib/studio-list';
 import { getSection } from '../../lib/site';
 import { siteUrl } from '../../lib/draft-http';
+import { StoriesUnavailable } from '../../lib/public-stories';
 
 // The story list IMConnected Studio's "Import from IMConnected" button reads. Same bearer token (PUBLISH_TOKEN)
 // and the same browser-origin allowlist (PUBLISH_ORIGINS, including the preflight) as /api/publish.
@@ -36,7 +37,13 @@ export const GET: APIRoute = async ({ request, url, clientAddress }) => {
   if (section && !getSection(section)) return studioJson(request, 400, { ok: false, error: 'That section does not exist.' });
 
   const site = new URL(siteUrl());
-  const stories = await listPublishedForStudio(site, { limit, section });
+  let stories: Awaited<ReturnType<typeof listPublishedForStudio>>;
+  try {
+    stories = await listPublishedForStudio(site, { limit, section });
+  } catch (err) {
+    if (err instanceof StoriesUnavailable) return studioJson(request, 503, { ok: false, error: 'The stories can’t be read right now. Please try again in a minute.' });
+    throw err;
+  }
   let drafts: ReturnType<typeof listDraftsForStudio> = [];
   try {
     drafts = listDraftsForStudio(site, { section });

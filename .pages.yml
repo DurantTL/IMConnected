@@ -1,6 +1,7 @@
-# Pages CMS (https://pagescms.org) — a free web editor for this repo.
-# Sign in at app.pagescms.org with GitHub, open this repo, and editors get a
-# friendly form for every story. Works on submission branches too.
+# FROZEN (epic #25, step 4). Stories now live in the site's database and are edited in /admin, not in git.
+# This Pages CMS (https://pagescms.org) config only edits the archive in src/content/stories, which the site no
+# longer reads, so nothing edited here is published. It is kept so the archive stays editable by hand; use
+# scripts/import-git-stories.mjs to bring such an edit into the database. Safe to delete.
 media:
   input: public/images
   output: /images

@@ -16,7 +16,7 @@ const sign = (secret: string, payload: string) => createHmac('sha256', secret).u
 /**
  * base64url(payload).base64url(HMAC-SHA256(secret, payload)). The payload is `d:<draft id>.<expiryUnix>` for
  * a dashboard submission, or the older `<pr number>.<expiryUnix>` that emails sent while submissions opened
- * pull requests still carry (kind 'pr'; they are only honoured when GitHub is configured).
+ * pull requests still carry (kind 'pr'; no longer honoured: /api/confirm answers that the link isn't valid).
  */
 export function makeConfirmToken(id: number, secret: string, nowMs = Date.now(), kind: 'draft' | 'pr' = 'draft'): string {
   const payload = `${kind === 'draft' ? 'd:' : ''}${id}.${Math.floor(nowMs / 1000) + TOKEN_TTL_SECONDS}`;

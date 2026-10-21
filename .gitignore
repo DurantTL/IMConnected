@@ -5,10 +5,11 @@ dist/
 .env.*
 !.env.example
 /data/
-.mock-prs/
 *.log
 .DS_Store
 # synthetic story written by scripts/test-story-store.mjs while it runs
 src/content/stories/zz-test-*
 public/images/zz-test-*
 .build-commits
+src/content/stories/*zz-test-*
+public/images/stories/*zz-test-*

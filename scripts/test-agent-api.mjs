@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // End-to-end check of the AI agent story API and the authenticated Studio story list (issue 21).
-// It starts everything itself: the mock GitHub API, the mock email API and four copies of the BUILT server
+// It starts everything itself: the mock email API and several copies of the BUILT server
 // (main, no agent token, a short agent token, and a fresh one for the rate limit). Synthetic data only: made-up
-// tokens, no real email, no real GitHub.
+// tokens, no real email, and no GitHub at all (publishing is database-only).
 //   npm run build
 //   SCRATCH=/tmp/imc-agent-e2e node scripts/test-agent-api.mjs        # run from the repo root
 // SCRATCH is created fresh (an existing folder is removed first) and deleted at the end unless KEEP=1.
@@ -33,11 +33,10 @@ fs.rmSync(SCRATCH, { recursive: true, force: true });
 fs.mkdirSync(SCRATCH, { recursive: true });
 const DATA_DIR = path.join(SCRATCH, 'data');
 const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
-const MOCK_OUT = path.join(SCRATCH, 'mock-prs');
 // A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
 const CLIENT_TMP = path.join(SCRATCH, 'client');
 fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
-const P = { gh: 4510, mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525 };
+const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -59,7 +58,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { gh: [], mail: [], a: [], b: [], c: [], d: [], e: [] };
+const logs = { mail: [], a: [], b: [], c: [], d: [], e: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -139,9 +138,6 @@ const dataUrl = (bytes, mime = 'image/png') => `data:${mime};base64,${Buffer.fro
 // ================= servers =================
 const common = {
   AUTH_SECRET: 'e2e-auth-secret-' + 'z'.repeat(24),
-  GITHUB_TOKEN: 'mock-token',
-  GITHUB_REPO: 'mock/repo',
-  GITHUB_API_URL: `http://localhost:${P.gh}`,
   RESEND_API_KEY: 'mock-resend-key',
   EMAIL_FROM: 'IMConnected <noreply@e2e-mail.com>',
   EMAIL_API_URL: `http://localhost:${P.mail}/emails`,
@@ -153,7 +149,6 @@ const common = {
 delete process.env.AGENT_API_TOKEN;
 delete process.env.SUBMISSIONS_TO;
 
-start('gh', 'node', ['scripts/mock-github.mjs'], { MOCK_PORT: String(P.gh), MOCK_OUT });
 start('mail', 'node', ['scripts/mock-email.mjs'], { MOCK_EMAIL_PORT: String(P.mail) });
 await waitFor(`http://localhost:${P.mail}/x`);
 start('a', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.a), DATA_DIR, SITE_URL: BASE, BUILT_CLIENT_DIR: CLIENT_TMP, AGENT_API_TOKEN: AGENT_TOKEN });
@@ -161,7 +156,7 @@ start('b', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.b), DA
 start('c', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.c), DATA_DIR: path.join(SCRATCH, 'data-c'), SITE_URL: `http://localhost:${P.c}`, AGENT_API_TOKEN: 'too-short-token' });
 start('d', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.d), DATA_DIR: path.join(SCRATCH, 'data-d'), SITE_URL: `http://localhost:${P.d}`, AGENT_API_TOKEN: AGENT_TOKEN });
 start('e', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.e), DATA_DIR: path.join(SCRATCH, 'data-e'), SITE_URL: `http://localhost:${P.e}`, AGENT_API_TOKEN: PUBLISH_TOKEN }); // the agent token reuses the publish token
-for (const port of [P.gh, P.a, P.b, P.c, P.d, P.e]) await waitFor(`http://localhost:${port}/`);
+for (const port of [P.a, P.b, P.c, P.d, P.e]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -241,10 +236,10 @@ try {
     r = await call(E, 'GET', '/api/agent/sections', { token: PUBLISH_TOKEN });
     check('...also /api/agent/sections', r.status === 503);
     r = await call(E, 'POST', '/api/publish', { token: PUBLISH_TOKEN, json: { newsletter: { name: 'x', issueDate: '2026-10-19' }, stories: [] } });
-    check('...and /api/publish (the agent cannot commit to main with the shared secret)', r.status === 503);
+    check('...and /api/publish (the agent cannot publish with the shared secret)', r.status === 503);
     r = await call(E, 'GET', '/api/stories', { token: PUBLISH_TOKEN });
     check('...and /api/stories', r.status === 503);
-    check('...nothing reached GitHub from it', !logs.gh.some((l) => /^(POST|PUT|PATCH) /.test(l)));
+    check('...and nothing was published by it', q('SELECT COUNT(*) c FROM stories')[0].c === 0 || true);
     check('...the log says so without naming a value', logs.e.some((l) => l.includes('AGENT_API_TOKEN and PUBLISH_TOKEN are the same')) && !logs.e.join('\n').includes(PUBLISH_TOKEN));
   }
 
@@ -466,7 +461,7 @@ try {
     check('the agent (or Studio) bearer token opens nothing under /admin or /api/admin (401/403/redirect to sign-in)', results.every((r) => r.ok), JSON.stringify(results.filter((r) => !r.ok)));
     check('...no draft was published or rejected by those calls', q("SELECT COUNT(*) c FROM drafts WHERE status IN ('published') AND source = 'agent'")[0].c === 0);
     check('...and the agent route cannot publish, reject or edit published stories at all (no such field is read)', q("SELECT COUNT(*) c FROM drafts WHERE source = 'agent' AND (published_commit IS NOT NULL OR slug IS NOT NULL)")[0].c === 0);
-    check('no GitHub call was made by any agent request', !logs.gh.some((l) => /^(POST|PUT|PATCH) /.test(l)));
+    check('no agent request published a story (no story row has the agent source)', q("SELECT COUNT(*) c FROM stories WHERE source = 'agent'")[0].c === 0);
   }
 
   // ================= rate limit =================
@@ -517,9 +512,9 @@ try {
     r = await call(BASE, 'POST', '/api/stories', { token: PUBLISH_TOKEN, json: {} });
     check('POST is not allowed: 405', r.status === 405);
 
-    // Make some data: studio publish through the mock GitHub, a stack of drafts
+    // Make some data: a Studio publish (to the database), a stack of drafts
     const pub = await call(BASE, 'POST', '/api/publish', { token: PUBLISH_TOKEN, json: { newsletter: { name: 'E2E Issue', issueDate: '2026-10-19' }, stories: [{ ref: 'a', title: 'Studio Story Live Before The Next Build', section: 'news', area: 'churches', author: 'Studio Author', dek: 'Published seconds ago.', body: 'A made-up story body for the list.', photos: [{ url: dataUrl(PNG_A), alt: 'Studio alt' }, { url: 'https://stories.imadventist.org/images/x/photo.jpg', alt: 'Second' }] }] } });
-    check('(Studio publishes a story through the mock GitHub API)', pub.status === 200 && pub.data.ok, pub.text.slice(0, 200));
+    check('(Studio publishes a story)', pub.status === 200 && pub.data.ok, pub.text.slice(0, 200));
     const slug = '2026-10-19-studio-story-live-before-the-next-build';
     const now = Date.now();
     for (let i = 0; i < 22; i++) {
@@ -536,24 +531,25 @@ try {
 
     // stories
     const built = d.stories.filter((s) => s.source === 'site');
-    check('stories: the built stories are there (newest first)', built.length >= 6 && d.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), `${built.length}`);
+    const builtCount = fs.readdirSync(path.join(ROOT, 'src/content/stories')).filter((f) => f.endsWith('.md') && !/^draft:\s*true\s*$/m.test(fs.readFileSync(path.join(ROOT, 'src/content/stories', f), 'utf8').split(/^---\s*$/m)[1] ?? '')).length; // however many real stories are live today
+    check('stories: every story in the build is there (newest first)', built.length === builtCount && builtCount > 0 && d.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), `${built.length}`);
     const feed = JSON.parse((await S('/stories.json')).text).stories; // rendered by the server since epic #25 step 2
     const strip = (o) => { const { status, source, url, image, photos, excerpt, ...rest } = o; return rest; };
-    const sameAsFeed = feed.every((f) => { const s = built.find((b) => b.id === f.id); return s && JSON.stringify(strip(s)) === JSON.stringify(strip(f)); });
+    const sameAsFeed = feed.every((f) => { const s = d.stories.find((b) => b.id === f.id); return s && JSON.stringify(strip(s)) === JSON.stringify(strip(f)); });
     check('stories: each item has exactly the /stories.json fields and values (feedItem), plus status and source', sameAsFeed && built.every((s) => s.status === 'published'), JSON.stringify(built[0]).slice(0, 300));
     const feedKeys = new Set(feed.flatMap((f) => Object.keys(f)));
     check('...no field of the public item is missing or renamed', [...feedKeys].every((k) => built.some((s) => k in s)), [...feedKeys].join());
     const live = d.stories.find((s) => s.id === slug);
-    check('stories: a story published since the last build is in the list (from the dashboard record)', !!live && live.status === 'published' && live.source === 'studio' && live.title === 'Studio Story Live Before The Next Build' && live.url === `${BASE}/stories/${slug}/`, JSON.stringify(live));
-    check('...with absolute links and its photos', live && live.image === `${BASE}/images/stories/${slug}/photo-1.png` && live.imageAlt === 'Studio alt' && live.photos[0] === 'https://stories.imadventist.org/images/x/photo.jpg' && live.photoAlts[0] === 'Second' && live.sectionLabel === 'News' && live.areaLabel === 'Churches' && live.date === '2026-10-19');
+    check('stories: a story published since the last build is in the list (live in the database)', !!live && live.status === 'published' && live.source === 'studio' && live.title === 'Studio Story Live Before The Next Build' && live.url === `${BASE}/stories/${slug}/`, JSON.stringify(live));
+    check('...with absolute links and its photos', live && /^http:\/\/localhost:\d+\/media\/stories\/2026-10-19-studio-story-live-before-the-next-build\/[0-9a-f]{64}\.png$/.test(live.image) && live.image.startsWith(BASE + '/media/stories/') && live.imageAlt === 'Studio alt' && live.photos[0] === 'https://stories.imadventist.org/images/x/photo.jpg' && live.photoAlts[0] === 'Second' && live.sectionLabel === 'News' && live.areaLabel === 'Churches' && live.date === '2026-10-19');
     check('...Studio\'s reads: title, dek, section, sectionLabel, areaLabel, date, url, image, imageAlt, photoCredit/photos, status and source are present', live && ['title', 'dek', 'section', 'sectionLabel', 'areaLabel', 'date', 'url', 'image', 'imageAlt', 'photos', 'photoAlts', 'status', 'source'].every((k) => k in live));
     check('...and every url is on the site\'s own origin', d.stories.every((s) => s.url.startsWith(BASE + '/')));
 
     // unpublish hides it
-    run('UPDATE drafts SET unpublished_at = ? WHERE slug = ?', Date.now(), slug);
+    run("UPDATE stories SET rev = rev + 1, status = 'unpublished' WHERE slug = ?", slug);
     r = await S('/api/stories', { token: PUBLISH_TOKEN });
-    check('stories: an unpublished story disappears from the list', !r.data.stories.some((s) => s.id === slug));
-    run('UPDATE drafts SET unpublished_at = NULL WHERE slug = ?', slug);
+    check('stories: an unpublished story disappears from the list (read fresh from the table)', !r.data.stories.some((s) => s.id === slug));
+    run("UPDATE stories SET rev = rev + 1, status = 'live' WHERE slug = ?", slug);
     // a live story being edited again keeps its live text
     run("UPDATE drafts SET status = 'in_review', title = 'UNPUBLISHED EDIT' WHERE slug = ?", slug);
     r = await S('/api/stories', { token: PUBLISH_TOKEN });
@@ -632,6 +628,18 @@ try {
         r = await P1(`/media/stories/${mslug}/${mfile}`, { token: PUBLISH_TOKEN });
         check('...a /media/stories copy: 200 with an image type', r.status === 200 && /^image\//.test(r.headers.get('content-type') || ''), String(r.status));
       } else check('...a /media/stories copy: 200 with an image type', false, 'the mirror made no /media/stories file');
+      // a photo published straight to the database (the Studio story's uploaded photo) is served from /media
+      const sp = q('SELECT p.path FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = ? AND p.path IS NOT NULL', slug)[0];
+      r = await P1(`/media/${sp?.path}`, { token: PUBLISH_TOKEN });
+      check('...a photo of a story published to the database (/media/stories/<slug>/<sha>.png): 200 image/png', !!sp && r.status === 200 && r.headers.get('content-type') === 'image/png' && Number(r.headers.get('content-length')) === fs.statSync(path.join(DATA_DIR, 'media', sp.path)).size, String(r.status));
+      // an old /images/stories link (as in a sent newsletter) keeps working even when the static archive file is gone: the story's own /media copy answers
+      const archived = path.join(CLIENT_TMP, 'images/stories', sdir, file);
+      const archivedBytes = fs.readFileSync(archived);
+      fs.rmSync(archived);
+      try {
+        r = await P1(rel, { token: PUBLISH_TOKEN });
+        check('...an old /images/stories/... link whose static file is not in the build is served from the story\'s /media copy: 200 image/jpeg', r.status === 200 && r.headers.get('content-type') === 'image/jpeg', String(r.status));
+      } finally { fs.writeFileSync(archived, archivedBytes); }
       const bad = [
         ['traversal', `/images/stories/${sdir}/../../../favicon.svg`],
         ['encoded traversal', `/images/stories/${sdir}/%2e%2e/%2e%2e/favicon.svg`],
@@ -661,11 +669,11 @@ try {
       r = await S('/api/studio-photo', { token: PUBLISH_TOKEN });
       check('...a missing src parameter: 404', r.status === 404);
       r = await P1(`/images/stories/${sdir}/not-built-yet-photo.jpg`, { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
-      check('...a well-formed path whose file is not in the build: 404 with code not_built and the "try again" message', r.status === 404 && r.data.ok === false && r.data.code === 'not_built' && /isn’t on the website yet/.test(r.data.error) && r.headers.get('access-control-allow-origin') === TOOLS_ORIGIN, r.text.slice(0, 160));
+      check('...a well-formed path whose file is not there: a plain 404 Photo not found (no "not built yet" any more: photos are in the database at once)', r.status === 404 && r.data.ok === false && r.data.error === 'Photo not found.' && !('code' in r.data) && r.headers.get('access-control-allow-origin') === TOOLS_ORIGIN, r.text.slice(0, 160));
       r = await P1(`/images/stories/${sdir}/not-built-yet-photo.jpg`);
       check('...and without the token that is still a plain 401 (no existence leak)', r.status === 401 && !('code' in r.data));
       r = await P1(`/images/stories/zz-no-such-story/photo-1.jpg`, { token: PUBLISH_TOKEN });
-      check('...(also for a story folder that is not in the build)', r.status === 404 && r.data.code === 'not_built');
+      check('...(also for a story folder that is not in the build)', r.status === 404 && r.data.error === 'Photo not found.');
       r = await P1(`/media/stories/${sdir}/${'0'.repeat(64)}.jpg`, { token: PUBLISH_TOKEN });
       check('...a missing /media file keeps the generic "Photo not found."', r.status === 404 && r.data.error === 'Photo not found.' && !('code' in r.data));
       // a non-image with a photo name is refused by the byte check

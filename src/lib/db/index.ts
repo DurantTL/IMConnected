@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase, runMigrations, MIGRATION_NAME } from './db-core.mjs';
-import { ensureStorySync } from '../story-sync';
+import { ensureAdoption } from '../story-adopt';
 import { ensureBackupScheduler } from '../backup';
 
 // Migrations are bundled into the server build as raw strings.
@@ -27,9 +27,9 @@ export function getDb(): DatabaseSync {
     if (applied.length) console.log(`[db] applied migrations: ${applied.join(', ')}`);
     db = conn;
   }
-  // TEMPORARY (epic #25, until step 4): mirror the built stories into the database in the background.
-  // A cheap check after the first pass; never throws and never blocks the caller.
-  ensureStorySync();
+  // One-time import of the built stories into a database that has not adopted them yet (epic #25, step 4).
+  // A boolean check once finished; never throws and never blocks the caller.
+  ensureAdoption();
   // Nightly backups (epic #25, issue #30): starts one unref'd timer when Google Drive is configured; never throws.
   ensureBackupScheduler();
   return db;

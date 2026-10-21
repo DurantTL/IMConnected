@@ -7,7 +7,7 @@ these rules without asking first; they count as the user's request to use
 subagents. The agents live in `.claude/agents/`.
 
 - **explorer** (Haiku 5.5, pinned as `claude-haiku-5-5`): broad searches,
-  tracing how a story moves from the submit form to a pull request, digesting
+  tracing how a story moves from the submit form to a draft and then into the database, digesting
   long output (CI logs, build errors, issue lists, big diffs), and visual QA:
   reviewing screenshot folders and running read-only browser crawls that
   measure pages. Do small, targeted lookups yourself; spawning costs more than
@@ -36,10 +36,10 @@ spawning an Opus builder. Unclear requirements don't escalate; they get the
 
 **Always verify.** Treat a subagent's "done" as a claim. Run the checks
 yourself before pushing: `npm run build` (the Astro build;
-it must pass with no errors), and for changes to the submit form or
-`src/lib/`, one synthetic submission through `node scripts/mock-github.mjs`
-(see the README) with the resulting `.mock-prs/` folder checked and then
-deleted.
+it must pass with no errors), and for changes to the submit form, publishing or
+`src/lib/`, the end-to-end suite that covers it (`scripts/test-editor-submissions.mjs`,
+`scripts/test-editor-drafts.mjs`, `scripts/test-public-pages.mjs`, `scripts/test-story-store.mjs`;
+they use a throwaway `DATA_DIR` and need no GitHub token or mock).
 
 ## Keeping usage down
 
@@ -62,14 +62,15 @@ done, never whether it is reviewed or verified.
 - **One review round by default.** The reviewer reviews every code PR before
   it opens. After the fix round, re-review only the fix commit, and only when
   the first review found something blocking or medium-severity, or the fixes
-  touch the submit endpoint, HTML escaping, photo checks, the GitHub token,
-  submitter contact details, or a human-only gate. Low-severity findings and
+  touch the submit endpoint, HTML escaping, photo checks, the publish
+  transaction, the one-time adoption, submitter contact details, or a
+  human-only gate (publishing, the import script). Low-severity findings and
   nits go to the issue or PR as follow-up notes instead of starting another
   fix round. Accessibility, escaping and data-correctness findings are never
   deferred.
 - **Fixes still go to Sonnet.** Small edits the main session may make itself
   (a few lines, no new logic). Reviewer findings beyond that go back to the
   implementer.
-- **Story submission PRs are not code PRs.** Pull requests labeled
-  `story-submission` are editorial. They don't need the reviewer or an
-  implementer; a human editor reviews, edits and merges them.
+- **There are no story submission PRs any more.** Stories are submitted into the
+  dashboard and published there by a person; they are never commits, so no PR
+  or agent is involved in publishing a story.

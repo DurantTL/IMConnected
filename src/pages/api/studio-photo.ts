@@ -39,10 +39,6 @@ export const GET: APIRoute = async ({ request, url, clientAddress }) => {
   if (!src) return notFound();
   const found = resolveStudioPhoto(src, new URL(siteUrl()).origin);
   if (!found) return notFound();
-  if ('notBuilt' in found) {
-    return studioJson(request, 404, { ok: false, error: 'This photo isn’t on the website yet. Try again after the site updates (about 3–5 minutes).', code: 'not_built' });
-  }
-
   // Open without following a symlink, check the size and the first bytes, then stream like /media/* does.
   let fh: fs.promises.FileHandle;
   try {

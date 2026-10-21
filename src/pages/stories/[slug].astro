@@ -1,15 +1,22 @@
 ---
 import StoryPage from '../../components/StoryPage.astro';
-import { getPublicStories, getPublicStory, renderStoryBody } from '../../lib/public-stories';
+import { asUnavailable, getPublicStories, getPublicStory, renderStoryBody } from '../../lib/public-stories';
 import { bySection } from '../../lib/stories';
 
-// Rendered on the server from the stories table (epic #25, step 2); the middleware caches the result.
+// Rendered on the server from the stories table; the middleware caches the result.
 export const prerender = false;
 
-const story = await getPublicStory(Astro.params.slug ?? '');
-// An unknown or unpublished story is a real 404.
-if (!story) return new Response(null, { status: 404 });
-const related = bySection(await getPublicStories(), story.data.section).filter((s) => s.id !== story.id).slice(0, 3);
+let story: Awaited<ReturnType<typeof getPublicStory>>;
+let all: Awaited<ReturnType<typeof getPublicStories>>;
+try {
+  story = await getPublicStory(Astro.params.slug ?? '');
+  // An unknown or unpublished story is a real 404.
+  if (!story) return new Response(null, { status: 404 });
+  all = await getPublicStories();
+} catch (err) {
+  return asUnavailable(err);
+}
+const related = bySection(all, story.data.section).filter((s) => s.id !== story.id).slice(0, 3);
 const html = await renderStoryBody(story);
 ---
 <StoryPage story={story} related={related}><Fragment set:html={html} /></StoryPage>

@@ -1,5 +1,4 @@
 // Small helpers shared by the /api/admin/drafts and /api/admin/stories routes.
-import { githubConfigFromEnv } from './github';
 import type { ErrorCode } from './messages';
 
 export const NO_STORE = { 'Cache-Control': 'no-store' };
@@ -16,8 +15,6 @@ export function redirectTo(path: string, params: { n?: string; e?: ErrorCode } =
   const qs = q.toString();
   return new Response(null, { status: 303, headers: { Location: qs ? `${path}?${qs}` : path, ...NO_STORE } });
 }
-
-export const githubOrNull = () => githubConfigFromEnv();
 
 export function siteUrl(): string {
   return (process.env.SITE_URL || 'https://stories.imadventist.org').replace(/\/+$/, '');
