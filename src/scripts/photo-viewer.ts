@@ -26,7 +26,8 @@ function init(): void {
 
   let dialog: HTMLDialogElement | undefined;
   let stageImg: HTMLImageElement;
-  let counter: HTMLElement;
+  let counterAlt: HTMLElement;
+  let counterPos: HTMLElement;
   let prev: HTMLButtonElement;
   let next: HTMLButtonElement;
   let close: HTMLButtonElement;
@@ -42,7 +43,9 @@ function init(): void {
     stageImg.src = a.href;
     stageImg.alt = alt;
     // The live region announces each photo as it appears: its alt text and the position.
-    counter.textContent = total > 1 ? `${alt} (${index + 1} of ${total})` : alt;
+    // Two spans so a long alt text is clamped on screen without hiding the position.
+    counterAlt.textContent = alt;
+    counterPos.textContent = total > 1 ? ` (${index + 1} of ${total})` : '';
     // Warm the neighbours so the next swipe is instant.
     if (total > 1) for (const n of [index + 1, index - 1]) new Image().src = links[(n + total) % total].href;
   }
@@ -60,10 +63,11 @@ function init(): void {
         ? '<button type="button" class="viewer-btn viewer-prev" aria-label="Previous photo"><span aria-hidden="true">&#8249;</span></button>' +
           '<button type="button" class="viewer-btn viewer-next" aria-label="Next photo"><span aria-hidden="true">&#8250;</span></button>'
         : '') +
-      '<p class="viewer-count" id="viewer-desc" aria-live="polite"></p>';
+      '<p class="viewer-count" id="viewer-desc" aria-live="polite"><span class="viewer-alt"></span><span class="viewer-pos"></span></p>';
     document.body.append(d);
     stageImg = d.querySelector('.viewer-img')!;
-    counter = d.querySelector('.viewer-count')!;
+    counterAlt = d.querySelector('.viewer-alt')!;
+    counterPos = d.querySelector('.viewer-pos')!;
     close = d.querySelector('.viewer-close')!;
     prev = d.querySelector('.viewer-prev')!;
     next = d.querySelector('.viewer-next')!;
