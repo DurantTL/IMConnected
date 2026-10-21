@@ -8,6 +8,7 @@ import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
 import { validDate } from './storyfile';
 import { ERRORS, type ErrorCode } from './messages';
+import { DEFAULT_PHOTO_LAYOUT, isPhotoLayout, photoLayoutOrDefault, type PhotoLayout } from './photo-layouts';
 
 export type DraftStatus = 'new' | 'in_review' | 'published' | 'rejected';
 export type DraftSource = 'form' | 'studio' | 'editor' | 'agent';
@@ -31,6 +32,8 @@ export interface DraftFields {
   church: string;
   date: string;
   photoCredit: string;
+  /** How the story page arranges the photos (src/lib/photo-layouts.ts). */
+  photoLayout: PhotoLayout;
   featured: boolean;
   body: string;
 }
@@ -116,6 +119,7 @@ function toDraft(r: Row): Draft {
     church: s(r.church),
     date: s(r.date),
     photoCredit: s(r.photo_credit),
+    photoLayout: photoLayoutOrDefault(r.photo_layout),
     featured: n(r.featured) === 1,
     body: s(r.body),
     slug: sn(r.slug),
@@ -162,7 +166,7 @@ export function tx<T>(fn: () => T): T {
 export const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 export function emptyFields(over: Partial<DraftFields> = {}): DraftFields {
-  return { title: '', dek: '', section: 'news', area: 'conference', column: '', author: '', authorTitle: '', church: '', date: todayUtc(), photoCredit: '', featured: false, body: '', ...over };
+  return { title: '', dek: '', section: 'news', area: 'conference', column: '', author: '', authorTitle: '', church: '', date: todayUtc(), photoCredit: '', photoLayout: DEFAULT_PHOTO_LAYOUT, featured: false, body: '', ...over };
 }
 
 export interface NewDraft {
@@ -186,12 +190,12 @@ export function createDraft(opts: NewDraft): number {
   const sub = opts.submitter ?? {};
   const r = getDb()
     .prepare(
-      `INSERT INTO drafts (status, source, title, dek, section, area, story_column, author, author_title, church, date, photo_credit, featured, body,
+      `INSERT INTO drafts (status, source, title, dek, section, area, story_column, author, author_title, church, date, photo_credit, photo_layout, featured, body,
          slug, submitter_name, submitter_email, submitter_phone, submitter_church, email_verified, created_at, created_by, updated_at, updated_by, source_url, agent_note)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
-      status, opts.source, f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.featured ? 1 : 0, f.body,
+      status, opts.source, f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body,
       opts.slug ?? null, sub.name ?? null, sub.email ?? null, sub.phone ?? null, sub.church ?? null, opts.emailVerified ? 1 : 0,
       now, opts.userId ?? null, now, opts.userId ?? null, opts.sourceUrl ?? null, opts.agentNote ?? null,
     );
@@ -302,6 +306,7 @@ const CONFLICT = fail('conflict', 'conflict');
 export function checkFieldValues(f: DraftFields): ErrorCode | null {
   if (!getSection(f.section)) return 'bad_section';
   if (f.date && !validDate(f.date)) return 'bad_date';
+  if (!isPhotoLayout(f.photoLayout)) return 'bad_layout';
   return null;
 }
 
@@ -316,8 +321,8 @@ export function saveDraft(id: number, expected: number, f: DraftFields, photoAlt
     const v = takeVersion(id, expected, userId, "status = 'in_review'");
     if (v === null) return CONFLICT;
     getDb()
-      .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, featured = ?, body = ? WHERE id = ?')
-      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.featured ? 1 : 0, f.body, id);
+      .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = ?, featured = ?, body = ? WHERE id = ?')
+      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, id);
     const upd = getDb().prepare('UPDATE draft_photos SET alt = ? WHERE id = ? AND draft_id = ?');
     for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
     return { ok: true, updatedAt: v } as SaveResult;
@@ -518,9 +523,9 @@ export function reloadDraftFromStory(id: number, userId: number, f: DraftFields,
     const now = Date.now();
     getDb()
       .prepare(
-        "UPDATE drafts SET status = 'in_review', rejected_at = NULL, studio_overwrote_at = NULL, title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, featured = ?, body = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE id = ?",
+        "UPDATE drafts SET status = 'in_review', rejected_at = NULL, studio_overwrote_at = NULL, title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = ?, featured = ?, body = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE id = ?",
       )
-      .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.featured ? 1 : 0, f.body, now, userId, id);
+      .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
     old = replacePhotos(id, photos);
   });
   removeUploadFiles(old);
@@ -607,6 +612,7 @@ export interface StudioStory {
   author: string;
   date: string;
   photoCredit: string;
+  photoLayout: PhotoLayout;
   /** The Markdown that was published. */
   body: string;
   photos: { url: string; alt: string; caption: string }[];
@@ -642,7 +648,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
   {
     const now = Date.now();
     for (const st of stories) {
-      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, photoCredit: st.photoCredit, body: st.body });
+      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, photoCredit: st.photoCredit, photoLayout: st.photoLayout, body: st.body });
       const cur = getDraftBySlug(st.slug);
       let id: number;
       if (cur && isEditable(cur)) {
@@ -654,9 +660,9 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
           id = cur.id;
           getDb()
             .prepare(
-              "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, featured = 0, body = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
+              "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
             )
-            .run(fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.body, commit, now, now, id);
+            .run(fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.photoLayout, fields.body, commit, now, now, id);
         } else {
           id = createDraft({ source: 'studio', status: 'published', fields, slug: st.slug });
           getDb().prepare('UPDATE drafts SET published_commit = ?, published_at = ?, published_via_studio = 1 WHERE id = ?').run(commit, now, id);
@@ -685,6 +691,8 @@ export interface AgentDraftInput {
   date: string;
   sourceUrl: string | null;
   note: string;
+  /** null = not sent: a new draft gets the default, an updated one keeps its layout. */
+  photoLayout: PhotoLayout | null;
   /** null = leave an updated draft's photos alone. */
   photos: { bytes: Uint8Array; ext: string; alt: string }[] | null;
 }
@@ -715,11 +723,11 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         const now = Date.now();
         const r = db
           .prepare(
-            `UPDATE drafts SET title = ?, dek = ?, body = ?, section = ?, area = ?, author = ?, church = ?, agent_note = ?,
+            `UPDATE drafts SET title = ?, dek = ?, body = ?, section = ?, area = ?, author = ?, church = ?, agent_note = ?, photo_layout = COALESCE(?, photo_layout),
                date = CASE WHEN ? = '' THEN date ELSE ? END, updated_at = MAX(?, updated_at + 1)
              WHERE id = ? AND status = 'new' AND updated_by IS NULL`,
           )
-          .run(input.title, input.dek, input.body, input.section, input.area, input.author, input.church, input.note || null, input.date, input.date, now, id);
+          .run(input.title, input.dek, input.body, input.section, input.area, input.author, input.church, input.note || null, input.photoLayout, input.date, input.date, now, id);
         if (Number(r.changes) !== 1) return { ok: false, id };
         if (input.photos) {
           oldFiles = listPhotos(id).map((p) => p.path).filter((p): p is string => !!p);
@@ -730,7 +738,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         id = createDraft({
           source: 'agent',
           status: 'new',
-          fields: { title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.date ? { date: input.date } : {}) },
+          fields: { title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
           sourceUrl: input.sourceUrl,
           agentNote: input.note || null,
         });

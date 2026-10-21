@@ -2,6 +2,7 @@
 import Admin from '../../../layouts/Admin.astro';
 import { SECTIONS } from '../../../lib/site';
 import { LIMITS } from '../../../lib/limits';
+import { PHOTO_LAYOUTS } from '../../../lib/photo-layouts';
 import { SOURCE_LABEL, STATUS_LABEL, getDraft, isEditable, listPhotos } from '../../../lib/drafts';
 import { noticeText, fmtTime, looksLikeEmail } from '../../../lib/admin-ui';
 import { errorText } from '../../../lib/messages';
@@ -221,6 +222,22 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                 <div><button type="submit" form="photo-form" name="op" value="upload" class="cms-btn secondary">Upload</button></div>
               </div>
             )}
+            <fieldset class="ed-layouts">
+              <legend>Photo layout</legend>
+              <p class="admin-note">How the photos are arranged on the story page. A layout with more places than photos simply uses what there is: with one photo every layout looks like “One hero”.</p>
+              <div class="ed-layout-cards">
+                {PHOTO_LAYOUTS.map((l) => (
+                  <label class="ed-layout">
+                    <input type="radio" name="photoLayout" value={l.value} checked={l.value === draft.photoLayout} />
+                    <span class={`lay-mini lay-${l.value}`} aria-hidden="true">
+                      {Array.from({ length: { one: 1, twoUp: 2, heroGrid: 3, mosaic: 4, stack: 3 }[l.value] }, () => <i></i>)}
+                    </span>
+                    <span class="lay-name">{l.label}</span>
+                    <span class="lay-hint">{l.hint}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
           </section>
 
           <div class="ed-savebar">

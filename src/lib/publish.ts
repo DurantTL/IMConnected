@@ -3,6 +3,7 @@ import { getSection, isValidArea } from './site';
 import { LIMITS } from './limits';
 import { slugify, sniffImage, textToMarkdown } from './submission';
 import { clean, validDate, leadImageFields } from './storyfile';
+import { DEFAULT_PHOTO_LAYOUT, isPhotoLayout, PHOTO_LAYOUT_VALUES, type PhotoLayout } from './photo-layouts';
 
 export class PublishError extends Error {
   constructor(message: string, public ref?: string) {
@@ -22,6 +23,8 @@ export interface PreparedStudioStory {
   author: string;
   date: string;
   photoCredit: string;
+  /** How the story page arranges the photos; 'one' when Studio sent none. */
+  photoLayout: PhotoLayout;
   /** Alt text of the lead photo as the story page shows it (alt, else caption, else title). */
   leadAlt: string;
   /** The Markdown body (with the pull quote, if any). */
@@ -103,6 +106,13 @@ export function prepareStudioPublish(input: unknown) {
       if (!getSection(section)) throw fail('That section does not exist.');
       if (!isValidArea(section, area)) throw fail('That category is not valid for this section.');
 
+      // Studio sends the story block's layout (one, twoUp, heroGrid, mosaic, stack). Missing means 'one'; anything else is refused.
+      let photoLayout: PhotoLayout = DEFAULT_PHOTO_LAYOUT;
+      if (r.photoLayout !== undefined && r.photoLayout !== null) {
+        if (!isPhotoLayout(r.photoLayout)) throw fail(`photoLayout must be one of: ${PHOTO_LAYOUT_VALUES.join(', ')}.`);
+        photoLayout = r.photoLayout;
+      }
+
       const rawPhotos = r.photos === undefined ? [] : r.photos;
       if (!Array.isArray(rawPhotos)) throw fail('photos must be a list.');
       if (rawPhotos.length > LIMITS.maxPhotos) throw fail(`Use up to ${LIMITS.maxPhotos} photos per story.`);
@@ -127,7 +137,7 @@ export function prepareStudioPublish(input: unknown) {
         if (attribution) lines.push('>', `> — ${textToMarkdown(attribution).replace(/\n+/g, ' ')}`);
         md += '\n\n' + lines.join('\n');
       }
-      stories.push({ ref, slug, title, dek, section, area, author, date: issueDate, photoCredit: lead?.credit ?? '', leadAlt: lead?.alt ?? '', body: md.trim(), photos });
+      stories.push({ ref, slug, title, dek, section, area, author, date: issueDate, photoCredit: lead?.credit ?? '', photoLayout, leadAlt: lead?.alt ?? '', body: md.trim(), photos });
     }
 
     return { name, issueDate, stories };

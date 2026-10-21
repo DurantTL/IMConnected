@@ -1,6 +1,7 @@
 // Reads the editor form (save and preview) into draft fields, refusing oversized values instead of cutting them.
 import { FIELD_MAX, type DraftFields } from './drafts';
 import { clean } from './storyfile';
+import { DEFAULT_PHOTO_LAYOUT, type PhotoLayout } from './photo-layouts';
 
 function text(form: FormData, name: string, max: number, label: string): string {
   const v = form.get(name);
@@ -25,6 +26,8 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
     church: line(form, 'church', FIELD_MAX.short, 'The church'),
     date: line(form, 'date', 10, 'The date'),
     photoCredit: line(form, 'photoCredit', FIELD_MAX.short, 'The photo credit'),
+    // An unknown value is kept as sent so that saving it is refused (checkFieldValues -> bad_layout), never silently changed.
+    photoLayout: (form.has('photoLayout') ? line(form, 'photoLayout', 40, 'The photo layout') : DEFAULT_PHOTO_LAYOUT) as PhotoLayout,
     featured: form.get('featured') === '1',
     body: text(form, 'body', FIELD_MAX.body, 'The story text'),
   };

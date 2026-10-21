@@ -55,6 +55,17 @@ content:
       - { name: photoCredit, label: Photo credit, type: string }
       - { name: photos, label: More photos, type: image, list: true }
       - { name: photoAlts, label: Alt text for the more photos (same order as above), type: string, list: true }
+      - name: photoLayout
+        label: Photo layout
+        type: select
+        default: one
+        options:
+          values:
+            - { value: one, label: "One hero (lead photo, the others in a row)" }
+            - { value: twoUp, label: "Two up" }
+            - { value: heroGrid, label: "Hero + grid" }
+            - { value: mosaic, label: "Mosaic" }
+            - { value: stack, label: "Stack" }
       - { name: featured, label: Feature on home page, type: boolean, default: false }
       - { name: draft, label: Draft (hidden), type: boolean, default: false }
       - { name: body, label: Story, type: rich-text }

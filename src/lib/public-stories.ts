@@ -37,6 +37,7 @@ export function toPublicStory(s: Story): PublicStory {
       photoCredit: s.photoCredit,
       photos: s.photos.map((p, i) => photoUrl(s, lead + i, p)),
       photoAlts: s.photoAlts,
+      photoLayout: s.photoLayout,
       featured: s.featured,
     },
   };

@@ -21,6 +21,7 @@ import { getDb } from './db';
 import { invalidateStories } from './public-cache';
 import { mediaDir, resolveMediaFile } from './media';
 import { getDraftBySlug, markUnpublished, publishDraftRow, recordStudioPublish, tx, uploadFile, removeUploadFiles, type Draft, type DraftFields, type DraftPhoto } from './drafts';
+import { photoLayoutOrDefault } from './photo-layouts';
 import { getStoryBySlug, storyExists, unpublishStory as hideStory, writeStory, type Story, type StoryInput, type StoryPhoto } from './story-store';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,159}$/;
@@ -234,7 +235,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     slug, title, dek: dek || undefined, section, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
     date: draft.date, photoCredit: stored.sources.length && photoCredit ? photoCredit : undefined,
     ...photoFields(stored, alts, title),
-    featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body),
+    photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body),
     status: 'live', source: draft.source, draftId: draft.id, publishedAt: now, publishedBy: userId, editedAt: now, photoRows: stored.rows,
   };
 
@@ -294,7 +295,7 @@ export function loadStory(slug: string): LoadedStory | null {
   return {
     fields: {
       title: s.title, dek: s.dek ?? '', section: s.section, area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
-      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', featured: s.featured, body: s.body,
+      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body,
     },
     photos: sources.map((url, i) => ({ url, alt: alts[i] ?? '', caption: '' })),
   };
@@ -334,11 +335,11 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
           slug: p.slug, title: p.title, dek: p.dek || undefined, section: p.section, area: p.area, author: p.author, date: p.date,
           photoCredit: stored.sources.length && p.photoCredit ? p.photoCredit : undefined,
           ...photoFields(stored, [p.leadAlt, ...p.photos.slice(1).map((ph) => ph.alt)], p.title),
-          featured: false, draft: false, body: p.body, status: 'live', source: 'studio', publishedAt: now, editedAt: now, photoRows: stored.rows,
+          photoLayout: p.photoLayout, featured: false, draft: false, body: p.body, status: 'live', source: 'studio', publishedAt: now, editedAt: now, photoRows: stored.rows,
         }, now);
       }
       const rec = recordStudioPublish(planned.map(({ p, stored }) => ({
-        slug: p.slug, title: p.title, dek: p.dek, section: p.section, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, body: p.body,
+        slug: p.slug, title: p.title, dek: p.dek, section: p.section, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body,
         photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption })),
       })));
       ids = rec.ids; overwrote = rec.overwrote; oldUploads = rec.oldUploads;
