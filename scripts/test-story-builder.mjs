@@ -46,6 +46,7 @@ try {
           `export * from ${JSON.stringify(path.join(root, 'src/lib/drafts.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/draft-form.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-publish.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/publish.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-store.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-blocks.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-block-render.ts'))};`,
@@ -212,7 +213,51 @@ try {
   assert.equal(loadedEdge.fields.storyBlocks[1].items[0], '<' + 'i'.repeat(1999));
   assert.equal(loadedEdge.fields.storyBlocks[3].label, '<' + 'b'.repeat(119));
 
-  console.log('PASS modules: migration, persistence, legacy save, conflict, publishing, focus, live edit remapping, photo deletion');
+  // Studio crop compatibility: real prepared requests and publish transactions.
+  const pngData = (shade) => `data:image/png;base64,${syntheticPng(shade).toString('base64')}`;
+  const studioRequest = (photos, title = 'Synthetic Studio crops') => ({ newsletter: { name: 'Synthetic review', issueDate: '2026-01-08' }, stories: [{ ref: 'studio-crop', title, author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic Studio crop compatibility story.', photoLayout: 'mosaic', photos }] });
+  const sendStudio = (request) => m.publishStudioStories(m.prepareStudioPublish(request).stories);
+  const a = { url: pngData(45), alt: 'Synthetic A', caption: '', focalX: 0, focalY: 100, zoom: 3 };
+  const b = { url: pngData(65), alt: 'Synthetic B', caption: '', focalX: 17, focalY: 83, zoom: 1.8 };
+  const first = await sendStudio(studioRequest([a, b]));
+  const studioSlug = first.stories[0].slug;
+  const crops = () => m.getStoryBySlug(studioSlug).photoRows.map(({ focalX, focalY, zoom }) => ({ focalX, focalY, zoom }));
+  assert.deepEqual(crops(), [{ focalX: 0, focalY: 100, zoom: 3 }, { focalX: 17, focalY: 83, zoom: 1.8 }]);
+  assert.deepEqual(m.listPhotos(first.ids[0]).map(({ focalX, focalY, zoom }) => ({ focalX, focalY, zoom })), crops(), 'closed Studio draft and live story use the same effective crop');
+  for (const key of ['focalX', 'focalY', 'zoom']) for (const value of [null, '2', {}, NaN, Infinity, key === 'zoom' ? .99 : -1, key === 'zoom' ? 3.01 : 101]) {
+    assert.throws(() => m.prepareStudioPublish(studioRequest([{ ...a, [key]: value }])), (error) => error instanceof m.PublishError && error.ref === 'studio-crop' && error.message.includes(key));
+  }
+  const oldA = { url: a.url, alt: a.alt, caption: '' }, oldB = { url: b.url, alt: b.alt, caption: '' };
+  await sendStudio(studioRequest([oldB, oldA]));
+  assert.deepEqual(crops(), [{ focalX: 17, focalY: 83, zoom: 1.8 }, { focalX: 0, focalY: 100, zoom: 3 }], 'same-byte photos keep their crop after an old-client reorder');
+  await sendStudio(studioRequest([{ ...oldB, focalX: 50 }, { url: pngData(85), alt: 'Replacement' }]));
+  assert.deepEqual(crops(), [{ focalX: 50, focalY: 83, zoom: 1.8 }, { focalX: 50, focalY: 50, zoom: 1 }], 'partial omissions preserve other fields and replacement identities use defaults');
+  const pending = sendStudio(studioRequest([oldB]));
+  db.prepare('UPDATE story_photos SET focal_x=23, zoom=2.2 WHERE story_id=? AND position=0').run(m.getStoryBySlug(studioSlug).id);
+  await pending;
+  assert.deepEqual(crops(), [{ focalX: 23, focalY: 83, zoom: 2.2 }], 'omitted crop inherits a concurrent edit committed during asynchronous photo preparation');
+  await sendStudio(studioRequest([{ ...oldB, focalX: 50, focalY: 50, zoom: 1 }]));
+  assert.deepEqual(crops(), [{ focalX: 50, focalY: 50, zoom: 1 }], 'explicit defaults reset the crop');
+  await sendStudio(studioRequest([{ ...a, zoom: 1.4 }, { ...a, zoom: 2.4 }]));
+  await sendStudio(studioRequest([oldA, oldA]));
+  assert.deepEqual(crops().map((crop) => crop.zoom), [1.4, 2.4], 'duplicate identities prefer their previous positions');
+  const live = m.loadStory(studioSlug);
+  m.reloadDraftFromStory(first.ids[0], user, live.fields, live.photos);
+  const openPhotos = m.listPhotos(first.ids[0]);
+  await sendStudio(studioRequest([{ ...a, zoom: 2.8 }]));
+  assert.deepEqual(m.listPhotos(first.ids[0]), openPhotos, 'Studio preserves an editor\'s open draft photos');
+  const beforeRollback = crops();
+  db.exec("CREATE TRIGGER synthetic_crop_rollback BEFORE INSERT ON stories WHEN NEW.title = 'Synthetic rollback blocker' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END");
+  const multi = studioRequest([{ ...a, zoom: 1.1 }]);
+  multi.stories.push({ ...multi.stories[0], ref: 'rollback', title: 'Synthetic rollback blocker' });
+  await assert.rejects(sendStudio(multi), /synthetic failure/);
+  assert.deepEqual(crops(), beforeRollback, 'a failed multi-story publish rolls back crop updates');
+  db.exec('DROP TRIGGER synthetic_crop_rollback');
+  const remote = await sendStudio(studioRequest([{ url: 'https://EXAMPLE.invalid:443/synthetic.png', focalX: 12, focalY: 34, zoom: 1.9 }], 'Synthetic remote crop'));
+  await sendStudio(studioRequest([{ url: 'https://example.invalid/synthetic.png' }], 'Synthetic remote crop'));
+  assert.equal(m.getStoryBySlug(remote.stories[0].slug).photoRows[0].zoom, 1.9, 'normalized remote URLs inherit crop without fetching remote bytes');
+
+  console.log('PASS modules and Studio crop compatibility: migration, legacy save, conflicts, publish/reopen, validation, identity/reorder, partial omissions, races, open drafts and rollback');
 } finally {
   db?.close();
   delete globalThis.__storyBuilderTestDb;

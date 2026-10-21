@@ -64,6 +64,8 @@ Migration **017** adds `story_blocks` JSON to drafts/stories and `focal_x`/`foca
 
 Migration **018** adds `zoom` to draft and published photo rows (default 1, range 1–3). Older forms that omit zoom preserve a saved crop. Crops change display metadata only: no photo is resampled or overwritten, and existing Studio and agent API requests remain supported.
 
+Studio compatibility (#45) extends each published photo with optional numeric `focalX`/`focalY` (0–100) and `zoom` (1–3). Missing values preserve an unchanged photo's latest crop inside the publish transaction; explicit defaults reset it and new photos start centered at 100%. Studio imports retain all permitted lead/gallery photos, layout and crop metadata, while imported teaser cards stay protected from republishing. See [the Studio contract and checks](docs/STUDIO-IMPORT.md).
+
 `/stories.json` adds optional `storyBlocks` and `photoFocus` without changing version 1. Module IDs are stable strings, and image modules contain `url`, `alt`, `focalX`, `focalY` and optional `zoom` (1–3, default 1). Focus arrays follow the lead image then gallery images and use the same crop fields. Draft modules/private uploads are excluded from the Studio story list. New consumers may use these additive fields; existing consumers can keep using the original story fields.
 
 Focused validation (synthetic local data only):
