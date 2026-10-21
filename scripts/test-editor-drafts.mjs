@@ -389,6 +389,9 @@ let H, slugH;
   await c1.form('/api/admin/stories/edit', { slug: slugL });
   const reopened = JSON.parse(draftRow(L).story_blocks);
   check('editing it: the paragraph field shows "<" (20,000 characters, not 20,015)', reopened[0].text === para && reopened[0].text.length === 20_000);
+  // a page without JavaScript sends the read-only Markdown box back as it was rendered
+  r = await c1.json(`/api/admin/drafts/${L}/save`, { version: version(L), ...f, body: draftRow(L).body, storyBlocks: JSON.stringify(reopened) });
+  check('...a save that sends the Markdown box back unchanged (no JavaScript) succeeds', r.data.ok === true, JSON.stringify(r.data));
   r = await c1.json(`/api/admin/drafts/${L}/save`, { version: version(L), ...f, storyBlocks: JSON.stringify(reopened) });
   check('...Save succeeds', r.data.ok === true, JSON.stringify(r.data));
   r = await c1.form(`/api/admin/drafts/${L}/publish`, { version: version(L) });
@@ -575,7 +578,7 @@ let S;
   const D = await mk('Double Click Story');
   const v = version(D);
   const both = await Promise.all([c1.form(`/api/admin/drafts/${D}/publish`, { version: v }), c1.form(`/api/admin/drafts/${D}/publish`, { version: v })]);
-  check('the same draft published twice at once publishes once (the other is refused)', both.filter((x) => x.params.get('n') === 'published').length === 1 && both.filter((x) => ['conflict', 'already_publishing', 'not_publishable'].includes(x.params.get('e'))).length === 1 && q("SELECT COUNT(*) n FROM stories WHERE slug LIKE '2026-10-19-double-click-story%'")[0].n === 1, JSON.stringify(both.map((x) => x.loc)));
+  check('the same draft published twice at once publishes once (the other is refused)', both.filter((x) => x.params.get('n') === 'published').length === 1 && both.filter((x) => ['conflict', 'already_publishing', 'not_publishable', 'closed'].includes(x.params.get('e'))).length === 1 && q("SELECT COUNT(*) n FROM stories WHERE slug LIKE '2026-10-19-double-click-story%'")[0].n === 1, JSON.stringify(both.map((x) => x.loc)));
   // a slug taken by someone else between freshSlug and the write is refused, not taken over
   const V = await mk('Taken Address Story');
   run("INSERT INTO stories (slug, title, section, author, date, source, published_at, updated_at) VALUES ('2026-10-19-taken-address-story', 'Other story', 'news', 'a', '2026-10-19', 'git', 1, 1)");

@@ -125,7 +125,8 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
 
 /** Modules become the Markdown body, which publishing limits to 20,000 characters: refuse at save with a clear message. */
 export function checkStoryBlockLength(blocks: StoryBlock[]): void {
-  if (storyBlocksToMarkdown(blocks).replace(/&lt;/g, '<').length > STORY_BLOCKS_TEXT_MAX) { // as typed, the same rule as text()
+  const md = storyBlocksToMarkdown(blocks);
+  if (md.replace(/&lt;/g, '<').length > STORY_BLOCKS_TEXT_MAX || md.length > 4 * STORY_BLOCKS_TEXT_MAX) { // as typed, the same rule as text(); stored size capped at 4x
     error(`The story text is too long: modules together can hold up to ${STORY_BLOCKS_TEXT_MAX.toLocaleString('en-US')} characters.`);
   }
 }

@@ -564,7 +564,9 @@ function remapStoryBlocks(id: number, input: StoryBlock[] | undefined): void {
     if (!photo) throw new Error(OWN_PHOTO_ERROR); // only this story's own photos
     return { ...b, photoId: photo.id, url: undefined, focalX: undefined, focalY: undefined };
   });
-  getDb().prepare('UPDATE drafts SET story_blocks = ? WHERE id = ?').run(JSON.stringify(blocks), id);
+  // The Markdown box shows the modules' projection, as createDraft does, so a page without JavaScript saves cleanly.
+  if (blocks.length) getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(blocks), storyBlocksToMarkdown(blocks), id);
+  else getDb().prepare('UPDATE drafts SET story_blocks = ? WHERE id = ?').run(JSON.stringify(blocks), id);
 }
 
 /** An editor draft for a live story: its text and photos, linked to the story's slug. */

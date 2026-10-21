@@ -139,7 +139,7 @@ function readStory(file) {
   const body = raw.replace(/</g, '&lt;');
   const bad = linkTargets(body).find((t) => !safeUrl(t));
   if (bad) throw new Error(`a link or image target is not a web, mail or tel link: ${bad.slice(0, 40)}`);
-  if (body.length > LIMITS.bodyMax) throw new Error(`story text is longer than ${LIMITS.bodyMax} characters`);
+  if (body.replace(/&lt;/g, '<').length > LIMITS.bodyMax || body.length > 4 * LIMITS.bodyMax) throw new Error(`story text is longer than ${LIMITS.bodyMax} characters`);
   return {
     slug, title, dek: str(fm.dek) || undefined, section, area, column: str(fm.column) || undefined, author, authorTitle: str(fm.authorTitle) || undefined,
     church: str(fm.church) || undefined, date, image, imageAlt: str(fm.imageAlt) || undefined, photoCredit: str(fm.photoCredit) || undefined,
