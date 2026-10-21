@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Browser integration of the built editor. Synthetic local data only; no credentials or external services.
 // npm run build
-// PLAYWRIGHT_ROOT=/workspace/.tools/browser CHROMIUM_PATH=/usr/bin/chromium node scripts/test-story-builder-ui.mjs
+// [PLAYWRIGHT_ROOT=<folder>] [CHROMIUM_PATH=<browser>] [CHROMIUM_NO_SANDBOX=1] [AXE_JS=<axe.min.js>] node scripts/test-story-builder-ui.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -14,8 +14,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { deflateSync } from 'node:zlib';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const require = createRequire(path.join(process.env.PLAYWRIGHT_ROOT || '/workspace/.tools/browser', 'package.json'));
-const { chromium } = require('playwright');
+// Playwright is not a dependency of this repo. PLAYWRIGHT_ROOT (a folder whose node_modules has it) overrides the normal resolution.
+const playwrightRequire = process.env.PLAYWRIGHT_ROOT ? createRequire(path.join(process.env.PLAYWRIGHT_ROOT, 'package.json')) : createRequire(import.meta.url);
+const { chromium } = (() => {
+  for (const spec of ['playwright', '/opt/node22/lib/node_modules/playwright']) { try { return playwrightRequire(spec); } catch { /* try the next */ } }
+  throw new Error('Playwright was not found. Install it or set PLAYWRIGHT_ROOT to a folder whose node_modules has it.');
+})();
+// CHROMIUM_PATH picks a browser; CHROMIUM_NO_SANDBOX=1 adds --no-sandbox (needed only when running as root, e.g. in a container).
+const launchOptions = () => ({ executablePath: process.env.CHROMIUM_PATH || undefined, args: process.env.CHROMIUM_NO_SANDBOX === '1' ? ['--no-sandbox'] : [] });
 const PORT = Number(process.env.PORT || 4791);
 const BASE = `http://localhost:${PORT}`;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'imc-builder-ui-'));
@@ -86,7 +92,7 @@ try {
   const photo = db.prepare('SELECT * FROM draft_photos WHERE draft_id=?').get(id);
   check('a synthetic photo is uploaded through the real photo endpoint', uploaded.status === 303 && !!photo);
 
-  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
+  browser = await chromium.launch(launchOptions());
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   // Secure cookies are accepted for localhost by Chromium, matching the application's local development contract.
   await context.addCookies([{ name: '__Host-imc_session', value: token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
@@ -100,11 +106,16 @@ try {
   await page.goto(BASE + emptyCreated.headers.get('location'));
   await page.locator('#module-workspace').waitFor({ state: 'visible' });
   check('new empty stories show a writing prompt and paragraph placeholder', await page.locator('#module-start-writing').isVisible() && await page.locator('[data-module-field="text"]').getAttribute('placeholder') === 'Start writing your story here…');
+  const emptyId = Number(/\/drafts\/(\d+)/.exec(emptyCreated.headers.get('location'))[1]);
+  const emptyBefore = db.prepare('SELECT status, updated_at, updated_by FROM drafts WHERE id=?').get(emptyId);
   check('opening an empty phone story does not focus a text field or summon the keyboard', await page.evaluate(() => !document.activeElement.matches('input,textarea,[contenteditable=true]')));
   if (shots) {
     await page.locator('#module-start-writing').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(shots, 'story-empty-mobile.png') });
   }
+  await page.waitForTimeout(21500); // longer than the 20-second autosave timer
+  const emptyAfter = db.prepare('SELECT status, updated_at, updated_by FROM drafts WHERE id=?').get(emptyId);
+  check('merely opening an empty draft does not autosave it (no new version, no editor recorded, no status change)', JSON.stringify(emptyAfter) === JSON.stringify(emptyBefore), JSON.stringify([emptyBefore, emptyAfter]));
   await page.getByRole('button', { name: 'Start writing', exact: true }).click();
   check('Start writing explicitly focuses the paragraph field', await page.locator('[data-module-field="text"]').evaluate((field) => field === document.activeElement));
   await page.getByRole('button', { name: 'Delete module', exact: true }).click();
@@ -120,19 +131,26 @@ try {
   check('enabling modules preserves the complete legacy Markdown', (await blocks())[0].text === legacy);
   await page.locator('[data-add-module="heading"]').click();
   await page.locator('[data-module-field="text"]').fill('A synthetic heading');
-  await page.getByRole('button', { name: 'Edit Paragraph module 1', exact: true }).focus();
+  await page.getByRole('button', { name: /^1\. Paragraph/ }).focus();
   await page.keyboard.press('Enter');
   check('Enter selects a module and restores actual focus after rendering', await selectedHasFocus());
+  const labelMismatch = await page.evaluate(() => [...document.querySelectorAll('#module-outline button')].filter((b) => {
+    const label = b.getAttribute('aria-label');
+    if (label === null) return false; // no aria-label: the visible text is the name
+    const visible = [...b.childNodes].filter((n) => !(n.nodeType === 1 && n.getAttribute('aria-hidden') === 'true')).map((n) => n.textContent).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    return !label.trim().toLowerCase().startsWith(visible);
+  }).map((b) => b.outerHTML.slice(0, 80)));
+  check('outline buttons\' accessible names start with their visible text (WCAG 2.5.3)', labelMismatch.length === 0, labelMismatch.join(' | '));
   await page.keyboard.press('Tab');
-  check('Tab continues from the selected module to its next available action', await page.getByRole('button', { name: 'Move module 1 down', exact: true }).evaluate((button) => button === document.activeElement));
+  check('Tab continues from the selected module to its next available action', await page.getByRole('button', { name: 'Move down, module 1', exact: true }).evaluate((button) => button === document.activeElement));
   await page.keyboard.press('Shift+Tab');
   check('Shift+Tab returns to the selected module', await selectedHasFocus());
-  await page.getByRole('button', { name: 'Edit Heading module 2', exact: true }).focus();
+  await page.getByRole('button', { name: /^2\. Heading/ }).focus();
   await page.keyboard.press('Space');
   check('Space selects the heading and keeps actual focus on it', await selectedHasFocus() && await page.locator('#module-title').textContent() === 'Heading settings');
-  await page.getByRole('button', { name: 'Edit Paragraph module 1', exact: true }).click();
+  await page.getByRole('button', { name: /^1\. Paragraph/ }).click();
   check('pointer selection keeps focus on the selected outline button', await selectedHasFocus());
-  await page.getByRole('button', { name: 'Move module 2 up', exact: true }).click();
+  await page.getByRole('button', { name: 'Move up, module 2', exact: true }).click();
   check('accessible Move controls reorder actual module state', (await blocks())[0].type === 'heading');
   await page.getByRole('button', { name: 'Duplicate module', exact: true }).click();
   check('duplicate creates a distinct stable module ID', (await blocks()).length === 3 && new Set((await blocks()).map((b) => b.id)).size === 3);
@@ -162,6 +180,18 @@ try {
   await page.locator('[data-add-module="divider"]').click();
   const expected = await blocks();
   check('all seven supported module types are represented', new Set(expected.map((b) => b.type)).size === 7);
+  // a hidden invalid address must not block Save silently: the field is plain text and the server explains the problem
+  const buttonModule = expected.find((b) => b.type === 'button');
+  await page.locator(`[data-select-module="${buttonModule.id}"]`).click();
+  check('the button address field is a plain text field (a type=url field would block Save without a word)', await page.locator('[data-module-field="url"]').getAttribute('type') === 'text');
+  await page.locator('[data-module-field="url"]').fill('not an address');
+  await page.locator('[data-select-module]').first().click();
+  const badSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click();
+  const badSaved = await badSave;
+  check('Save with an invalid address in a hidden module answers with a clear message', badSaved.status() === 400 && /Button links/.test((await badSaved.json()).error) && /Button links/.test(await page.locator('#save-status').textContent()));
+  await page.locator(`[data-select-module="${buttonModule.id}"]`).click();
+  await page.locator('[data-module-field="url"]').fill(buttonModule.url);
 
   await page.locator('[data-studio-tab=photos]').click();
   await page.locator('.sb-focus-settings').evaluate((details) => { details.open = true; });
@@ -195,8 +225,8 @@ try {
   });
   check('private preview loads the authenticated uploaded image', true);
   check('preview keeps scripts disabled in its sandbox', !(await page.locator('#preview').getAttribute('sandbox') || '').split(/\s+/).includes('allow-scripts'));
-  const axePath = process.env.AXE_JS || '/workspace/.tools/a11y/node_modules/axe-core/axe.min.js';
-  if (fs.existsSync(axePath)) {
+  const axePath = process.env.AXE_JS || (() => { try { return playwrightRequire.resolve('axe-core/axe.min.js'); } catch { return ''; } })();
+  if (axePath && fs.existsSync(axePath)) {
     await page.addScriptTag({ path: axePath });
     const accessibility = [];
     for (const panel of ['content', 'settings', 'photos', 'review']) {

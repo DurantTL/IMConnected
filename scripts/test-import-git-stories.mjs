@@ -115,6 +115,26 @@ try {
     /ERROR\s+zz-layout-bad.*photoLayout/.test(r.out) && q("SELECT photo_layout p FROM stories WHERE slug = 'zz-layout-good'")[0]?.p === 'mosaic' && q("SELECT photo_layout p FROM stories WHERE slug = 'zz-layout-none'")[0]?.p === 'one' && q("SELECT COUNT(*) n FROM stories WHERE slug = 'zz-layout-bad'")[0].n === 0, r.out);
   r = imp('--apply');
   check('...and a second run reports the layout story as unchanged', /same\s+zz-layout-good/.test(r.out), r.out);
+
+  // story modules (migration 017): an image module may only show the story's own photos; module text is escaped like the body
+  const mods = (blocks) => `storyBlocks: ${JSON.stringify(blocks)}\n`;
+  const own = '/images/stories/zz-hand-story/photo-1.jpg';
+  const lead = `image: "${own}"\nimageAlt: "A synthetic picture"\n`;
+  write('zz-mod-good', md('Modules Good', lead + mods([
+    { id: 'p', type: 'text', text: 'A synthetic paragraph.' },
+    { id: 'h', type: 'heading', level: 2, text: 'A <b>heading</b>' },
+    { id: 'i', type: 'image', url: own, alt: 'A <i>picture</i>' },
+  ])));
+  write('zz-mod-external', md('Modules External', lead + mods([{ id: 'i', type: 'image', url: 'https://example.test/outside.jpg', alt: 'x' }])));
+  write('zz-mod-foreign', md('Modules Foreign', lead + mods([{ id: 'i', type: 'image', url: '/images/stories/another-story/photo-1.jpg', alt: 'x' }])));
+  write('zz-mod-nophoto', md('Modules No Photo', mods([{ id: 'i', type: 'image', url: own, alt: 'x' }])));
+  r = imp('--apply');
+  const good = q("SELECT body, story_blocks FROM stories WHERE slug = 'zz-mod-good'")[0];
+  check('an image module that shows the story\'s own photo is imported, with module text stored as &lt; (no "<" anywhere)', !!good && !good.story_blocks.includes('<') && !good.body.includes('<') && JSON.parse(good.story_blocks)[2].url === own && JSON.parse(good.story_blocks)[1].text.includes('&lt;b>heading&lt;/b>') && !good.body.includes('A synthetic picture') && !good.body.includes('\\&lt;'), r.out + JSON.stringify(good));
+  check('an image module with an external address, another story\'s photo, or no photo at all is an error naming the file, and nothing is stored',
+    ['zz-mod-external', 'zz-mod-foreign', 'zz-mod-nophoto'].every((n) => new RegExp(`ERROR\\s+${n}.*own photos`).test(r.out) && !q('SELECT 1 FROM stories WHERE slug = ?', n).length), r.out);
+  r = imp('--apply');
+  check('...and a second run reports the module story as unchanged', /same\s+zz-mod-good/.test(r.out), r.out);
 } catch (err) {
   console.error('ERROR', err);
   fails++;

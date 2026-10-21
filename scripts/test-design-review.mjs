@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Responsive and accessibility validation of the built public site. Local data only.
 // npm run build
-// PLAYWRIGHT_ROOT=/workspace/.tools/browser CHROMIUM_PATH=/usr/bin/chromium node scripts/test-design-review.mjs
+// [PLAYWRIGHT_ROOT=<folder>] [CHROMIUM_PATH=<browser>] [CHROMIUM_NO_SANDBOX=1] [AXE_JS=<axe.min.js>] node scripts/test-design-review.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,14 +11,21 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const require = createRequire(path.join(process.env.PLAYWRIGHT_ROOT || '/workspace/.tools/browser', 'package.json'));
-const { chromium } = require('playwright');
+// Playwright is not a dependency of this repo. PLAYWRIGHT_ROOT (a folder whose node_modules has it) overrides the normal resolution.
+const playwrightRequire = process.env.PLAYWRIGHT_ROOT ? createRequire(path.join(process.env.PLAYWRIGHT_ROOT, 'package.json')) : createRequire(import.meta.url);
+const { chromium } = (() => {
+  for (const spec of ['playwright', '/opt/node22/lib/node_modules/playwright']) { try { return playwrightRequire(spec); } catch { /* try the next */ } }
+  throw new Error('Playwright was not found. Install it or set PLAYWRIGHT_ROOT to a folder whose node_modules has it.');
+})();
+// CHROMIUM_PATH picks a browser; CHROMIUM_NO_SANDBOX=1 adds --no-sandbox (needed only when running as root, e.g. in a container).
+const launchOptions = () => ({ executablePath: process.env.CHROMIUM_PATH || undefined, args: process.env.CHROMIUM_NO_SANDBOX === '1' ? ['--no-sandbox'] : [] });
 const PORT = Number(process.env.PORT || 4805);
 const BASE = `http://localhost:${PORT}`;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'imc-design-review-'));
 const artifacts = path.resolve(process.env.SHOTS || path.join(scratch, 'artifacts'));
-const axePath = process.env.AXE_JS || '/workspace/.tools/a11y/node_modules/axe-core/axe.min.js';
-assert.ok(fs.existsSync(axePath), 'AXE_JS must point to an installed axe.min.js');
+// axe-core is not a dependency either: AXE_JS, else whatever 'axe-core' resolves to.
+const axePath = process.env.AXE_JS || (() => { try { return playwrightRequire.resolve('axe-core/axe.min.js'); } catch { return ''; } })();
+assert.ok(axePath && fs.existsSync(axePath), 'Set AXE_JS to an installed axe.min.js (axe-core is not a dependency of this repo)');
 fs.mkdirSync(artifacts, { recursive: true });
 const results = [];
 const logs = [];
@@ -51,7 +58,7 @@ try {
   const sampleStory = feed.stories.find((story) => story.image) || feed.stories[0];
   const storyPath = new URL(sampleStory.url).pathname;
   const targets = [ ['home', '/'], ['section', '/news/'], ['story', storyPath], ['submit', '/submit/'], ['search', '/search/?q=church'], ['login', '/admin/login'] ];
-  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
+  browser = await chromium.launch(launchOptions());
   const context = await browser.newContext({ colorScheme: 'light' });
   await context.route('**/*', (route) => {
     const url = new URL(route.request().url());
@@ -83,6 +90,16 @@ try {
       check(`${name} at ${width}px responds successfully`, response.status() === 200);
       check(`${name} at ${width}px has no horizontal page overflow`, dimensions.scroll <= dimensions.width);
       check(`${name} at ${width}px has no uncaught script errors`, errors.length === 0);
+      if (width === 1440 && ['home', 'section', 'story', 'submit', 'search'].includes(name)) {
+        const current = await page.evaluate(() => ({
+          latest: document.querySelector('.nav a[href="/"]')?.getAttribute('aria-current') ?? null,
+          search: document.querySelector('.header-search')?.getAttribute('aria-current') ?? null,
+          mobileLatest: !!document.querySelector('.mobile-nav a[href="/"]'),
+          sections: [...document.querySelectorAll('.nav a[aria-current]')].map((a) => a.getAttribute('href')),
+        }));
+        check(`${name}: the header marks only the current page (Latest on home, Search on search, nothing else on other pages)`,
+          (current.latest === 'page') === (name === 'home') && (current.search === 'page') === (name === 'search') && current.sections.length === (name === 'home' ? 1 : name === 'section' || name === 'story' ? 1 : 0) && current.mobileLatest);
+      }
       if (name === 'home' && width < 921) {
         const toggle = page.locator('.menu-toggle');
         await toggle.focus(); await page.keyboard.press('Enter');

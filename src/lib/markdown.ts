@@ -50,3 +50,13 @@ export async function renderMarkdownSafe(markdown: string): Promise<{ html: stri
   );
   return { html, unsafeLinks };
 }
+
+/** Image addresses the private editor preview may load: the story's own photos only, never another same-origin path. */
+const PREVIEW_IMG = /^(?:\/api\/admin\/photos\/\d{1,12}|\/(?:media|images)\/stories\/[A-Za-z0-9._/-]+|https:\/\/[^\s"'<>]+)$/;
+export function restrictPreviewImages(html: string): string {
+  return html.replace(/<img\b[^>]*>/gi, (tag) => {
+    const m = /\bsrc=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+    const src = m ? (m[1] ?? m[2] ?? m[3] ?? '') : '';
+    return PREVIEW_IMG.test(src) && !src.split('/').includes('..') && !/\bsrcset=/i.test(tag) ? tag : '';
+  });
+}

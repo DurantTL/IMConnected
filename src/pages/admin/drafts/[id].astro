@@ -43,7 +43,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
         <div class="studio-titlebar">
           <div class="studio-identity">
             <a class="studio-back" href="/admin">← All drafts</a>
-            <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1><span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span></div>
+            <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1><span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span>{isAgent && <span class="cms-badge">From AI agent</span>}</div>
             <span class="ed-status" id="save-status" role="status" aria-live="polite">
               {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
             </span>
@@ -111,7 +111,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
         <input type="hidden" name="version" value={draft.updatedAt} />
         <fieldset disabled={!editable} class="ed">
           <section class="ed-card studio-settings" id="studio-panel-settings" data-studio-panel="settings" role="tabpanel" aria-labelledby="studio-tab-settings">
-            <div class="studio-panel-heading"><div><span class="sb-eyebrow">Story settings</span><h2>The details behind your story</h2><p class="admin-note">Give readers a clear headline, byline and place to find it.</p></div><span class="studio-source">{SOURCE_LABEL[draft.source]}</span></div>
+            <div class="studio-panel-heading"><div><span class="sb-eyebrow">Story settings</span><h2>The details behind your story</h2><p class="admin-note">Give readers a clear headline, byline and place to find it.</p></div><span class="studio-source">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span></div>
             <div class="ed-grid">
               <label class="full">Title <span class="hint">up to {LIMITS.title} characters</span>
                 <input type="text" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
@@ -228,7 +228,8 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <button type="button" data-md="link" aria-label="Link">Link</button>
                   <button type="button" data-md="list" aria-label="List">• List</button>
                 </div>
-                <textarea class="body" name="body" id="f-body" aria-label="Story text">{draft.body}</textarea>
+                {draft.storyBlocks?.length ? <noscript><p class="admin-error">This story is built from modules, which need JavaScript to edit. Without it the text below is read-only.</p></noscript> : null}
+                <textarea class="body" name="body" id="f-body" aria-label="Story text" readonly={!!draft.storyBlocks?.length}>{draft.body}</textarea>
                 </div>
                 <p id="module-status" class="admin-note" role="status" aria-live="polite"></p>
               </div>
@@ -259,8 +260,8 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                           <span class="sb-focal-marker" aria-hidden="true" style={`left:${p.focalX ?? 50}%;top:${p.focalY ?? 50}%`}></span>
                         </div>
                         <div class="sb-focal-values">
-                          <label>Horizontal focus<input type="range" min="0" max="100" step="1" name={`photo_${p.id}_focalX`} value={p.focalX ?? 50} aria-label={`Photo ${i + 1} horizontal focus`} /></label>
-                          <label>Vertical focus<input type="range" min="0" max="100" step="1" name={`photo_${p.id}_focalY`} value={p.focalY ?? 50} aria-label={`Photo ${i + 1} vertical focus`} /></label>
+                          <label>Horizontal focus<input type="range" min="0" max="100" step="any" name={`photo_${p.id}_focalX`} value={p.focalX ?? 50} aria-label={`Photo ${i + 1} horizontal focus`} /></label>
+                          <label>Vertical focus<input type="range" min="0" max="100" step="any" name={`photo_${p.id}_focalY`} value={p.focalY ?? 50} aria-label={`Photo ${i + 1} vertical focus`} /></label>
                           <button type="button" data-center-focus={p.id}>Center focus</button>
                         </div>
                         <output data-focus-output={p.id} aria-live="polite">{p.focalX ?? 50}% horizontal, {p.focalY ?? 50}% vertical</output>

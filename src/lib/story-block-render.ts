@@ -7,6 +7,12 @@ export interface StoryBlockRenderOptions {
   resolvePhoto?: (photoId: number) => { url: string; alt?: string; focalX?: number; focalY?: number } | undefined;
 }
 
+/**
+ * Plain-text module fields (headings, list items, labels, alt text) are stored with "<" as &lt; (the body contract), so
+ * turn that back into the character before escaping for HTML: the page shows the text literally, never `&amp;lt;`.
+ */
+const plain = (value: string) => escapeHtml(value.replace(/&lt;/g, '<'));
+
 export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryBlockRenderOptions = {}): Promise<string> {
   const blocks = normalizeStoryBlocks(input);
   const out: string[] = [];
@@ -14,12 +20,12 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
     const attr = ` data-module-id="${escapeHtml(b.id)}"`;
     switch (b.type) {
       case 'text': out.push(`<div class="story-module story-module-text"${attr}>${(await renderMarkdownSafe(b.text || '')).html}</div>`); break;
-      case 'heading': out.push(`<h${b.level || 2} class="story-module"${attr}>${escapeHtml(b.text || '')}</h${b.level || 2}>`); break;
+      case 'heading': out.push(`<h${b.level || 2} class="story-module"${attr}>${plain(b.text || '')}</h${b.level || 2}>`); break;
       case 'quote': out.push(`<blockquote class="story-module"${attr}>${(await renderMarkdownSafe(b.text || '')).html}</blockquote>`); break;
-      case 'list': out.push(`<ul class="story-module"${attr}>${(b.items || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`); break;
+      case 'list': out.push(`<ul class="story-module"${attr}>${(b.items || []).map((item) => `<li>${plain(item)}</li>`).join('')}</ul>`); break;
       case 'divider': out.push(`<hr class="story-module"${attr}>`); break;
       case 'button':
-        if (b.url) out.push(`<p class="story-module story-module-action"${attr}><a class="btn" href="${escapeHtml(b.url)}">${escapeHtml(b.label || b.url)}</a></p>`);
+        if (b.url) out.push(`<p class="story-module story-module-action"${attr}><a class="btn" href="${escapeHtml(b.url)}">${plain(b.label || b.url)}</a></p>`);
         break;
       case 'image': {
         const photo = b.photoId ? options.resolvePhoto?.(b.photoId) : undefined;
@@ -29,7 +35,7 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
         const x = focalPoint(photo?.focalX ?? b.focalX), y = focalPoint(photo?.focalY ?? b.focalY);
         const alt = b.alt || photo?.alt || '';
         const linkLabel = alt.trim() ? '' : ' aria-label="Enlarge story photo"';
-        out.push(`<figure class="story-module story-module-image"${attr}><a href="${escapeHtml(url)}" data-photo${linkLabel}><img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" loading="lazy" decoding="async" style="width:100%;aspect-ratio:16/9;object-fit:cover;object-position:${x}% ${y}%;"></a></figure>`);
+        out.push(`<figure class="story-module story-module-image"${attr}><a href="${escapeHtml(url)}" data-photo${linkLabel}><img src="${escapeHtml(url)}" alt="${plain(alt)}" loading="lazy" decoding="async" style="width:100%;aspect-ratio:16/9;object-fit:cover;object-position:${x}% ${y}%;"></a></figure>`);
         break;
       }
     }

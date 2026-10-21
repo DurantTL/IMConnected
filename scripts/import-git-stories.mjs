@@ -128,7 +128,10 @@ function readStory(file) {
   const photoLayout = fm.photoLayout === undefined || fm.photoLayout === null ? 'one' : String(fm.photoLayout);
   if (!['one', 'twoUp', 'heroGrid', 'mosaic', 'stack'].includes(photoLayout)) throw new Error(`unknown photoLayout "${photoLayout.slice(0, 40)}"`);
   // Same as the dashboard: every "<" becomes &lt; so no tag, comment or autolink can be stored.
-  const storyBlocks = blockMod.normalizeStoryBlocks(fm.storyBlocks);
+  const storyBlocks = blockMod.escapeStoryBlocks(blockMod.normalizeStoryBlocks(fm.storyBlocks));
+  // An image module can only show one of this story's own photos (its lead image or gallery), never another address.
+  blockMod.assertOwnStoryImages(storyBlocks, [...(str(fm.image) ? [str(fm.image)] : []), ...photos]);
+  blockMod.checkStoryBlockLength(storyBlocks);
   const photoFocus = Array.isArray(fm.photoFocus) ? fm.photoFocus.map((p) => ({ focalX: blockMod.focalPoint(p?.focalX), focalY: blockMod.focalPoint(p?.focalY) })) : [];
   const raw = (storyBlocks.length ? blockMod.storyBlocksToMarkdown(storyBlocks) : m[2]).replace(/\r\n?/g, '\n').trim();
   if (!raw) throw new Error('empty story text');

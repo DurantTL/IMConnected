@@ -1,7 +1,7 @@
 import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
 import { z } from 'astro/zod';
-import { normalizeStoryBlocks } from './lib/story-blocks';
+import { OWN_PHOTO_ERROR, normalizeStoryBlocks } from './lib/story-blocks';
 import { SECTION_KEYS } from './lib/site';
 
 const stories = defineCollection({
@@ -33,6 +33,10 @@ const stories = defineCollection({
     photoFocus: z.array(z.object({ focalX: z.number().min(0).max(100), focalY: z.number().min(0).max(100) })).default([]),
     featured: z.boolean().default(false),
     draft: z.boolean().default(false),
+  }).superRefine((d, ctx) => {
+    // An image module can only show one of the story's own photos (its lead image or gallery).
+    const own = new Set([...(d.image ? [d.image] : []), ...d.photos]);
+    if (d.storyBlocks?.some((b) => b.type === 'image' && b.url && !own.has(b.url))) ctx.addIssue({ code: 'custom', path: ['storyBlocks'], message: OWN_PHOTO_ERROR });
   }),
 });
 

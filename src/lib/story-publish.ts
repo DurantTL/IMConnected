@@ -8,7 +8,7 @@
 // interleave with another publish in this process; a second process is stopped by the UNIQUE indexes on
 // stories.slug and drafts.slug.
 import fs from 'node:fs';
-import { normalizeStoryBlocks, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
+import { checkStoryBlockLength, escapeStoryBlocks, normalizeStoryBlocks, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { LIMITS } from './limits';
@@ -186,7 +186,9 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   const dek = oneLine(draft.dek);
   const draftBlocks = normalizeStoryBlocks(draft.storyBlocks ?? []);
   if (draftBlocks.some((b) => b.type === 'button' && !b.url)) throw new EditorError('link_unsafe');
-  const body = clean(draftBlocks.length ? storyBlocksToMarkdown(draftBlocks) : draft.body).trim();
+  // The module text goes through the same contract as the body: control characters out, every "<" as &lt; (once, here and in writeStory).
+  const escapedBlocks = escapeStoryBlocks(draftBlocks);
+  const body = clean(draftBlocks.length ? storyBlocksToMarkdown(escapedBlocks) : draft.body).trim();
   const section = draft.section;
   const area = draft.area || undefined;
 
@@ -197,6 +199,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   if (dek.length > LIMITS.dek) throw new EditorError('dek_long');
   if (!body) throw new EditorError('body_required');
   if (body.length > LIMITS.bodyMax) throw new EditorError('body_long');
+  try { checkStoryBlockLength(draftBlocks); } catch { throw new EditorError('body_long'); }
   if (!getSection(section)) throw new EditorError('section_required');
   if (!isValidArea(section, area)) throw new EditorError('area_bad');
   if (!validDate(draft.date)) throw new EditorError('date_required');
@@ -233,7 +236,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
 
   const existing = getStoryBySlug(slug, { includeUnpublished: true });
   const stored = await storePhotos(slug, items, existing);
-  const storyBlocks: StoryBlock[] = draftBlocks.map((block) => {
+  const storyBlocks: StoryBlock[] = escapedBlocks.map((block) => {
     if (block.type !== 'image') return block;
     const index = photos.findIndex((p) => p.id === block.photoId);
     if (index < 0) { removeFiles(stored.created); throw new EditorError('photo_missing'); }
@@ -246,7 +249,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     slug, title, dek: dek || undefined, section, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
     date: draft.date, photoCredit: stored.sources.length && photoCredit ? photoCredit : undefined,
     ...photoFields(stored, alts, title),
-    photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(storyBlocks.length ? storyBlocksToMarkdown(storyBlocks) : body), storyBlocks,
+    photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body), storyBlocks,
     status: 'live', source: draft.source, draftId: draft.id, publishedAt: now, publishedBy: userId, editedAt: now, photoRows: stored.rows,
   };
 
@@ -302,16 +305,16 @@ export function loadStory(slug: string): LoadedStory | null {
   if (!s) return null;
   if (!getSection(s.section)) throw new EditorError('section_unknown');
   const sources = [...(s.image ? [s.image] : []), ...s.photos];
-  // An imported modular story may contain an inline image outside its lead/gallery list.
-  for (const block of s.storyBlocks ?? []) if (block.type === 'image' && block.url && !sources.includes(block.url)) sources.push(block.url);
+  // Image modules can only show the story's own photos (writes refuse anything else); drop one that does not, never add a source.
+  const storyBlocks = s.storyBlocks?.filter((b) => b.type !== 'image' || (b.url && sources.includes(b.url)));
   const alts = [s.imageAlt ?? '', ...s.photoAlts];
   return {
     fields: {
       title: s.title, dek: s.dek ?? '', section: s.section, area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
-      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks: s.storyBlocks,
+      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks,
     },
     photos: sources.map((url, i) => {
-      const inline = s.storyBlocks?.find((b) => b.type === 'image' && b.url === url);
+      const inline = storyBlocks?.find((b) => b.type === 'image' && b.url === url);
       return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50 };
     }),
   };

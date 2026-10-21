@@ -74,6 +74,7 @@ if (form) {
 
   // A response for an older snapshot does not mean later edits were saved.
   async function flushSaves(): Promise<boolean> {
+    if (!editable) return true; // nothing can change, so there is nothing to wait for
     while (dirty || saving) {
       if (!(await save())) return false;
     }

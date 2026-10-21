@@ -1,7 +1,7 @@
 // Reads the editor form (save and preview) into draft fields, refusing oversized values instead of cutting them.
 import { FIELD_MAX, type DraftFields } from './drafts';
 import { clean } from './storyfile';
-import { parseStoryBlocks, storyBlocksToMarkdown } from './story-blocks';
+import { OWN_PHOTO_ERROR, checkStoryBlockLength, parseStoryBlocks, storyBlocksToMarkdown } from './story-blocks';
 import { DEFAULT_PHOTO_LAYOUT } from './photo-layouts';
 
 function text(form: FormData, name: string, max: number, label: string): string {
@@ -35,7 +35,17 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
   if (rawBlocks !== null) {
     if (typeof rawBlocks !== 'string') throw new Error('Story modules could not be read.');
     fields.storyBlocks = parseStoryBlocks(rawBlocks);
-    if (fields.storyBlocks.length) fields.body = storyBlocksToMarkdown(fields.storyBlocks);
+    // A draft's image modules point at the draft's own uploaded photos by ID. An address (any address) is never accepted from a form.
+    if (fields.storyBlocks.some((b) => b.type === 'image' && b.url)) throw new Error(OWN_PHOTO_ERROR);
+    if (fields.storyBlocks.length) {
+      const projection = storyBlocksToMarkdown(fields.storyBlocks);
+      // The modules own the text. Without JavaScript the Markdown box could still be edited, and that edit would be silently dropped: refuse it.
+      if (form.get('body') !== null && fields.body.trim() !== clean(projection).trim()) { // a client that sends no Markdown box edited nothing there
+        throw new Error('This story is built from modules, so its text is edited in the modules, which need JavaScript. Your change to the Markdown box was not saved. Reload the page, or switch the story to Markdown first.');
+      }
+      checkStoryBlockLength(fields.storyBlocks);
+      fields.body = projection;
+    }
   }
   const photoFocus = new Map<number, { focalX: number; focalY: number }>();
   for (const key of form.keys()) {

@@ -373,6 +373,51 @@ let H, slugH;
   await c1.form('/api/admin/stories/unpublish', { slug: slugH });
 }
 
+// ================= story modules: hostile text everywhere, escaped like the body =================
+{
+  const evil = '<script>alert(1)</script> <img src=x onerror=alert(1)>';
+  let r = await c1.form('/api/admin/drafts/new', {});
+  const M = idOf(r);
+  await c1.form(`/api/admin/drafts/${M}/photos`, { version: version(M), op: 'upload' }, [{ bytes: PNG_A, filename: 'a.png' }]);
+  const pid = q('SELECT id FROM draft_photos WHERE draft_id = ?', M)[0].id;
+  const blocks = [
+    { id: 'm-text', type: 'text', text: `Intro. ${evil}` }, { id: 'm-head', type: 'heading', level: 2, text: evil }, { id: 'm-list', type: 'list', items: [evil, 'Plain item'] },
+    { id: 'm-quote', type: 'quote', text: evil }, { id: 'm-img', type: 'image', photoId: pid, alt: evil }, { id: 'm-btn', type: 'button', label: evil, url: 'https://example.test/go' },
+  ];
+  const fields = baseFields({ title: 'Module Hostility Check', section: 'news', area: 'churches' }); delete fields.body; // like a client that sends no Markdown box
+  r = await c1.json(`/api/admin/drafts/${M}/save`, { version: version(M), ...fields, storyBlocks: JSON.stringify(blocks) });
+  check('modules with hostile text, alt text and labels save', r.data.ok === true, JSON.stringify(r.data));
+  check('...the saved Markdown projection has no paragraph made of the image description (image modules add nothing)', (draftRow(M).body.match(/script/g) || []).length === 10, draftRow(M).body);
+  r = await c1.json(`/api/admin/drafts/${M}/save`, { version: version(M), ...fields, body: 'A change typed into the Markdown box', storyBlocks: JSON.stringify(blocks) });
+  check('a Markdown-box edit on a modular draft is refused with a clear message, never dropped', r.status === 400 && /Markdown box was not saved/.test(r.data.error || ''), JSON.stringify(r.data));
+  r = await c1.json(`/api/admin/drafts/${M}/save`, { version: version(M), ...fields, storyBlocks: JSON.stringify([{ id: 'x', type: 'image', url: 'https://example.test/outside.jpg' }]) });
+  check('an image module with an address (external or otherwise) is refused on save', r.status === 400 && /own photos/.test(r.data.error || ''), JSON.stringify(r.data));
+  check('the editor shows the Markdown box read-only for a modular draft', /<textarea[^>]*name="body"[^>]*readonly/.test((await c1.get(`/admin/drafts/${M}`)).text));
+  r = await c1.form(`/api/admin/drafts/${M}/publish`, { version: version(M) });
+  check('the hostile modular story publishes', r.params.get('n') === 'published', r.loc);
+  const slugM = draftRow(M).slug;
+  const sj = JSON.parse((await getPub('/stories.json')).text).stories.find((x) => x.url.includes(slugM));
+  const rawBlocks = JSON.stringify(sj?.storyBlocks ?? null);
+  check('/stories.json storyBlocks hold no "<" and show the text as &lt;', !!sj && !rawBlocks.includes('<') && rawBlocks.includes('&lt;script>alert(1)&lt;/script>'), rawBlocks.slice(0, 300));
+  if (PUBLISH_TOKEN) {
+    const api = await (await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } })).text();
+    const fromApi = JSON.stringify(JSON.parse(api).stories.find((x) => x.id === slugM)?.storyBlocks ?? null);
+    check('GET /api/stories storyBlocks hold no "<" either', fromApi.includes('&lt;script>') && !fromApi.includes('<'), fromApi.slice(0, 200));
+  }
+  const pageM = (await getPub(`/stories/${slugM}/`)).text;
+  const shown = (pageM.match(/&lt;script&gt;alert\(1\)&lt;\/script&gt; &lt;img src=x onerror=alert\(1\)&gt;/g) || []).length;
+  check('the story page shows every module text literally (paragraph, heading, list, quote, label)', shown >= 5, String(shown));
+  check('...with no element created from it and no double-escaped entity', !/<script>alert|<img src=x|<svg onload/.test(pageM.replace(/="[^"]*"/g, '=""')) && !pageM.includes('&amp;lt;'));
+  check('...the search index holds no doubled backslash-entity text', !(await anon.get('/api/search?q=' + encodeURIComponent('alert'))).text.includes('\\&lt;'));
+  await c1.form('/api/admin/stories/unpublish', { slug: slugM });
+
+  // the private preview may load only the story's own photos
+  const pv = await c1.json(`/api/admin/drafts/${M}/preview`, { title: 'T', body: '![a](/api/admin/users) ![b](/admin/drafts/1) ![c](/api/admin/photos/1) ![d](/media/stories/x/y.jpg) ![e](https://example.test/p.jpg)' });
+  const pdoc = pv.data.doc || '';
+  check('preview: an image pointing at another same-origin path is removed', !pdoc.includes('/api/admin/users') && !pdoc.includes('/admin/drafts/1'), pdoc.slice(-400));
+  check('...the story\'s own photo paths are kept', pdoc.includes('src="/api/admin/photos/1"') && pdoc.includes('src="/media/stories/x/y.jpg"'));
+}
+
 // ================= conflicts =================
 {
   let r = await c1.form('/api/admin/drafts/new', {});
@@ -637,7 +682,7 @@ if (browser) {
     check('the live preview is rendered by the server (blockquote, strong)', (await page.getAttribute('#preview', 'srcdoc')).includes('<blockquote>'));
     await shot('editor-preview-390.png');
     await page.click('.ed-tabs [data-view=write]');
-    await page.click('#save-btn');
+    await page.locator('#save-btn:visible, #mobile-save-btn:visible').first().click(); // the toolbar Save on desktop, the bottom bar Save on phones
     await page.waitForFunction(() => /Last saved \d/.test(document.getElementById('save-status').textContent));
     check('Save works and shows the time and name', /Test Editor/.test(await page.textContent('#save-status')) && draftRow(W).body.startsWith('> **Hello** world'), await page.textContent('#save-status'));
     // autosave after 20 s
@@ -648,7 +693,7 @@ if (browser) {
     // a conflict seen by the browser
     await c2.json(`/api/admin/drafts/${W}/save`, { version: version(W), ...baseFields({ title: 'Changed By Someone Else', body: 'Other text' }) });
     await page.fill('#f-body', 'My text that will conflict.');
-    await page.click('#save-btn');
+    await page.locator('#save-btn:visible, #mobile-save-btn:visible').first().click(); // the toolbar Save on desktop, the bottom bar Save on phones
     await page.waitForSelector('#conflict:not([hidden])');
     check('the browser shows "reload to see changes" on a stale save and does not overwrite', /Reload to see their changes/.test(await page.textContent('#conflict')) && draftRow(W).body === 'Other text');
     await shot('editor-conflict-390.png');

@@ -8,7 +8,7 @@ import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
 import { validDate } from './storyfile';
 import { ERRORS, type ErrorCode } from './messages';
-import { parseStoredStoryBlocks, normalizeStoryBlocks, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
+import { checkStoryBlockLength, parseStoredStoryBlocks, normalizeStoryBlocks, storyBlocksToMarkdown, OWN_PHOTO_ERROR, type StoryBlock } from './story-blocks';
 import { DEFAULT_PHOTO_LAYOUT, isPhotoLayout, photoLayoutOrDefault, type PhotoLayout } from './photo-layouts';
 
 export type DraftStatus = 'new' | 'in_review' | 'published' | 'rejected';
@@ -329,6 +329,8 @@ export function saveDraft(id: number, expected: number, f: DraftFields, photoAlt
     if (!cur) return fail('invalid', 'draft_gone') as SaveResult;
     if (!isEditable({ status: cur.status })) return fail('locked', 'closed') as SaveResult;
     const blocks = f.storyBlocks === undefined ? parseStoredStoryBlocks(cur.story_blocks) : normalizeStoryBlocks(f.storyBlocks);
+    if (blocks.some((b) => b.type === 'image' && b.url)) return fail('invalid', 'block_image_url');
+    try { checkStoryBlockLength(blocks); } catch { return fail('invalid', 'body_long'); }
     const ownedPhotos = listPhotos(id);
     if (blocks.some((b) => b.type === 'image' && b.photoId !== undefined && !ownedPhotos.some((p) => p.id === b.photoId))) return fail('invalid', 'photo_gone');
     const body = blocks.length ? storyBlocksToMarkdown(blocks) : f.body;
@@ -557,9 +559,10 @@ export function reloadDraftFromStory(id: number, userId: number, f: DraftFields,
 function remapStoryBlocks(id: number, input: StoryBlock[] | undefined): void {
   const photos = listPhotos(id);
   const blocks = normalizeStoryBlocks(input ?? []).map((b) => {
-    if (b.type !== 'image') return b;
+    if (b.type !== 'image' || b.url === undefined) return b;
     const photo = photos.find((p) => p.url === b.url);
-    return photo ? { ...b, photoId: photo.id, url: undefined, focalX: undefined, focalY: undefined } : b;
+    if (!photo) throw new Error(OWN_PHOTO_ERROR); // only this story's own photos
+    return { ...b, photoId: photo.id, url: undefined, focalX: undefined, focalY: undefined };
   });
   getDb().prepare('UPDATE drafts SET story_blocks = ? WHERE id = ?').run(JSON.stringify(blocks), id);
 }

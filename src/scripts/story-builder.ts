@@ -1,4 +1,4 @@
-import { storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
+import { splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
 const blocksField = document.getElementById('story-blocks') as HTMLInputElement | null;
@@ -28,8 +28,8 @@ if (form && blocksField) {
   const labels: Record<StoryBlock['type'], string> = { text: 'Paragraph', heading: 'Heading', quote: 'Quote', list: 'List', image: 'Image', button: 'Button / link', divider: 'Divider' };
   const uid = () => `module-${crypto.randomUUID()}`;
   if (editable && builderData.emptyStory && !blocks.length) {
+    // The starter module is not an edit: opening an empty draft must not mark it changed (that would autosave, move it to review and write an audit entry).
     blocks = [{ id: uid(), type: 'text', text: '' }]; modular = true; selected = blocks[0].id;
-    queueMicrotask(() => form.dispatchEvent(new Event('input', { bubbles: true })));
   }
   const clone = (value: StoryBlock[]) => JSON.parse(JSON.stringify(value)) as StoryBlock[];
   const announce = (message: string) => { status.textContent = message; };
@@ -53,6 +53,7 @@ if (form && blocksField) {
   }
   function sync() {
     blocksField!.value = JSON.stringify(modular ? blocks : []);
+    body.readOnly = modular || !editable; // the modules own the text; the Markdown box is only edited in Markdown mode
     if (modular) {
       try { body.value = storyBlocksToMarkdown(blocks); }
       catch (error) { announce(error instanceof Error ? error.message : 'Check the module settings before saving.'); }
@@ -105,7 +106,8 @@ if (form && blocksField) {
       const item = node('li');
       item.draggable = editable;
       item.dataset.moduleId = block.id;
-      const select = button(`${index + 1}. ${labels[block.type]}`, () => { selected = block.id; render(); focusSelected(); }, `Edit ${labels[block.type]} module ${index + 1}`);
+      // No aria-label: the visible text ("1. Paragraph ...") is the accessible name (WCAG 2.5.3 label in name).
+      const select = button(`${index + 1}. ${labels[block.type]}`, () => { selected = block.id; render(); focusSelected(); });
       select.dataset.selectModule = block.id;
       const grip = node('span', '⠿', 'sb-grip'); grip.setAttribute('aria-hidden', 'true'); select.prepend(grip);
       select.setAttribute('aria-pressed', String(selected === block.id));
@@ -114,9 +116,9 @@ if (form && blocksField) {
       if (summary) select.append(node('small', summary.slice(0, 64)));
       item.append(select);
       const actions = node('div', undefined, 'sb-module-actions');
-      const up = button('Move up', () => move(block.id, index - 1), `Move module ${index + 1} up`);
+      const up = button('Move up', () => move(block.id, index - 1), `Move up, module ${index + 1}`);
       up.disabled = !editable || index === 0;
-      const down = button('Move down', () => move(block.id, index + 1), `Move module ${index + 1} down`);
+      const down = button('Move down', () => move(block.id, index + 1), `Move down, module ${index + 1}`);
       down.disabled = !editable || index === blocks.length - 1;
       actions.append(up, down);
       item.append(actions);
@@ -141,7 +143,7 @@ if (form && blocksField) {
   function field(block: StoryBlock, labelText: string, key: string, value: string, multiline = false) {
     const label = node('label', labelText);
     const input = multiline ? node('textarea') : node('input');
-    if (input instanceof HTMLInputElement) input.type = key === 'url' ? 'url' : 'text';
+    if (input instanceof HTMLInputElement) input.type = 'text'; // the server validates addresses; a hidden type=url field must never block Save silently
     input.value = value;
     if (key === 'text' && block.type === 'text') input.placeholder = 'Start writing your story here…';
     input.dataset.moduleField = key;
@@ -228,8 +230,7 @@ if (form && blocksField) {
   useModules.addEventListener('click', () => {
     if (!editable || modular) return;
     remember(); modular = true;
-    blocks = [];
-    for (let at = 0; at < Math.max(body.value.length, 1); at += 20000) blocks.push({ id: uid(), type: 'text', text: body.value.slice(at, at + 20000) });
+    blocks = splitMarkdownIntoModules(body.value).map((text) => ({ id: uid(), type: 'text' as const, text }));
     selected = blocks[0].id;
     render(); changed(); announce('Modules enabled. Your existing Markdown is preserved in the first paragraph module.');
   });

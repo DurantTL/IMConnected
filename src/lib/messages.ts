@@ -8,6 +8,7 @@ export const ERRORS = {
   bad_date: 'The date is not valid.',
   bad_layout: 'That photo layout is not one of the choices.',
   bad_section: 'That section does not exist.',
+  block_image_url: "Image modules can only use this story's own photos.",
   photo_gone: 'That photo is no longer on this draft.',
   too_big: 'That is too much to send at once.',
   form_unreadable: 'The form could not be read.',
