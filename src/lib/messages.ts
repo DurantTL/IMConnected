@@ -19,6 +19,7 @@ export const ERRORS = {
   photo_op: 'That photo action is not known.',
   not_publishable: 'Only a new or in-review draft can be published.',
   already_publishing: 'This draft is already being published.',
+  publish_retry: 'A photo file changed while publishing, so nothing was published. Please try again.',
   publish_failed: 'We could not publish right now. Please try again in a few minutes.',
   slug_taken: 'Another story just took that address. Please publish again.',
   title_required: 'Add a title before publishing.',

@@ -41,6 +41,8 @@ export interface StoredPhotos {
   sources: string[];
   /** Absolute paths of the files this attempt created (deleted if the publish fails). */
   created: string[];
+  /** Absolute paths of every uploaded file this publish relies on, created now or already there. */
+  files: string[];
   /** Public address of every uploaded photo by draft photo id. */
   uploaded: Map<number, string>;
 }
@@ -70,6 +72,7 @@ export async function storePhotos(slug: string, items: PhotoInput[], existing: S
   const rows: StoryPhoto[] = [];
   const sources: string[] = [];
   const created: string[] = [];
+  const files: string[] = [];
   const uploaded = new Map<number, string>();
   const oldSources = existing ? [...(existing.image ? [existing.image] : []), ...existing.photos] : [];
   try {
@@ -79,6 +82,7 @@ export async function storePhotos(slug: string, items: PhotoInput[], existing: S
         const sha = sha256(item.bytes);
         const { rel, created: made } = await storeFile(slug, item.bytes, item.ext, sha);
         if (made) created.push(made);
+        files.push(path.join(mediaDir(), rel));
         const src = `/media/${rel}`;
         rows.push({ position: i, kind, path: rel, url: null, alt: item.alt, sha256: sha, bytes: item.bytes.length });
         sources.push(src);
@@ -112,13 +116,24 @@ export async function storePhotos(slug: string, items: PhotoInput[], existing: S
     removeFiles(created);
     throw err;
   }
-  return { rows, sources, created, uploaded };
+  return { rows, sources, created, files, uploaded };
 }
 
 /**
  * Delete files a failed attempt created, but only those no story_photos row references (checked now, after the rollback):
  * the same content-addressed file may belong to a story that was published meanwhile, and it must survive.
  */
+/**
+ * Inside the transaction, just before COMMIT: every uploaded photo this publish relies on must still be on disk. A file that
+ * was already there when we looked may have been deleted since by another publish's rollback (it created and then removed
+ * the same content-addressed file). Throws a retryable error so nothing is written and the editor sees "try again".
+ */
+export function assertFilesExist(files: string[]): void {
+  const hook = process.env.STORY_SYNC_TEST === '1' ? process.env.PUBLISH_TEST_DELETE_FILE : undefined;
+  if (hook && fs.existsSync(hook)) for (const f of files) fs.rmSync(f, { force: true }); // test only: a concurrent rollback
+  if (files.some((f) => !fs.existsSync(f))) throw new EditorError('publish_retry');
+}
+
 export function removeFiles(files: string[]): void {
   const root = mediaDir() + path.sep;
   for (const f of files) {
@@ -233,6 +248,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
       const r = publishDraftRow(draft.id, version, { slug, userId });
       if (!r.ok) throw new EditorError(r.code);
       writeStory(story, now, draft.slug ? 'upsert' : 'insert');
+      assertFilesExist(stored.files);
       db.exec('COMMIT');
     } catch (err) {
       try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
@@ -312,6 +328,7 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
     let overwrote: number[] = [];
     let oldUploads: string[] = [];
     tx(() => {
+      assertFilesExist(planned.flatMap(({ stored }) => stored.files));
       for (const { p, stored } of planned) {
         writeStory({
           slug: p.slug, title: p.title, dek: p.dek || undefined, section: p.section, area: p.area, author: p.author, date: p.date,

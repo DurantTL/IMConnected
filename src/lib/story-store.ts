@@ -164,6 +164,21 @@ export function countStories(opts: Omit<ListOptions, 'limit' | 'offset'> = {}): 
 
 const nul = (v: string | undefined) => v ?? null;
 
+let appliedAt015: number | undefined;
+/**
+ * A person's edit is stamped no earlier than one millisecond after migration 015 was applied, whatever the host clock says:
+ * if the clock steps backwards, a step-4 edit must still look newer than the upgrade (the adoption and the import script
+ * compare edited_at with that moment).
+ */
+export function editStamp(now: number): number {
+  if (appliedAt015 === undefined) {
+    try {
+      appliedAt015 = Number((getDb().prepare("SELECT applied_at FROM schema_migrations WHERE name = '015_stories_source_of_truth.sql'").get() as { applied_at: number } | undefined)?.applied_at ?? 0);
+    } catch { appliedAt015 = 0; }
+  }
+  return Math.max(now, appliedAt015 + 1);
+}
+
 export type WriteOutcome = 'inserted' | 'updated' | 'unchanged';
 
 /**
@@ -182,16 +197,17 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
     JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
     s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null];
+  const editedAt = s.editedAt === undefined ? null : editStamp(s.editedAt);
   let id: number;
   if (cur) {
     id = Number(cur.id);
     db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, s.editedAt ?? null, id);
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
     db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
   } else {
     const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
       photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, edited_at, slug)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, s.editedAt ?? null, s.slug);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, editedAt, s.slug);
     id = Number(r.lastInsertRowid);
   }
   const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -225,7 +241,7 @@ export function upsertStory(s: StoryInput, now = Date.now()): WriteOutcome {
  * caller invalidates the cache after committing (use unpublishStoryNow outside a transaction).
  */
 export function unpublishStory(slug: string, now = Date.now(), edited = false): boolean {
-  const r = getDb().prepare("UPDATE stories SET status = 'unpublished', updated_at = ?, edited_at = CASE WHEN ? THEN MAX(?, COALESCE(edited_at, 0) + 1) ELSE edited_at END, rev = rev + 1 WHERE slug = ? AND status = 'live'").run(now, edited ? 1 : 0, now, slug);
+  const r = getDb().prepare("UPDATE stories SET status = 'unpublished', updated_at = ?, edited_at = CASE WHEN ? THEN MAX(?, COALESCE(edited_at, 0) + 1) ELSE edited_at END, rev = rev + 1 WHERE slug = ? AND status = 'live'").run(now, edited ? 1 : 0, editStamp(now), slug);
   return Number(r.changes) > 0;
 }
 

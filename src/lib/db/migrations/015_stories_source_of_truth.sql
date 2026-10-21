@@ -8,8 +8,9 @@
 -- * story_holds (migration 012) is no longer written or read, except by that one adoption pass. It is RENAMED to
 --   story_holds_retired: code from before this step looks the old name up first (getHold / listHolds) and fails, so an old
 --   image that is started against this database cannot mirror the build over it. A later migration can drop it.
--- * stories.rev: bumped by every write made by step-4 code. After the adoption flag is set, a trigger refuses any UPDATE of
---   a story that does not bump it, which is how the old image's mirror (its upsert and its "left the build" unpublish,
+-- * stories.rev: bumped by every write made by step-4 code. From the moment this migration is applied, a trigger refuses any
+--   UPDATE of a story that does not bump it (the backfill below runs before the trigger exists). A FUTURE MIGRATION THAT
+--   UPDATEs `stories` MUST SET rev = rev + 1, or the trigger aborts it, which is how the old image's mirror (its upsert and its "left the build" unpublish,
 --   neither of which knows `rev`) is stopped from reverting or unpublishing rows.
 ALTER TABLE stories ADD COLUMN edited_at INTEGER;
 ALTER TABLE stories ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
@@ -30,7 +31,7 @@ WHERE slug IN (SELECT slug FROM drafts WHERE slug IS NOT NULL AND unpublished_at
 ALTER TABLE story_holds RENAME TO story_holds_retired;
 
 CREATE TRIGGER stories_guard_old_writers BEFORE UPDATE ON stories
-WHEN NEW.rev = OLD.rev AND EXISTS (SELECT 1 FROM app_state WHERE key = 'git_adopted_at')
+WHEN NEW.rev = OLD.rev
 BEGIN
   SELECT RAISE(ABORT, 'stories are written by the database now: a pre-step-4 image must not run against this database');
 END;

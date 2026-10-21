@@ -154,6 +154,12 @@ try {
     check('migration 015 applies on the step-3 state and loses nothing', applied15.at(-1) === '015_stories_source_of_truth.sql' && JSON.stringify([db.prepare('SELECT * FROM users').all(), db.prepare('SELECT * FROM drafts').all(), db.prepare('SELECT slug, title, source, status FROM stories').all(), db.prepare('SELECT * FROM story_holds_retired').all()]) === before15, applied15.join());
     const ed = Object.fromEntries(db.prepare('SELECT slug, edited_at FROM stories').all().map((r) => [r.slug, r.edited_at]));
     check('...stories unpublished or held in the dashboard get edited_at; untouched ones keep NULL', Number(ed['old-unpublished']) === 5000 && Number(ed['held-one']) === 777 && ed['still-live'] === null && ed.dup === null, JSON.stringify(ed));
+    // the guard is active from the moment 015 is applied, before any adoption
+    let refused = false;
+    try { db.prepare("UPDATE stories SET title = 'old style write' WHERE slug = 'dup'").run(); } catch { refused = true; }
+    let allowed = true;
+    try { db.prepare("UPDATE stories SET title = 'new style write', rev = rev + 1 WHERE slug = 'dup'").run(); } catch { allowed = false; }
+    check('on a NOT yet adopted database, an old-style UPDATE of a story (no rev bump) is refused and a rev-bumping one is allowed', refused && allowed && db.prepare("SELECT title FROM stories WHERE slug = 'dup'").get().title === 'new style write' && db.prepare("SELECT COUNT(*) n FROM app_state").get().n === 0);
     const st = db.prepare("SELECT name, \"notnull\" AS nn FROM pragma_table_info('app_state')").all().map((r) => r.name).join();
     check('app_state(key, value, updated_at) exists and starts empty', st === 'key,value,updated_at' && db.prepare('SELECT COUNT(*) AS n FROM app_state').get().n === 0, st);
     db.close();
@@ -460,6 +466,38 @@ try {
     await waitForAdoption();
     check('...and once the failure is gone the adoption completes and it is still unpublished', !!adoptedFlag() && q('SELECT status FROM stories WHERE slug = ?', P3.id)[0].status === 'unpublished');
     await stopServer();
+
+    // 5d. a shared photo file deleted by a concurrent rollback before COMMIT: nothing is written, the editor is told to retry
+    //     (and the clock: edits are stamped after the migration even if the host clock stepped back)
+    {
+      run("UPDATE schema_migrations SET applied_at = ? WHERE name = '015_stories_source_of_truth.sql'", Date.now() + 3_600_000);
+      const applied = q("SELECT applied_at a FROM schema_migrations WHERE name = '015_stories_source_of_truth.sql'")[0].a;
+      const hook = path.join(SCRATCH, 'delete-files');
+      fs.rmSync(hook, { force: true });
+      await startServer({ ...envFor, PUBLISH_TEST_DELETE_FILE: hook });
+      const nowD = Date.now();
+      const dId = Number(run("INSERT INTO drafts (status, source, title, dek, section, area, author, date, body, created_at, updated_at) VALUES ('in_review', 'editor', 'Photo Vanishes Story', '', 'news', 'churches', 'Ed Author', '2026-10-20', 'A story whose photo file disappears.', ?, ?)", nowD, nowD).lastInsertRowid);
+      fs.mkdirSync(path.join(DATA_DIR, 'uploads', String(dId)), { recursive: true });
+      const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(60, 9)]);
+      const rel = `${dId}/${'ef'.repeat(16)}.png`;
+      fs.writeFileSync(path.join(DATA_DIR, 'uploads', rel), png);
+      run("INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at) VALUES (?, ?, 'png', 'x', 0, ?)", dId, rel, nowD);
+      await fetch(BASE + '/');
+      const ver = () => q('SELECT updated_at u FROM drafts WHERE id = ?', dId)[0].u;
+      fs.writeFileSync(hook, '1');
+      const storiesBefore = q('SELECT COUNT(*) n FROM stories')[0].n;
+      const bad = await post(`/api/admin/drafts/${dId}/publish`, { version: ver() });
+      check('a photo file that vanished before COMMIT (a concurrent rollback) gives "try again" and writes nothing', bad.get('e') === 'publish_retry' && q('SELECT COUNT(*) n FROM stories')[0].n === storiesBefore && q('SELECT status, slug FROM drafts WHERE id = ?', dId)[0].slug === null && fs.existsSync(path.join(DATA_DIR, 'uploads', rel)), bad.toString());
+      fs.rmSync(hook, { force: true });
+      const ok = await post(`/api/admin/drafts/${dId}/publish`, { version: ver() });
+      const slugD = q('SELECT slug FROM drafts WHERE id = ?', dId)[0].slug;
+      const sD = q('SELECT edited_at, status FROM stories WHERE slug = ?', slugD)[0];
+      check('...the retry publishes it', ok.get('n') === 'published' && sD.status === 'live', ok.toString());
+      check('with the host clock behind the migration, a dashboard publish is still stamped after it (edited_at = migration time + 1)', Number(sD.edited_at) === Number(applied) + 1, `${sD.edited_at} vs ${applied}`);
+      const un2 = await post('/api/admin/stories/unpublish', { slug: slugD });
+      check('...and so is an unpublish', un2.get('n') === 'unpublished' && q('SELECT edited_at e FROM stories WHERE slug = ?', slugD)[0].e >= Number(applied) + 1);
+      await stopServer();
+    }
 
     // ================= part 6: an old (pre-step-4) image started against an adopted database changes nothing =================
     // main's story-sync.ts, as raw SQL: getHold / listHolds first, upsertStory's UPDATE, and the "left the build" unpublishStory.
