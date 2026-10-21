@@ -8,6 +8,7 @@
 // interleave with another publish in this process; a second process is stopped by the UNIQUE indexes on
 // stories.slug and drafts.slug.
 import fs from 'node:fs';
+import { normalizeStoryBlocks, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { LIMITS } from './limits';
@@ -183,7 +184,9 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   const title = oneLine(draft.title);
   const author = oneLine(draft.author);
   const dek = oneLine(draft.dek);
-  const body = clean(draft.body).trim();
+  const draftBlocks = normalizeStoryBlocks(draft.storyBlocks ?? []);
+  if (draftBlocks.some((b) => b.type === 'button' && !b.url)) throw new EditorError('link_unsafe');
+  const body = clean(draftBlocks.length ? storyBlocksToMarkdown(draftBlocks) : draft.body).trim();
   const section = draft.section;
   const area = draft.area || undefined;
 
@@ -230,12 +233,20 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
 
   const existing = getStoryBySlug(slug, { includeUnpublished: true });
   const stored = await storePhotos(slug, items, existing);
+  const storyBlocks: StoryBlock[] = draftBlocks.map((block) => {
+    if (block.type !== 'image') return block;
+    const index = photos.findIndex((p) => p.id === block.photoId);
+    if (index < 0) { removeFiles(stored.created); throw new EditorError('photo_missing'); }
+    const photo = photos[index];
+    return { ...block, photoId: undefined, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50 };
+  });
+  stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; });
   const now = Date.now();
   const story: StoryInput = {
     slug, title, dek: dek || undefined, section, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
     date: draft.date, photoCredit: stored.sources.length && photoCredit ? photoCredit : undefined,
     ...photoFields(stored, alts, title),
-    photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body),
+    photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(storyBlocks.length ? storyBlocksToMarkdown(storyBlocks) : body), storyBlocks,
     status: 'live', source: draft.source, draftId: draft.id, publishedAt: now, publishedBy: userId, editedAt: now, photoRows: stored.rows,
   };
 
@@ -281,7 +292,7 @@ export function unpublishLive(slug: string, userId: number): { title: string } |
 
 export interface LoadedStory {
   fields: DraftFields;
-  photos: { url: string; alt: string; caption: string }[];
+  photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number }[];
 }
 
 /** A live story from the database as editor fields and photos. Null when there is no live story with that address. */
@@ -291,13 +302,18 @@ export function loadStory(slug: string): LoadedStory | null {
   if (!s) return null;
   if (!getSection(s.section)) throw new EditorError('section_unknown');
   const sources = [...(s.image ? [s.image] : []), ...s.photos];
+  // An imported modular story may contain an inline image outside its lead/gallery list.
+  for (const block of s.storyBlocks ?? []) if (block.type === 'image' && block.url && !sources.includes(block.url)) sources.push(block.url);
   const alts = [s.imageAlt ?? '', ...s.photoAlts];
   return {
     fields: {
       title: s.title, dek: s.dek ?? '', section: s.section, area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
-      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body,
+      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks: s.storyBlocks,
     },
-    photos: sources.map((url, i) => ({ url, alt: alts[i] ?? '', caption: '' })),
+    photos: sources.map((url, i) => {
+      const inline = s.storyBlocks?.find((b) => b.type === 'image' && b.url === url);
+      return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50 };
+    }),
   };
 }
 

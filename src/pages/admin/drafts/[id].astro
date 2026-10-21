@@ -8,6 +8,7 @@ import { noticeText, fmtTime, looksLikeEmail } from '../../../lib/admin-ui';
 import { errorText } from '../../../lib/messages';
 import { siteUrl } from '../../../lib/draft-http';
 import { driveConfig } from '../../../lib/db/gdrive.mjs';
+import '../../../styles/story-builder.css';
 export const prerender = false;
 
 const id = /^\d{1,12}$/.test(Astro.params.id ?? '') ? Number(Astro.params.id) : null;
@@ -37,16 +38,29 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
       <p class="admin-note"><a href="/admin">Back to the drafts</a></p>
     </>
   ) : (
-    <div class="ed" data-draft={draft.id}>
-      <div class="cms-bar">
-        <h1>{draft.title || 'Untitled story'}</h1>
-        <a class="cms-btn secondary" href="/admin">All drafts</a>
-      </div>
-      <div class="cms-meta">
-        <span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : draft.status === 'new' ? 'warn' : ''}`}>{STATUS_LABEL[draft.status]}</span>
-        <span class="cms-badge">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span>
-        <span>Created <time datetime={new Date(draft.createdAt).toISOString()} data-local>{fmtTime(draft.createdAt)}</time></span>
-      </div>
+    <div class="ed editor-studio" data-draft={draft.id}>
+      <header class="studio-head">
+        <div class="studio-titlebar">
+          <div class="studio-identity">
+            <a class="studio-back" href="/admin">← All drafts</a>
+            <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1><span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span></div>
+            <span class="ed-status" id="save-status" role="status" aria-live="polite">
+              {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
+            </span>
+          </div>
+          <div class="studio-primary-actions">
+            <button type="button" class="cms-btn secondary" data-studio-preview>Preview</button>
+            <button type="submit" form="draft-form" class="cms-btn" id="save-btn" disabled={!editable}>Save changes</button>
+            {editable && <button type="button" class="cms-btn studio-review-action" data-open-panel="review">Review &amp; publish <span aria-hidden="true">→</span></button>}
+          </div>
+        </div>
+        <nav class="studio-tabs" role="tablist" aria-label="Story workspace" hidden>
+          <button type="button" role="tab" id="studio-tab-content" aria-controls="story-builder" aria-selected="true" data-studio-tab="content">Content <span>Build the story</span></button>
+          <button type="button" role="tab" id="studio-tab-settings" aria-controls="studio-panel-settings" aria-selected="false" tabindex="-1" data-studio-tab="settings">Story settings <span>Title, author &amp; category</span></button>
+          <button type="button" role="tab" id="studio-tab-photos" aria-controls="photos" aria-selected="false" tabindex="-1" data-studio-tab="photos">Photos <span>{photos.length} of {LIMITS.maxPhotos} images</span></button>
+          {editable && <button type="button" role="tab" id="studio-tab-review" aria-controls="studio-panel-review" aria-selected="false" tabindex="-1" data-studio-tab="review">Review &amp; publish <span>Check before going live</span></button>}
+        </nav>
+      </header>
 
       {published && (
         <p class="admin-ok" role="status">
@@ -86,40 +100,13 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
         </section>
       )}
 
-      {isAgent && (
-        <section class="ed-card ed-sub">
-          <h2>Submitter</h2>
-          <dl>
-            <dt>Name</dt><dd>AI agent</dd>
-            {draft.agentNote && <><dt>Agent's note</dt><dd style="white-space:pre-wrap">{draft.agentNote}</dd></>}
-            {originalPost && <><dt>Original post</dt><dd><a href={originalPost} rel="noopener noreferrer" target="_blank">View original post</a></dd></>}
-          </dl>
-          <p class="admin-note">This story was written by an AI agent from a public post. Check the facts, names and photos, and get permission where needed, before you publish.</p>
-        </section>
-      )}
 
-      {hasSubmitter && (
-        <section class="ed-card ed-sub">
-          <h2>Submitter</h2>
-          <dl>
-            <dt>Name</dt><dd>{draft.submitterName || '—'}</dd>
-            <dt>Email</dt>
-            <dd>
-              {draft.submitterEmail ? (looksLikeEmail(draft.submitterEmail) ? <a href={`mailto:${draft.submitterEmail}`}>{draft.submitterEmail}</a> : draft.submitterEmail) : '—'}
-              {draft.submitterEmail && (draft.emailVerified ? <span class="cms-badge ok"> Verified</span> : <span class="cms-badge warn"> Not verified</span>)}
-            </dd>
-            <dt>Phone</dt><dd>{draft.submitterPhone || '—'}</dd>
-            <dt>Church</dt><dd>{draft.submitterChurch || '—'}</dd>
-          </dl>
-          <p class="admin-note">Contact details are for editors only and are never published.</p>
-        </section>
-      )}
 
       <form id="draft-form" method="post" action={`/api/admin/drafts/${draft.id}/save`} data-save={`/api/admin/drafts/${draft.id}/save`} data-preview={`/api/admin/drafts/${draft.id}/preview`}>
         <input type="hidden" name="version" value={draft.updatedAt} />
         <fieldset disabled={!editable} class="ed">
-          <section class="ed-card">
-            <h2>Story details</h2>
+          <section class="ed-card studio-settings" id="studio-panel-settings" data-studio-panel="settings" role="tabpanel" aria-labelledby="studio-tab-settings">
+            <div class="studio-panel-heading"><div><span class="sb-eyebrow">Story settings</span><h2>The details behind your story</h2><p class="admin-note">Give readers a clear headline, byline and place to find it.</p></div><span class="studio-source">{SOURCE_LABEL[draft.source]}</span></div>
             <div class="ed-grid">
               <label class="full">Title <span class="hint">up to {LIMITS.title} characters</span>
                 <input type="text" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
@@ -161,20 +148,73 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               </label>
               <label class="ed-check"><input type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
             </div>
+            <div class="studio-submitter-notes">      {isAgent && (
+        <section class="ed-card ed-sub">
+          <h2>Submitter</h2>
+          <dl>
+            <dt>Name</dt><dd>AI agent</dd>
+            {draft.agentNote && <><dt>Agent's note</dt><dd style="white-space:pre-wrap">{draft.agentNote}</dd></>}
+            {originalPost && <><dt>Original post</dt><dd><a href={originalPost} rel="noopener noreferrer" target="_blank">View original post</a></dd></>}
+          </dl>
+          <p class="admin-note">This story was written by an AI agent from a public post. Check the facts, names and photos, and get permission where needed, before you publish.</p>
+        </section>
+      )}
+
+      {hasSubmitter && (
+        <section class="ed-card ed-sub">
+          <h2>Submitter</h2>
+          <dl>
+            <dt>Name</dt><dd>{draft.submitterName || '—'}</dd>
+            <dt>Email</dt>
+            <dd>
+              {draft.submitterEmail ? (looksLikeEmail(draft.submitterEmail) ? <a href={`mailto:${draft.submitterEmail}`}>{draft.submitterEmail}</a> : draft.submitterEmail) : '—'}
+              {draft.submitterEmail && (draft.emailVerified ? <span class="cms-badge ok"> Verified</span> : <span class="cms-badge warn"> Not verified</span>)}
+            </dd>
+            <dt>Phone</dt><dd>{draft.submitterPhone || '—'}</dd>
+            <dt>Church</dt><dd>{draft.submitterChurch || '—'}</dd>
+          </dl>
+          <p class="admin-note">Contact details are for editors only and are never published.</p>
+        </section>
+      )}</div>
           </section>
 
-          <section class="ed-card">
-            <h2>Story text</h2>
+          <section class="ed-card story-builder" id="story-builder" data-studio-panel="content" role="tabpanel" aria-labelledby="studio-tab-content">
+            <div class="sb-heading"><div><span class="sb-eyebrow">Content canvas</span><h2>Build your story</h2></div><span class="sb-private"><span aria-hidden="true">●</span> Private preview</span></div>
             {draft.body.includes('<') && (
               <p class="admin-error" role="alert">This text contains “&lt;”, so it may hold raw HTML. Raw HTML is not kept: after you publish, it is shown to readers as plain text. Rewrite it in Markdown if you need the formatting.</p>
             )}
-            <p class="admin-note">Write in Markdown. Raw HTML is not allowed: a “&lt;” is always saved as plain text.</p>
+            <p class="sb-workspace-intro">Add a module, shape its content, and see your story come together.</p>
+            <input type="hidden" name="storyBlocks" id="story-blocks" value={JSON.stringify(draft.storyBlocks ?? [])} />
+            <div class="sb-controls" role="group" aria-label="Editor mode">
+              <button class="cms-btn secondary" type="button" id="use-modules">Use modules</button>
+              <button class="cms-btn secondary" type="button" id="use-markdown">Use Markdown</button>
+              <button class="cms-btn secondary" type="button" id="blocks-undo" disabled>Undo module change</button>
+              <button class="cms-btn secondary" type="button" id="blocks-redo" disabled>Redo module change</button>
+            </div>
             <div class="ed-tabs" role="group" aria-label="Show">
               <button type="button" data-view="write" aria-pressed="true">Write</button>
               <button type="button" data-view="preview" aria-pressed="false">Preview</button>
             </div>
             <div class="ed-split" id="split" data-view="write">
               <div class="ed-write">
+                <div id="module-workspace" class="sb-modules" hidden>
+                  <aside class="sb-outline" aria-label="Story modules"><div class="sb-pane-heading"><span class="sb-step">01</span><div><h3>Story outline</h3><p>Arrange your content</p></div><span id="module-count" class="sb-count"></span></div>
+                    <p class="sb-drag-help">Drag a module to reorder. Move buttons also work with a keyboard.</p>
+                    <ol id="module-outline"></ol>
+                    <h3 class="sb-library-heading">Add a module</h3>
+                    <div class="sb-library" role="group" aria-label="Add content module">
+                      <button type="button" data-add-module="text">Paragraph</button>
+                      <button type="button" data-add-module="heading">Heading</button>
+                      <button type="button" data-add-module="quote">Quote</button>
+                      <button type="button" data-add-module="list">List</button>
+                      <button type="button" data-add-module="image">Image</button>
+                      <button type="button" data-add-module="button">Button / link</button>
+                      <button type="button" data-add-module="divider">Divider</button>
+                    </div>
+                  </aside>
+                  <div class="sb-properties"><div class="sb-pane-heading"><span class="sb-step">02</span><div><h3 id="module-title">Module settings</h3><p>Make it your own</p></div></div><div id="module-fields"></div></div>
+                </div>
+                <div id="markdown-workspace">
                 <div class="ed-toolbar" role="toolbar" aria-label="Formatting">
                   <button type="button" data-md="bold" aria-label="Bold"><strong>B</strong></button>
                   <button type="button" data-md="italic" aria-label="Italic"><em>I</em></button>
@@ -184,26 +224,42 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <button type="button" data-md="list" aria-label="List">• List</button>
                 </div>
                 <textarea class="body" name="body" id="f-body" aria-label="Story text">{draft.body}</textarea>
+                </div>
+                <p id="module-status" class="admin-note" role="status" aria-live="polite"></p>
               </div>
               <div class="ed-preview">
-                <iframe id="preview" title="Story preview" sandbox="" referrerpolicy="no-referrer"></iframe>
+                <div class="sb-preview-tools"><div class="sb-pane-heading"><span class="sb-step">03</span><div><strong>Reader preview</strong><p>Updates as you write</p></div></div><div role="group" aria-label="Preview width"><button type="button" data-preview-width="desktop" aria-pressed="true">Desktop</button><button type="button" data-preview-width="phone" aria-pressed="false">Phone</button></div></div>
+                <iframe id="preview" title="Story preview" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
               </div>
             </div>
           </section>
 
-          <section class="ed-card" id="photos">
-            <h2>Photos</h2>
+          <section class="ed-card studio-photos" id="photos" data-studio-panel="photos" role="tabpanel" aria-labelledby="studio-tab-photos">
+            <div class="studio-panel-heading"><div><span class="sb-eyebrow">Photo studio</span><h2>Bring the story into focus</h2><p class="admin-note">Choose your lead image, arrange the gallery and keep the subject in frame.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>See reader preview</button></div>
             <p class="admin-note">The first photo leads the story. JPG, PNG or WebP, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
             {photos.length > 0 && (
               <ol class="ed-photos">
                 {photos.map((p, i) => (
                   <li class="ed-photo">
-                    {p.path ? <img src={`/api/admin/photos/${p.id}`} alt="" width="96" height="96" /> : p.url && safeImg(p.url) ? <img src={p.url} alt="" width="96" height="96" referrerpolicy="no-referrer" /> : <div></div>}
+                    <div class="sb-photo-preview"><span class="sb-crop-label">Reader crop preview</span>{p.path ? <img data-focus-preview={p.id} src={`/api/admin/photos/${p.id}`} alt="" width="160" height="100" style={`object-position:${p.focalX ?? 50}% ${p.focalY ?? 50}%`} /> : p.url && safeImg(p.url) ? <img data-focus-preview={p.id} src={p.url} alt="" width="160" height="100" style={`object-position:${p.focalX ?? 50}% ${p.focalY ?? 50}%`} referrerpolicy="no-referrer" /> : <div></div>}</div>
                     <div class="fields">
                       <strong>{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
                       <label>Alt text (describe the photo for readers who can't see it)
                         <input type="text" name={`photo_${p.id}_alt`} value={p.alt} maxlength="300" autocomplete="off" />
                       </label>
+                      {(p.path || p.url && safeImg(p.url)) && <details class="sb-focus-settings" open={i === 0}><summary>Adjust image focus</summary>
+                        <p class="admin-note">Drag the marker to the subject. Arrow keys move it; Shift + arrow moves 10%. The original image stays unchanged.</p>
+                        <div class="sb-focal" tabindex={editable ? 0 : -1} role="group" aria-label={`Focal point for photo ${i + 1}. Use arrow keys to adjust.`} data-focal={p.id}>
+                          <img src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt={p.alt || `Photo ${i + 1}`} draggable="false" referrerpolicy="no-referrer" />
+                          <span class="sb-focal-marker" aria-hidden="true" style={`left:${p.focalX ?? 50}%;top:${p.focalY ?? 50}%`}></span>
+                        </div>
+                        <div class="sb-focal-values">
+                          <label>Horizontal focus<input type="range" min="0" max="100" step="1" name={`photo_${p.id}_focalX`} value={p.focalX ?? 50} aria-label={`Photo ${i + 1} horizontal focus`} /></label>
+                          <label>Vertical focus<input type="range" min="0" max="100" step="1" name={`photo_${p.id}_focalY`} value={p.focalY ?? 50} aria-label={`Photo ${i + 1} vertical focus`} /></label>
+                          <button type="button" data-center-focus={p.id}>Center focus</button>
+                        </div>
+                        <output data-focus-output={p.id} aria-live="polite">{p.focalX ?? 50}% horizontal, {p.focalY ?? 50}% vertical</output>
+                      </details>}
                     </div>
                     <div class="ops">
                       <button type="submit" form="photo-form" name="op" value={`up:${p.id}`} disabled={i === 0} aria-label={`Move photo ${i + 1} up`}>Up</button>
@@ -216,8 +272,8 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               </ol>
             )}
             {photos.length < LIMITS.maxPhotos && (
-              <div class="ed-field">
-                <label for="f-upload">Add photos</label>
+              <div class="ed-field sb-upload-zone">
+                <label for="f-upload">Add photos to this story</label><p>Upload once, then use a photo in any Image module or gallery layout.</p>
                 <input id="f-upload" type="file" name="photos" form="photo-form" accept="image/jpeg,image/png,image/webp" multiple />
                 <div><button type="submit" form="photo-form" name="op" value="upload" class="cms-btn secondary">Upload</button></div>
               </div>
@@ -240,12 +296,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
             </fieldset>
           </section>
 
-          <div class="ed-savebar">
-            <button type="submit" class="cms-btn" id="save-btn">Save</button>
-            <span class="ed-status" id="save-status" role="status" aria-live="polite">
-              {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
-            </span>
-          </div>
+
         </fieldset>
       </form>
       <form id="photo-form" method="post" action={`/api/admin/drafts/${draft.id}/photos`} enctype="multipart/form-data">
@@ -253,8 +304,10 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
       </form>
 
       {editable && (
-        <section class="ed-card">
-          <h2>Publish</h2>
+        <section class="ed-card studio-review" id="studio-panel-review" data-studio-panel="review" role="tabpanel" aria-labelledby="studio-tab-review">
+          <div class="studio-panel-heading"><div><span class="sb-eyebrow">Ready for readers?</span><h2>Review before publishing</h2><p class="admin-note">This is the last stop before your story appears on the public website.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>Open private preview</button></div>
+          <div class="studio-review-summary"><div><span>Story</span><strong data-review-title>{draft.title || 'Untitled story'}</strong></div><div><span>Author</span><strong data-review-author>{draft.author || 'Add an author in Story settings'}</strong></div><div><span>Content</span><strong data-review-content>{draft.storyBlocks?.length ? `${draft.storyBlocks.length} modules` : 'Markdown story'}</strong></div><div><span>Photos</span><strong>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</strong></div></div>
+          <ul class="studio-review-checklist"><li>Check the headline, names and facts.</li><li>Confirm permission to use the story and photos.</li><li>Read the phone preview and describe your images with alt text.</li></ul>
           {backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
           <p class="admin-note">
             {draft.live ? 'This story is already live. Publishing overwrites it with these changes. ' : ''}Publishing saves your changes, checks the story and puts it on the live site. It is live at once.
@@ -278,4 +331,5 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
     </div>
   )}
 </Admin>
+<script type="application/json" id="story-builder-data" set:html={JSON.stringify({ emptyStory: !draft?.body.trim() && !(draft?.storyBlocks?.length), photos: photos.map((p) => ({ id: p.id, src: p.path ? `/api/admin/photos/${p.id}` : p.url && safeImg(p.url) ? p.url : '', alt: p.alt, focalX: p.focalX ?? 50, focalY: p.focalY ?? 50 })) }).replace(/</g, '\\u003c')}></script>
 <script>import '../../../scripts/draft-editor';</script>

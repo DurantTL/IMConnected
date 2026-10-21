@@ -58,6 +58,8 @@ function draftAsFeedSource(slugOrId: string, d: Draft, photos: DraftPhoto[]): Fe
       photos: rest.map((p) => p.url as string),
       photoAlts: rest.map((p) => p.alt),
       photoLayout: d.photoLayout,
+      // Draft modules may reference private uploads, so only public story modules are exported.
+      photoFocus: [lead, ...rest].filter((p): p is DraftPhoto => !!p).map((p) => ({ focalX: p.focalX, focalY: p.focalY })),
       featured: d.featured,
     },
   };

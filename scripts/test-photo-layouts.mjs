@@ -176,7 +176,7 @@ const EXPECT = {
   const now = Date.now();
   db.prepare("INSERT INTO stories (slug, title, section, author, date, published_at, updated_at) VALUES ('2026-10-01-old-story', 'Old story', 'news', 'Test Author', '2026-10-01', ?, ?)").run(now, now);
   db.prepare("INSERT INTO drafts (status, source, title, created_at, updated_at) VALUES ('in_review', 'editor', 'Old draft', ?, ?)").run(now, now);
-  const applied = runMigrations(db, all);
+  const applied = runMigrations(db, all.filter((m) => m.name < '017'));
   check('migration 016 applies on a database with stories and drafts', applied.length === 1 && applied[0].startsWith('016_'), JSON.stringify(applied));
   check('...the existing story and draft read photo_layout = one (nothing changes for them)',
     db.prepare("SELECT photo_layout p FROM stories WHERE slug = '2026-10-01-old-story'").get().p === 'one' && db.prepare('SELECT photo_layout p FROM drafts').get().p === 'one');
@@ -362,7 +362,7 @@ try {
     browserSkipReason = 'Playwright is not installed';
   } else {
     let browser;
-    try { browser = await pw.chromium.launch(); } catch (err) { browserSkipReason = 'no browser could be launched: ' + String(err.message).split('\n')[0]; }
+    try { browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox'] }); } catch (err) { browserSkipReason = 'no browser could be launched: ' + String(err.message).split('\n')[0]; }
     if (browser) {
       const overflow = [];
       const WIDTHS = [390, 768, 1280];

@@ -48,6 +48,29 @@ A layout above the text is a single grid in `src/components/StoryPhotos.astro` (
 
 Tests: `SCRATCH=/tmp/imc-photo-layouts node scripts/test-photo-layouts.mjs` after `npm run build` (the layout planner; migration 016 on a database with data; Studio's `photoLayout` validation, default and republish; the markup of every layout with 1, 2, 3, 4 and 6 photos; `/stories.json` and `GET /api/stories`; the agent API; the dashboard picker, save validation, publish and edit; and, with Playwright, no horizontal scroll at 390, 768 and 1280 px, the viewer with keyboard and touch, the no-JavaScript links). Add `SHOTS=<folder>` for screenshots of every layout and photo count at those widths, and `AXE_JS=<path to axe.min.js>` for an axe scan (axe-core is not a dependency of this repo). Existing stories are compared with the pre-change pages by `scripts/test-public-pages.mjs` (`BASELINE_DIR`).
 
+## Modular story editor and image focus
+
+See the [design review and screenshots](docs/DESIGN_REVIEW.md) for the magazine layout and dedicated editor workspace. The editor separates **Content**, **Story settings**, **Photos**, and **Review & publish**; inactive panels leave the keyboard tab order, while their fields remain included in saves. A sticky toolbar keeps Save and private Preview available.
+
+The editor at `/admin/drafts/<id>` supports Markdown and a modular story workspace. Choose **Use modules** to preserve existing Markdown inside paragraph modules, then add paragraphs, headings, quotes, lists, inline story images, buttons/links, and dividers. The outline has drag reordering and labelled Move up/Move down controls. Modules can be duplicated, deleted, undone and redone before leaving the page. Text modules support Markdown formatting; raw HTML remains inert. Click a module in the private preview to select its settings. Desktop and Phone change only the preview width, and previewing never publishes.
+
+Upload images under Photos, then select them in an Image module. **Adjust image focus** shows the original image with a draggable focal marker and a cropped thumbnail. Arrow keys move the marker one percentage point, Shift + arrow moves ten, and the labelled sliders and Center focus button provide alternatives. Saving retains the coordinates; publishing applies them to inline images, cards and cropped story photos. The full original remains available in the photo viewer. Images used inline are omitted from the separate story photo group to avoid duplicates. Deleting a photo also removes modules that reference it.
+
+Migration **017** adds `story_blocks` JSON to drafts/stories and `focal_x`/`focal_y` to their photo rows. Existing stories default to no modules and centered focus (50/50). Missing module/focus fields from an older editor preserve the current values. A Markdown projection remains in `body` for search and older consumers. Published modules contain public photo URLs, never private draft photo IDs; reopening a published story remaps images to its editable photo rows. Studio replacing a closed story clears old modules so it cannot accidentally publish stale layout content. Existing Studio and agent API payloads remain supported; this first module editor does not add a form-response, payment, or conditional-field engine.
+
+`/stories.json` adds optional `storyBlocks` and `photoFocus` without changing version 1. Module IDs are stable strings, and image modules contain `url`, `alt`, `focalX` and `focalY`. Focus arrays follow the lead image then gallery images. Draft modules/private uploads are excluded from the Studio story list. New consumers may use these additive fields; existing consumers can keep using the original story fields.
+
+Focused validation (synthetic local data only):
+
+```bash
+node scripts/test-story-blocks.mjs
+node scripts/test-story-builder.mjs
+# After npm run build, with Playwright installed outside the checkout:
+PLAYWRIGHT_ROOT=/workspace/.tools/browser CHROMIUM_PATH=/usr/bin/chromium node scripts/test-story-builder-ui.mjs
+```
+
+The editor and public design take the content-outline, labelled-action, mobile-reflow and private-preview ideas from [IMSDA Events design review #1114](https://github.com/DurantTL/IMSDA-Events/issues/1114), retaining IMConnected's existing routes and editorial permissions.
+
 ## Setup
 
 ### 1. Create the repo
@@ -311,6 +334,8 @@ photoCredit: "Photographer"
 photos: []               # extra gallery images
 photoAlts: []            # alt text for each of `photos`, same order (optional)
 photoLayout: one         # one | twoUp | heroGrid | mosaic | stack (optional, default one): how the story page arranges the photos
+storyBlocks: []          # optional structured modules; [] keeps the Markdown body below
+photoFocus: []           # optional [{ focalX: 50, focalY: 50 }], lead first, then gallery (0–100)
 featured: false
 draft: false             # true hides it
 ---

@@ -6,12 +6,13 @@
 // turns the links into click-to-enlarge. Photos have a fixed aspect ratio (cropped to fit, like the newsletter) so the
 // page does not move while they load. No captions per photo: the credit is the only line under the group.
 import type { PhotoPlan } from '../lib/photo-layouts';
+import { photoFocusStyle } from '../lib/story-blocks';
 
 interface Props {
   layout: string;
   plan: PhotoPlan;
   /** Every photo, lead first. */
-  photos: { src: string; alt: string }[];
+  photos: { src: string; alt: string; focalX?: number; focalY?: number }[];
   credit?: string;
 }
 const { layout, plan, photos, credit } = Astro.props;
@@ -21,7 +22,7 @@ const { layout, plan, photos, credit } = Astro.props;
     <div class={`photos-row photos-${row.kind}`}>
       {row.photos.map((i) => (
         <a href={photos[i].src} data-photo>
-          <img src={photos[i].src} alt={photos[i].alt} loading={i === 0 ? 'eager' : 'lazy'} decoding="async" />
+          <img src={photos[i].src} alt={photos[i].alt} loading={i === 0 ? 'eager' : 'lazy'} decoding="async" style={photoFocusStyle(photos[i])} />
         </a>
       ))}
     </div>

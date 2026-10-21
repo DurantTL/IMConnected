@@ -10,6 +10,7 @@ import { adoptionDone, adoptionInFlight } from './story-adopt';
 import { getDb } from './db';
 import { cacheGeneration, TTL_MS } from './public-cache';
 import { renderMarkdownSafe } from './markdown';
+import { renderStoryBlocksSafe } from './story-block-render';
 
 /** The /media address of a photo we hold, else the photo's own address. */
 function photoUrl(s: Story, index: number, original: string): string {
@@ -38,6 +39,13 @@ export function toPublicStory(s: Story): PublicStory {
       photos: s.photos.map((p, i) => photoUrl(s, lead + i, p)),
       photoAlts: s.photoAlts,
       photoLayout: s.photoLayout,
+      storyBlocks: s.storyBlocks?.map((block) => {
+        if (block.type !== 'image' || !block.url) return block;
+        const sources = [...(s.image ? [s.image] : []), ...s.photos];
+        const index = sources.indexOf(block.url);
+        return index < 0 ? block : { ...block, url: photoUrl(s, index, block.url) };
+      }),
+      photoFocus: s.photoRows.map((p) => ({ focalX: p.focalX ?? 50, focalY: p.focalY ?? 50 })),
       featured: s.featured,
     },
   };
@@ -121,5 +129,6 @@ export async function getPublicStory(slug: string): Promise<PublicStory | undefi
 
 /** A story's body as HTML. Raw HTML in the Markdown is neutralised, and links with a script scheme become "#". */
 export async function renderStoryBody(story: PublicStory): Promise<string> {
+  if (story.data.storyBlocks?.length) return renderStoryBlocksSafe(story.data.storyBlocks);
   return (await renderMarkdownSafe(story.body ?? '')).html;
 }

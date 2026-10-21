@@ -30,24 +30,31 @@ const youth = fresh(bySection(stories, 'youth')).slice(0, 3);
 const kids = bySection(stories, 'kids').slice(0, 3);
 ---
 <Base>
-  <section class="tagline-band" aria-label="About IMConnected">
-    <div class="wrap">
-      <p>{SITE.tagline}</p>
-      <span class="words">Connect · Inform · Inspire</span>
-    </div>
-  </section>
-
-  <div class="wrap">
+  <div class="wrap magazine-home">
+    <section class="home-intro" aria-labelledby="home-title">
+      <div>
+        <p class="eyebrow">The conference story magazine</p>
+        <h1 id="home-title">A connected community.<br /><em>A living faith.</em></h1>
+      </div>
+      <p class="home-intro-note">{SITE.tagline}.<br /><a class="intro-link" href="/news/">Discover what’s happening <span aria-hidden="true">→</span></a></p>
+    </section>
     {lead ? (
       <section class="hero" aria-label="Top stories">
         <StoryCard story={lead} variant="lead" />
-        <div class="hero-side">
-          {side.map((s) => <StoryCard story={s} variant="compact" />)}
-        </div>
+        <aside class="hero-side" aria-labelledby="latest-title">
+          <div class="latest-heading"><span class="eyebrow">The latest</span><h2 id="latest-title">From around our conference</h2></div>
+          <ol class="latest-stories">{side.map((s, i) => <li><span class="latest-number" aria-hidden="true">0{i + 1}</span><StoryCard story={s} variant="compact" /></li>)}</ol>
+          <a class="intro-link" href="/news/">All conference news <span aria-hidden="true">→</span></a>
+        </aside>
       </section>
     ) : (
       <p class="empty-state">No stories yet — check back soon.</p>
     )}
+
+    <nav class="topic-directory" aria-label="Explore story sections">
+      <span class="topic-directory-label">Find your next story</span>
+      {SECTIONS.map((s) => <a href={`/${s.key}/`} data-sec={s.key}><span>{s.short}</span><span class="topic-count">{bySection(stories, s.key).length} {bySection(stories, s.key).length === 1 ? 'story' : 'stories'} <span aria-hidden="true">↗</span></span></a>)}
+    </nav>
 
     {features.length > 0 && (
       <section class="block" data-sec="features">
@@ -59,18 +66,18 @@ const kids = bySection(stories, 'kids').slice(0, 3);
       </section>
     )}
 
-    <section class="block" data-sec="news">
+    <section class="block community-section" data-sec="news">
       <div class="block-head">
-        <div><h2>Across the Conference</h2><p>{news.blurb}</p></div>
+          <div><p class="eyebrow">Local stories. Shared purpose.</p><h2>Across the Conference</h2><p>{news.blurb}</p></div>
         <a class="more" href="/news/">All news →</a>
       </div>
       <div class="grid cols-4">
         {news.areas!.map((a) => {
           const items = bySection(stories, 'news', a.key).slice(0, 3);
           return (
-            <div class="area-col" data-sec="news">
-              <h3 class="area-title"><a href={`/news/${a.key}/`} style="text-decoration:none">{a.label}</a></h3>
-              {items.length ? items.map((s) => <StoryCard story={s} variant="text" showDek={false} showKicker={false} />) : <p class="empty">No stories yet.</p>}
+            <div class:list={['area-col', { 'area-empty': !items.length }]} data-sec="news">
+              <h3 class="area-title"><a href={`/news/${a.key}/`}>{a.label}<span aria-hidden="true">↗</span></a></h3>
+              {items.length ? items.map((s) => <StoryCard story={s} variant="text" showDek={false} showKicker={false} />) : <div class="area-invitation"><p class="empty">Your community’s next story belongs here.</p><a href="/submit/">Share a story <span aria-hidden="true">→</span></a></div>}
             </div>
           );
         })}
@@ -78,9 +85,9 @@ const kids = bySection(stories, 'kids').slice(0, 3);
     </section>
 
     {columns.length > 0 && (
-      <section class="block" data-sec="columns">
+      <section class="block voices-section" data-sec="columns">
         <div class="block-head">
-          <div><h2>Columns</h2><p>{getSection('columns')!.blurb}</p></div>
+          <div><p class="eyebrow">A moment to reflect</p><h2>Voices &amp; perspectives</h2><p>{getSection('columns')!.blurb}</p></div>
           <a class="more" href="/columns/">All columns →</a>
         </div>
         <div class="grid cols-3">{columns.map((s) => <StoryCard story={s} variant="text" />)}</div>
@@ -109,7 +116,8 @@ const kids = bySection(stories, 'kids').slice(0, 3);
 
     <section class="cta" aria-label="Submit a story">
       <div>
-        <h2>Have a story from your church?</h2>
+        <p class="eyebrow">Every community has a story</p>
+        <h2>Let’s tell yours.</h2>
         <p>Baptisms, outreach, school events, Pathfinder adventures, answered prayers — share what God is doing in your community.</p>
       </div>
       <a class="btn accent" href="/submit/">Submit a Story</a>
