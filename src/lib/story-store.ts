@@ -4,6 +4,7 @@
 // is complete; every write below clears the page cache (invalidateStories) so the change shows on the next request.
 import { getDb } from './db';
 import { invalidateStories } from './public-cache';
+import { indexStory } from './search-index';
 
 export type StoryStatus = 'live' | 'unpublished';
 export type StorySource = 'git' | 'form' | 'studio' | 'editor' | 'agent';
@@ -194,6 +195,7 @@ export function upsertStory(s: StoryInput, now = Date.now()): 'inserted' | 'upda
     }
     const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     for (const p of s.photoRows) ins.run(id, p.position, p.kind, p.path, p.url, p.alt, p.sha256, p.bytes);
+    indexStory(db, id, s, now); // search index row (migration 013), in the same transaction: findable as soon as it is saved
     db.exec('COMMIT');
     invalidateStories();
     return cur ? 'updated' : 'inserted';

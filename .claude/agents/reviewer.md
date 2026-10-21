@@ -85,9 +85,18 @@ you to review the current branch against `origin/main`.
      middleware still returns straight from `next()` for every non-`/admin` path except the in-memory cache lookup,
      which must touch only the GET paths `publicCacheKey()` accepts and never `/admin` or `/api/admin` (no database,
      cookies or session); the dashboard unpublish records a hold with the unpublish commit sha (`out.sha`; marker NULL if it can't be computed) and republish never revives the old text; `src/lib/story-holds.ts` (`holdActive`) is the one rule shared by the sync and the fallback: no unpublish sha means hidden, a sha in the image's `.build-commits` (docker.yml `git log -200 --format='%H %ct'`, Dockerfile copy) releases, a list without it stays hidden unless it is a full 200 commits whose oldest commit is over 10 minutes newer than the hold's `created_at` (the window safeguard), no list falls back to the marker (NULL never counts as different), an unparseable non-empty list or a missing commit time keeps it hidden, the window uses GitHub's commit time (`unpublish_time`), the unpublish handler writes draft state, hold and row in one transaction right after the commit, the publish handler refuses an unpublished draft with no hold row (released holds stay as rows), and every failure keeps it hidden; `/images/stories/*` redirects to `/media/` only when
-     the static file is missing; the Pagefind source pages under `src/pages/search-source/` are pruned from
-     `dist/client` by `npm run build`;
-   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/confirm.ts`, `src/pages/media/[...path].ts`, the public story pages and feeds listed above, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
+     the static file is missing;
+   - search (epic #25 step 3): `GET /api/search` (`src/pages/api/search.ts`, `src/lib/search.ts`, `search-index.ts`,
+     `search-run.ts`, migration 013) only returns live, non-draft stories (the same set as `public-stories.ts`;
+     held and dashboard-unpublished stories never appear, including in the in-memory fallback used before the first
+     mirror pass or when the index is unreadable); the visitor's text is reduced to quoted letter/digit words (max
+     200 characters, 8 words) and never reaches FTS5 as syntax or into a response; snippets are built from plain
+     text, escaped with `escapeHtml` first and only then wrapped in `<mark>`, and `/search` builds DOM text nodes
+     (no `innerHTML`, no `set:html` of stored text); a story is indexed in the same transaction that writes it
+     (`upsertStory`) and stale rows are healed before a search; per-IP rate limit; answers are 200, 400 or 429, an
+     internal failure is a 200 with `ok: false`, never a 500; responses are `no-store`; no Pagefind, no
+     `data-pagefind-*` attributes, no `/search-source/` pages remain;
+   - prerendering: only `src/pages/api/submit.ts`, `src/pages/api/publish.ts`, `src/pages/api/stories.ts`, `src/pages/api/search.ts`, `src/pages/api/confirm.ts`, `src/pages/media/[...path].ts`, the public story pages and feeds listed above, `src/pages/api/agent/*`, `/admin*` and `/api/admin/*` set `prerender = false`;
    - editor sign-in (`src/lib/auth/`, `src/pages/admin/`, `src/middleware.ts`): `AUTH_SECRET` required at 32+
      characters (503 otherwise); passwords scrypt-hashed and compared with `timingSafeEqual`; unknown email,
      wrong password and disabled account give one message and one cost (dummy scrypt); TOTP secrets

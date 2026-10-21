@@ -1,5 +1,5 @@
 ---
-// The whole story page (shared by the server-rendered /stories/<slug>/ and the build-time search source page).
+// The whole story page.
 // The default slot is the rendered story body.
 import Base from '../layouts/Base.astro';
 import StoryCard from './StoryCard.astro';
@@ -9,9 +9,8 @@ import type { PublicStory } from '../lib/stories';
 interface Props {
   story: PublicStory;
   related: PublicStory[];
-  noindex?: boolean;
 }
-const { story, related, noindex = false } = Astro.props;
+const { story, related } = Astro.props;
 const d = story.data;
 const section = getSection(d.section)!;
 const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
@@ -19,7 +18,7 @@ const subHref = d.area ? `/${d.section}/${d.area}/` : undefined;
 const url = new URL(`/stories/${story.id}/`, Astro.site).href;
 const enc = encodeURIComponent;
 ---
-<Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section} noindex={noindex}>
+<Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section}>
   <script type="application/ld+json" slot="head" set:html={JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'NewsArticle',
@@ -31,14 +30,14 @@ const enc = encodeURIComponent;
     image: d.image ? new URL(d.image, Astro.site).href : undefined,
   }).replace(/</g, '\\u003c')} />
   <div class="wrap">
-    <article class="article" data-sec={d.section} data-pagefind-body>
-      <div data-pagefind-ignore>
+    <article class="article" data-sec={d.section}>
+      <div>
         <a class="kicker" href={`/${d.section}/`}>{section.label}</a>
         {sub && (<><span class="kicker"><span class="sep">/</span></span>{subHref ? <a class="kicker" href={subHref}>{sub}</a> : <span class="kicker">{sub}</span>}</>)}
       </div>
-      <h1 data-pagefind-meta="title">{d.title}</h1>
+      <h1>{d.title}</h1>
       {d.dek && <p class="dek">{d.dek}</p>}
-      <div class="byline" data-pagefind-ignore>
+      <div class="byline">
         <span>By <strong>{d.author}</strong>{d.authorTitle && `, ${d.authorTitle}`}</span>
         {d.church && <span>{d.church}</span>}
         <time datetime={d.date.toISOString()}>{formatDate(d.date)}</time>
@@ -46,7 +45,7 @@ const enc = encodeURIComponent;
 
       {d.image && (
         <figure>
-          <img src={d.image} alt={d.imageAlt ?? ''} loading="eager" data-pagefind-meta="image[src]" />
+          <img src={d.image} alt={d.imageAlt ?? ''} loading="eager" />
           {(d.imageAlt || d.photoCredit) && (
             <figcaption>{d.imageAlt}{d.photoCredit && ` Photo: ${d.photoCredit}`}</figcaption>
           )}
@@ -63,7 +62,7 @@ const enc = encodeURIComponent;
         </section>
       )}
 
-      <div class="share" data-pagefind-ignore>
+      <div class="share">
         <span>Share:</span>
         <a href={`https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`} target="_blank" rel="noopener">Facebook</a>
         <a href={`mailto:?subject=${enc(d.title)}&body=${enc(url)}`}>Email</a>
@@ -72,7 +71,7 @@ const enc = encodeURIComponent;
     </article>
 
     {related.length > 0 && (
-      <section class="block" data-sec={d.section} data-pagefind-ignore>
+      <section class="block" data-sec={d.section}>
         <div class="block-head">
           <h2>More in {section.label}</h2>
           <a class="more" href={`/${d.section}/`}>See all →</a>
@@ -81,7 +80,7 @@ const enc = encodeURIComponent;
       </section>
     )}
 
-    <section class="cta" aria-label="Submit a story" data-pagefind-ignore>
+    <section class="cta" aria-label="Submit a story">
       <div>
         <h2>Have a story to share?</h2>
         <p>We’d love to hear what God is doing in your church, school or club.</p>

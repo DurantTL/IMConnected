@@ -12,7 +12,7 @@
 //
 // SCRATCH is created fresh (an existing folder is removed first) and deleted at the end unless KEEP=1.
 // Without BASELINE_DIR the comparison checks are skipped and reported as SKIP (that is not a pass of the issue).
-// Optional: Playwright (PLAYWRIGHT_ROOT, default /opt/node-tools) and Chromium (CHROMIUM_PATH) for the search check.
+// The search endpoint and page are tested in depth by scripts/test-search.mjs.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -146,7 +146,9 @@ function mediaMap() {
   return out.sort((a, b) => b[0].length - a[0].length);
 }
 const unmedia = (text, map) => map.reduce((t, [from, to]) => t.split(from).join(to), text);
-const baselineHtml = (urlPath) => fs.readFileSync(path.join(BASELINE, urlPath === '/' ? '' : urlPath, 'index.html'), 'utf8');
+// The baseline build still carries Pagefind's data-pagefind-* attributes on story pages; step 3 of epic #25 removed them (and
+// nothing else), so they are the one thing taken out of the baseline before it is compared.
+const baselineHtml = (urlPath) => fs.readFileSync(path.join(BASELINE, urlPath === '/' ? '' : urlPath, 'index.html'), 'utf8').replace(/ data-pagefind-(?:body|ignore|meta="[^"]*")/g, '');
 
 // ================= unit checks of the cache (bundled from src/lib/public-cache.ts) =================
 {
@@ -219,7 +221,8 @@ const baselineHtml = (urlPath) => fs.readFileSync(path.join(BASELINE, urlPath ==
 }
 
 // ================= part 1: a fresh start, with the first import held back =================
-const SKIPPED_PAGES = new Set(['submit', 'search', 'confirm', 'pagefind', '_astro', 'images']);
+// 'pagefind' and 'search-source' only exist in a baseline built before step 3 of epic #25; the search page itself is covered by test-search.mjs.
+const SKIPPED_PAGES = new Set(['submit', 'search', 'confirm', 'pagefind', 'search-source', '_astro', 'images']);
 const pages = [];
 const FEED_PATHS = ['/stories.json', '/rss.xml'];
 if (BASELINE) {
@@ -316,6 +319,11 @@ try {
   const noOldText = async () => {
     const urls = ['/', `/${feedBase.stories.find((x) => x.id === slug).section}/`, `/stories/${slug}/`, '/stories.json', '/rss.xml'];
     for (const u of urls) { const r = await get(u); if (r.text.includes(`/stories/${slug}`) || oldSnippets.some((sn) => r.text.includes(sn.replace(/’/g, '&#39;')) || r.text.includes(sn))) return false; }
+    // search (epic #25 step 3) shows exactly what readers can see: the story must not come back from /api/search either,
+    // whether the table is filled (FTS5) or not yet (in-memory search over the build)
+    const title = feedBase.stories.find((x) => x.id === slug).title.split(/\s+/).slice(0, 5).join(' ');
+    const found = await get('/api/search?q=' + encodeURIComponent(title));
+    if (found.status !== 200 || found.text.includes(`/stories/${slug}/`)) return false;
     return true;
   };
   let slug = null;
@@ -472,7 +480,7 @@ try {
   if (slug) {
     const other = q("SELECT slug, title FROM stories WHERE status = 'live' AND slug != ? ORDER BY slug LIMIT 1", slug)[0];
     const url = `/stories/${other.slug}/`;
-    const hasTitle = (r, t) => r.text.includes(`<h1 data-pagefind-meta="title">${t}</h1>`);
+    const hasTitle = (r, t) => r.text.includes(`<h1>${t}</h1>`);
     run("UPDATE stories SET title = 'Edited in the database', content_hash = 'edited-1' WHERE slug = ?", other.slug);
     // The pages above are cached; an unpublish and republish in the dashboard (store writes) clears the cache.
     await post('/api/admin/stories/unpublish', cookie, { slug });
@@ -545,28 +553,15 @@ try {
     run("DELETE FROM stories WHERE id = ?", id);
   }
 
-  // ================= part 4: search still links to the real story pages =================
+  // ================= part 4: search finds stories and links them to the real story pages =================
   {
-    let chromium;
-    try {
-      const root = process.env.PLAYWRIGHT_ROOT || '/opt/node-tools';
-      ({ chromium } = createRequire(path.join(root, 'package.json'))('playwright'));
-    } catch { /* optional */ }
-    if (!chromium) info('Playwright is not available: the search check is skipped');
-    else {
-      const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox'] }).catch(() => null);
-      if (!browser) info('Chromium did not start: the search check is skipped');
-      else {
-        try {
-          const page = await browser.newPage();
-          await page.goto(`${BASE}/search/?q=baptism`, { waitUntil: 'load' });
-          await page.waitForSelector('.pagefind-ui__result-link', { timeout: 15000 }).catch(() => {});
-          const hrefs = await page.$$eval('.pagefind-ui__result-link', (as) => as.map((a) => a.getAttribute('href')));
-          check('search finds stories and links them to /stories/<slug>/ (not the build-time source pages)', hrefs.length > 0 && hrefs.every((h) => /^\/stories\/[^/]+\//.test(h)), JSON.stringify(hrefs));
-          if (hrefs.length) { const r = await get(hrefs[0].split('#')[0]); check('...and a search result link opens the story', r.status === 200); }
-        } finally { await browser.close(); }
-      }
-    }
+    const res = await get('/api/search?q=baptism');
+    const body = (() => { try { return JSON.parse(res.text); } catch { return null; } })();
+    const hrefs = body?.results?.map((r) => r.url) ?? [];
+    check('search finds stories and links them to /stories/<slug>/', res.status === 200 && hrefs.length > 0 && hrefs.every((h) => /^\/stories\/[^/]+\/$/.test(h)), `${res.status} ${JSON.stringify(hrefs)}`);
+    if (hrefs.length) { const r = await get(hrefs[0]); check('...and a search result link opens the story', r.status === 200); }
+    const pf = await get('/pagefind/pagefind.js');
+    check('Pagefind is gone: no index is served and the search page does not load it', pf.status === 404 && !(await get('/search/')).text.includes('pagefind') && !fs.existsSync(path.join(ROOT, 'dist/client/pagefind')));
   }
 
   // ================= part 4b: a story unpublished before migration 012 can still be published from the dashboard =================

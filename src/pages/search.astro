@@ -1,35 +1,109 @@
 ---
 import Base from '../layouts/Base.astro';
+import { SECTIONS } from '../lib/site';
 ---
 <Base title="Search" description="Search IMConnected stories">
-  <link slot="head" href="/pagefind/pagefind-ui.css" rel="stylesheet" />
   <div class="wrap">
     <header class="page-head">
       <span class="kicker">IMConnected</span>
       <h1>Search stories</h1>
       <p>Find news, features and stories from across Iowa and Missouri.</p>
     </header>
-    <div id="search" class="search-box"></div>
-    <noscript><p>Search requires JavaScript.</p></noscript>
+    <form class="search-form" id="search-form" role="search" action="/search/" method="get">
+      <label class="sr-only" for="search-q">Search for</label>
+      <input id="search-q" name="q" type="search" maxlength="200" autocomplete="off" placeholder="Search stories" required />
+      <label class="sr-only" for="search-section">In section</label>
+      <select id="search-section" name="section">
+        <option value="">All sections</option>
+        {SECTIONS.map((s) => <option value={s.key}>{s.label}</option>)}
+      </select>
+      <button class="btn" type="submit">Search</button>
+    </form>
+    <p id="search-status" class="search-status" role="status" aria-live="polite"></p>
+    <ol id="search-results" class="search-results"></ol>
+    <noscript><p>Search needs JavaScript.</p></noscript>
   </div>
 </Base>
-<script is:inline src="/pagefind/pagefind-ui.js"></script>
-<script is:inline>
-  window.addEventListener('DOMContentLoaded', () => {
-    if (!window.PagefindUI) {
-      document.getElementById('search').innerHTML =
-        '<p class="empty-state">Search index not found. Run <code>npm run build</code> to generate it.</p>';
-      return;
+<script>
+  // Results come from GET /api/search. Titles and details are set as text; the snippet arrives as escaped text with
+  // <mark> around the matches, and is turned into DOM nodes here (the only tag honoured is <mark>), never inserted as HTML.
+  const form = document.getElementById('search-form') as HTMLFormElement;
+  const input = document.getElementById('search-q') as HTMLInputElement;
+  const select = document.getElementById('search-section') as HTMLSelectElement;
+  const statusEl = document.getElementById('search-status')!;
+  const list = document.getElementById('search-results')!;
+  const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" };
+  const unescape = (s: string) => s.replace(/&(?:amp|lt|gt|quot|#39);/g, (e) => ENTITIES[e]);
+  const sectionLabels: Record<string, string> = Object.fromEntries([...select.options].filter((o) => o.value).map((o) => [o.value, o.text]));
+  let controller: AbortController | undefined;
+
+  interface Hit { slug: string; url: string; title: string; section: string; date: string; author: string; church?: string; snippet: string }
+
+  function snippetNode(snippet: string): HTMLElement {
+    const p = document.createElement('p');
+    p.className = 'snippet';
+    let inMark = false;
+    for (const part of snippet.split(/(<mark>|<\/mark>)/)) {
+      if (part === '<mark>') inMark = true;
+      else if (part === '</mark>') inMark = false;
+      else if (part) {
+        if (inMark) { const m = document.createElement('mark'); m.textContent = unescape(part); p.append(m); }
+        else p.append(document.createTextNode(unescape(part)));
+      }
     }
-    // Story pages are indexed from build-time copies under /search-source/ (see src/pages/search-source/); link to the real pages.
-    const fixUrl = (r) => {
-      const fix = (u) => u.replace(/^\/search-source\//, '/stories/');
-      r.url = fix(r.url);
-      (r.sub_results || []).forEach((s) => { s.url = fix(s.url); });
-      return r;
-    };
-    const params = new URLSearchParams(location.search);
-    const ui = new PagefindUI({ element: '#search', showSubResults: true, showImages: false, resetStyles: false, processResult: fixUrl });
-    if (params.get('q')) ui.triggerSearch(params.get('q'));
+    return p;
+  }
+
+  function resultNode(h: Hit): HTMLElement {
+    const li = document.createElement('li');
+    li.className = 'search-result';
+    const a = document.createElement('a');
+    a.href = `/stories/${encodeURIComponent(h.slug)}/`;
+    const title = document.createElement('h2');
+    title.textContent = h.title;
+    a.append(title);
+    const meta = document.createElement('p');
+    meta.className = 'meta';
+    const when = new Date(`${h.date}T00:00:00Z`).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+    meta.textContent = [sectionLabels[h.section] ?? h.section, when, `By ${h.author}${h.church ? `, ${h.church}` : ''}`].join(' · ');
+    li.append(a, meta, snippetNode(h.snippet));
+    return li;
+  }
+
+  async function run(q: string, section: string, push: boolean) {
+    controller?.abort();
+    controller = new AbortController();
+    list.replaceChildren();
+    statusEl.textContent = 'Searching…';
+    if (push) {
+      const u = new URL(location.href);
+      u.search = '';
+      u.searchParams.set('q', q);
+      if (section) u.searchParams.set('section', section);
+      history.replaceState(null, '', u);
+    }
+    try {
+      const res = await fetch(`/api/search?${new URLSearchParams(section ? { q, section } : { q })}`, { signal: controller.signal, headers: { Accept: 'application/json' } });
+      const data = await res.json();
+      if (!data.ok) { statusEl.textContent = data.error || 'Search is not available right now.'; return; }
+      const hits = data.results as Hit[];
+      if (!hits.length) { statusEl.textContent = 'No stories matched your search. Try different or fewer words.'; return; }
+      statusEl.textContent = hits.length === 1 ? '1 story found' : `${hits.length} stories found`;
+      list.append(...hits.map(resultNode));
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
+      statusEl.textContent = 'Search is not available right now. Please try again in a moment.';
+    }
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (q) void run(q, select.value, true);
   });
+  const params = new URLSearchParams(location.search);
+  const q0 = (params.get('q') ?? '').slice(0, 200);
+  const s0 = params.get('section') ?? '';
+  if ([...select.options].some((o) => o.value === s0)) select.value = s0;
+  if (q0.trim()) { input.value = q0; void run(q0.trim(), select.value, false); }
 </script>

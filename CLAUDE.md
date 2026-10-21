@@ -35,7 +35,7 @@ spawning an Opus builder. Unclear requirements don't escalate; they get the
 `needs-decision` label and a question to a human.
 
 **Always verify.** Treat a subagent's "done" as a claim. Run the checks
-yourself before pushing: `npm run build` (Astro build plus the Pagefind index;
+yourself before pushing: `npm run build` (the Astro build;
 it must pass with no errors), and for changes to the submit form or
 `src/lib/`, one synthetic submission through `node scripts/mock-github.mjs`
 (see the README) with the resulting `.mock-prs/` folder checked and then
