@@ -2,10 +2,15 @@ import { defineMiddleware } from 'astro:middleware';
 import { getDb } from './lib/db';
 import { ensureRetention } from './lib/retention';
 import { authSecretOk } from './lib/auth/secret';
+import { cachedPage, publicCacheKey, PUBLIC_CACHE_CONTROL } from './lib/public-cache';
 import { SESSION_COOKIE, readSession, touchSession, clearSessionCookie } from './lib/auth/session';
 
 // Runs for every request, including while prerendering public pages at build time. For anything
-// outside /admin and /api/admin it returns immediately without touching the database, cookies or headers.
+// outside /admin and /api/admin it returns immediately without touching the database or cookies. The one
+// addition (epic #25, step 2): for the few GET paths the server renders from the stories table (home, sections,
+// areas, stories, /stories.json, /rss.xml) it answers from the in-memory page cache (src/lib/public-cache.ts),
+// or renders once and keeps the result. That is a Map lookup keyed by a pure string check; any other path
+// goes straight to next().
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -92,11 +97,34 @@ const redirect = (to: string) => harden(new Response(null, { status: 302, header
 const json = (status: number, error: string) =>
   harden(new Response(JSON.stringify({ ok: false, error }), { status, headers: { 'Content-Type': 'application/json' } }));
 
+/** A cached or freshly rendered public page, with the headers that let Cloudflare keep it briefly. */
+async function servePublic(key: string, next: () => Promise<Response>): Promise<Response> {
+  const out = await cachedPage(key, async () => {
+    const res = await next();
+    if (res.status !== 200) return { response: res };
+    return { page: { body: await res.text(), type: res.headers.get('Content-Type') || 'text/html; charset=utf-8' } };
+  });
+  if ('page' in out) {
+    return new Response(out.page.body, {
+      status: 200,
+      headers: { 'Content-Type': out.page.type, 'Cache-Control': PUBLIC_CACHE_CONTROL, 'X-Page-Cache': out.hit ? 'hit' : 'miss' },
+    });
+  }
+  // An unknown or unpublished story, or an error: never cached, never kept by a shared cache.
+  const res = new Response(out.response.body, out.response);
+  res.headers.set('Cache-Control', 'no-store');
+  return res;
+}
+
 export const onRequest = defineMiddleware(async (context, next) => {
   const url = context.url;
   const path = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
   const kind = guardedKind(path);
-  if (!kind) return next();
+  if (!kind) {
+    if (context.request.method !== 'GET') return next();
+    const key = publicCacheKey(path);
+    return key ? servePublic(key, next) : next();
+  }
 
   // Without AUTH_SECRET (32+ characters) nothing under /admin runs: it protects the stored TOTP secrets.
   if (!authSecretOk()) {

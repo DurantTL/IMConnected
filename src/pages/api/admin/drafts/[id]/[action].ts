@@ -5,6 +5,8 @@ import {
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
 import { buildDraftFiles, publishMessage } from '../../../../../lib/draft-publish';
+import { getHold } from '../../../../../lib/story-store';
+import { invalidateStories } from '../../../../../lib/public-cache';
 import { commitToBase } from '../../../../../lib/github';
 import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
@@ -118,6 +120,17 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     console.error('[drafts] GITHUB_TOKEN / GITHUB_REPO not configured');
     return refuse('no_github');
   }
+  // Fail closed: a story the editor unpublished must have its hold (a released one counts). Without it the old text
+  // could come back, so the editor is asked to unpublish again first.
+  if (draft.unpublishedAt !== null && draft.slug) {
+    let hold: ReturnType<typeof getHold>;
+    try {
+      hold = getHold(draft.slug);
+    } catch {
+      hold = undefined;
+    }
+    if (!hold) return refuse('hold_missing');
+  }
   if (publishing.has(draft.id)) return refuse('already_publishing');
   publishing.add(draft.id);
   let reserved: string | null = null;
@@ -140,6 +153,16 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       console.error('[drafts] published but could not record it', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
       return redirectTo(page, { e: 'live_not_recorded' });
     }
+    // A story that was unpublished stays hidden on the database-rendered pages (a hold, see unpublish.ts) until an image
+    // that contains the unpublish commit runs: the server's build and mirror still have its old text.
+    let held = false;
+    try {
+      const h = getHold(built.slug);
+      held = h !== undefined && h.releasedAt === null;
+    } catch (err) {
+      console.error('[stories] could not read the hold', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+    }
+    invalidateStories();
     // Housekeeping after the story is recorded: a failure here must never read as "not recorded".
     try {
       audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: built.slug, commit: sha, newerEditsNotLive: r.stale }, ip });
@@ -148,7 +171,7 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     } catch (err) {
       console.error('[drafts] published; cleanup afterwards failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
-    return redirectTo(page, { n: r.stale ? 'published_stale' : 'published' });
+    return redirectTo(page, { n: held ? 'published_held' : r.stale ? 'published_stale' : 'published' });
   } catch (err) {
     if (err instanceof EditorError) return redirectTo(page, { e: err.code });
     // Give the slug back only when GitHub definitely refused the commit (4xx). After a network error or a

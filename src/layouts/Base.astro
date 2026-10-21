@@ -15,7 +15,8 @@ interface Props {
 
 const { title, description = SITE.description, image, type = 'website', current, noindex = false } = Astro.props;
 const fullTitle = title ? `${title} | ${SITE.name}` : `${SITE.name} — ${SITE.tagline}`;
-const canonical = new URL(Astro.url.pathname, Astro.site);
+// Always with a trailing slash, as in the prerendered pages: the server answers /news and /news/ alike.
+const canonical = new URL(Astro.url.pathname.endsWith('/') ? Astro.url.pathname : `${Astro.url.pathname}/`, Astro.site);
 const ogImage = image ? new URL(image, Astro.site).href : undefined;
 ---
 <!doctype html>

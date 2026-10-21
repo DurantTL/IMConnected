@@ -4,6 +4,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# The commits this image is built from (docker.yml writes the real list; a local build gets an empty file).
+RUN touch .build-commits
 # Canonical URL baked into pages (og:url, canonical, sitemap). Override with --build-arg.
 ARG SITE_URL=https://stories.imadventist.org
 ENV SITE_URL=$SITE_URL
@@ -26,6 +28,7 @@ ENV NODE_ENV=production \
     PORT=4321
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/.build-commits ./.build-commits
 COPY package.json ./
 # create-admin.mjs and the migrations it applies (run with `docker compose exec`)
 COPY scripts ./scripts

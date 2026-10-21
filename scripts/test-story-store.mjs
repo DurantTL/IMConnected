@@ -125,7 +125,7 @@ try {
       users: db.prepare('SELECT * FROM users').all(), drafts: db.prepare('SELECT * FROM drafts').all(), photos: db.prepare('SELECT * FROM draft_photos').all(),
     });
     const a = JSON.stringify(snap());
-    const applied = runMigrations(db, all);
+    const applied = runMigrations(db, all.filter((m) => m.name < '012'));
     check('migration 011 applies on a database with drafts and accounts', applied.join() === '011_stories.sql', applied.join());
     check('migration 011 loses no account, draft or draft photo', JSON.stringify(snap()) === a);
     const tables = db.prepare("SELECT name, strict FROM pragma_table_list WHERE name IN ('stories', 'story_photos')").all();
@@ -139,6 +139,21 @@ try {
     db.exec(ins);
     try { db.exec(ins); } catch { dup = true; }
     check('a second story with the same slug is refused', dup);
+    // migration 012 (story holds) on a database that already has stories, drafts and accounts
+    const snapDb = () => JSON.stringify([db.prepare('SELECT * FROM users').all(), db.prepare('SELECT * FROM drafts').all(), db.prepare('SELECT slug, title FROM stories').all()]);
+    db.prepare("INSERT INTO drafts (id, status, source, title, section, body, slug, published_commit, unpublished_at, created_at, updated_at) VALUES (8, 'in_review', 'editor', 'Unpublished long ago', 'news', 'Body', 'old-unpublished', 'abc', 5000, ?, ?)").run(now, now);
+    db.prepare("INSERT INTO drafts (id, status, source, title, section, body, slug, published_commit, created_at, updated_at) VALUES (9, 'published', 'editor', 'Live one', 'news', 'Body', 'still-live', 'abc', ?, ?)").run(now, now);
+    const before12 = snapDb();
+    const applied12 = runMigrations(db, all.filter((m) => m.name <= '012_story_holds.sql')); // 013 (search) has its own test: test-search.mjs
+    check('migration 012 applies on a database with stories, drafts and accounts, and loses nothing', applied12.join() === '012_story_holds.sql' && snapDb() === before12, applied12.join());
+    const cols12 = db.prepare("SELECT group_concat(name || ':' || \"notnull\") AS c FROM pragma_table_info('story_holds')").get().c;
+    check('story_holds has slug (primary key), a nullable build_marker, a nullable unpublish_sha and created_at', /slug:0|slug:1/.test(cols12) && cols12.includes('build_marker:0') && cols12.includes('unpublish_sha:0') && cols12.includes('created_at:1'), cols12);
+    db.prepare("INSERT INTO story_holds (slug, build_marker, unpublish_sha, created_at) VALUES ('s', NULL, NULL, 1)").run();
+    const seeded = db.prepare('SELECT slug, unpublish_sha, released_at FROM story_holds ORDER BY slug').all();
+    check('migration 012 seeds a released hold for a draft unpublished before it (and none for a live one)', seeded.some((r) => r.slug === 'old-unpublished' && r.unpublish_sha === null && Number(r.released_at) === 5000) && !seeded.some((r) => r.slug === 'still-live'), JSON.stringify(seeded));
+    let dupHold = false;
+    try { db.prepare("INSERT INTO story_holds (slug, created_at) VALUES ('s', 2)").run(); } catch { dupHold = true; }
+    check('a story can have only one hold', dupHold);
     db.close();
   }
 
@@ -207,9 +222,9 @@ try {
   const head = await fetch(`${BASE}/media/${q('SELECT path FROM story_photos LIMIT 1')[0].path}`, { method: 'HEAD' });
   check('HEAD works and has no body', head.status === 200 && head.headers.get('content-type') === 'image/jpeg' && (await head.text()) === '');
 
-  // public pages still come from the build
+  // public pages now read the table once the mirror has finished (step 2; scripts/test-public-pages.mjs compares them with the old prerendered pages)
   const home = await (await fetch(BASE + '/')).text();
-  check('public pages are unchanged (still the build, no /media links)', home.includes('/images/stories/') && !home.includes('/media/'));
+  check('public pages are served from the table after the import (/media photo links, no /images links)', home.includes('/media/stories/') && !home.includes('/images/stories/'));
 
   // ---- traversal and other refusals ----
   const bad = [

@@ -1,6 +1,9 @@
 import type { APIRoute } from 'astro';
-import { markUnpublished } from '../../../../lib/drafts';
+import { markUnpublished, tx } from '../../../../lib/drafts';
 import { unpublishStory, validSlug } from '../../../../lib/draft-publish';
+import { holdStory, setHoldMarker, unpublishStory as hideStory } from '../../../../lib/story-store';
+import { computeBuildMarker } from '../../../../lib/story-sync';
+import { invalidateStories } from '../../../../lib/public-cache';
 import { EditorError } from '../../../../lib/messages';
 import { githubOrNull, readFormLimited, redirectTo } from '../../../../lib/draft-http';
 import { audit } from '../../../../lib/auth/audit';
@@ -21,7 +24,27 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
   try {
     const out = await unpublishStory(cfg, slug, user.name);
     if (!out) return redirectTo(back, { e: 'story_missing' });
-    markUnpublished(slug, user.id);
+    // Straight after the commit, with no await in between: the draft's unpublished state, the hold (with the commit and
+    // GitHub's time for it) and the table row change together or not at all. Without the hold a later publish could bring
+    // the old text back, so if this fails the editor is told not to publish before the next deploy.
+    try {
+      tx(() => {
+        markUnpublished(slug, user.id);
+        holdStory(slug, out.sha, out.time ?? null);
+        hideStory(slug);
+      });
+    } catch (err) {
+      console.error('[stories] could not record the unpublish', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      audit('draft.unpublish', { userId: user.id, target: `story:${slug}`, detail: { slug, commit: out.sha, recorded: false }, ip: clientIp(request, clientAddress) });
+      return redirectTo(back, { e: 'unpublish_not_recorded' });
+    }
+    // The build marker (used only by local builds without a commit list) is filled in afterwards; a failure is harmless.
+    try {
+      setHoldMarker(slug, out.sha, await computeBuildMarker());
+    } catch (err) {
+      console.error('[stories] could not work out the build marker', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+    }
+    invalidateStories();
     audit('draft.unpublish', { userId: user.id, target: `story:${slug}`, detail: { slug, commit: out.sha }, ip: clientIp(request, clientAddress) });
     return redirectTo(back, { n: 'unpublished' });
   } catch (err) {

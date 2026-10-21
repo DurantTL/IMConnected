@@ -2,9 +2,13 @@
 import Base from '../layouts/Base.astro';
 import StoryCard from '../components/StoryCard.astro';
 import { SECTIONS, SITE, getSection } from '../lib/site';
-import { getStories, bySection } from '../lib/stories';
+import { getPublicStories } from '../lib/public-stories';
+import { bySection } from '../lib/stories';
 
-const stories = await getStories();
+// Rendered on the server from the stories table (epic #25, step 2); the middleware caches the result.
+export const prerender = false;
+
+const stories = await getPublicStories();
 
 // Hero: featured stories first, then newest
 const featured = stories.filter((s) => s.data.featured);

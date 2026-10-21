@@ -537,7 +537,7 @@ try {
     // stories
     const built = d.stories.filter((s) => s.source === 'site');
     check('stories: the built stories are there (newest first)', built.length >= 6 && d.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), `${built.length}`);
-    const feed = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist/client/stories.json'), 'utf8')).stories;
+    const feed = JSON.parse((await S('/stories.json')).text).stories; // rendered by the server since epic #25 step 2
     const strip = (o) => { const { status, source, url, image, photos, excerpt, ...rest } = o; return rest; };
     const sameAsFeed = feed.every((f) => { const s = built.find((b) => b.id === f.id); return s && JSON.stringify(strip(s)) === JSON.stringify(strip(f)); });
     check('stories: each item has exactly the /stories.json fields and values (feedItem), plus status and source', sameAsFeed && built.every((s) => s.status === 'published'), JSON.stringify(built[0]).slice(0, 300));

@@ -1,5 +1,6 @@
 // TEMPORARY (epic #25, until step 4): mirror the built stories into the `stories` table and copy their photos
-// into DATA_DIR/media, so later steps can serve from the database. Git stays the source of truth meanwhile.
+// into DATA_DIR/media, so public pages can serve from the database (step 2; until storySyncDone() they use the build).
+// Git stays the source of truth meanwhile.
 //
 // Where the stories come from at run time: the Markdown sources are NOT in the Docker image (only dist/,
 // node_modules, scripts and src/lib/db are copied), but Astro bakes the built content collection (front matter
@@ -23,8 +24,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { mediaDir, MEDIA_TYPES } from './media';
-import { getStoryHash, getStoryBySlug, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
+import { getHold, listHolds, releaseHold, getStoryHash, getStoryBySlug, slugsBySource, unpublishStory, upsertStory, type StoryInput, type StoryPhoto } from './story-store';
 import { listUnpublishedSlugs } from './drafts';
+import { invalidateStories } from './public-cache';
+import { holdActive } from './story-holds';
+import { getDb } from './db';
+import { reindexAll } from './search-index';
 
 /** The built site's static files (dist/client): next to the server bundle, else ./dist/client, or BUILT_CLIENT_DIR. */
 export function builtClientDir(): string | null {
@@ -86,6 +91,9 @@ async function hashFile(file: string): Promise<string> {
 // Test hooks (only honoured with STORY_SYNC_TEST=1, which the story-store test sets; unset in production): fail one slug on purpose, shorten the retry wait.
 const testHooks = process.env.STORY_SYNC_TEST === '1';
 const failSlug = () => (testHooks ? process.env.STORY_SYNC_TEST_FAIL_SLUG : undefined);
+// Also test-only: hold the first pass back for N ms (so a test can request pages while the table is still empty), and
+// re-run a pass on SIGUSR2 (so a test can change a row and watch the page cache react to the store's own write).
+const testDelayMs = testHooks ? Number(process.env.STORY_SYNC_TEST_DELAY_MS) || 0 : 0;
 
 /**
  * Copy one photo to DATA_DIR/media/stories/<slug>/<sha256>.<ext>, hashing it while it streams. The temp file has
@@ -148,6 +156,19 @@ async function mirrorPhoto(clientDir: string | null, slug: string, p: Located, p
   return { position, kind: p.kind, path: rel, url: null, alt: p.alt, sha256: sha, bytes };
 }
 
+/** The marker of the build this server is running (also what holds are recorded against). */
+export async function computeBuildMarker(): Promise<string> {
+  if (testHooks && process.env.STORY_SYNC_TEST_FAIL_MARKER === '1') throw new Error('test failure');
+  const { getStories } = await import('./stories');
+  const clientDir = builtClientDir();
+  const referenced: string[] = [];
+  for (const entry of await getStories()) for (const src of [entry.data.image, ...entry.data.photos]) {
+    const f = src ? builtPhotoFile(clientDir, src) : null;
+    if (f) referenced.push(f);
+  }
+  return buildMarker(clientDir, referenced);
+}
+
 /** One pass. Exported so tests and tools can call it; the server uses ensureStorySync(). */
 export async function syncStoriesFromBuild(): Promise<SyncResult> {
   const { getStories } = await import('./stories');
@@ -182,7 +203,12 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
       const photoRows: StoryPhoto[] = [];
       for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], markerChanged, result));
       // Read the dashboard's unpublish list right before the write, so one made during this pass is not missed.
-      const status = listUnpublishedSlugs().has(slug) ? 'unpublished' : 'live';
+      // A story unpublished and then published again in the dashboard stays hidden while a hold is active (migration 012,
+      // story-holds.ts): until the running image contains the unpublish commit. A released hold is marked released here.
+      const hold = getHold(slug);
+      const held = hold !== undefined && hold.releasedAt === null && holdActive(hold, marker);
+      if (hold !== undefined && hold.releasedAt === null && !held) releaseHold(slug, hold.unpublishSha);
+      const status = listUnpublishedSlugs().has(slug) || held ? 'unpublished' : 'live';
 
       const base = {
         slug, title: d.title, dek: d.dek, section: d.section, area: d.area, column: d.column, author: d.author, authorTitle: d.authorTitle,
@@ -207,6 +233,7 @@ export async function syncStoriesFromBuild(): Promise<SyncResult> {
   for (const slug of slugsBySource('git', 'live')) {
     if (!seen.has(slug) && unpublishStory(slug)) result.unpublished++;
   }
+  for (const [slug, h] of listHolds()) if (!holdActive(h, marker)) releaseHold(slug, h.unpublishSha); // only released holds
   // Record the build as verified only when every story was mirrored.
   if (result.skipped === 0 && markerChanged) {
     try {
@@ -224,6 +251,12 @@ const MAX_PASSES = 5;
 let busy = false;
 let done = false;
 let passes = 0;
+
+/**
+ * True once a pass has mirrored every built story in this process. Until then the stories table can be empty or
+ * partial, so public pages read the built collection instead (see public-stories.ts).
+ */
+export const storySyncDone = () => done;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
 function scheduleRetry(): void {
@@ -243,10 +276,13 @@ export function ensureStorySync(): void {
   passes++;
   void (async () => {
     await yieldToLoop(); // let the caller (usually getDb) finish first
+    if (testDelayMs && passes === 1) await new Promise((r) => setTimeout(r, testDelayMs));
     try {
       const r = await syncStoriesFromBuild();
       console.log(`[stories] mirrored the build: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged, ${r.unpublished} unpublished, ${r.skipped} skipped, ${r.hashed} photos hashed, ${r.copied} copied`);
-      if (r.skipped === 0) done = true;
+      // Fill the search index for every story (migration 013 leaves it empty) before search starts using it.
+      try { await reindexAll(getDb(), yieldToLoop); } catch (err) { console.error('[stories] could not build the search index:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error'); }
+      if (r.skipped === 0) { done = true; invalidateStories(); } // pages cached from the built collection give way to the database
       else { console.error(`[stories] ${r.skipped} stories could not be mirrored; pass ${passes} of ${MAX_PASSES}`); scheduleRetry(); }
     } catch (err) {
       console.error('[stories] sync failed:', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
@@ -255,4 +291,10 @@ export function ensureStorySync(): void {
       busy = false;
     }
   })();
+}
+
+if (testHooks) {
+  process.on('SIGUSR2', () => {
+    void syncStoriesFromBuild().then((r) => console.log(`[stories] test re-sync: ${r.inserted} new, ${r.updated} updated, ${r.unchanged} unchanged`), () => {});
+  });
 }

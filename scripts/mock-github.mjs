@@ -60,7 +60,7 @@ createServer(async (req, res) => {
   }
   if (req.method === 'POST' && p === '/git/blobs') { const s = id(); blobs.set(s, body); return send(201, { sha: s }); }
   if (req.method === 'POST' && p === '/git/trees') { const s = id(); trees.set(s, body.tree); return send(201, { sha: s }); }
-  if (req.method === 'POST' && p === '/git/commits') { const s = id(); commits.set(s, body); return send(201, { sha: s }); }
+  if (req.method === 'POST' && p === '/git/commits') { const s = id(); commits.set(s, body); return send(201, { sha: s, committer: { date: new Date().toISOString() } }); }
   if (req.method === 'POST' && p === '/git/refs') {
     const commit = commits.get(body.sha);
     const branch = body.ref.replace('refs/heads/', '');
