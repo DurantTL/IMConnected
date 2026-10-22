@@ -480,6 +480,30 @@ try {
   await publicPage.locator('.story-inline-photo a').click();
   check('inline marker photos use the existing enlargement viewer', await publicPage.locator('dialog.viewer').evaluate((dialog) => dialog.open));
   await publicPage.keyboard.press('Escape');
+  legacyId = await createLegacy();
+  await saveLegacy('heroGrid'); await uploadLegacy(); await uploadLegacy(); await uploadLegacy();
+  await page.goto(BASE + `/admin/drafts/${legacyId}`);
+  await page.locator('[data-studio-tab=content]').click();
+  await page.locator('#f-body').fill('Before the gallery.\n\nAfter the gallery.');
+  await page.locator('#gallery-photo-start').selectOption('3');
+  await page.locator('#gallery-photo-end').selectOption('1');
+  await page.locator('#insert-inline-gallery').click();
+  check('gallery picker refuses reversed ranges without changing the text', !(await page.locator('#f-body').inputValue()).includes('{{gallery') && (await page.locator('#gallery-marker-status').innerText()).includes('ascending'));
+  await page.locator('#gallery-photo-start').selectOption('1'); await page.locator('#gallery-photo-end').selectOption('3'); await page.locator('#gallery-columns').selectOption('3');
+  await page.locator('#insert-inline-gallery').click();
+  check('gallery picker inserts its bounded range and chosen columns', (await page.locator('#f-body').inputValue()).includes('{{gallery 1-3 columns=3}}'));
+  const gallerySave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await gallerySave).status(), 200);
+  await publishLegacy();
+  check('published gallery renders every selected slot exactly once', await publicPage.locator('.story-inline-gallery img').count() === 3 && await publicPage.locator('article img').count() === 3);
+  for (const [width, columns] of [[1440, 3], [390, 2]]) {
+    await publicPage.setViewportSize({ width, height: 900 });
+    check(`gallery uses ${columns} columns at ${width}px without overflow`, await publicPage.locator('.story-inline-gallery').evaluate((el, count) => getComputedStyle(el).gridTemplateColumns.split(' ').length === count && document.documentElement.scrollWidth <= innerWidth, columns));
+    if (shots) await publicPage.screenshot({ path: path.join(shots, `story-gallery-${width}.png`), fullPage: true });
+  }
+  await publicPage.locator('.story-inline-gallery a').first().click();
+  check('gallery photos use the same enlargement viewer', await publicPage.locator('dialog.viewer').evaluate((dialog) => dialog.open));
+  await publicPage.keyboard.press('Escape');
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {

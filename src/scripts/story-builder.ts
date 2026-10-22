@@ -17,6 +17,15 @@ if (form && blocksField) {
     body.setRangeText(marker, body.selectionStart, body.selectionEnd, 'end');
     body.dispatchEvent(new Event('input', { bubbles: true })); body.focus();
   });
+  document.getElementById('insert-inline-gallery')?.addEventListener('click', () => {
+    const from = document.getElementById('gallery-photo-start') as HTMLSelectElement;
+    const to = document.getElementById('gallery-photo-end') as HTMLSelectElement;
+    const columns = document.getElementById('gallery-columns') as HTMLSelectElement;
+    const message = document.getElementById('gallery-marker-status')!;
+    if (body.readOnly || !from.value || Number(to.value) <= Number(from.value)) { message.textContent = 'Choose a range of at least two photos, in ascending order.'; from.focus(); return; }
+    body.setRangeText(`\n\n{{gallery ${from.value}-${to.value} columns=${columns.value}}}\n\n`, body.selectionStart, body.selectionEnd, 'end');
+    body.dispatchEvent(new Event('input', { bubbles: true })); message.textContent = 'Gallery inserted.'; body.focus();
+  });
   const undo = document.getElementById('blocks-undo') as HTMLButtonElement;
   const redo = document.getElementById('blocks-redo') as HTMLButtonElement;
   const useModules = document.getElementById('use-modules') as HTMLButtonElement;

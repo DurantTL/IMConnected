@@ -2,9 +2,9 @@ import { createSatteriMarkdownProcessor, type SatteriMarkdownProcessorOptions } 
 import { escapeHtml, checkMarkdownLinks, renderMarkdownSafe } from './markdown';
 import { escapeHtmlInMarkdown } from './storyfile';
 import { photoFocusStyle, isStoryImageUrl } from './story-blocks';
-import { photoMarkerIndex, isMediaMarkerLine, type InlineStoryPhoto } from './story-media';
+import { photoMarkerIndex, galleryMarker, isMediaMarkerLine, type InlineStoryPhoto } from './story-media';
 
-export const INLINE_MEDIA_CSS = '.story-inline-photo{margin:1.4em 0}.story-inline-photo a{display:block;overflow:hidden;border-radius:8px}.story-inline-photo img{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;margin:0}.story-media-warning{padding:12px;border:1px solid #a54b10;background:#fff4df;color:#6b3009}';
+export const INLINE_MEDIA_CSS = '.story-inline-gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:1.4em 0}.story-inline-gallery .story-inline-photo{margin:0;min-width:0}@media(min-width:768px){.story-inline-gallery[data-columns="3"]{grid-template-columns:repeat(3,minmax(0,1fr))}}.story-inline-photo{margin:1.4em 0}.story-inline-photo a{display:block;overflow:hidden;border-radius:8px}.story-inline-photo img{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;margin:0}.story-media-warning{padding:12px;border:1px solid #a54b10;background:#fff4df;color:#6b3009}';
 interface MediaState { photos: InlineStoryPhoto[]; preview: boolean; used: Set<number>; warnings: string[] }
 
 export function renderInlinePhoto(photo: InlineStoryPhoto, preview = false): string {
@@ -40,11 +40,16 @@ const mediaPlugin: NonNullable<SatteriMarkdownProcessorOptions['mdastPlugins']>[
         flush();
         const index = photoMarkerIndex(value, state.photos.length);
         const photo = index === null ? undefined : state.photos[index];
-        const html = photo ? renderInlinePhoto(photo, state.preview) : '';
-        if (html && photo && index !== null) { state.used.add(index); replacements.push({ type: 'html', value: html }); }
+        const gallery = galleryMarker(value, state.photos.length);
+        let html = photo ? renderInlinePhoto(photo, state.preview) : '';
+        if (gallery) {
+          const images = gallery.indices.map((i) => renderInlinePhoto(state.photos[i], state.preview));
+          if (images.every(Boolean)) html = `<section class="story-inline-gallery" data-columns="${gallery.columns}" aria-label="Story photo gallery">${images.join('')}</section>`;
+        }
+        if (html) { if (gallery) gallery.indices.forEach((i) => state.used.add(i)); else if (index !== null) state.used.add(index); replacements.push({ type: 'html', value: html }); }
         else {
           state.warnings.push(value);
-          if (state.preview) replacements.push({ type: 'html', value: `<p class="story-media-warning" role="status">Photo marker skipped: ${escapeHtml(value)}. Choose a photo from this story.</p>` });
+          if (state.preview) replacements.push({ type: 'html', value: `<p class="story-media-warning" role="status">Media marker skipped: ${escapeHtml(value)}. Choose a photo from this story.</p>` });
         }
       }
       flush();

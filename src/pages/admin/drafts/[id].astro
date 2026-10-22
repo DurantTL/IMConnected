@@ -241,6 +241,13 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <label>Story photo<select id="inline-photo-choice" data-editor-local aria-label="Story photo to insert"><option value="">Choose a photo</option>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}{p.alt ? ` — ${p.alt}` : ''}</option>)}</select></label>
                   <button type="button" id="insert-inline-photo" disabled={!photos.length}>Insert photo</button>
                 </div>
+                <div class="ed-toolbar" role="group" aria-label="Insert photo gallery">
+                  <label>From photo<select id="gallery-photo-start" data-editor-local>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}</option>)}</select></label>
+                  <label>To photo<select id="gallery-photo-end" data-editor-local>{photos.map((p, i) => <option value={i + 1} selected={i === photos.length - 1}>Photo {i + 1}</option>)}</select></label>
+                  <label>Gallery columns<select id="gallery-columns" data-editor-local><option value="2">2 columns</option><option value="3">3 columns</option></select></label>
+                  <button type="button" id="insert-inline-gallery" disabled={photos.length < 2}>Insert gallery</button>
+                  <span id="gallery-marker-status" role="status"></span>
+                </div>
                 {draft.storyBlocks?.length ? <noscript><p class="admin-error">This story is built from modules, which need JavaScript to edit. Without it the text below is read-only.</p></noscript> : null}
                 <textarea class="body" name="body" id="f-body" aria-label="Story text" readonly={!!draft.storyBlocks?.length}>{draft.body}</textarea>
                 </div>

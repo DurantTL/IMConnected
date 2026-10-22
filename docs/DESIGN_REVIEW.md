@@ -99,3 +99,7 @@ AXE_JS=/path/to/axe.min.js node scripts/test-design-review.mjs
 ```
 
 The editor, submission, public-page, photo-layout, search, import and agent suites are listed in `AGENTS.md`. This branch contains code changes only and has not been deployed or merged to the production branch.
+
+## Inline galleries
+
+The Markdown gallery picker places a bounded range of story photos inside the article. Requested three-column galleries use two columns on phones; crops and original-image links remain available. Synthetic captures: [desktop](design/story-gallery-1440.png) and [phone](design/story-gallery-390.png). The built editor passed 106 browser checks with axe; the marker/module contract suite passed 47 checks.

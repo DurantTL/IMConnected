@@ -56,6 +56,13 @@ try {
       assert.equal(row.dek, 'Synthetic summary'); assert.equal(row.body, 'Body.');
     } finally { db.close(); }
   });
+  const gallery = await renderMediaMarkdown('Before.\n\n{{gallery 1-2 columns=3}}\n\nAfter.', mediaPhotos);
+  check('gallery markers use only the selected slots with crops, links and bounded columns', () => { assert.deepEqual([...gallery.used], [0, 1]); assert.match(gallery.html, /story-inline-gallery" data-columns="3"/); assert.equal((gallery.html.match(/data-photo/g) || []).length, 2); assert.match(gallery.html, /scale:2/); });
+  for (const marker of ['{{gallery 2-1 columns=2}}', '{{gallery 1-99 columns=3}}', '{{gallery 1-1 columns=2}}', '{{gallery 1-2 columns=99}}', '{{gallery 1-2 columns=invalid}}']) {
+    const result = await renderMediaMarkdown(marker, mediaPhotos);
+    const preview = await renderMediaMarkdown(marker, mediaPhotos, true);
+    check('invalid gallery is skipped as a whole: ' + marker, () => { assert.equal(result.html, ''); assert.equal(result.used.size, 0); assert.match(preview.html, /story-media-warning/); });
+  }
   check('legacy absence is an empty module list', () => assert.deepEqual(normalizeStoryBlocks(undefined), []));
   check('IDs must be stable and unique', () => assert.throws(() => normalizeStoryBlocks([{ id: 'same', type: 'text' }, { id: 'same', type: 'divider' }])));
   check('unknown module types are rejected', () => assert.throws(() => normalizeStoryBlocks([{ id: 'html', type: 'raw-html' }])));
