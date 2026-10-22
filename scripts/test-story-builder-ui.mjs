@@ -137,7 +137,7 @@ try {
   await page.locator('#module-library-search').fill('no-such-module');
   check('library no-results state has a visible recovery action', await page.locator('#module-library-empty').isVisible() && await page.locator('[data-add-module]:visible').count() === 0 && await page.locator('#module-library-reset').isVisible());
   await page.locator('#module-library-reset').click();
-  check('clearing library search restores the same eight module controls without changing content', await page.locator('[data-add-module]:visible').count() === 8 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
+  check('clearing library search restores the same ten module controls without changing content', await page.locator('[data-add-module]:visible').count() === 10 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
   for (const layout of ['news', 'recap', 'announcement']) {
     await page.getByRole('button', { name: /^1\. Paragraph/ }).click();
     const before = await blocks();
@@ -525,6 +525,42 @@ try {
   const visualSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
   await page.locator('#save-btn').click(); assert.equal((await visualSave).status(), 200); await publishLegacy();
   check('published Gallery module excludes its photos from the surrounding layout', await publicPage.locator('.story-inline-gallery img').count() === 2 && await publicPage.locator('article img').count() === 2 && await publicPage.locator('[data-photo-layout]').count() === 0);
+  legacyId = await createLegacy(); await saveLegacy('heroGrid'); await uploadLegacy();
+  await page.goto(BASE + `/admin/drafts/${legacyId}`);
+  await page.locator('[data-studio-tab=settings]').click();
+  await page.locator('[name=announcementKind]').selectOption('event');
+  await page.locator('[name=eventDate]').fill('2026-12-01'); await page.locator('[name=eventLocation]').fill('Synthetic Hall <north>');
+  await page.locator('[name=announcementLink0Label]').fill('Register'); await page.locator('[name=announcementLink0Url]').fill('https://example.invalid/register');
+  await page.locator('[name=announcementVideo]').fill('https://youtu.be/abcdefghijk');
+  const flyerPhotoId = db.prepare('SELECT id FROM draft_photos WHERE draft_id=?').get(legacyId).id;
+  await page.locator('[name="photo_' + flyerPhotoId + '_zoom"]').evaluate((el) => { el.value = '3'; });
+  await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
+  await page.locator('[data-add-module="flyer"]').click();
+  await page.locator('[data-studio-tab=photos]').click(); await page.locator('[name="photo_' + flyerPhotoId + '_alt"]').fill('Corrected synthetic flyer description'); await page.locator('[data-studio-tab=content]').click();
+  await page.locator('[data-add-module="video"]').click(); await page.locator('[data-module-field=label]').fill('Synthetic event overview'); await page.locator('[data-module-field=url]').fill('https://vimeo.com/12345678');
+  await page.locator('[data-add-module="button"]').click(); await page.locator('[data-module-field=label]').fill('Event page'); await page.locator('[data-module-field=url]').fill('https://example.invalid/event');
+  await page.waitForFunction(() => { const doc = document.getElementById('preview')?.contentDocument; return doc?.querySelector('.story-flyer img') && doc.querySelectorAll('.story-module-video a').length === 2; });
+  check('announcement private preview shows the full flyer and safe provider links without players', await page.frameLocator('#preview').locator('iframe,[data-load-video]').count() === 0 && await page.frameLocator('#preview').locator('.story-flyer img').evaluate((img) => img.alt === 'Corrected synthetic flyer description' && !img.style.scale && !img.style.aspectRatio.includes('16')));
+  const announcementSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await announcementSave).status(), 200); await publishLegacy();
+  check('announcement publishes details, module links and one uncropped flyer', await publicPage.locator('.story-flyer img').count() === 1 && await publicPage.locator('article img').count() === 1 && (await publicPage.locator('.announcement-details').innerText()).includes('Synthetic Hall <north>') && await publicPage.getByRole('link', { name: 'Event page', exact: true }).count() === 1);
+  check('announcement video players make no embedded request before reader action', await publicPage.locator('iframe').count() === 0 && await publicPage.locator('[data-load-video]').count() === 2);
+  const mediaFeed = await (await fetch(BASE + '/stories.json')).json();
+  check('feed keeps version1 and adds typed announcement fields', mediaFeed.version === 1 && mediaFeed.stories.find((s) => s.id === legacyDraft().slug)?.announcement?.kind === 'event');
+  for (const width of [1440, 390]) {
+    await publicPage.setViewportSize({ width, height: 1000 });
+    check(`flyer stays full aspect and article fits at ${width}px`, await publicPage.locator('.story-flyer img').evaluate((img) => Math.abs(img.getBoundingClientRect().height / img.getBoundingClientRect().width - img.naturalHeight / img.naturalWidth) < .02 && !img.style.scale && document.documentElement.scrollWidth <= innerWidth));
+    if (shots) await publicPage.screenshot({ path: path.join(shots, `announcement-story-${width}.png`), fullPage: true });
+  }
+  if (process.env.AXE_JS) { await publicPage.addScriptTag({ path: process.env.AXE_JS }); const scan = await publicPage.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })); check('announcement details, flyer, buttons and video affordances pass axe', scan.violations.length === 0); }
+  await publicPage.getByRole('button', { name: 'Play video: Announcement video', exact: true }).focus(); await publicPage.keyboard.press('Enter');
+  check('keyboard Play loads only the derived privacy-provider iframe with a title', await publicPage.locator('iframe').count() === 1 && await publicPage.locator('iframe').getAttribute('src') === 'https://www.youtube-nocookie.com/embed/abcdefghijk?rel=0' && await publicPage.locator('iframe').getAttribute('title') === 'Announcement video');
+  legacyId = await createLegacy(); await saveLegacy('one', 'Synthetic inline flyer.\n\n{{photo 1}}\n\nEvent summary.'); await uploadLegacy();
+  const markerForm = new FormData(); for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: 'Synthetic inline flyer', author: 'Synthetic Editor', section: 'news', area: 'conference', date: legacyDraft().date, body: legacyDraft().body, announcementKind: 'announcement' })) markerForm.set(key, String(value));
+  assert.equal((await post(`/api/admin/drafts/${legacyId}/save`, markerForm)).status, 200);
+  const markerPreview = await (await post(`/api/admin/drafts/${legacyId}/preview`, markerForm)).json();
+  check('announcement inline marker preview shows one full flyer', (markerPreview.doc.match(/<img /g) || []).length === 1 && markerPreview.doc.includes('story-inline-photo story-flyer'));
+  await publishLegacy(); check('announcement inline marker publishes one full flyer with no crop', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-flyer img').evaluate((img) => !img.style.scale && img.style.aspectRatio === 'auto'));
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {

@@ -40,6 +40,7 @@ export function toPublicStory(s: Story): PublicStory {
       photos: s.photos.map((p, i) => photoUrl(s, lead + i, p)),
       photoAlts: s.photoAlts,
       photoLayout: s.photoLayout,
+      announcement: s.announcement,
       storyBlocks: s.storyBlocks && mapStoryPhotos(s.storyBlocks, (block) => {
         if (!block.url) return block;
         const sources = [...(s.image ? [s.image] : []), ...s.photos];
@@ -136,10 +137,10 @@ export async function renderStoryBody(story: PublicStory): Promise<string> {
 export async function renderStoryContent(story: PublicStory): Promise<{ html: string; used: Set<string>; usedPhotoIndices?: Set<number> }> {
   if (story.data.storyBlocks?.length) {
     const photos = storyBlockPhotos(story.data.storyBlocks).filter((p) => p.url);
-    return { html: await renderStoryBlocksSafe(story.data.storyBlocks), used: new Set(photos.filter((p) => p.photoIndex === undefined).map((p) => p.url!)), usedPhotoIndices: new Set(photos.filter((p) => p.photoIndex !== undefined).map((p) => p.photoIndex!)) };
+    return { html: await renderStoryBlocksSafe(story.data.storyBlocks, { flyerUrl: story.data.announcement ? story.data.image : undefined }), used: new Set(photos.filter((p) => p.photoIndex === undefined).map((p) => p.url!)), usedPhotoIndices: new Set(photos.filter((p) => p.photoIndex !== undefined).map((p) => p.photoIndex!)) };
   }
   const d = story.data;
   const photos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] ?? '' }))].map((photo, i) => ({ ...photo, ...d.photoFocus?.[i] }));
-  const rendered = await renderMediaMarkdown(story.body ?? '', photos);
+  const rendered = await renderMediaMarkdown(story.body ?? '', photos, false, d.announcement ? 0 : undefined);
   return { html: rendered.html, used: new Set(), usedPhotoIndices: rendered.used };
 }

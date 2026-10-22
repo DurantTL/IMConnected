@@ -1,3 +1,4 @@
+import type { Announcement } from './announcement';
 import type { StoryBlock } from './story-blocks';
 import { getCollection, type CollectionEntry } from 'astro:content';
 
@@ -36,6 +37,7 @@ export interface PublicStory {
     /** How the photos are arranged on the page (src/lib/photo-layouts.ts). Missing means 'one', the original look. */
     photoLayout?: string;
     storyBlocks?: StoryBlock[];
+    announcement?: Announcement | null;
     photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
     featured: boolean;
   };

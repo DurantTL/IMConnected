@@ -1,3 +1,4 @@
+import type { Announcement } from './announcement';
 // Story feed data shared by /stories.json and /rss.xml.
 // URLs are absolute so the items work outside the site (email, feed readers).
 import { mapStoryPhotos, escapeStoryBlocks, type StoryBlock } from './story-blocks';
@@ -34,6 +35,7 @@ export interface FeedItem {
   /** How the story page arranges the photos: one, twoUp, heroGrid, mosaic or stack (one = lead photo, others in a row) */
   photoLayout: string;
   storyBlocks?: StoryBlock[];
+  announcement?: Announcement | null;
   photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
   featured: boolean;
 }
@@ -58,6 +60,7 @@ export interface FeedSource {
     photoAlts: string[];
     photoLayout?: string;
     storyBlocks?: StoryBlock[];
+    announcement?: Announcement | null;
     photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
     featured: boolean;
   };
@@ -88,6 +91,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     photoLayout: photoLayoutOrDefault(d.photoLayout),
     ...(d.storyBlocks?.length ? { storyBlocks: mapStoryPhotos(escapeStoryBlocks(d.storyBlocks), (b) => b.url ? { ...b, url: abs(b.url) } : b) } : {}),
     ...(d.photoFocus?.some((p) => p.focalX !== 50 || p.focalY !== 50 || (p.zoom ?? 1) !== 1) ? { photoFocus: d.photoFocus } : {}),
+    ...(d.announcement ? { announcement: d.announcement } : {}),
     featured: d.featured,
   };
 }

@@ -43,6 +43,7 @@ function draftAsFeedSource(slugOrId: string, d: Draft, photos: DraftPhoto[]): Fe
   return {
     id: slugOrId,
     data: {
+      announcement: d.announcement,
       title: d.title || 'Untitled story',
       dek: d.dek || undefined,
       section: d.section,

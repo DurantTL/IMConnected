@@ -44,6 +44,9 @@ try {
         if (id === '\0story-builder-test:db') return 'export function getDb(){return globalThis.__storyBuilderTestDb}';
         if (id === '\0story-builder-test:entry') return [
           `export * from ${JSON.stringify(path.join(root, 'src/lib/drafts.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/agent.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/announcement.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/announcement-render.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/draft-form.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-publish.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/publish.ts'))};`,
@@ -232,6 +235,36 @@ try {
   assert.equal(m.changePhoto(gid, gd.updatedAt, user, 'delete', gr[1].id).ok, true);
   assert.deepEqual(m.getDraft(gid).storyBlocks[1].photos.map((p) => p.photoId), [gr[0].id], 'deleting one photo preserves other gallery references and text');
   await assert.rejects(() => m.publishDraft(m.getDraft(gid), m.listPhotos(gid), m.getDraft(gid).updatedAt, user), (e) => e.code === 'blocks_bad');
+  // Typed agent announcements preserve omission/clearing and remain subject to human review.
+  const agentBase = { title: 'Synthetic event flyer', body: 'Accessible synthetic event summary.', author: 'Synthetic Editor', section: 'news', area: 'conference', sourceUrl: 'https://example.invalid/source/bulletin', photos: [{ data: `data:image/png;base64,${syntheticPng(33).toString('base64')}`, alt: 'Synthetic event flyer' }] };
+  const bulletin = { kind: 'event', eventDate: '2026-12-01', location: 'Synthetic Hall <north>', links: [{ label: 'Register <here>', url: 'https://example.invalid/register' }], videoUrl: 'https://youtu.be/abcdefghijk' };
+  const ainput = m.parseAgentStory({ ...agentBase, announcement: bulletin });
+  const acreated = m.upsertAgentDraft(ainput), aid = acreated.id;
+  assert.equal(m.getDraft(aid).status, 'new'); assert.equal(m.getDraft(aid).source, 'agent'); assert.equal(m.getDraft(aid).announcement.videoUrl, 'https://www.youtube.com/watch?v=abcdefghijk');
+  const without = m.parseAgentStory({ ...agentBase, photos: undefined });
+  assert.equal(m.upsertAgentDraft(without).ok, true); assert.equal(m.getDraft(aid).announcement.kind, 'event');
+  assert.equal(m.upsertAgentDraft({ ...without, announcement: null }).ok, true); assert.equal(m.getDraft(aid).announcement, null);
+  m.upsertAgentDraft({ ...without, announcement: ainput.announcement });
+  for (const bad of [{ kind: 'other' }, { kind: 'event', eventDate: '2026-02-30' }, { kind: 'event', links: [{ label: 'Bad', url: 'javascript:alert(1)' }] }, { kind: 'announcement', videoUrl: 'https://youtube.com.evil.invalid/embed/abcdefghijk' }, { kind: 'event', links: Array.from({ length: 4 }, () => ({ label: 'Link', url: 'https://example.invalid/' })) }]) assert.throws(() => m.parseAgentStory({ ...agentBase, announcement: bad }), (e) => e.code === 'bad_announcement');
+  const ap = m.listPhotos(aid)[0];
+  const ablocks = [{ id: 'summary', type: 'text', text: agentBase.body }, { id: 'flyer', type: 'flyer', photoId: ap.id }, { id: 'video', type: 'video', label: 'Synthetic video <title>', url: 'https://vimeo.com/12345678' }, { id: 'link', type: 'button', label: 'Register', url: 'https://example.invalid/register' }];
+  const asaved = m.saveDraft(aid, m.getDraft(aid).updatedAt, { ...m.getDraft(aid), storyBlocks: ablocks, announcement: undefined }, new Map(), user, null, new Map([[ap.id, { zoom: 3, focalX: 0 }]]));
+  assert.equal(asaved.ok, true); assert.equal(m.getDraft(aid).announcement.kind, 'event', 'older editor forms preserve metadata');
+  assert.equal(m.upsertAgentDraft(without).ok, false, 'agent cannot change a reviewed event');
+  const apub = await m.publishDraft(m.getDraft(aid), m.listPhotos(aid), asaved.updatedAt, user);
+  const ast = m.getStoryBySlug(apub.slug);
+  assert.equal(ast.announcement.kind, 'event');
+  const ahtml = await m.renderStoryBlocksSafe(ast.storyBlocks);
+  assert.match(ahtml, /story-flyer/); assert.doesNotMatch(ahtml.slice(ahtml.indexOf('story-flyer'), ahtml.indexOf('story-module-video')), /aspect-ratio:16|scale:3/); assert.match(ahtml, /data-video-embed="https:\/\/player.vimeo.com\/video\/12345678"/); assert.doesNotMatch(ahtml, /<iframe|<title>/);
+  const aprivate = await m.renderStoryBlocksSafe(ast.storyBlocks, { preview: true }); assert.doesNotMatch(aprivate, /data-load-video|<iframe/);
+  const details = await m.renderAnnouncementDetails(ast.announcement);
+  assert.match(details, /Synthetic Hall &lt;north&gt;/); assert.match(details, /Register &lt;here&gt;/); assert.doesNotMatch(details, /<north>/);
+  const al = m.loadStory(apub.slug); m.reloadDraftFromStory(aid, user, al.fields, al.photos); assert.equal(m.getDraft(aid).announcement.kind, 'event'); assert.equal(m.getDraft(aid).storyBlocks[1].photoId, m.listPhotos(aid)[0].id);
+  const aold = m.getDraft(aid); assert.equal(m.saveDraft(aid, aold.updatedAt - 1, { ...aold, announcement: null }, new Map(), user).reason, 'conflict'); assert.equal(m.getDraft(aid).announcement.kind, 'event', 'stale save does not clear event metadata');
+  // Old Studio payloads retain live metadata and carry it to closed history; open editor work is preserved.
+  const astro = m.prepareStudioPublish({ newsletter: { name: 'Synthetic bulletin review', issueDate: ast.date }, stories: [{ title: ast.title, section: 'news', area: 'conference', author: ast.author, date: ast.date, body: agentBase.body, photos: [{ url: agentBase.photos[0].data, alt: 'Synthetic event flyer', caption: '' }], }] });
+  assert.equal(astro.stories[0].slug, apub.slug);
+  await m.publishStudioStories(astro.stories); assert.equal(m.getStoryBySlug(apub.slug).announcement.kind, 'event'); assert.equal(m.getDraft(aid).announcement.kind, 'event');
   const pngData = (shade) => `data:image/png;base64,${syntheticPng(shade).toString('base64')}`;
   const studioRequest = (photos, title = 'Synthetic Studio crops') => ({ newsletter: { name: 'Synthetic review', issueDate: '2026-01-08' }, stories: [{ ref: 'studio-crop', title, author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic Studio crop compatibility story.', photoLayout: 'mosaic', photos }] });
   const sendStudio = (request) => m.publishStudioStories(m.prepareStudioPublish(request).stories);

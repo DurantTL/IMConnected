@@ -1,6 +1,7 @@
 ---
 // The whole story page.
 // The default slot is the rendered story body.
+import { renderAnnouncementDetails } from '../lib/announcement-render';
 import Base from '../layouts/Base.astro';
 import StoryCard from './StoryCard.astro';
 import { getSection, areaLabel, formatDate, SITE } from '../lib/site';
@@ -35,11 +36,12 @@ const allPhotos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : [])
   .map((p, i) => ({ ...p, ...d.photoFocus?.[i], alt: p.alt || `Photo ${i + (d.image ? 1 : 2)} from “${d.title}”` }))
   .filter((p, i) => !inlinePhotos.has(p.src) && !inlineIndices.has(i));
 const plan = planPhotos(layout, allPhotos.length);
-const laid = plan.mode === 'layout' && (!!d.image || inlineCount > 0);
+const laid = !d.announcement && plan.mode === 'layout' && (!!d.image || inlineCount > 0);
 const galleryPhotos = laid ? plan.rest.map((i) => allPhotos[i]) : null;
 const leadPhoto = d.image && !inlinePhotos.has(d.image) && !inlineIndices.has(0) ? allPhotos[0] : undefined;
 const plainGallery = leadPhoto ? allPhotos.slice(1) : allPhotos;
-const leadFocus = photoFocusStyle(leadPhoto);
+const leadFocus = d.announcement ? undefined : photoFocusStyle(leadPhoto);
+const announcementDetails = await renderAnnouncementDetails(d.announcement);
 ---
 <Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section}>
   <style is:inline slot="head" set:html={INLINE_MEDIA_CSS}></style>
@@ -74,13 +76,14 @@ const leadFocus = photoFocusStyle(leadPhoto);
 
       {leadPhoto && !laid && (
         <figure>
-          {(leadPhoto.zoom ?? 1) > 1 ? <a class="story-lead-crop" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge story photo'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={`${leadFocus}aspect-ratio:16/9;object-fit:cover;`} /></a> : <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />}
+          {d.announcement ? <a class="story-flyer" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge flyer'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style="width:100%;height:auto;object-fit:contain;" /></a> : (leadPhoto.zoom ?? 1) > 1 ? <a class="story-lead-crop" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge story photo'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={`${leadFocus}aspect-ratio:16/9;object-fit:cover;`} /></a> : <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />}
           {(d.imageAlt || d.photoCredit) && (
             <figcaption>{d.imageAlt}{d.photoCredit && ` Photo: ${d.photoCredit}`}</figcaption>
           )}
         </figure>
       )}
 
+      <Fragment set:html={announcementDetails} />
       <div class="prose">
         <slot />
       </div>
@@ -128,6 +131,7 @@ const leadFocus = photoFocusStyle(leadPhoto);
 </Base>
 <script>
   import '../scripts/photo-viewer';
+  import '../scripts/story-video';
 
   document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((b) =>
     b.addEventListener('click', async () => {

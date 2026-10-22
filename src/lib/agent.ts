@@ -1,3 +1,4 @@
+import { normalizeAnnouncement, type Announcement } from './announcement';
 // Validates a request from the AI agent (POST /api/agent/stories) into a story draft.
 // The agent's text gets the same treatment as a dashboard draft: control characters removed, every "<" in the
 // body written as &lt; (escapeHtmlInMarkdown), and nothing is ever fetched: photos must be data: images.
@@ -23,6 +24,7 @@ export interface AgentPhoto {
 }
 
 export interface AgentStory {
+  announcement?: Announcement | null;
   title: string;
   dek: string;
   /** Safe Markdown. */
@@ -130,7 +132,11 @@ export function parseAgentStory(input: unknown): AgentStory {
     photos = o.photos.map(parsePhoto);
   }
 
-  return { title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos };
+  let announcement: Announcement | null | undefined;
+  if (o.announcement !== undefined) {
+    try { announcement = normalizeAnnouncement(o.announcement); } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
+  }
+  return { announcement, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos };
 }
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----

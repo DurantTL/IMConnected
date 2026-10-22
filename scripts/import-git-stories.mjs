@@ -53,11 +53,12 @@ const PUBLIC = path.resolve(opt('--public', path.join(here, '../public')));
 // copy to drift). They are TypeScript files with only type annotations, which Node can load by stripping the types: built in
 // from Node 22.18, behind --experimental-strip-types from 22.6 (package.json requires 22.22). On a Node that does not strip by
 // default the script re-runs itself once with the flag, so it works on any 22.6+ image.
-let site, limitsMod, blockMod;
+let site, limitsMod, blockMod, announcementMod;
 try {
   site = await import(path.join(here, '../src/lib/site.ts'));
   limitsMod = await import(path.join(here, '../src/lib/limits.ts'));
   blockMod = await import(path.join(here, '../src/lib/story-blocks.ts'));
+  announcementMod = await import(path.join(here, '../src/lib/announcement.ts'));
 } catch (err) {
   if (!process.env.IMPORT_STRIP_RETRY && /ERR_UNKNOWN_FILE_EXTENSION|Unknown file extension/.test(String(err?.code ?? err))) {
     const r = spawnSync(process.execPath, ['--experimental-strip-types', '--no-warnings', ...process.argv.slice(1)], { stdio: 'inherit', env: { ...process.env, IMPORT_STRIP_RETRY: '1' } });
@@ -143,7 +144,7 @@ function readStory(file) {
   return {
     slug, title, dek: str(fm.dek) || undefined, section, area, column: str(fm.column) || undefined, author, authorTitle: str(fm.authorTitle) || undefined,
     church: str(fm.church) || undefined, date, image, imageAlt: str(fm.imageAlt) || undefined, photoCredit: str(fm.photoCredit) || undefined,
-    photos, photoAlts, photoLayout, storyBlocks, photoFocus, featured: fm.featured === true, draft: fm.draft === true, body,
+    announcement: announcementMod.normalizeAnnouncement(fm.announcement), photos, photoAlts, photoLayout, storyBlocks, photoFocus, featured: fm.featured === true, draft: fm.draft === true, body,
   };
 }
 
@@ -184,7 +185,7 @@ const same = (row, s) =>
   row.title === s.title && (row.dek ?? undefined) === s.dek && row.section === s.section && (row.area ?? undefined) === s.area && (row.story_column ?? undefined) === s.column &&
   row.author === s.author && (row.author_title ?? undefined) === s.authorTitle && (row.church ?? undefined) === s.church && row.date === s.date &&
   (row.image ?? undefined) === s.image && (row.image_alt ?? undefined) === s.imageAlt && (row.photo_credit ?? undefined) === s.photoCredit &&
-  row.photos === JSON.stringify(s.photos) && row.photo_alts === JSON.stringify(s.photoAlts) && row.photo_layout === s.photoLayout && (row.story_blocks ?? '[]') === JSON.stringify(s.storyBlocks) && (row.featured === 1) === s.featured &&
+  row.photos === JSON.stringify(s.photos) && row.photo_alts === JSON.stringify(s.photoAlts) && row.photo_layout === s.photoLayout && (row.announcement ?? null) === (s.announcement ? JSON.stringify(s.announcement) : null) && (row.story_blocks ?? '[]') === JSON.stringify(s.storyBlocks) && (row.featured === 1) === s.featured &&
   (row.draft === 1) === s.draft && String(row.body).replace(/\r\n?/g, '\n').trim() === s.body &&
   db.prepare('SELECT focal_x, focal_y, zoom FROM story_photos WHERE story_id = ? ORDER BY position').all(row.id).every((p, i) => p.focal_x === (s.photoFocus[i]?.focalX ?? 50) && p.focal_y === (s.photoFocus[i]?.focalY ?? 50) && p.zoom === (s.photoFocus[i]?.zoom ?? 1));
 
@@ -224,18 +225,18 @@ for (const f of files) {
       const now = Date.now();
       const status = s.draft ? 'unpublished' : 'live';
       const cols = [s.title, s.dek ?? null, s.section, s.area ?? null, s.column ?? null, s.author, s.authorTitle ?? null, s.church ?? null, s.date, s.image ?? null, s.imageAlt ?? null, s.photoCredit ?? null,
-        JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, status, 'git', Date.parse(s.date), now, sha256(JSON.stringify([s, rows])), s.photoLayout, JSON.stringify(s.storyBlocks)];
+        JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, status, 'git', Date.parse(s.date), now, sha256(JSON.stringify([s, rows])), s.photoLayout, JSON.stringify(s.storyBlocks), s.announcement ? JSON.stringify(s.announcement) : null];
       db.exec('BEGIN IMMEDIATE');
       try {
         let id;
         if (row) {
           id = Number(row.id);
           db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-            photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, published_at=?, updated_at=?, content_hash=?, photo_layout=?, story_blocks=?, edited_at=NULL, rev=rev+1 WHERE id = ?`).run(...cols, id);
+            photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, published_at=?, updated_at=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, edited_at=NULL, rev=rev+1 WHERE id = ?`).run(...cols, id);
           db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
         } else {
           id = Number(db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-            photos, photo_alts, featured, draft, body, status, source, published_at, updated_at, content_hash, photo_layout, story_blocks, slug) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...cols, slug).lastInsertRowid);
+            photos, photo_alts, featured, draft, body, status, source, published_at, updated_at, content_hash, photo_layout, story_blocks, announcement, slug) VALUES (${Array(cols.length + 1).fill('?').join(',')})`).run(...cols, slug).lastInsertRowid);
         }
         const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         for (const r of rows) ins.run(id, r.position, r.kind, r.path, r.url, r.alt, r.sha256, r.bytes, s.photoFocus[r.position]?.focalX ?? 50, s.photoFocus[r.position]?.focalY ?? 50, s.photoFocus[r.position]?.zoom ?? 1);

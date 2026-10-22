@@ -1,3 +1,4 @@
+import { normalizeAnnouncement } from './announcement';
 import { storyBlockPhotos } from './story-blocks';
 // Reads the editor form (save and preview) into draft fields, refusing oversized values instead of cutting them.
 import { FIELD_MAX, type DraftFields } from './drafts';
@@ -32,6 +33,14 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
     featured: form.get('featured') === '1',
     body: text(form, 'body', FIELD_MAX.body, 'The story text'),
   };
+  if (form.has('announcementKind')) {
+    const kind = line(form, 'announcementKind', 20, 'Content type');
+    if (kind === 'story') fields.announcement = null;
+    else {
+      const links = [0, 1, 2].map((i) => ({ label: line(form, `announcementLink${i}Label`, 120, 'Link label'), url: line(form, `announcementLink${i}Url`, 2048, 'Link address') })).filter((p) => p.label || p.url);
+      fields.announcement = normalizeAnnouncement({ kind, eventDate: line(form, 'eventDate', 10, 'Event date'), location: line(form, 'eventLocation', 200, 'Location'), videoUrl: line(form, 'announcementVideo', 2048, 'Video address'), links });
+    }
+  }
   const rawBlocks = form.get('storyBlocks');
   if (rawBlocks !== null) {
     if (typeof rawBlocks !== 'string') throw new Error('Story modules could not be read.');

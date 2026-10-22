@@ -15,7 +15,7 @@ const check = (name, fn) => { fn(); count++; console.log(`PASS ${name}`); };
 try {
   const require = createRequire(import.meta.url);
   await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts', media: 'src/lib/story-media-render.ts', excerpt: 'src/lib/excerpt.ts', search: 'src/lib/search.ts', index: 'src/lib/search-index.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri') return { id: require.resolve(id), external: true }; } }] });
-  const { normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
+  const { normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, parseStoryVideo, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
   const { renderStoryBlocksSafe } = await import(pathToFileURL(path.join(scratch, 'render.js')));
   const { renderMediaMarkdown } = await import(pathToFileURL(path.join(scratch, 'media.js')));
   const { storyExcerpt } = await import(pathToFileURL(path.join(scratch, 'excerpt.js')));
@@ -73,6 +73,19 @@ try {
   });
   const longGallery = await renderStoryBlocksSafe([{ ...galleryBlock[0], id: 'g'.repeat(80) }]);
   check('valid maximum-length Gallery IDs render without synthetic-ID overflow', () => { assert.equal((longGallery.match(/data-photo/g) || []).length, 2); assert.match(longGallery, new RegExp(`data-module-id="${'g'.repeat(80)}"`)); });
+  check('video parser derives exact provider URLs and rejects arbitrary embed/html inputs', () => {
+    for (const url of ['https://youtu.be/abcdefghijk', 'https://www.youtube.com/watch?v=abcdefghijk&t=12', 'https://www.youtube-nocookie.com/embed/abcdefghijk', 'https://vimeo.com/12345678']) assert.ok(parseStoryVideo(url));
+    for (const url of ['http://youtu.be/abcdefghijk', 'https://youtube.com.evil.invalid/watch?v=abcdefghijk', 'https://youtube.com@evil.invalid/watch?v=abcdefghijk', 'https://youtube.com:444/watch?v=abcdefghijk', 'javascript:alert(1)', '<iframe src=x>', 'https://vimeo.com/123/anything', 'https://youtu.be/a', 'https://youtu.be/abcdefghijk\n']) assert.equal(parseStoryVideo(url), null, url);
+  });
+  const flyer = await renderStoryBlocksSafe([{ id: 'flyer', type: 'flyer', url: mediaPhotos[0].src, alt: '<synthetic flyer>', zoom: 3 }]);
+  check('Flyer modules preserve the full image and escaped accessible description', () => { assert.match(flyer, /height:auto;object-fit:contain/); assert.match(flyer, /alt="&lt;synthetic flyer&gt;"/); assert.doesNotMatch(flyer, /scale:3|aspect-ratio:16/); });
+  const video = await renderStoryBlocksSafe([{ id: 'vid', type: 'video', url: 'https://youtu.be/abcdefghijk', label: '<synthetic video>' }]);
+  const previewVideo = await renderStoryBlocksSafe([{ id: 'vid', type: 'video', url: 'https://youtu.be/abcdefghijk' }], { preview: true });
+  check('video players require explicit load and retain a provider link; preview is link-only', () => { assert.match(video, /data-load-video/); assert.match(video, /youtube-nocookie.com/); assert.doesNotMatch(video, /<iframe|<synthetic/); assert.doesNotMatch(previewVideo, /data-load-video|data-video-embed|<iframe/); assert.match(previewVideo, /https:\/\/www.youtube.com\/watch/); });
+  const inlineFlyer = await renderMediaMarkdown('{{photo 1}}', mediaPhotos, false, 0);
+  const galleryFlyer = await renderMediaMarkdown('{{gallery 1-2 columns=2}}', mediaPhotos, true, 0);
+  const inheritedFlyer = await renderStoryBlocksSafe([{ id: 'old-image', type: 'image', url: mediaPhotos[0].src, photoIndex: 0, zoom: 3 }], { flyerUrl: mediaPhotos[0].src });
+  check('announcement first-photo markers, galleries and older Image modules retain full flyer framing', () => { for (const html of [inlineFlyer.html, galleryFlyer.html, inheritedFlyer]) { assert.match(html, /story-flyer/); const img = html.match(/<img[^>]+>/)?.[0] ?? ''; assert.doesNotMatch(img, /scale:|aspect-ratio:16/); } });
   check('legacy absence is an empty module list', () => assert.deepEqual(normalizeStoryBlocks(undefined), []));
   check('IDs must be stable and unique', () => assert.throws(() => normalizeStoryBlocks([{ id: 'same', type: 'text' }, { id: 'same', type: 'divider' }])));
   check('unknown module types are rejected', () => assert.throws(() => normalizeStoryBlocks([{ id: 'html', type: 'raw-html' }])));

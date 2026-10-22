@@ -1,3 +1,6 @@
+import { storyBlockPhotos } from '../../../../../lib/story-blocks';
+import { renderAnnouncementDetails } from '../../../../../lib/announcement-render';
+import { renderInlinePhoto } from '../../../../../lib/story-media-render';
 import type { APIRoute } from 'astro';
 import {
   addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, photoCount, rejectDraft, restoreDraft, retireUploads,
@@ -56,12 +59,25 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       }
     }
     const draftPhotos = listPhotos(draft.id);
-    let html = fields.storyBlocks?.length ? await renderStoryBlocksSafe(fields.storyBlocks, { resolvePhoto: (photoId) => {
+    const bulletin = fields.announcement === undefined ? draft.announcement : fields.announcement;
+    let usedPreviewPhotos = new Set<number>();
+    let html: string;
+    if (fields.storyBlocks?.length) html = await renderStoryBlocksSafe(fields.storyBlocks, { preview: true, flyerPhotoId: bulletin ? draftPhotos[0]?.id : undefined, resolvePhoto: (photoId) => {
       const photo = draftPhotos.find((p) => p.id === photoId);
       if (!photo) return undefined;
       const point = { ...photo, ...focus.get(photoId) };
       return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom };
-    } }) : (await renderMediaMarkdown(fields.body, draftPhotos.map((photo) => ({ ...photo, src: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, ...focus.get(photo.id) })), true)).html;
+    } });
+    else {
+      const rendered = await renderMediaMarkdown(fields.body, draftPhotos.map((photo) => ({ ...photo, src: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, ...focus.get(photo.id) })), true, bulletin ? 0 : undefined);
+      html = rendered.html; usedPreviewPhotos = rendered.used;
+    }
+    if (bulletin) {
+      const first = draftPhotos[0];
+      const hasFirst = fields.storyBlocks?.length ? storyBlockPhotos(fields.storyBlocks).some((p) => p.photoId === first?.id) : usedPreviewPhotos.has(0);
+      if (first && !hasFirst) html = renderInlinePhoto({ src: first.path ? `/api/admin/photos/${first.id}` : first.url ?? '', alt: previewAlts.get(first.id) ?? first.alt }, true, true) + html;
+      html = await renderAnnouncementDetails(bulletin, true) + html;
+    }
     const ownHosts = [new URL(request.url).hostname];
     try { ownHosts.push(new URL(siteUrl()).hostname); } catch { /* a malformed SITE_URL must not break the preview: the request host alone is used */ }
     html = restrictPreviewImages(html, ownHosts);

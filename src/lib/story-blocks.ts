@@ -1,6 +1,6 @@
 // Version-one story modules. Pure validation and Markdown projection shared by the editor and server.
 // The Markdown body remains available to search, feeds and older consumers; the structured modules own layout.
-export const STORY_BLOCK_TYPES = ['text', 'heading', 'quote', 'list', 'image', 'gallery', 'button', 'divider'] as const;
+export const STORY_BLOCK_TYPES = ['text', 'heading', 'quote', 'list', 'image', 'gallery', 'flyer', 'video', 'button', 'divider'] as const;
 export type StoryBlockType = (typeof STORY_BLOCK_TYPES)[number];
 export interface StoryPhotoRef {
   photoId?: number;
@@ -61,11 +61,11 @@ export function assertOwnStoryImages(blocks: readonly StoryBlock[], own: Iterabl
 
 /** Shared traversal keeps photo ownership, publishing and derived data aligned. */
 export function storyBlockPhotos(blocks: readonly StoryBlock[]): StoryPhotoRef[] {
-  return blocks.flatMap((b) => b.type === 'image' ? [b] : b.type === 'gallery' ? b.photos ?? [] : []);
+  return blocks.flatMap((b) => ['image', 'flyer'].includes(b.type) ? [b] : b.type === 'gallery' ? b.photos ?? [] : []);
 }
 export function mapStoryPhotos(blocks: StoryBlock[], map: (photo: StoryPhotoRef) => StoryPhotoRef | null): StoryBlock[] {
   return blocks.flatMap((b) => {
-    if (b.type === 'image') { const photo = map(b); return photo ? [{ ...b, ...photo }] : []; }
+    if (['image', 'flyer'].includes(b.type)) { const photo = map(b); return photo ? [{ ...b, ...photo }] : []; }
     if (b.type === 'gallery') return [{ ...b, photos: (b.photos ?? []).flatMap((p) => { const photo = map(p); return photo ? [photo] : []; }) }];
     return [b];
   });
@@ -95,6 +95,25 @@ export function isStoryButtonUrl(value: unknown): value is string {
     const u = new URL(value);
     return ['http:', 'https:', 'mailto:', 'tel:'].includes(u.protocol) && !u.username && !u.password;
   } catch { return false; }
+}
+
+/** Derive embed URLs from exact providers/IDs; never accept iframe HTML or arbitrary embed addresses. */
+export function parseStoryVideo(value: unknown): { provider: 'YouTube' | 'Vimeo'; url: string; embed: string } | null {
+  if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f\\<>"']/.test(value)) return null;
+  try {
+    const u = new URL(value);
+    if (u.protocol !== 'https:' || u.username || u.password || u.port) return null;
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtube-nocookie.com', 'youtube-nocookie.com'].includes(u.hostname)) {
+      const id = u.hostname === 'youtu.be' ? /^\/([A-Za-z0-9_-]{11})\/?$/.exec(u.pathname)?.[1] : u.pathname === '/watch' ? u.searchParams.get('v') : /^\/(?:embed|shorts)\/([A-Za-z0-9_-]{11})\/?$/.exec(u.pathname)?.[1];
+      if (!id || !/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+      return { provider: 'YouTube', url: `https://www.youtube.com/watch?v=${id}`, embed: `https://www.youtube-nocookie.com/embed/${id}?rel=0` };
+    }
+    if (['vimeo.com', 'www.vimeo.com', 'player.vimeo.com'].includes(u.hostname)) {
+      const id = /^\/(?:video\/)?([1-9]\d{0,11})\/?$/.exec(u.pathname)?.[1];
+      if (id) return { provider: 'Vimeo', url: `https://vimeo.com/${id}`, embed: `https://player.vimeo.com/video/${id}` };
+    }
+  } catch { /* unsupported input */ }
+  return null;
 }
 
 export function focalPoint(value: unknown): number {
@@ -143,7 +162,7 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
       b.items = ((r.items ?? []) as unknown[]).map((item) => text(item, 2000, 'List item'));
       total += b.items.join('').length;
     }
-    if (b.type === 'image') { Object.assign(b, normalizePhoto(r)); total += b.alt?.length ?? 0; }
+    if (['image', 'flyer'].includes(b.type)) { Object.assign(b, normalizePhoto(r)); total += b.alt?.length ?? 0; }
     if (b.type === 'gallery') {
       if (r.columns !== undefined && r.columns !== 2 && r.columns !== 3) return error('Gallery columns must be 2 or 3.');
       b.columns = r.columns === 3 ? 3 : 2;
@@ -155,6 +174,12 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
       const identities = b.photos.map((p) => p.photoId ? `id:${p.photoId}` : p.photoIndex !== undefined ? `index:${p.photoIndex}` : p.url);
       if (new Set(identities).size !== identities.length) return error('Choose each gallery photo once.');
       total += b.photos.reduce((n, p) => n + (p.alt?.length ?? 0), 0);
+    }
+    if (b.type === 'video') {
+      b.label = text(r.label, 120, 'Video title');
+      b.url = text(r.url, 2048, 'Video URL');
+      if (b.url) { const video = parseStoryVideo(b.url); if (!video) return error('Use a supported HTTPS YouTube or Vimeo video URL.'); b.url = video.url; }
+      total += b.label.length + b.url.length;
     }
     if (b.type === 'button') {
       b.label = text(r.label, 120, 'Button label');
@@ -213,6 +238,8 @@ export function storyBlocksToMarkdown(blocks: StoryBlock[]): string {
       case 'heading': return `${'#'.repeat(b.level || 2)} ${plainMarkdown(b.text || '')}`;
       case 'quote': return (b.text || '').split('\n').map((line) => `> ${line}`).join('\n');
       case 'list': return (b.items || []).map((item) => `- ${plainMarkdown(item)}`).join('\n');
+      case 'video': return b.url ? `[${plainMarkdown(b.label || 'Watch video')}](${b.url})` : '';
+      case 'flyer': return '';
       case 'gallery': return '';
       case 'image': return ''; // an image has no text of its own: its description is an attribute, not a paragraph
       case 'button': return b.url ? `[${plainMarkdown(b.label || b.url)}](${b.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})` : plainMarkdown(b.label || '');

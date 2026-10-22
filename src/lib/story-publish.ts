@@ -188,7 +188,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   let draftBlocks: StoryBlock[];
   try { draftBlocks = normalizeStoryBlocks(draft.storyBlocks ?? []); } catch { throw new EditorError('blocks_bad'); }
   if (draftBlocks.some((b) => b.type === 'gallery' && (b.photos?.length ?? 0) < 2)) throw new EditorError('blocks_bad');
-  if (draftBlocks.some((b) => b.type === 'button' && !b.url)) throw new EditorError('link_unsafe');
+  if (draftBlocks.some((b) => ['button', 'video'].includes(b.type) && !b.url)) throw new EditorError('link_unsafe');
   // The Markdown is built and measured as typed (the same rule as saving); every "<" becomes &lt; only when it is written
   // (here for the body, in writeStory for the modules), so escaping can never push a field over its limit.
   const body = clean(draftBlocks.length ? storyBlocksToMarkdown(draftBlocks) : draft.body).trim();
@@ -251,7 +251,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     slug, title, dek: dek || undefined, section, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
     date: draft.date, photoCredit: stored.sources.length && photoCredit ? photoCredit : undefined,
     ...photoFields(stored, alts, title),
-    photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body), storyBlocks,
+    announcement: draft.announcement, photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body), storyBlocks,
     status: 'live', source: draft.source, draftId: draft.id, publishedAt: now, publishedBy: userId, editedAt: now, photoRows: stored.rows,
   };
 
@@ -313,7 +313,7 @@ export function loadStory(slug: string): LoadedStory | null {
   return {
     fields: {
       title: s.title, dek: s.dek ?? '', section: s.section, area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
-      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks,
+      church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', announcement: s.announcement, photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks,
     },
     photos: sources.map((url, i) => {
       const inline = storyBlockPhotos(storyBlocks ?? []).find((b) => b.url === url);
@@ -379,7 +379,7 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
         }, now);
       }
       const rec = recordStudioPublish(planned.map(({ p, stored }) => ({
-        slug: p.slug, title: p.title, dek: p.dek, section: p.section, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body,
+        slug: p.slug, title: p.title, dek: p.dek, section: p.section, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body, announcement: getStoryBySlug(p.slug, { includeUnpublished: true })?.announcement ?? null,
         photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption, focalX: stored.rows[i].focalX, focalY: stored.rows[i].focalY, zoom: stored.rows[i].zoom })),
       })));
       ids = rec.ids; overwrote = rec.overwrote; oldUploads = rec.oldUploads;

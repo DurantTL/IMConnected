@@ -1,3 +1,4 @@
+import { parseAnnouncement, announcementJson, type Announcement } from './announcement';
 import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
 // Story drafts: the rows in `drafts` / `draft_photos` and the uploaded photo files under DATA_DIR/uploads/.
 // Submitter contact fields live here for signed-in editors to read. They are never logged or committed.
@@ -24,6 +25,7 @@ export const REJECTED_PHOTO_DAYS = 30;
 export const FIELD_MAX = { title: 300, dek: 600, short: 200, body: 100_000 };
 
 export interface DraftFields {
+  announcement?: Announcement | null;
   title: string;
   dek: string;
   section: string;
@@ -129,6 +131,7 @@ function toDraft(r: Row): Draft {
     featured: n(r.featured) === 1,
     body: s(r.body),
     storyBlocks: parseStoredStoryBlocks(r.story_blocks),
+    announcement: parseAnnouncement(r.announcement),
     slug: sn(r.slug),
     publishedCommit: sn(r.published_commit),
     submitterName: sn(r.submitter_name),
@@ -173,7 +176,7 @@ export function tx<T>(fn: () => T): T {
 export const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 export function emptyFields(over: Partial<DraftFields> = {}): DraftFields {
-  return { title: '', dek: '', section: 'news', area: 'conference', column: '', author: '', authorTitle: '', church: '', date: todayUtc(), photoCredit: '', photoLayout: DEFAULT_PHOTO_LAYOUT, featured: false, body: '', ...over };
+  return { title: '', dek: '', section: 'news', area: 'conference', column: '', author: '', authorTitle: '', church: '', date: todayUtc(), photoCredit: '', photoLayout: DEFAULT_PHOTO_LAYOUT, featured: false, body: '', announcement: null, ...over };
 }
 
 export interface NewDraft {
@@ -192,6 +195,7 @@ export interface NewDraft {
 /** Create a draft (also the entry point for the submit form and Studio in the next issue). */
 export function createDraft(opts: NewDraft): number {
   const f = emptyFields(opts.fields);
+  const bulletin = announcementJson(f.announcement);
   const blocks = f.storyBlocks === undefined ? undefined : normalizeStoryBlocks(f.storyBlocks);
   const now = Date.now();
   const status = opts.status ?? (opts.source === 'editor' ? 'in_review' : 'new');
@@ -208,6 +212,7 @@ export function createDraft(opts: NewDraft): number {
       now, opts.userId ?? null, now, opts.userId ?? null, opts.sourceUrl ?? null, opts.agentNote ?? null,
     );
   const id = Number(r.lastInsertRowid);
+  getDb().prepare('UPDATE drafts SET announcement = ? WHERE id = ?').run(bulletin, id);
   if (blocks !== undefined) getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(blocks), blocks.length ? storyBlocksToMarkdown(blocks) : f.body, id);
   return id;
 }
@@ -321,6 +326,7 @@ export function checkFieldValues(f: DraftFields): ErrorCode | null {
 }
 
 export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null, photoFocus: Map<number, PhotoCrop> = new Map()): SaveResult {
+  const bulletin = f.announcement === undefined ? undefined : announcementJson(f.announcement);
   const bad = checkFieldValues(f);
   if (bad) return fail('invalid', bad);
   // null = the form did not carry the picker: keep the draft's layout.
@@ -339,8 +345,8 @@ export function saveDraft(id: number, expected: number, f: DraftFields, photoAlt
     const v = takeVersion(id, expected, userId, "status = 'in_review'");
     if (v === null) return CONFLICT;
     getDb()
-      .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = COALESCE(?, photo_layout), featured = ?, body = ?, story_blocks = ? WHERE id = ?')
-      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, layout, f.featured ? 1 : 0, body, JSON.stringify(blocks), id);
+      .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = COALESCE(?, photo_layout), featured = ?, body = ?, story_blocks = ?, announcement = CASE WHEN ? THEN ? ELSE announcement END WHERE id = ?')
+      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, layout, f.featured ? 1 : 0, body, JSON.stringify(blocks), bulletin !== undefined ? 1 : 0, bulletin ?? null, id);
     const upd = getDb().prepare('UPDATE draft_photos SET alt = ? WHERE id = ? AND draft_id = ?');
     for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
     const focus = getDb().prepare('UPDATE draft_photos SET focal_x = COALESCE(?, focal_x), focal_y = COALESCE(?, focal_y), zoom = COALESCE(?, zoom) WHERE id = ? AND draft_id = ?');
@@ -551,6 +557,7 @@ export function reloadDraftFromStory(id: number, userId: number, f: DraftFields,
         "UPDATE drafts SET status = 'in_review', rejected_at = NULL, studio_overwrote_at = NULL, title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = ?, featured = ?, body = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE id = ?",
       )
       .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
+    getDb().prepare('UPDATE drafts SET announcement = ? WHERE id = ?').run(announcementJson(f.announcement), id);
     old = replacePhotos(id, photos);
     remapStoryBlocks(id, f.storyBlocks);
   });
@@ -645,6 +652,7 @@ export function markEmailVerified(draftId: number): boolean {
 }
 
 export interface StudioStory {
+  announcement?: Announcement | null;
   slug: string;
   title: string;
   dek: string;
@@ -689,7 +697,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
   {
     const now = Date.now();
     for (const st of stories) {
-      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, photoCredit: st.photoCredit, photoLayout: st.photoLayout, body: st.body });
+      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, photoCredit: st.photoCredit, photoLayout: st.photoLayout, body: st.body, announcement: st.announcement });
       const cur = getDraftBySlug(st.slug);
       let id: number;
       if (cur && isEditable(cur)) {
@@ -711,6 +719,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
         // Photos: only a Studio draft's own are replaced (it holds no uploads); another draft's uploaded files are never deleted.
         // A rejected draft may still hold its uploads: they are replaced and the files deleted once the commit below succeeds.
         const keepsUploads = cur && cur.source !== 'studio' && cur.status !== 'rejected' && listPhotos(id).some((p) => p.path);
+        if (st.announcement !== undefined) getDb().prepare('UPDATE drafts SET announcement = ? WHERE id = ?').run(announcementJson(st.announcement), id);
         if (!keepsUploads) oldUploads = oldUploads.concat(replacePhotos(id, st.photos));
       }
       ids.push(id);
@@ -720,6 +729,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
 }
 
 export interface AgentDraftInput {
+  announcement?: Announcement | null;
   title: string;
   dek: string;
   /** Already safe Markdown. */
@@ -765,10 +775,10 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         const r = db
           .prepare(
             `UPDATE drafts SET title = ?, dek = ?, body = ?, section = ?, area = ?, author = ?, church = ?, agent_note = ?, photo_layout = COALESCE(?, photo_layout),
-               date = CASE WHEN ? = '' THEN date ELSE ? END, updated_at = MAX(?, updated_at + 1)
+               announcement = CASE WHEN ? THEN ? ELSE announcement END, date = CASE WHEN ? = '' THEN date ELSE ? END, updated_at = MAX(?, updated_at + 1)
              WHERE id = ? AND status = 'new' AND updated_by IS NULL`,
           )
-          .run(input.title, input.dek, input.body, input.section, input.area, input.author, input.church, input.note || null, input.photoLayout, input.date, input.date, now, id);
+          .run(input.title, input.dek, input.body, input.section, input.area, input.author, input.church, input.note || null, input.photoLayout, input.announcement !== undefined ? 1 : 0, input.announcement === undefined ? null : announcementJson(input.announcement), input.date, input.date, now, id);
         if (Number(r.changes) !== 1) return { ok: false, id };
         if (input.photos) {
           oldFiles = listPhotos(id).map((p) => p.path).filter((p): p is string => !!p);
@@ -779,7 +789,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         id = createDraft({
           source: 'agent',
           status: 'new',
-          fields: { title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
+          fields: { announcement: input.announcement, title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
           sourceUrl: input.sourceUrl,
           agentNote: input.note || null,
         });

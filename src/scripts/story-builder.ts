@@ -50,7 +50,7 @@ if (form && blocksField) {
   const future: string[] = [];
   let editKey = '';
   let editAt = 0;
-  const labels: Record<StoryBlock['type'], string> = { text: 'Paragraph', heading: 'Heading', quote: 'Quote', list: 'List', image: 'Image', gallery: 'Gallery', button: 'Button / link', divider: 'Divider' };
+  const labels: Record<StoryBlock['type'], string> = { text: 'Paragraph', heading: 'Heading', quote: 'Quote', list: 'List', image: 'Image', gallery: 'Gallery', flyer: 'Flyer', video: 'Video', button: 'Button / link', divider: 'Divider' };
   const uid = () => `module-${crypto.randomUUID()}`;
   if (editable && builderData.emptyStory && !blocks.length) {
     // The starter module is not an edit: opening an empty draft must not mark it changed (that would autosave, move it to review and write an audit entry).
@@ -103,7 +103,7 @@ if (form && blocksField) {
     if (summary) summary.textContent = modular ? `${blocks.length} modules` : 'Markdown story';
     const start = document.getElementById('module-start-writing');
     if (start) start.hidden = !(blocks.length === 1 && blocks[0].type === 'text' && !blocks[0].text);
-    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-add-module="image"], [data-add-module="gallery"]')) {
+    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-add-module="image"], [data-add-module="gallery"], [data-add-module="flyer"]')) {
       button.disabled = !editable || !photos.some((p) => p.src);
       button.title = photos.some((p) => p.src) ? 'Place a story photo in the text' : 'Upload a photo in Photos first';
     }
@@ -261,7 +261,12 @@ if (form && blocksField) {
       for (const n of [2, 3]) { const option = node('option', `${n} columns`); option.value = String(n); option.selected = (block.columns ?? 2) === n; select.append(option); }
       select.addEventListener('change', () => update(block, 'columns', Number(select.value))); label.append(select); fields.append(label);
     }
-    if (block.type === 'image') {
+    if (block.type === 'video') {
+      field(block, 'Video title', 'label', block.label || '');
+      field(block, 'YouTube or Vimeo URL (HTTPS)', 'url', block.url || '');
+      fields.append(node('p', 'Readers press Play to load the provider. Private preview shows a safe provider link.', 'admin-note'));
+    }
+    if (['image', 'flyer'].includes(block.type)) {
       const label = node('label', 'Story photo');
       const select = node('select'); select.dataset.moduleField = 'photoId';
       const placeholder = node('option', 'Choose a photo'); placeholder.value = ''; select.append(placeholder);
@@ -275,7 +280,8 @@ if (form && blocksField) {
       const photo = photos.find((p) => p.id === block.photoId);
       if (photo?.src) { const img = node('img'); img.src = photo.src; img.alt = block.alt || photo.alt; img.className = 'sb-module-image'; fields.append(img); }
       field(block, 'Image description (alt text)', 'alt', block.alt || '');
-      fields.append(node('p', 'This photo appears here in the story text. Adjust its focal point in the Photo studio.', 'admin-note'));
+      if (block.type === 'flyer') fields.append(node('p', 'Leave the description empty to follow the current photo description in Photo studio.', 'admin-note'));
+      fields.append(node('p', block.type === 'flyer' ? 'Flyers show the whole image so its text stays visible. Add a text summary to the story for accessibility.' : 'This photo appears here in the story text. Adjust its focal point in the Photo studio.', 'admin-note'));
       fields.append(button('Open Photo studio', () => setPanel('photos', true)));
     }
     if (block.type === 'divider') fields.append(node('p', 'A simple divider gives the next part of your story room to breathe.', 'admin-note'));
@@ -360,7 +366,7 @@ if (form && blocksField) {
     if (!editable || !modular) return;
     if (blocks.length >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
     const type = add.dataset.addModule as StoryBlock['type'];
-    if (['image', 'gallery'].includes(type) && !photos.some((p) => p.src)) return;
+    if (['image', 'gallery', 'flyer'].includes(type) && !photos.some((p) => p.src)) return;
     remember();
     const block: StoryBlock = { id: uid(), type };
     if (['text', 'heading', 'quote'].includes(type)) block.text = '';
@@ -368,7 +374,8 @@ if (form && blocksField) {
     if (type === 'list') block.items = [''];
     if (type === 'button') { block.label = 'Read more'; block.url = ''; }
     if (type === 'gallery') { block.columns = 2; block.photos = photos.filter((p) => p.src).map((p) => ({ photoId: p.id })); }
-    if (type === 'image') { block.photoId = photos.find((p) => p.src)!.id; block.alt = photos.find((p) => p.id === block.photoId)?.alt || ''; }
+    if (type === 'video') { block.label = 'Event video'; block.url = ''; }
+    if (['image', 'flyer'].includes(type)) { block.photoId = photos.find((p) => p.src)!.id; if (type === 'image') block.alt = photos.find((p) => p.id === block.photoId)?.alt || ''; }
     const at = blocks.findIndex((b) => b.id === selected);
     blocks.splice(at < 0 ? blocks.length : at + 1, 0, block); selected = block.id;
     render(); changed(); announce(`${labels[type]} module added.`);
