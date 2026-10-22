@@ -40,7 +40,10 @@ const kids = bySection(stories, 'kids').slice(0, 3);
       </div>
       <p class="home-intro-note">{SITE.tagline}.<br /><a class="intro-link" href="/news/">Discover what’s happening <span aria-hidden="true">→</span></a></p>
     </section>
-    <EventSpotlight events={upcomingEvents(stories)} />
+  </div>
+  <EventSpotlight events={upcomingEvents(stories)} />
+  <div class="wrap magazine-home">
+    <div class="home-news-heading"><p class="eyebrow">Faith in action. Close to home.</p><h2>Stories worth sharing.</h2><a href="/news/">The latest news <span aria-hidden="true">↗</span></a></div>
     {lead ? (
       <section class="hero" aria-label="Top stories">
         <StoryCard story={lead} variant="lead" />

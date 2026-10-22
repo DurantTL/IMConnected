@@ -52,6 +52,8 @@ Tests: `SCRATCH=/tmp/imc-photo-layouts node scripts/test-photo-layouts.mjs` afte
 
 Stories can belong to multiple sections: choose a primary Section/Category and check Additional sections in Story settings. A News → Camp story can also appear in Youth & Pathfinders without duplicating its article. See [multiple sections and API contracts](docs/MULTIPLE-SECTIONS.md).
 
+The [publication redesign guide](docs/PUBLICATION-REDESIGN.md) shows the IMConnected wordmark, newsletter colors, automatically advancing event spotlight, article layouts and current synthetic screenshots. Stories can appear in [multiple sections](docs/MULTIPLE-SECTIONS.md), such as News / Camp and Youth.
+
 The [community navigation guide](docs/COMMUNITY-NAVIGATION.md) covers the homepage event rail, administrator website-menu settings, separate Stories/Announcements/Events queues and customizable module quick access.
 
 See the [design review and screenshots](docs/DESIGN_REVIEW.md) for the magazine layout and dedicated editor workspace. The editor separates **Content**, **Story settings**, **Photos**, and **Review & publish**; inactive panels leave the keyboard tab order, while their fields remain included in saves. A sticky toolbar keeps Save and private Preview available.

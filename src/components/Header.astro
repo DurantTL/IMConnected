@@ -1,4 +1,5 @@
 ---
+import BrandMark from './BrandMark.astro';
 import { SITE } from '../lib/site';
 import { defaultNavigation, currentNavigation } from '../lib/site-navigation';
 import { readNavigation } from '../lib/navigation-store';
@@ -14,7 +15,7 @@ const active = currentNavigation(items, Astro.url, current);
     <div class="bar">
       <p class="masthead-note">The stories.<br />The people.<br /><strong>Our community.</strong></p>
       <a class="brand" href="/" aria-label={`${SITE.name} home`}>
-        <span class="brand-name">IM<span>Connected</span></span>
+        <BrandMark />
         <span class="brand-sub">{SITE.publisher}</span>
       </a>
       <div class="masthead-actions">

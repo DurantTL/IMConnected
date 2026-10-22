@@ -190,7 +190,7 @@ const EXPECT = {
   runMigrations(db, all.filter((m) => m.name < '018'));
   db.prepare("INSERT INTO draft_photos (draft_id, url, created_at, focal_x, focal_y) SELECT id, 'https://example.invalid/synthetic.png', ?, 17, 83 FROM drafts").run(now);
   db.prepare("INSERT INTO story_photos (story_id, position, kind, url, focal_x, focal_y) SELECT id, 0, 'lead', 'https://example.invalid/synthetic.png', 17, 83 FROM stories").run();
-  const cropMigration = runMigrations(db, all);
+  const cropMigration = runMigrations(db, all.filter((m) => m.name < '019'));
   check('migration 018 preserves existing draft and published photo crops at 100% zoom', cropMigration.length === 1 && cropMigration[0].startsWith('018_') && ['draft_photos', 'story_photos'].every((table) => {
     const photo = db.prepare(`SELECT focal_x, focal_y, zoom FROM ${table}`).get();
     return photo.focal_x === 17 && photo.focal_y === 83 && photo.zoom === 1;
@@ -277,7 +277,8 @@ try {
       if (!new RegExp(`alt="Synthetic ${L} photo \\d"`).test(a)) bad.push(`${label}: photo ${i + 1} alt`);
     });
     if (/<figcaption>[^<]*<\/figcaption>/.test(fig[2]) && !/<figcaption>Photo: /.test(fig[2])) bad.push(`${label}: a caption that is not the credit`);
-    if (art.indexOf(fig[0]) > art.indexOf('<div class="prose">')) bad.push(`${label}: photos are not above the text`);
+    const proseAt = art.search(/<div\b[^>]*class="prose"(?:\s|>)/);
+    if (proseAt < 0 || art.indexOf(fig[0]) > proseAt) bad.push(`${label}: photos are not above the text`);
   }
   check(`all ${wanted.length} layout x photo-count pages have the expected rows, links, loading, decoding and alt text, and no photo is lost (${pagesChecked} pages)`, bad.length === 0, bad.slice(0, 6).join(' | '));
 

@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import BrandMark from '../components/BrandMark.astro';
 import { SITE } from '../lib/site';
 import { countOpenDrafts } from '../lib/drafts';
 
@@ -41,7 +42,7 @@ const nav = [
   <body class="admin">
     <a class="skip" href="#main">Skip to content</a>
     <header class="admin-bar">
-      <a class="admin-brand" href="/admin"><span class="admin-brand-kicker">Editorial workspace</span>{SITE.name}</a>
+      <a class="admin-brand" href="/admin"><BrandMark /><span class="admin-brand-kicker">Editorial workspace</span></a>
       {user && (
         <nav aria-label="Editor navigation">
           {Astro.locals.session?.mfaPassed && nav.map((n) => (

@@ -24,6 +24,7 @@ const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
 const subHref = d.area ? `/${d.section}/${d.area}/` : undefined;
 const url = new URL(`/stories/${story.id}/`, Astro.site).href;
 const enc = encodeURIComponent;
+const readingMinutes = Math.max(1, Math.ceil((story.body || '').trim().split(/\s+/).filter(Boolean).length / 220));
 
 // Photo layout (issue #35). "one" (the default, and every story that has none) keeps the original look: the lead photo above
 // the text and the others in a row under it. Another layout puts the lead and the others together above the text; photos it
@@ -59,7 +60,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
     <article class="article" data-sec={d.section}>
       <nav class="article-breadcrumb" aria-label="Breadcrumb"><a href="/">Home</a><span aria-hidden="true">/</span><a href={`/${d.section}/`}>{section.label}</a></nav>
       <header class="article-heading">
-      <div>
+      <div class="article-categories">
         <a class="kicker" href={`/${d.section}/`}>{section.label}</a>
         {sub && (<><span class="kicker"><span class="sep">/</span></span>{subHref ? <a class="kicker" href={subHref}>{sub}</a> : <span class="kicker">{sub}</span>}</>)}
         {(d.additionalSections ?? []).filter((key) => key !== d.section).map((key) => <><span class="kicker" aria-hidden="true"> · </span><a class="kicker" href={`/${key}/`}>{getSection(key)?.label}</a></>)}
@@ -71,6 +72,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
         {d.church && <span>{d.church}</span>}
         <time datetime={d.date.toISOString()}>{formatDate(d.date)}</time>
       </div>
+      <p class="article-reading"><span>{readingMinutes} min read</span><a href="#article-body">Read the story <span aria-hidden="true">↓</span></a></p>
       </header>
 
       {laid && <StoryPhotos layout={layout} plan={plan} photos={allPhotos} credit={d.photoCredit} />}
@@ -85,7 +87,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       )}
 
       <Fragment set:html={announcementDetails} />
-      <div class="prose">
+      <div class="prose" id="article-body" tabindex="-1">
         <slot />
       </div>
 

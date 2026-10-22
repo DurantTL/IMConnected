@@ -1,8 +1,10 @@
 # Magazine and editorial studio redesign
 
+The current wordmark, newsletter palette, event spotlight and article layout are documented with new screenshots in the [publication redesign guide](PUBLICATION-REDESIGN.md). Earlier captures below document their original feature reviews.
+
 ## Event spotlight and editable menus
 
-Issue #72 adapts [durant.xyz](https://durant.xyz/)'s restrained entrances, growing navigation underline and expanding phone menu to the magazine. Entrances translate content by 14 pixels once; text stays fully opaque throughout. Reduced motion skips/cancels spatial animation. The new homepage event rail uses full-aspect flyers, native scrolling and deliberate Previous/Next controls without autoplay. Upcoming dates use the conference's Central time calendar; only published events appear.
+The original issue #72 implementation adapts [durant.xyz](https://durant.xyz/)'s restrained entrances, growing navigation underline and expanding phone menu to the magazine. Entrances translate content by 14 pixels once; text stays fully opaque throughout. Reduced motion skips/cancels spatial animation. It introduced a full-aspect event rail with native scrolling and manual controls. The later [publication redesign (#77)](PUBLICATION-REDESIGN.md) replaces that presentation with the owner-requested immersive spotlight and accessible automatic advance. Upcoming dates use the conference's Central time calendar; only published events appear.
 
 Administrators can edit website link labels, destinations, order and visibility at `/admin/navigation`; version checks protect concurrent edits. The editor's module library now offers categories and browser-local Favorites. Stories, Announcements and Events have separate draft screens and creation actions, with All drafts retained for oversight. See the [workflow and configuration guide](COMMUNITY-NAVIGATION.md).
 
