@@ -85,8 +85,8 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
         <legend>Photos</legend>
         <div class="field">
           <label for="photos">Upload photos (optional)</label>
-          <input id="photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple />
-          <span class="hint">Up to {LIMITS.maxPhotos} photos (JPG, PNG or WebP). Large photos are resized automatically. The first photo becomes the main image.</span>
+          <input id="photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/avif" multiple />
+          <span class="hint">Up to {LIMITS.maxPhotos} photos (JPG, PNG, WebP or AVIF). Large JPG/PNG photos are resized automatically; WebP and AVIF originals are kept. The first photo becomes the main image.</span>
           <div class="previews" id="previews"></div>
         </div>
         <div class="row-2">
@@ -169,9 +169,10 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
     }
   });
 
-  // Shrink photos in the browser before upload: faster on phones and keeps the git repo small.
+  // Optimize camera photos before upload; retain already-compressed WebP/AVIF originals.
   const MAX_EDGE = 2000;
   async function shrink(file) {
+    if (/^image\/(webp|avif)$/i.test(file.type) || /\.(webp|avif)$/i.test(file.name)) return file;
     try {
       const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
       const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));

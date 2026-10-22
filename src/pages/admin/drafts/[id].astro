@@ -296,7 +296,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
 
           <section class="ed-card studio-photos" id="photos" data-studio-panel="photos" role="tabpanel" aria-labelledby="studio-tab-photos">
             <div class="studio-panel-heading"><div><span class="sb-eyebrow">Photo studio</span><h2>Bring the story into focus</h2><p class="admin-note">Choose your lead image, arrange the gallery and keep the subject in frame.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>See reader preview</button></div>
-            <p class="admin-note">The first photo leads the story. JPG, PNG or WebP, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
+            <p class="admin-note">The first photo leads the story. JPG, PNG, WebP or AVIF, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
             {photos.length > 0 && (
               <ol class="ed-photos">
                 {photos.map((p, i) => (
@@ -338,7 +338,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
             {photos.length < LIMITS.maxPhotos && (
               <div class="ed-field sb-upload-zone">
                 <label for="f-upload">Add photos to this story</label><p>Upload once, then use a photo in any Image module or gallery layout.</p>
-                <input id="f-upload" type="file" name="photos" form="photo-form" accept="image/jpeg,image/png,image/webp" multiple />
+                <input id="f-upload" type="file" name="photos" form="photo-form" accept="image/jpeg,image/png,image/webp,image/avif" multiple />
                 <div><button type="submit" form="photo-form" name="op" value="upload" class="cms-btn secondary">Upload</button></div>
               </div>
             )}

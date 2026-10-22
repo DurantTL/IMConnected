@@ -6,7 +6,7 @@ An administrator configures `AGENT_API_TOKEN` as described in the [README](../RE
 
 ## Request example
 
-This is a complete synthetic event request. The tiny PNG is a test placeholder; replace its data URI with the base64 bytes of the actual flyer. Send JPG, PNG or WebP, up to six images at 10 MB each, within the 40 MB JSON request limit. The site never downloads remote image URLs. PDF, SVG and raw HTML are not accepted as photos.
+This is a complete synthetic event request. The tiny PNG is a test placeholder; replace its data URI with the base64 bytes of the actual flyer. Send JPG, PNG, WebP or AVIF, up to six images at 10 MB each, within the 40 MB JSON request limit. The site never downloads remote image URLs. PDF, SVG and raw HTML are not accepted as photos.
 
 ```json
 {

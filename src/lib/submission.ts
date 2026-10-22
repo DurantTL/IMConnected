@@ -1,6 +1,7 @@
 // Parses and validates a submit-form payload; the story becomes a dashboard draft (src/lib/drafts.ts).
 import { getSection, isValidArea } from './site';
 import { LIMITS } from './limits';
+export { sniffImage } from './image-formats.mjs';
 
 export interface Submission {
   name: string;
@@ -62,15 +63,6 @@ export function slugify(text: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 60)
     .replace(/-+$/g, '') || 'story';
-}
-
-/** Detect image type from magic bytes — never trust the browser-sent MIME type. */
-export function sniffImage(buf: Uint8Array): 'jpg' | 'png' | 'webp' | null {
-  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
-  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';
-  const ascii = (a: number, b: number) => String.fromCharCode(...buf.slice(a, b));
-  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'webp';
-  return null;
 }
 
 /**
