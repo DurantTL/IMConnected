@@ -611,6 +611,27 @@ try {
   await page.waitForFunction((id) => document.getElementById('preview')?.contentDocument?.querySelector(`[data-module-id="${id}"]`), section.content[1][0].id);
   await page.frameLocator('#preview').locator(`[data-module-id="${section.content[1][0].id}"]`).focus(); await page.frameLocator('#preview').locator(`[data-module-id="${section.content[1][0].id}"]`).press('Enter');
   check('keyboard canvas selection opens a nested child inspector', await page.locator('[data-module-field=text]').inputValue() === 'Synthetic right column text.');
+  const beforeLayout = await page.locator('#story-blocks').inputValue();
+  await page.locator('#saved-layout-name').fill('Synthetic <layout>');
+  const savedLayoutResponse = page.waitForResponse((r) => r.url() === BASE + '/api/admin/layouts' && r.request().method() === 'POST');
+  await page.locator('#save-story-layout').click(); const savedLayoutJson = await (await savedLayoutResponse).json();
+  check('named layout is saved through authenticated API', savedLayoutJson.ok && Number.isSafeInteger(savedLayoutJson.id));
+  await page.waitForFunction((id) => document.getElementById('saved-layout-choice')?.value === String(id), savedLayoutJson.id);
+  const ownLayouts = await (await fetch(BASE + '/api/admin/layouts', { headers: { Cookie: `__Host-imc_session=${token}` } })).json(); const savedStructure = ownLayouts.layouts.find((l) => l.id === savedLayoutJson.id);
+  check('saved structure strips text, links and photo references and keeps finite styling', savedStructure.name === 'Synthetic <layout>' && !JSON.stringify(savedStructure.blocks).includes('Synthetic **left**') && !JSON.stringify(savedStructure.blocks).includes('photoId') && savedStructure.blocks.at(-1).content[0][0].align === 'center');
+  const unauthLayout = await fetch(BASE + '/api/admin/layouts', { redirect: 'manual' }); check('saved layouts are not publicly readable', unauthLayout.status === 401 || unauthLayout.status === 303 || unauthLayout.status === 302);
+  const otherLayoutUser = Number(db.prepare("INSERT INTO users(email,name,role,status,created_at,updated_at) VALUES('other-ui-layout@example.invalid','Other Layout Editor','editor','active',?,?)").run(now, now).lastInsertRowid);
+  const otherLayoutToken = randomBytes(32).toString('base64url'); db.prepare('INSERT INTO sessions(id,user_id,created_at,last_seen_at,expires_at,mfa_passed) VALUES(?,?,?,?,?,1)').run(createHash('sha256').update(otherLayoutToken).digest('hex'), otherLayoutUser, now, now, now + 3600_000);
+  const otherLayouts = await (await fetch(BASE + '/api/admin/layouts', { headers: { Cookie: `__Host-imc_session=${otherLayoutToken}` } })).json();
+  const deleteOther = new FormData(); deleteOther.set('op', 'delete'); deleteOther.set('id', String(savedLayoutJson.id));
+  check('another editor cannot list or delete a saved private layout', otherLayouts.layouts.length === 0 && (await fetch(BASE + '/api/admin/layouts', { method: 'POST', headers: { Cookie: `__Host-imc_session=${otherLayoutToken}`, Origin: BASE }, body: deleteOther })).status === 404);
+  await page.locator('#insert-story-layout').click();
+  const afterLayout = JSON.parse(await page.locator('#story-blocks').inputValue());
+  const layoutWalk = (blocks) => blocks.flatMap((b) => [b, ...(b.content?.flatMap(layoutWalk) ?? [])]); const allLayoutNodes = layoutWalk(afterLayout);
+  check('inserting a saved section structure preserves original content and generates all new IDs', afterLayout.length > JSON.parse(beforeLayout).length && new Set(allLayoutNodes.map((b) => b.id)).size === allLayoutNodes.length && JSON.stringify(afterLayout.slice(0, 2)) === beforeLayout);
+  await page.locator('#blocks-undo').click(); check('saved layout insertion is one undo change', await page.locator('#story-blocks').inputValue() === beforeLayout);
+  await page.locator('#delete-story-layout').click(); await page.waitForFunction(() => document.getElementById('saved-layout-choice')?.options.length === 1);
+  check('saved layout deletion persists without deleting story content', await page.locator('#story-blocks').inputValue() === beforeLayout && (await (await fetch(BASE + '/api/admin/layouts', { headers: { Cookie: `__Host-imc_session=${token}` } })).json()).layouts.length === 0);
   const sectionSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST'); await page.locator('#save-btn').click(); assert.equal((await sectionSave).status(), 200); await publishLegacy();
   for (const [width, columns] of [[1440, 2], [390, 1]]) { await publicPage.setViewportSize({ width, height: 1000 }); check(`section reads in ${columns} columns at ${width}px`, await publicPage.locator('.story-section').evaluate((el, n) => getComputedStyle(el).gridTemplateColumns.split(' ').length === n && el.textContent.indexOf('left column') < el.textContent.indexOf('right column') && document.documentElement.scrollWidth <= innerWidth, columns)); if (shots) await publicPage.screenshot({ path: path.join(shots, `story-sections-${width}.png`), fullPage: true }); }
   check('public selected-text formatting and finite alignment/spacing survive publish', await publicPage.locator('.story-section [data-align=center]').evaluate((el) => getComputedStyle(el).textAlign === 'center' && getComputedStyle(el).marginBlockStart === '40px' && el.querySelector('strong').textContent === 'left'));
