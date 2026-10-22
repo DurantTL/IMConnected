@@ -35,13 +35,13 @@ API additionally lists waiting drafts and supplies the allowed browser CORS poli
     `in_review`), in the same shape with the draft's numeric `id`, `status` and
     `source` (`form`, `editor`, `studio` or `agent`) and no `url`. Show them as "not
     published yet" and don't link them. `image` is present only when the draft's
-    lead photo is a file the site serves publicly (uploads are editors-only).
+    lead photo is a file the site serves publicly (uploads are not public). Typed open announcements may also carry the scoped `draftFlyer` descriptor described below.
   - Submitter names, emails, phone numbers, the AI agent's notes and source links
     are never included.
 - Links (`url`) are always on the site's own origin. Images are on the site's
   origin, or `https://stories.imadventist.org` photo addresses an editor kept.
 - Show the stories newest first with a checkbox each; filter by `sectionLabel`.
-- For each checked story, add one Story block:
+- For each checked ordinary story, add one Story block. Typed announcements/events instead use the flyer cards described below:
 
 | Studio story field | From the API item |
 |---|---|
@@ -115,3 +115,21 @@ amber before switching.
 - Sending the newsletter stays in FluentCRM or Mailchimp, done by a person.
 - The IMSDA Events email system is for event and account mail and isn't used
   for the newsletter.
+
+## Announcement-style import and website export
+
+The API's `announcement` object selects a Studio `eventList` card with an Events or Announcements heading. It retains kind, event date, location, all three labelled actions and a supported YouTube/Vimeo URL. Email and website HTML render full-aspect flyers and safe action/video links; WordPress block export includes those same links. The published story address remains an additional Read announcement action. Announcement cards import the actual lead flyer only; a rejected lead is never replaced with a gallery image. The IMConnected board/detail templates already use the same full-aspect lead-flyer rule.
+
+An open announcement's uploaded lead flyer can be included through `draftFlyer: { draftId, photoId, key, alt }` in the authenticated list. The descriptor is not an image URL. The client constructs `/api/studio-draft-flyer?draftId=…&photoId=…&key=…` on its configured site and fetches it with the Studio bearer token. The server rechecks open status, typed announcement, current lead and stable media identity, then serves sniffed original bytes with no-store and CORS. This does not extend `/api/studio-photo`, the public media routes, ordinary draft uploads or the AI agent's permissions.
+
+Studio uses stable event IDs plus unchanged source checks before private transfer and after asynchronous copies. WordPress is preferred; a bounded resized local data URI is retained only when the actual browser-storage write succeeds. Send Check warns about local images and unpublished drafts, and reports missing/failed flyers. Manual Browse/URL replacement clears transfer flags; reloading an interrupted transfer shows a recoverable error instead of an endless pending state. Never save the descriptor, bearer token or private API URL in an exported newsletter.
+
+Synthetic checks:
+
+```bash
+node scripts/test-studio-draft-flyer.mjs
+STUDIO_HTML=../utilities/imconnected.html node scripts/test-studio-announcements.mjs
+STUDIO_HTML=../tools-public/imconnected.html node scripts/test-studio-client.mjs
+```
+
+Set the Playwright/Chromium environment variables documented in `docs/DESIGN_REVIEW.md` when those tools are installed outside the repository. Deploy the matching `imconnected.html` changes in both Studio repositories.

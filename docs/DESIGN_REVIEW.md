@@ -111,3 +111,7 @@ The community board adds a magazine-style invitation header, full-aspect flyer c
 ## Saved draft revisions
 
 Review & publish includes persisted revision history, separate from canvas Undo. Restore returns to Review with visible confirmation and, when needed, a missing-photo warning outside the closed history disclosure. Draft controls are temporarily unavailable while restore is pending, and become available again if it fails. The [synthetic review capture](design/story-revision-history.png) shows both notices without exposing private submission data. The browser regression opens history for an axe audit, exercises delayed restore failure and retry, and verifies that a deleted photo's reused numeric ID cannot attach an older marker to its replacement.
+
+## Studio announcement cards
+
+Typed announcements and events now import into Studio's flyer-style event cards instead of ordinary story teasers. All three actions, event details and the video link survive email, website HTML and WordPress block export. Synthetic captures: [desktop](design/studio-announcement-desktop.png), [phone](design/studio-announcement-mobile.png). The private draft-flyer path is authenticated and isolated from public media; local fallback, quota errors, manual replacement and asynchronous transfer races have browser coverage.
