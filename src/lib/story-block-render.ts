@@ -20,7 +20,7 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
   const blocks = normalizeStoryBlocks(input);
   const out: string[] = [];
   for (const b of blocks) {
-    const attr = ` data-module-id="${escapeHtml(b.id)}"`;
+    const attr = ` data-module-id="${escapeHtml(b.id)}"${b.align ? ` data-align="${b.align}"` : ''}${b.spacing ? ` data-spacing="${b.spacing}"` : ''}`;
     switch (b.type) {
       case 'section': {
         const columns = await Promise.all((b.content ?? []).map(async (column) => `<div class="story-section-column">${await renderStoryBlocksSafe(column, options)}</div>`));

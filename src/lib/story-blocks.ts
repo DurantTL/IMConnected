@@ -21,6 +21,8 @@ export interface StoryBlock extends StoryPhotoRef {
   columns?: 2 | 3;
   content?: StoryBlock[][];
   label?: string;
+  align?: 'left' | 'center' | 'right';
+  spacing?: 'compact' | 'normal' | 'relaxed';
 }
 
 export interface PhotoCrop { focalX?: number; focalY?: number; zoom?: number }
@@ -169,6 +171,14 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
     ids.add(r.id);
     if (ids.size > STORY_BLOCK_LIMIT) return error(`A story can have at most ${STORY_BLOCK_LIMIT} modules, including sections.`);
     const b: StoryBlock = { id: r.id, type: r.type as StoryBlockType };
+    if (r.align !== undefined) {
+      if (!['text', 'heading', 'quote', 'list', 'button'].includes(b.type) || !['left', 'center', 'right'].includes(r.align as string)) return error('Choose a supported text alignment.');
+      b.align = r.align as StoryBlock['align'];
+    }
+    if (r.spacing !== undefined) {
+      if (!['compact', 'normal', 'relaxed'].includes(r.spacing as string)) return error('Choose compact, normal or relaxed spacing.');
+      b.spacing = r.spacing as StoryBlock['spacing'];
+    }
     if (b.type === 'section') {
       if (depth > 0) return error('Sections cannot be nested.');
       if (!Array.isArray(r.content) || r.content.length < 1 || r.content.length > 2 || !r.content.every(Array.isArray)) return error('A section needs one or two columns.');

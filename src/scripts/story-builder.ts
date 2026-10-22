@@ -1,4 +1,4 @@
-import { walkStoryBlocks, mapStoryBlocks, countStoryBlocks, findStoryBlockLocation, STORY_BLOCK_LIMIT, splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
+import { isStoryButtonUrl, checkStoryBlockLength, walkStoryBlocks, mapStoryBlocks, countStoryBlocks, findStoryBlockLocation, STORY_BLOCK_LIMIT, splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
 const blocksField = document.getElementById('story-blocks') as HTMLInputElement | null;
@@ -173,9 +173,9 @@ if (form && blocksField) {
     } };
     renderList(blocks);
   }
-  function update(block: StoryBlock, key: string, value: unknown) {
+  function update(block: StoryBlock, key: string, value: unknown, discrete = false) {
     if (!editable) return;
-    remember(`${block.id}:${key}`);
+    remember(discrete ? '' : `${block.id}:${key}`);
     Object.assign(block, { [key]: value });
     sync(); renderOutline(); changed();
   }
@@ -198,13 +198,16 @@ if (form && blocksField) {
           let suffix: string = after;
           if (name === 'Link') {
             const url = window.prompt('Link address (https://…)', 'https://');
-            if (!url || !/^(https?:\/\/|mailto:|tel:)/i.test(url.trim())) return;
+            if (!url) { input.focus(); return; }
+            if (!isStoryButtonUrl(url.trim())) { announce('Use a safe web, mailto or tel link without embedded credentials.'); input.focus(); return; }
             suffix = `](${url.trim().replace(/\(/g, '%28').replace(/\)/g, '%29')})`;
           }
           const start = input.selectionStart, end = input.selectionEnd;
           const selectedText = input.value.slice(start, end) || 'text';
-          input.setRangeText(before + selectedText + suffix, start, end, 'end');
-          update(block, key, input.value); input.focus();
+          const value = input.value.slice(0, start) + before + selectedText + suffix + input.value.slice(end);
+          try { checkStoryBlockLength(mapStoryBlocks(blocks, (b) => b.id === block.id ? { ...b, [key]: value } : b)); }
+          catch (error) { announce(error instanceof Error ? error.message : 'The story is too long.'); input.focus(); return; }
+          input.value = value; update(block, key, value, true); input.focus(); input.setSelectionRange(start + before.length, start + before.length + selectedText.length);
         }));
       }
       fields.append(tools);
@@ -318,6 +321,16 @@ if (form && blocksField) {
       fields.append(button('Open Photo studio', () => setPanel('photos', true)));
     }
     if (block.type === 'divider') fields.append(node('p', 'A simple divider gives the next part of your story room to breathe.', 'admin-note'));
+    const settings = node('div', undefined, 'sb-controls');
+    for (const [key, name, values] of [
+      ...(['text', 'heading', 'quote', 'list', 'button'].includes(block.type) ? [['align', 'Text alignment', [['', 'Default (left)'], ['left', 'Left'], ['center', 'Center'], ['right', 'Right']]]] : []),
+      ['spacing', 'Module spacing', [['', 'Default'], ['compact', 'Compact'], ['normal', 'Normal'], ['relaxed', 'Relaxed']]],
+    ] as [string, string, [string, string][]][]) {
+      const label = node('label', name), select = node('select'); select.setAttribute('aria-label', name); select.dataset.moduleField = key;
+      for (const [value, text] of values) { const option = node('option', text); option.value = value; option.selected = ((block as unknown as Record<string, unknown>)[key] ?? '') === value; select.append(option); }
+      select.addEventListener('change', () => update(block, key, select.value || undefined, true)); label.append(select); settings.append(label);
+    }
+    fields.append(settings);
     const actions = node('div', undefined, 'sb-controls');
     actions.append(button('Duplicate module', () => {
       if (countStoryBlocks(blocks) + countStoryBlocks([block]) > STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules, including sections.'); return; }

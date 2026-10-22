@@ -587,6 +587,11 @@ try {
   check('Section inserts two columns with distinct stable paragraph IDs', section.type === 'section' && section.content.length === 2 && section.content[0][0].id !== section.content[1][0].id && await page.locator('#module-count').textContent() === '4');
   const choose = async (id) => page.locator(`[data-select-module="${id}"]`).click();
   await choose(section.content[0][0].id); await page.locator('[data-module-field=text]').fill('Synthetic left column text.');
+  await page.locator('[data-module-field=text]').evaluate((el) => { el.focus(); el.setSelectionRange(10, 14); });
+  await page.locator('#module-fields').getByRole('button', { name: 'Bold', exact: true }).focus(); await page.keyboard.press('Enter');
+  check('keyboard formatting wraps only selected text and preserves selection/focus', await page.locator('[data-module-field=text]').evaluate((el) => el === document.activeElement && el.value === 'Synthetic **left** column text.' && el.value.slice(el.selectionStart, el.selectionEnd) === 'left'));
+  await page.getByLabel('Text alignment', { exact: true }).selectOption('center'); await page.getByLabel('Module spacing', { exact: true }).selectOption('relaxed');
+  await page.locator('#blocks-undo').click(); check('formatting settings are atomic undo changes', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0][0].spacing === undefined); await page.locator('#blocks-redo').click();
   await page.locator('[data-add-module=image]').click();
   await choose(section.content[1][0].id); await page.locator('[data-module-field=text]').fill('Synthetic right column text.');
   const beforeCrossDrop = await page.locator('#story-blocks').inputValue();
@@ -598,7 +603,7 @@ try {
   await choose(section.id); const beforeSectionDuplicate = await page.locator('#story-blocks').inputValue();
   await page.getByRole('button', { name: 'Duplicate module', exact: true }).click();
   const duplicatedSections = JSON.parse(await page.locator('#story-blocks').inputValue()); const flattenedSections = duplicatedSections.flatMap((b) => [b, ...(b.content?.flat() ?? [])]);
-  check('section duplication regenerates every descendant ID', new Set(flattenedSections.map((b) => b.id)).size === flattenedSections.length && duplicatedSections.at(-1).content[0][0].text === 'Synthetic left column text.');
+  check('section duplication regenerates every descendant ID', new Set(flattenedSections.map((b) => b.id)).size === flattenedSections.length && duplicatedSections.at(-1).content[0][0].text === 'Synthetic **left** column text.');
   await page.locator('#blocks-undo').click(); check('section duplication is one undo step', await page.locator('#story-blocks').inputValue() === beforeSectionDuplicate);
   await page.getByLabel('Section columns', { exact: true }).selectOption('1');
   check('changing to one column preserves all children in reading order', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0].length === 3);
@@ -608,6 +613,7 @@ try {
   check('keyboard canvas selection opens a nested child inspector', await page.locator('[data-module-field=text]').inputValue() === 'Synthetic right column text.');
   const sectionSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST'); await page.locator('#save-btn').click(); assert.equal((await sectionSave).status(), 200); await publishLegacy();
   for (const [width, columns] of [[1440, 2], [390, 1]]) { await publicPage.setViewportSize({ width, height: 1000 }); check(`section reads in ${columns} columns at ${width}px`, await publicPage.locator('.story-section').evaluate((el, n) => getComputedStyle(el).gridTemplateColumns.split(' ').length === n && el.textContent.indexOf('left column') < el.textContent.indexOf('right column') && document.documentElement.scrollWidth <= innerWidth, columns)); if (shots) await publicPage.screenshot({ path: path.join(shots, `story-sections-${width}.png`), fullPage: true }); }
+  check('public selected-text formatting and finite alignment/spacing survive publish', await publicPage.locator('.story-section [data-align=center]').evaluate((el) => getComputedStyle(el).textAlign === 'center' && getComputedStyle(el).marginBlockStart === '40px' && el.querySelector('strong').textContent === 'left'));
   check('nested image appears once and section source order survives publishing', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-section img').count() === 1);
   const brokenData = path.join(scratch, 'synthetic-broken-db'); fs.mkdirSync(brokenData); fs.writeFileSync(path.join(brokenData, 'imconnected.db'), 'synthetic invalid sqlite fixture');
   const unavailableServer = spawn(process.execPath, ['dist/server/entry.mjs'], { cwd: ROOT, env: { ...process.env, HOST: '127.0.0.1', PORT: String(PORT + 1), DATA_DIR: brokenData, SITE_URL: `http://localhost:${PORT + 1}`, AUTH_SECRET: 'synthetic-unavailable-' + 'x'.repeat(32), RESEND_API_KEY: '', GDRIVE_SERVICE_ACCOUNT_JSON: '', GDRIVE_FOLDER_ID: '', PUBLISH_TOKEN: '', AGENT_API_TOKEN: '' }, stdio: 'ignore' });

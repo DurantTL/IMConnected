@@ -237,13 +237,14 @@ try {
   await assert.rejects(() => m.publishDraft(m.getDraft(gid), m.listPhotos(gid), m.getDraft(gid).updatedAt, user), (e) => e.code === 'blocks_bad');
   const sid = m.createDraft({ source: 'editor', userId: user, fields: { title: 'Synthetic section story', author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic grouped text.' } });
   const sp = addPhoto(sid, 'Column image', 101);
-  const sblocks = [{ id: 'section', type: 'section', content: [[{ id: 'c1', type: 'text', text: 'First <column> **story**.' }, { id: 'ci', type: 'image', photoId: sp.id }], [{ id: 'c2', type: 'text', text: 'Second column story.' }, { id: 'cb', type: 'button', label: 'Read details', url: 'https://example.invalid/columns' }]] }];
+  const sblocks = [{ id: 'section', type: 'section', content: [[{ id: 'c1', type: 'text', text: 'First <column> **story**.', align: 'right', spacing: 'relaxed' }, { id: 'ci', type: 'image', photoId: sp.id }], [{ id: 'c2', type: 'text', text: 'Second column story.' }, { id: 'cb', type: 'button', label: 'Read details', url: 'https://example.invalid/columns' }]] }];
   const ss = m.saveDraft(sid, m.getDraft(sid).updatedAt, { ...m.getDraft(sid), storyBlocks: sblocks }, new Map(), user); assert.equal(ss.ok, true);
   const forgedSections = [{ id: 'section', type: 'section', content: [[{ id: 'foreign', type: 'image', photoId: reopenedPhoto.id }]] }];
   assert.equal(m.saveDraft(sid, ss.updatedAt, { ...m.getDraft(sid), storyBlocks: forgedSections }, new Map(), user).ok, false, 'nested image IDs must belong to this draft');
   const spp = await m.publishDraft(m.getDraft(sid), m.listPhotos(sid), ss.updatedAt, user), sst = m.getStoryBySlug(spp.slug);
-  assert.equal(sst.storyBlocks[0].content[0][1].photoIndex, 0); assert.equal(sst.storyBlocks[0].content[0][1].photoId, undefined); assert.match(sst.storyBlocks[0].content[0][0].text, /&lt;column>/);
+  assert.equal(sst.storyBlocks[0].content[0][0].align, 'right'); assert.equal(sst.storyBlocks[0].content[0][0].spacing, 'relaxed'); assert.equal(sst.storyBlocks[0].content[0][1].photoIndex, 0); assert.equal(sst.storyBlocks[0].content[0][1].photoId, undefined); assert.match(sst.storyBlocks[0].content[0][0].text, /&lt;column>/);
   const sl = m.loadStory(spp.slug); m.reloadDraftFromStory(sid, user, sl.fields, sl.photos);
+  assert.equal(m.getDraft(sid).storyBlocks[0].content[0][0].align, 'right');
   assert.equal(m.getDraft(sid).storyBlocks[0].content[0][1].photoId, m.listPhotos(sid)[0].id);
   assert.equal(m.changePhoto(sid, m.getDraft(sid).updatedAt, user, 'delete', m.listPhotos(sid)[0].id).ok, true);
   assert.equal(m.storyBlockPhotos(m.getDraft(sid).storyBlocks).length, 0); assert.equal(m.getDraft(sid).storyBlocks[0].content[1][0].text, 'Second column story.');
