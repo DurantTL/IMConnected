@@ -239,6 +239,13 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                       <button type="button" data-insert-layout="recap">Event recap <small>Heading · paragraph · list · paragraph</small></button>
                       <button type="button" data-insert-layout="announcement">Announcement <small>Heading · paragraph · list · divider</small></button>
                     </div>
+                    <h3 class="sb-library-heading">My saved layouts</h3>
+                    <p class="admin-note">Save the structure and settings. Text, links and photo choices are left out.</p>
+                    <label>Layout name<input id="saved-layout-name" data-editor-local maxlength="80" autocomplete="off" /></label>
+                    <button type="button" id="save-story-layout">Save this structure</button>
+                    <label>Saved layout<select id="saved-layout-choice" aria-label="Saved layout" data-editor-local><option value="">Loading layouts…</option></select></label>
+                    <div class="sb-controls"><button type="button" id="insert-story-layout">Insert saved layout</button><button type="button" id="delete-story-layout">Delete saved layout</button></div>
+                    <p id="saved-layout-status" role="status" class="admin-note"></p>
                     </details><div class="sb-pane-heading"><span class="sb-step">01</span><div><h3>Story outline</h3><p>Arrange your content</p></div><span id="module-count" class="sb-count"></span></div>
                     <p class="sb-drag-help">Drag a module to reorder. Move buttons also work with a keyboard.</p>
                     <ol id="module-outline"></ol>

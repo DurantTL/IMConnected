@@ -44,6 +44,7 @@ try {
         if (id === '\0story-builder-test:db') return 'export function getDb(){return globalThis.__storyBuilderTestDb}';
         if (id === '\0story-builder-test:entry') return [
           `export * from ${JSON.stringify(path.join(root, 'src/lib/drafts.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/editor-layouts.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/agent.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/announcement.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/announcement-render.ts'))};`,
@@ -248,6 +249,14 @@ try {
   assert.equal(m.getDraft(sid).storyBlocks[0].content[0][1].photoId, m.listPhotos(sid)[0].id);
   assert.equal(m.changePhoto(sid, m.getDraft(sid).updatedAt, user, 'delete', m.listPhotos(sid)[0].id).ok, true);
   assert.equal(m.storyBlockPhotos(m.getDraft(sid).storyBlocks).length, 0); assert.equal(m.getDraft(sid).storyBlocks[0].content[1][0].text, 'Second column story.');
+  const named = m.saveEditorLayout(user, 'Synthetic <layout>', sblocks);
+  const structures = m.listEditorLayouts(user), structure = structures.find((l) => l.id === named);
+  assert.equal(structure.name, 'Synthetic <layout>'); assert.equal(structure.blocks[0].content[0][0].align, 'right');
+  const storedStructure = JSON.stringify(structure.blocks); for (const forbidden of ['First', 'https:', 'photoId', 'photoIndex', 'focalX', 'Column image']) assert.ok(!storedStructure.includes(forbidden), 'saved layout excludes ' + forbidden);
+  const otherUser = Number(db.prepare("INSERT INTO users(email,name,role,status,created_at,updated_at) VALUES('other-layout@example.invalid','Other Synthetic Editor','editor','active',?,?)").run(now, now).lastInsertRowid);
+  assert.deepEqual(m.listEditorLayouts(otherUser), []); assert.equal(m.deleteEditorLayout(otherUser, named), false); assert.equal(m.listEditorLayouts(user).length, 1);
+  for (let i = 1; i < 50; i++) m.saveEditorLayout(user, 'Synthetic ' + i, [{ id: 'blank', type: 'text', text: 'Private story text' }]);
+  assert.throws(() => m.saveEditorLayout(user, 'Excess', sblocks), /up to 50/); assert.equal(m.deleteEditorLayout(user, named), true); assert.equal(m.listEditorLayouts(user).length, 49);
   // Typed agent announcements preserve omission/clearing and remain subject to human review.
   const agentBase = { title: 'Synthetic event flyer', body: 'Accessible synthetic event summary.', author: 'Synthetic Editor', section: 'news', area: 'conference', sourceUrl: 'https://example.invalid/source/bulletin', photos: [{ data: `data:image/png;base64,${syntheticPng(33).toString('base64')}`, alt: 'Synthetic event flyer' }] };
   const bulletin = { kind: 'event', eventDate: '2026-12-01', location: 'Synthetic Hall <north>', links: [{ label: 'Register <here>', url: 'https://example.invalid/register' }], videoUrl: 'https://youtu.be/abcdefghijk' };

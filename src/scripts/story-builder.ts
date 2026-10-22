@@ -393,6 +393,49 @@ if (form && blocksField) {
     fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
     announce(`${layout.label} inserted after the selected module. ${added.length} empty modules added; existing content is kept.`);
   });
+  const layoutName = document.getElementById('saved-layout-name') as HTMLInputElement;
+  layoutName.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); document.getElementById('save-story-layout')?.click(); } });
+  const layoutChoice = document.getElementById('saved-layout-choice') as HTMLSelectElement;
+  const layoutStatus = document.getElementById('saved-layout-status')!;
+  let savedLayouts: { id: number; name: string; blocks: StoryBlock[] }[] = [];
+  async function loadLayouts(selectedId?: number) {
+    try {
+      const response = await fetch('/api/admin/layouts', { credentials: 'same-origin' }); const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load saved layouts.');
+      savedLayouts = data.layouts; layoutChoice.replaceChildren();
+      const empty = node('option', savedLayouts.length ? 'Choose a layout' : 'No saved layouts yet'); empty.value = ''; layoutChoice.append(empty);
+      for (const layout of savedLayouts) { const option = node('option', layout.name); option.value = String(layout.id); layoutChoice.append(option); }
+      if (selectedId) layoutChoice.value = String(selectedId);
+    } catch (error) { layoutStatus.textContent = error instanceof Error ? error.message : 'Could not load saved layouts.'; }
+  }
+  async function layoutPost(form: FormData) {
+    const response = await fetch('/api/admin/layouts', { method: 'POST', body: form, credentials: 'same-origin' }); const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Could not save the layout.'); return data;
+  }
+  document.getElementById('save-story-layout')?.addEventListener('click', async () => {
+    if (!editable || !modular || !countStoryBlocks(blocks)) return;
+    const form = new FormData(); form.set('op', 'save'); form.set('name', layoutName.value); form.set('blocks', JSON.stringify(blocks));
+    try { const data = await layoutPost(form); await loadLayouts(data.id); layoutStatus.textContent = 'Structure saved. Add content when you reuse it.'; }
+    catch (error) { layoutStatus.textContent = error instanceof Error ? error.message : 'Could not save the layout.'; }
+  });
+  document.getElementById('insert-story-layout')?.addEventListener('click', () => {
+    const layout = savedLayouts.find((l) => l.id === Number(layoutChoice.value));
+    if (!editable || !modular || !layout) { layoutStatus.textContent = 'Choose a saved layout first.'; return; }
+    if (countStoryBlocks(blocks) + countStoryBlocks(layout.blocks) > STORY_BLOCK_LIMIT) { announce('This layout would exceed the 60-module limit. No modules were added.'); return; }
+    const added = mapStoryBlocks(clone(layout.blocks), (b) => ({ ...b, id: uid() }));
+    const at = findStoryBlockLocation(blocks, selected);
+    // A structure containing sections stays at the root; sections cannot nest.
+    const target = added.some((b) => b.type === 'section') && at?.section ? findStoryBlockLocation(blocks, at.section.id) : at;
+    remember(); (target?.siblings ?? blocks).splice(target ? target.index + 1 : blocks.length, 0, ...added); selected = added[0].id;
+    render(); changed(); focusSelected(); announce('Saved structure inserted. Fill in its content and choose photos.');
+  });
+  document.getElementById('delete-story-layout')?.addEventListener('click', async () => {
+    if (!editable || !layoutChoice.value || !window.confirm('Delete this saved layout?')) return;
+    const form = new FormData(); form.set('op', 'delete'); form.set('id', layoutChoice.value);
+    try { await layoutPost(form); await loadLayouts(); layoutStatus.textContent = 'Saved layout deleted.'; }
+    catch (error) { layoutStatus.textContent = error instanceof Error ? error.message : 'Could not delete the layout.'; }
+  });
+  void loadLayouts();
   useModules.addEventListener('click', () => {
     if (!editable || modular) return;
     remember(); modular = true;
