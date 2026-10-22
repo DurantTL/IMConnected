@@ -561,6 +561,32 @@ try {
   const markerPreview = await (await post(`/api/admin/drafts/${legacyId}/preview`, markerForm)).json();
   check('announcement inline marker preview shows one full flyer', (markerPreview.doc.match(/<img /g) || []).length === 1 && markerPreview.doc.includes('story-inline-photo story-flyer'));
   await publishLegacy(); check('announcement inline marker publishes one full flyer with no crop', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-flyer img').evaluate((img) => !img.style.scale && img.style.aspectRatio === 'auto'));
+  await publicPage.goto(BASE + '/announcements/');
+  check('public board lists live event and announcement types and exposes navigation', await publicPage.locator('[data-board-kind=event]').count() === 1 && await publicPage.locator('[data-board-kind=announcement]').count() === 1 && await publicPage.locator('.nav a[aria-current=page][href="/announcements/"]').count() === 1);
+  await publicPage.getByRole('button', { name: /^Events / }).click();
+  check('board filters events and announces its result count', await publicPage.locator('[data-board-kind]:visible').count() === 1 && await publicPage.locator('#board-count').textContent() === '1 update');
+  await publicPage.getByRole('button', { name: /^All updates / }).click();
+  for (const width of [1440, 390]) {
+    await publicPage.setViewportSize({ width, height: 1000 });
+    check(`announcements board fits at ${width}px without flyer cropping`, await publicPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('.board-flyer img')].every((img) => getComputedStyle(img).objectFit === 'contain')));
+    if (shots) await publicPage.screenshot({ path: path.join(shots, `announcements-board-${width}.png`), fullPage: true });
+  }
+  if (process.env.AXE_JS) { await publicPage.addScriptTag({ path: process.env.AXE_JS }); const boardAxe = await publicPage.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })); check('public announcements board passes axe', boardAxe.violations.length === 0); }
+  const boardSource = await (await fetch(BASE + '/announcements/')).text();
+  check('board server response contains both types and no private photo endpoint', (boardSource.match(/data-board-kind=/g) || []).length === 2 && !boardSource.includes('/api/admin/photos/'));
+  // Prime the origin cache, then a human-only local test action removes the announcement.
+  const hideAnnouncement = new FormData(); hideAnnouncement.set('slug', legacyDraft().slug);
+  const unlisted = await post('/api/admin/stories/unpublish', hideAnnouncement);
+  check('local human unpublish succeeds', unlisted.status === 303);
+  const boardAfter = await (await fetch(BASE + '/announcements/')).text();
+  check('unpublish immediately invalidates cached board and removes that announcement', !boardAfter.includes('data-board-kind="announcement"') && boardAfter.includes('data-board-kind="event"'));
+  const brokenData = path.join(scratch, 'synthetic-broken-db'); fs.mkdirSync(brokenData); fs.writeFileSync(path.join(brokenData, 'imconnected.db'), 'synthetic invalid sqlite fixture');
+  const unavailableServer = spawn(process.execPath, ['dist/server/entry.mjs'], { cwd: ROOT, env: { ...process.env, HOST: '127.0.0.1', PORT: String(PORT + 1), DATA_DIR: brokenData, SITE_URL: `http://localhost:${PORT + 1}`, AUTH_SECRET: 'synthetic-unavailable-' + 'x'.repeat(32), RESEND_API_KEY: '', GDRIVE_SERVICE_ACCOUNT_JSON: '', GDRIVE_FOLDER_ID: '', PUBLISH_TOKEN: '', AGENT_API_TOKEN: '' }, stdio: 'ignore' });
+  try {
+    let unavailableResponse;
+    for (let attempt = 0; attempt < 80; attempt++) { try { unavailableResponse = await fetch(`http://localhost:${PORT + 1}/announcements/`); break; } catch { await sleep(100); } }
+    check('unreadable database makes the board503/no-store with no frozen archive fallback', unavailableResponse?.status === 503 && unavailableResponse.headers.get('cache-control') === 'no-store' && !(await unavailableResponse.text()).includes('data-board-kind'));
+  } finally { const stopped = new Promise((resolve) => unavailableServer.once('exit', resolve)); unavailableServer.kill('SIGTERM'); await Promise.race([stopped, sleep(2000)]); if (unavailableServer.exitCode === null) unavailableServer.kill('SIGKILL'); }
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {

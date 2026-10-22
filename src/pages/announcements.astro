@@ -1,0 +1,50 @@
+---
+import Base from '../layouts/Base.astro';
+import { asUnavailable, getPublicStories } from '../lib/public-stories';
+import { formatDate } from '../lib/site';
+import { storyExcerpt } from '../lib/excerpt';
+export const prerender = false;
+let all: Awaited<ReturnType<typeof getPublicStories>>;
+try { all = await getPublicStories(); } catch (err) { return asUnavailable(err); }
+const notices = all.filter((s) => s.data.announcement);
+const events = notices.filter((s) => s.data.announcement?.kind === 'event').length;
+---
+<Base title="Announcements & events" description="Community announcements, event invitations and flyers from across Iowa and Missouri." current="announcements">
+  <div class="wrap board-page">
+    <header class="board-heading">
+      <div><p class="kicker">The community board</p><h1>Announcements<br /><em>&amp; events.</em></h1><p class="board-intro">Dates to remember. Invitations to share. Find what’s happening across our community.</p></div>
+      <aside class="board-invitation"><span aria-hidden="true">↗</span><h2>Have something to share?</h2><p>Send an announcement or event flyer for our editors to review.</p><a href="/submit/">Share with the community →</a></aside>
+    </header>
+    <div class="board-tools"><div class="board-filters" role="group" aria-label="Filter announcements and events" hidden><button type="button" data-board-filter="all" aria-pressed="true">All updates <span>{notices.length}</span></button><button type="button" data-board-filter="event" aria-pressed="false">Events <span>{events}</span></button><button type="button" data-board-filter="announcement" aria-pressed="false">Announcements <span>{notices.length - events}</span></button></div><p id="board-count" role="status">{notices.length} {notices.length === 1 ? 'update' : 'updates'}</p></div>
+    {notices.length ? <div class="board-grid">{notices.map((story) => {
+      const d = story.data, a = d.announcement!, href = `/stories/${story.id}/`;
+      return <article class="board-card" data-board-kind={a.kind}>
+        <div class="board-card-label"><span>{a.kind === 'event' ? 'Event' : 'Announcement'}</span>{a.eventDate && <time datetime={a.eventDate}>{formatDate(new Date(`${a.eventDate}T12:00:00Z`))}</time>}</div>
+        {d.image && <a class="board-flyer" href={href} aria-label={`Read ${d.title}`}><img src={d.image} alt={d.imageAlt ?? ''} loading="lazy" decoding="async" /></a>}
+        <div class="board-card-copy"><h2><a href={href}>{d.title}</a></h2>{a.location && <p class="board-location">{a.location}</p>}<p>{d.dek || storyExcerpt(story.body ?? '', 180)}</p>
+          {!!a.links.length && <div class="board-actions">{a.links.map((link) => <a href={link.url}>{link.label} <span aria-hidden="true">↗</span></a>)}</div>}
+          {a.videoUrl && <a class="board-video" href={href + '#announcement-details'}>Video &amp; event details →</a>}
+          <a class="board-read" href={href} aria-label={`Read announcement: ${d.title}`}>Read announcement <span aria-hidden="true">→</span></a>
+        </div>
+      </article>;
+    })}</div> : <section class="board-empty"><h2>A place for what’s next.</h2><p>There are no published announcements yet. Check back for community updates, or send something for our editors to review.</p><a class="btn accent" href="/submit/">Submit a Story</a></section>}
+    <p id="board-no-results" class="board-empty" hidden>No updates match this filter. Choose All updates to see the full board.</p>
+  </div>
+</Base>
+<style>
+  [hidden]{display:none!important}.board-page{padding-top:54px;padding-bottom:80px}.board-heading{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:64px;align-items:center;padding-bottom:42px;border-bottom:2px solid var(--ink,#183e48)}.board-heading h1{font-size:clamp(44px,6.5vw,88px);line-height:1.02;letter-spacing:-.045em;margin:18px 0 24px}.board-heading h1 em{font-weight:400;color:#386f72}.board-intro{max-width:530px;font:18px/1.6 system-ui;color:#4d6265}.board-invitation{padding:30px;background:#153f49;color:#fff;border-radius:3px}.board-invitation>span{font:48px/1 system-ui;color:#e8b56d}.board-invitation h2{font-size:25px;line-height:1.15;margin:22px 0 14px}.board-invitation p{font:15px/1.6 system-ui;color:#dae7e7}.board-invitation a{display:inline-block;margin-top:12px;font:700 14px/1.5 system-ui;color:#fff;text-underline-offset:5px}.board-tools{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px;padding:24px 0}.board-tools p{margin:0;font:14px/1.5 system-ui;color:#4c6265}.board-filters{display:flex;flex-wrap:wrap;gap:8px}.board-filters button{border:1px solid #b5c5c6;border-radius:30px;background:transparent;color:#234b53;padding:10px 16px;cursor:pointer;font:600 14px/1.4 system-ui}.board-filters button[aria-pressed=true]{background:#183e48;border-color:#183e48;color:white}.board-filters span{padding-left:8px;opacity:.8}.board-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:26px;align-items:start}.board-card{border:1px solid #cad5d5;background:white;border-radius:4px;overflow:hidden;min-width:0}.board-card-label{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;padding:16px 20px;font:600 12px/1.5 system-ui;letter-spacing:.025em;color:#315d64}.board-card-label>span{text-transform:uppercase}.board-flyer{display:block;padding:18px;background:#edf2f0;border-top:1px solid #d6dfdf;border-bottom:1px solid #d6dfdf}.board-flyer img{display:block;width:100%;height:auto;max-height:480px;object-fit:contain}.board-card-copy{padding:23px}.board-card h2{font-size:27px;line-height:1.15;margin:0 0 18px;overflow-wrap:anywhere}.board-card h2 a{color:#183e48;text-decoration:none}.board-card h2 a:hover{text-decoration:underline}.board-card-copy>p{font:15px/1.6 system-ui;color:#4c6265;overflow-wrap:anywhere}.board-location{font-weight:700!important;color:#234b53!important}.board-actions{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0}.board-actions a{font:700 13px/1.4 system-ui;padding:10px 13px;border:1px solid #9eb6b8;border-radius:3px;color:#234b53;text-decoration:none;overflow-wrap:anywhere;max-width:100%}.board-actions a:hover{background:#edf2f0}.board-video{display:block;font:600 14px/1.5 system-ui;color:#315d64;margin-bottom:18px}.board-read{display:flex;justify-content:space-between;gap:12px;padding-top:18px;border-top:1px solid #d5dfdf;font:700 14px/1.5 system-ui;color:#234b53;text-decoration:none}.board-empty{border:1px dashed #b3c5c6;padding:44px;max-width:760px;margin:20px auto;text-align:center}.board-empty h2{font-size:32px}.board-empty p{font:17px/1.6 system-ui;color:#4c6265}.board-page :focus-visible{outline:3px solid #a14b0b;outline-offset:4px}
+  @media(max-width:1000px){.board-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.board-heading{gap:30px;grid-template-columns:minmax(0,1fr) 270px}}
+  @media(max-width:650px){.board-page{padding-top:30px}.board-heading{grid-template-columns:minmax(0,1fr);gap:24px;padding-bottom:28px}.board-heading h1{font-size:48px}.board-invitation{padding:24px}.board-invitation h2{margin-top:10px}.board-invitation>span{float:right}.board-grid{grid-template-columns:minmax(0,1fr)}.board-empty{padding:26px}.board-filters button{padding:10px 12px}}
+</style>
+<script>
+  const controls = document.querySelector<HTMLElement>('.board-filters');
+  if (controls) controls.hidden = false;
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-board-filter]')) button.addEventListener('click', () => {
+    const filter = button.dataset.boardFilter;
+    let count = 0;
+    for (const card of document.querySelectorAll<HTMLElement>('[data-board-kind]')) { card.hidden = filter !== 'all' && card.dataset.boardKind !== filter; if (!card.hidden) count++; }
+    for (const choice of document.querySelectorAll('[data-board-filter]')) choice.setAttribute('aria-pressed', String(choice === button));
+    document.getElementById('board-count')!.textContent = `${count} ${count === 1 ? 'update' : 'updates'}`;
+    document.getElementById('board-no-results')!.hidden = count > 0;
+  });
+</script>

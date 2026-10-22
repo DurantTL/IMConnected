@@ -52,7 +52,7 @@ const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
  */
 export function publicCacheKey(pathname: string): string | null {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
-  if (path === '/' || path === '/rss.xml' || path === '/stories.json') return path;
+  if (path === '/' || path === '/rss.xml' || path === '/stories.json' || path === '/announcements') return path;
   const parts = path.split('/');
   if (parts.length === 3 && parts[1] === 'stories') return SLUG.test(parts[2]) ? path : null;
   if (parts.length === 2 || parts.length === 3) {

@@ -233,7 +233,7 @@ The communication director builds each newsletter in IMConnected Studio. Clickin
 
 ## Announcements and event media
 
-Choose Announcement or Event in Story settings to add a full-height flyer (first photo), optional date/location, up to three labelled link buttons and a YouTube/Vimeo video. The module library includes Flyer and Video for placement within any story. Readers explicitly load video players; private preview stays link-only. See [the agent request examples and editor workflow](docs/AGENT-ANNOUNCEMENTS.md). Migration019 stores additive typed metadata in the existing SQLite database; older form, agent and Studio clients preserve it when omitted.
+The public `/announcements/` page lists published announcements/events, with type filters and full-aspect flyer cards. Choose Announcement or Event in Story settings to add a full-height flyer (first photo), optional date/location, up to three labelled link buttons and a YouTube/Vimeo video. The module library includes Flyer and Video for placement within any story. Readers explicitly load video players; private preview stays link-only. See [the agent request examples and editor workflow](docs/AGENT-ANNOUNCEMENTS.md). Migration019 stores additive typed metadata in the existing SQLite database; older form, agent and Studio clients preserve it when omitted.
 
 ## AI agent API
 

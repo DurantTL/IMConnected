@@ -54,3 +54,7 @@ In **Story settings**, choose Announcement or Event and review the date, locatio
 The module library also includes **Flyer**, **Video**, **Gallery**, and **Button / link**. Flyer selects a current-story photo and displays its whole image. Leave its description empty to follow the photo's current description, or enter an explicit override. Video accepts a supported provider link and a descriptive title. Button / link adds a labelled action at any point in the story. Galleries select and reorder story-owned photos with two or three columns. Duplicate, Undo and reopening published content preserve these modules and their references.
 
 Ordinary stories can use these modules too. Announcement metadata is additive in `/stories.json` (version 1) and the authenticated Studio lists; older Studio requests retain the saved metadata. An open editor's draft is preserved when Studio replaces its live story.
+
+## Public announcements and events page
+
+Published announcements/events appear at `/announcements/` as well as their normal `/stories/<slug>/` detail addresses. The navigation links to the board, where readers can filter events and announcements. Drafts, unpublished stories and ordinary story types do not appear. Publishing or unpublishing invalidates the origin page cache immediately; existing browser/CDN cache lifetimes still apply. If the story database is unavailable, the page reports503 instead of showing the frozen archive.
