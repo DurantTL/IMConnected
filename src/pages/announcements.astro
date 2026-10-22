@@ -13,7 +13,7 @@ const events = notices.filter((s) => s.data.announcement?.kind === 'event').leng
   <div class="wrap board-page">
     <header class="board-heading">
       <div><p class="kicker">The community board</p><h1>Announcements<br /><em>&amp; events.</em></h1><p class="board-intro">Dates to remember. Invitations to share. Find what’s happening across our community.</p></div>
-      <aside class="board-invitation"><span aria-hidden="true">↗</span><h2>Have something to share?</h2><p>Send an announcement or event flyer for our editors to review.</p><a href="/submit/">Share with the community →</a></aside>
+      <aside class="board-invitation"><span aria-hidden="true"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 19 19 5M5 5h14v14" /></svg></span><h2>Have something to share?</h2><p>Send an announcement or event flyer for our editors to review.</p><a href="/submit/">Share with the community →</a></aside>
     </header>
     <div class="board-tools"><div class="board-filters" role="group" aria-label="Filter announcements and events" hidden><button type="button" data-board-filter="all" aria-pressed="true">All updates <span>{notices.length}</span></button><button type="button" data-board-filter="event" aria-pressed="false">Events <span>{events}</span></button><button type="button" data-board-filter="announcement" aria-pressed="false">Announcements <span>{notices.length - events}</span></button></div><p id="board-count" role="status">{notices.length} {notices.length === 1 ? 'update' : 'updates'}</p></div>
     {notices.length ? <div class="board-grid">{notices.map((story) => {
@@ -22,7 +22,7 @@ const events = notices.filter((s) => s.data.announcement?.kind === 'event').leng
         <div class="board-card-label"><span>{a.kind === 'event' ? 'Event' : 'Announcement'}</span>{a.eventDate && <time datetime={a.eventDate}>{formatDate(new Date(`${a.eventDate}T12:00:00Z`))}</time>}</div>
         {d.image && <a class="board-flyer" href={href} aria-label={`Read ${d.title}`}><img src={d.image} alt={d.imageAlt ?? ''} loading="lazy" decoding="async" /></a>}
         <div class="board-card-copy"><h2><a href={href}>{d.title}</a></h2>{a.location && <p class="board-location">{a.location}</p>}<p>{d.dek || storyExcerpt(story.body ?? '', 180)}</p>
-          {!!a.links.length && <div class="board-actions">{a.links.map((link) => <a href={link.url}>{link.label} <span aria-hidden="true">↗</span></a>)}</div>}
+          {!!a.links.length && <div class="board-actions">{a.links.map((link) => <a href={link.url}>{link.label} <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 19 19 5M5 5h14v14" /></svg></a>)}</div>}
           {a.videoUrl && <a class="board-video" href={href + '#announcement-details'}>Video &amp; event details →</a>}
           <a class="board-read" href={href} aria-label={`Read announcement: ${d.title}`}>Read announcement <span aria-hidden="true">→</span></a>
         </div>
