@@ -94,6 +94,9 @@ try {
     assert.throws(() => checkStoryBlockLength([{ id: 'outer', type: 'section', content: [[{ id: 't1', type: 'text', text: 'x'.repeat(10001) }], [{ id: 't2', type: 'text', text: 'y'.repeat(10001) }]] }]), /too long/);
     assert.throws(() => assertOwnStoryImages(sections, []), /own photos/);
   });
+  const formatted = [{ id: 'aligned', type: 'text', text: '**Safe** <text>', align: 'center', spacing: 'relaxed' }];
+  const formattedHtml = await renderStoryBlocksSafe(formatted);
+  check('finite module formatting preserves safe text/projection and emits only enumerated attributes', () => { assert.match(formattedHtml, /data-align="center" data-spacing="relaxed"/); assert.match(formattedHtml, /&lt;text&gt;/); assert.equal(blocksToMarkdown(formatted), '**Safe** <text>'); for (const value of [{ align: 'justify' }, { align: 'left;display:none' }, { spacing: '500px' }]) assert.throws(() => normalizeStoryBlocks([{ ...formatted[0], ...value }])); });
   check('legacy absence is an empty module list', () => assert.deepEqual(normalizeStoryBlocks(undefined), []));
   check('IDs must be stable and unique', () => assert.throws(() => normalizeStoryBlocks([{ id: 'same', type: 'text' }, { id: 'same', type: 'divider' }])));
   check('unknown module types are rejected', () => assert.throws(() => normalizeStoryBlocks([{ id: 'html', type: 'raw-html' }])));
