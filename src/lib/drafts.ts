@@ -422,7 +422,8 @@ export function writeUpload(draftId: number, bytes: Uint8Array, ext: string): st
   const rel = `${draftId}/${randomBytes(16).toString('hex')}.${ext}`;
   const full = uploadFile(rel)!;
   fs.mkdirSync(path.dirname(full), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(full, bytes, { mode: 0o600 });
+  try { fs.writeFileSync(full, bytes, { mode: 0o600 }); }
+  catch (err) { fs.rmSync(full, { force: true }); throw err; }
   return rel;
 }
 
@@ -600,8 +601,12 @@ export function cleanupRejectedPhotos(now = Date.now(), force = false): number {
 
 /** Put a live story's current content into an existing draft (a draft linked to that slug) and reopen it. */
 export function reloadDraftFromStory(id: number, userId: number, f: DraftFields, photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number; zoom?: number }[]): void {
-  let old: string[] = [];
-  tx(() => {
+  const old = tx(() => resetDraftFromStory(id, userId, f, photos));
+  removeUploadFiles(old);
+}
+
+/** Caller owns the transaction and removes returned superseded uploads only after COMMIT. */
+export function resetDraftFromStory(id: number, userId: number | null, f: DraftFields, photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number; zoom?: number }[]): string[] {
     const now = Date.now();
     getDb()
       .prepare(
@@ -609,10 +614,9 @@ export function reloadDraftFromStory(id: number, userId: number, f: DraftFields,
       )
       .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
     getDb().prepare('UPDATE drafts SET announcement = ? WHERE id = ?').run(announcementJson(f.announcement), id);
-    old = replacePhotos(id, photos);
+    const old = replacePhotos(id, photos);
     remapStoryBlocks(id, f.storyBlocks);
-  });
-  removeUploadFiles(old);
+    return old;
 }
 
 /** Resolve published image module URLs to this draft's newly assigned photo ids. */

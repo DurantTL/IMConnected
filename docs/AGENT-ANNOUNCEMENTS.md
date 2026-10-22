@@ -43,6 +43,8 @@ This is a complete synthetic event request. The tiny PNG is a test placeholder; 
 
 ## Updates and review
 
+For an already published story, announcement or event, use the explicit [`POST /api/agent/stories/reopen` workflow](AGENT-REOPEN.md). It accepts partial metadata changes and appends new photos to an In review draft without changing the live website. A requestId protects retries; active/rejected drafts cannot be overwritten. An editor must review and publish the update.
+
 The same `sourceUrl` updates the same draft while it is still new and untouched by an editor. Omitting `announcement` preserves its previous metadata; sending `"announcement": null` changes it back to an ordinary story. Sending an announcement object replaces that metadata, so include the links and video you want to keep. Omitting `photos` preserves the existing photos; `photos: []` removes them. Responses remain `201 created/updated`, `400 bad_announcement` for invalid announcement data, `401` for failed authentication, `409 already_reviewed` once a person starts editing, `429` for the shared 60/hour rate limit, and `503` when unavailable. Other existing validation errors are unchanged.
 
 The first photo is the optional flyer. It displays at its full aspect ratio, including when placed with `{{photo 1}}`, a gallery, or an existing Image module. Its saved crop metadata and original bytes are retained; the flyer display does not crop away printed text. Reordering the lead photo changes which image is treated as the flyer. Provide a meaningful description and repeat essential flyer details in the body.

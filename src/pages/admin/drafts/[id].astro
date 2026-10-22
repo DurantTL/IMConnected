@@ -174,7 +174,15 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
             {draft.agentNote && <><dt>Agent's note</dt><dd style="white-space:pre-wrap">{draft.agentNote}</dd></>}
             {originalPost && <><dt>Original post</dt><dd><a href={originalPost} rel="noopener noreferrer" target="_blank">View original post</a></dd></>}
           </dl>
-          <p class="admin-note">This story was written by an AI agent from a public post. Check the facts, names and photos, and get permission where needed, before you publish.</p>
+          <p class="admin-note">An AI agent submitted this story or proposed updates. Check the facts, names and photos, and get permission where needed, before you publish.</p>
+        </section>
+      )}
+
+      {!isAgent && draft.agentNote && (
+        <section class="ed-card ed-sub">
+          <h2>AI agent update</h2>
+          <p class="admin-note">Review the proposed changes and photos before publishing.</p>
+          <p style="white-space:pre-wrap">{draft.agentNote}</p>
         </section>
       )}
 
