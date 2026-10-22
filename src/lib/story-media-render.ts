@@ -4,7 +4,7 @@ import { escapeHtmlInMarkdown } from './storyfile';
 import { photoFocusStyle, isStoryImageUrl } from './story-blocks';
 import { photoMarkerIndex, galleryMarker, isMediaMarkerLine, type InlineStoryPhoto } from './story-media';
 
-export const INLINE_MEDIA_CSS = '.story-inline-gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:1.4em 0}.story-inline-gallery .story-inline-photo{margin:0;min-width:0}@media(min-width:768px){.story-inline-gallery[data-columns="3"]{grid-template-columns:repeat(3,minmax(0,1fr))}}.story-inline-photo{margin:1.4em 0}.story-inline-photo a{display:block;overflow:hidden;border-radius:8px}.story-inline-photo img{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;margin:0}.story-media-warning{padding:12px;border:1px solid #a54b10;background:#fff4df;color:#6b3009}';
+export const INLINE_MEDIA_CSS = '.story-inline-gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:1.4em 0}.story-inline-gallery figure{margin:0;min-width:0}@media(min-width:768px){.story-inline-gallery[data-columns="3"]{grid-template-columns:repeat(3,minmax(0,1fr))}}.story-inline-photo{margin:1.4em 0}.story-inline-photo a{display:block;overflow:hidden;border-radius:8px}.story-inline-photo img{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;margin:0}.story-media-warning{padding:12px;border:1px solid #a54b10;background:#fff4df;color:#6b3009}';
 interface MediaState { photos: InlineStoryPhoto[]; preview: boolean; used: Set<number>; warnings: string[] }
 
 export function renderInlinePhoto(photo: InlineStoryPhoto, preview = false): string {

@@ -63,6 +63,16 @@ try {
     const preview = await renderMediaMarkdown(marker, mediaPhotos, true);
     check('invalid gallery is skipped as a whole: ' + marker, () => { assert.equal(result.html, ''); assert.equal(result.used.size, 0); assert.match(preview.html, /story-media-warning/); });
   }
+  const galleryBlock = [{ id: 'visual-gallery', type: 'gallery', columns: 3, photos: mediaPhotos.map((p, i) => ({ url: p.src, alt: p.alt, focalX: p.focalX, focalY: p.focalY, zoom: p.zoom, photoIndex: i })) }];
+  const galleryHtml = await renderStoryBlocksSafe(galleryBlock);
+  check('Gallery modules reuse safe crop rendering and expose one canvas selection target', () => { assert.equal((galleryHtml.match(/data-module-id=/g) || []).length, 1); assert.equal((galleryHtml.match(/data-photo/g) || []).length, 2); assert.match(galleryHtml, /scale:2/); assert.equal(blocksToMarkdown(galleryBlock), ''); });
+  check('Gallery modules enforce finite columns, photo count, unique slots and own addresses', () => {
+    for (const extra of [{ columns: 4 }, { photos: Array.from({ length: 7 }, (_, i) => ({ photoId: i + 1 })) }, { photos: [{ photoId: 1 }, { photoId: 1 }] }, { photos: [{ url: 'https://example.invalid/a.png' }] }]) assert.throws(() => normalizeStoryBlocks([{ ...galleryBlock[0], ...extra }]));
+    assert.throws(() => assertOwnStoryImages(galleryBlock, [mediaPhotos[1].src, mediaPhotos[0].src]), /own photos/);
+    assert.doesNotThrow(() => assertOwnStoryImages(galleryBlock, mediaPhotos.map((p) => p.src)));
+  });
+  const longGallery = await renderStoryBlocksSafe([{ ...galleryBlock[0], id: 'g'.repeat(80) }]);
+  check('valid maximum-length Gallery IDs render without synthetic-ID overflow', () => { assert.equal((longGallery.match(/data-photo/g) || []).length, 2); assert.match(longGallery, new RegExp(`data-module-id="${'g'.repeat(80)}"`)); });
   check('legacy absence is an empty module list', () => assert.deepEqual(normalizeStoryBlocks(undefined), []));
   check('IDs must be stable and unique', () => assert.throws(() => normalizeStoryBlocks([{ id: 'same', type: 'text' }, { id: 'same', type: 'divider' }])));
   check('unknown module types are rejected', () => assert.throws(() => normalizeStoryBlocks([{ id: 'html', type: 'raw-html' }])));

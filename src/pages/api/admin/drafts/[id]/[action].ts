@@ -44,11 +44,13 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     // focus, while editable drafts continue to preview unsaved form changes.
     let fields: ReturnType<typeof readDraftFields>['fields'] = draft;
     let focus: ReturnType<typeof readDraftFields>['photoFocus'] = new Map();
+    let previewAlts = new Map<number, string>();
     if (isEditable(draft)) {
       try {
         const parsed = readDraftFields(form);
         fields = parsed.fields;
         focus = parsed.photoFocus;
+        previewAlts = parsed.photoAlts;
       } catch (err) {
         return jsonResponse(400, { ok: false, error: (err as Error).message });
       }
@@ -58,8 +60,8 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       const photo = draftPhotos.find((p) => p.id === photoId);
       if (!photo) return undefined;
       const point = { ...photo, ...focus.get(photoId) };
-      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: photo.alt, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom };
-    } }) : (await renderMediaMarkdown(fields.body, draftPhotos.map((photo) => ({ src: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: photo.alt, ...photo, ...focus.get(photo.id) })), true)).html;
+      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom };
+    } }) : (await renderMediaMarkdown(fields.body, draftPhotos.map((photo) => ({ ...photo, src: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, ...focus.get(photo.id) })), true)).html;
     const ownHosts = [new URL(request.url).hostname];
     try { ownHosts.push(new URL(siteUrl()).hostname); } catch { /* a malformed SITE_URL must not break the preview: the request host alone is used */ }
     html = restrictPreviewImages(html, ownHosts);

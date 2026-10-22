@@ -1,3 +1,4 @@
+import { storyBlockPhotos } from './lib/story-blocks';
 import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
 import { z } from 'astro/zod';
@@ -36,7 +37,7 @@ const stories = defineCollection({
   }).superRefine((d, ctx) => {
     // An image module can only show one of the story's own photos (its lead image or gallery).
     const own = new Set([...(d.image ? [d.image] : []), ...d.photos]);
-    if (d.storyBlocks?.some((b) => b.type === 'image' && b.url && !own.has(b.url))) ctx.addIssue({ code: 'custom', path: ['storyBlocks'], message: OWN_PHOTO_ERROR });
+    if (storyBlockPhotos(d.storyBlocks ?? []).some((b) => b.url && !own.has(b.url))) ctx.addIssue({ code: 'custom', path: ['storyBlocks'], message: OWN_PHOTO_ERROR });
   }),
 });
 

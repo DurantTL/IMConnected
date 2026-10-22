@@ -7,7 +7,7 @@ import { getSection, areaLabel, formatDate, SITE } from '../lib/site';
 import StoryPhotos from './StoryPhotos.astro';
 import type { PublicStory } from '../lib/stories';
 import { photoLayoutOrDefault, planPhotos } from '../lib/photo-layouts';
-import { photoFocusStyle } from '../lib/story-blocks';
+import { storyBlockPhotos, photoFocusStyle } from '../lib/story-blocks';
 import { INLINE_MEDIA_CSS } from '../lib/story-media-render';
 
 interface Props {
@@ -28,8 +28,8 @@ const enc = encodeURIComponent;
 // the text and the others in a row under it. Another layout puts the lead and the others together above the text; photos it
 // has no place for (a fifth in Hero + grid, a third in Two up) stay in the row under the text.
 const layout = photoLayoutOrDefault(d.photoLayout);
-const inlinePhotos = Astro.props.inlinePhotoUrls ?? new Set((d.storyBlocks ?? []).filter((b) => b.type === 'image' && b.url).map((b) => b.url));
-const inlineIndices = Astro.props.inlinePhotoIndices ?? new Set<number>();
+const inlinePhotos = Astro.props.inlinePhotoUrls ?? new Set(storyBlockPhotos(d.storyBlocks ?? []).filter((b) => b.url && b.photoIndex === undefined).map((b) => b.url!));
+const inlineIndices = Astro.props.inlinePhotoIndices ?? new Set<number>(storyBlockPhotos(d.storyBlocks ?? []).flatMap((p) => p.photoIndex !== undefined ? [p.photoIndex] : []));
 const inlineCount = inlinePhotos.size + inlineIndices.size;
 const allPhotos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] || '' }))]
   .map((p, i) => ({ ...p, ...d.photoFocus?.[i], alt: p.alt || `Photo ${i + (d.image ? 1 : 2)} from “${d.title}”` }))

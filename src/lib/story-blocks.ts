@@ -1,20 +1,25 @@
 // Version-one story modules. Pure validation and Markdown projection shared by the editor and server.
 // The Markdown body remains available to search, feeds and older consumers; the structured modules own layout.
-export const STORY_BLOCK_TYPES = ['text', 'heading', 'quote', 'list', 'image', 'button', 'divider'] as const;
+export const STORY_BLOCK_TYPES = ['text', 'heading', 'quote', 'list', 'image', 'gallery', 'button', 'divider'] as const;
 export type StoryBlockType = (typeof STORY_BLOCK_TYPES)[number];
-export interface StoryBlock {
+export interface StoryPhotoRef {
+  photoId?: number;
+  photoIndex?: number;
+  url?: string;
+  alt?: string;
+  focalX?: number;
+  focalY?: number;
+  zoom?: number;
+}
+export interface StoryBlock extends StoryPhotoRef {
   id: string;
   type: StoryBlockType;
   text?: string;
   level?: 2 | 3;
   items?: string[];
-  photoId?: number;
-  url?: string;
+  photos?: StoryPhotoRef[];
+  columns?: 2 | 3;
   label?: string;
-  alt?: string;
-  focalX?: number;
-  focalY?: number;
-  zoom?: number;
 }
 
 export interface PhotoCrop { focalX?: number; focalY?: number; zoom?: number }
@@ -50,8 +55,37 @@ export const OWN_PHOTO_ERROR = "Image modules can only use this story's own phot
 
 /** Every image module with an address must point at one of the story's own photos (`own` = its lead image and gallery). */
 export function assertOwnStoryImages(blocks: readonly StoryBlock[], own: Iterable<string>): void {
-  const allowed = new Set(own);
-  for (const b of blocks) if (b.type === 'image' && b.url && !allowed.has(b.url)) error(OWN_PHOTO_ERROR);
+  const ordered = [...own], allowed = new Set(ordered);
+  for (const p of storyBlockPhotos(blocks)) if (p.url && (!allowed.has(p.url) || p.photoIndex !== undefined && ordered[p.photoIndex] !== p.url)) error(OWN_PHOTO_ERROR);
+}
+
+/** Shared traversal keeps photo ownership, publishing and derived data aligned. */
+export function storyBlockPhotos(blocks: readonly StoryBlock[]): StoryPhotoRef[] {
+  return blocks.flatMap((b) => b.type === 'image' ? [b] : b.type === 'gallery' ? b.photos ?? [] : []);
+}
+export function mapStoryPhotos(blocks: StoryBlock[], map: (photo: StoryPhotoRef) => StoryPhotoRef | null): StoryBlock[] {
+  return blocks.flatMap((b) => {
+    if (b.type === 'image') { const photo = map(b); return photo ? [{ ...b, ...photo }] : []; }
+    if (b.type === 'gallery') return [{ ...b, photos: (b.photos ?? []).flatMap((p) => { const photo = map(p); return photo ? [photo] : []; }) }];
+    return [b];
+  });
+}
+function normalizePhoto(r: Record<string, unknown>): StoryPhotoRef {
+  const p: StoryPhotoRef = {};
+  if (r.photoId !== undefined) {
+    if (typeof r.photoId !== 'number' || !Number.isSafeInteger(r.photoId) || r.photoId < 1) return error('Choose a valid story photo.');
+    p.photoId = r.photoId;
+  }
+  if (r.photoIndex !== undefined) {
+    if (!Number.isInteger(r.photoIndex) || Number(r.photoIndex) < 0 || Number(r.photoIndex) > 5) return error('Choose a valid story photo position.');
+    p.photoIndex = r.photoIndex as number;
+  }
+  if (r.url !== undefined && r.url !== '') { if (!isStoryImageUrl(r.url)) return error(OWN_PHOTO_ERROR); p.url = r.url; }
+  p.alt = text(r.alt, 300, 'Photo description');
+  if (r.focalX !== undefined) p.focalX = focalPoint(r.focalX);
+  if (r.focalY !== undefined) p.focalY = focalPoint(r.focalY);
+  if (r.zoom !== undefined) p.zoom = photoZoom(r.zoom);
+  return p;
 }
 
 /** Explicit action links only. No script schemes, protocol-relative addresses or embedded credentials. */
@@ -109,20 +143,18 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
       b.items = ((r.items ?? []) as unknown[]).map((item) => text(item, 2000, 'List item'));
       total += b.items.join('').length;
     }
-    if (b.type === 'image') {
-      if (r.photoId !== undefined) {
-        if (typeof r.photoId !== 'number' || !Number.isSafeInteger(r.photoId) || r.photoId < 1) return error('Choose a valid story photo.');
-        b.photoId = r.photoId;
-      }
-      if (r.url !== undefined && r.url !== '') {
-        if (!isStoryImageUrl(r.url)) return error(OWN_PHOTO_ERROR);
-        b.url = r.url;
-      }
-      b.alt = text(r.alt, 300, 'Photo description');
-      if (r.focalX !== undefined) b.focalX = focalPoint(r.focalX);
-      if (r.focalY !== undefined) b.focalY = focalPoint(r.focalY);
-      if (r.zoom !== undefined) b.zoom = photoZoom(r.zoom);
-      total += b.alt.length;
+    if (b.type === 'image') { Object.assign(b, normalizePhoto(r)); total += b.alt?.length ?? 0; }
+    if (b.type === 'gallery') {
+      if (r.columns !== undefined && r.columns !== 2 && r.columns !== 3) return error('Gallery columns must be 2 or 3.');
+      b.columns = r.columns === 3 ? 3 : 2;
+      if (r.photos !== undefined && (!Array.isArray(r.photos) || r.photos.length > 6)) return error('A gallery can contain up to 6 story photos.');
+      b.photos = ((r.photos ?? []) as unknown[]).map((p) => {
+        if (!p || typeof p !== 'object' || Array.isArray(p)) return error('Choose a valid story photo.');
+        return normalizePhoto(p as Record<string, unknown>);
+      });
+      const identities = b.photos.map((p) => p.photoId ? `id:${p.photoId}` : p.photoIndex !== undefined ? `index:${p.photoIndex}` : p.url);
+      if (new Set(identities).size !== identities.length) return error('Choose each gallery photo once.');
+      total += b.photos.reduce((n, p) => n + (p.alt?.length ?? 0), 0);
     }
     if (b.type === 'button') {
       b.label = text(r.label, 120, 'Button label');
@@ -154,6 +186,7 @@ export function escapeStoryBlocks(blocks: StoryBlock[]): StoryBlock[] {
     if (o.text !== undefined) o.text = lt(o.text);
     if (o.items) o.items = o.items.map(lt);
     if (o.alt !== undefined) o.alt = lt(o.alt);
+    if (o.photos) o.photos = o.photos.map((p) => ({ ...p, alt: lt(p.alt ?? '') }));
     if (o.label !== undefined) o.label = lt(o.label);
     return o;
   });
@@ -180,6 +213,7 @@ export function storyBlocksToMarkdown(blocks: StoryBlock[]): string {
       case 'heading': return `${'#'.repeat(b.level || 2)} ${plainMarkdown(b.text || '')}`;
       case 'quote': return (b.text || '').split('\n').map((line) => `> ${line}`).join('\n');
       case 'list': return (b.items || []).map((item) => `- ${plainMarkdown(item)}`).join('\n');
+      case 'gallery': return '';
       case 'image': return ''; // an image has no text of its own: its description is an attribute, not a paragraph
       case 'button': return b.url ? `[${plainMarkdown(b.label || b.url)}](${b.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})` : plainMarkdown(b.label || '');
       case 'divider': return '---';
@@ -219,6 +253,7 @@ export function unescapeStoryBlockPlainText(blocks: StoryBlock[]): StoryBlock[] 
     if (o.text !== undefined) o.text = un(o.text); // paragraph and quote too: the editor shows what was typed, and every "<" is escaped again on write
     if (o.items) o.items = o.items.map(un);
     if (o.alt !== undefined) o.alt = un(o.alt);
+    if (o.photos) o.photos = o.photos.map((p) => ({ ...p, alt: un(p.alt ?? '') }));
     if (o.label !== undefined) o.label = un(o.label);
     return o;
   });

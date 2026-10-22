@@ -207,7 +207,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <aside class="sb-outline" aria-label="Story modules"><details class="sb-library-disclosure" open><summary>Module library &amp; starter layouts</summary>
                     <p class="sb-insert-help">Insert after the selected module. Existing content stays in place.</p>
                     <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
-                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">7 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
+                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">8 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
                     <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
                     <div class="sb-library" role="group" aria-label="Add content module">
                       <button type="button" data-add-module="text">Paragraph</button>
@@ -215,6 +215,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                       <button type="button" data-add-module="quote">Quote</button>
                       <button type="button" data-add-module="list">List</button>
                       <button type="button" data-add-module="image">Image</button>
+                      <button type="button" data-add-module="gallery">Gallery</button>
                       <button type="button" data-add-module="button">Button / link</button>
                       <button type="button" data-add-module="divider">Divider</button>
                     </div>

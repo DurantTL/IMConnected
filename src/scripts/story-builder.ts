@@ -50,7 +50,7 @@ if (form && blocksField) {
   const future: string[] = [];
   let editKey = '';
   let editAt = 0;
-  const labels: Record<StoryBlock['type'], string> = { text: 'Paragraph', heading: 'Heading', quote: 'Quote', list: 'List', image: 'Image', button: 'Button / link', divider: 'Divider' };
+  const labels: Record<StoryBlock['type'], string> = { text: 'Paragraph', heading: 'Heading', quote: 'Quote', list: 'List', image: 'Image', gallery: 'Gallery', button: 'Button / link', divider: 'Divider' };
   const uid = () => `module-${crypto.randomUUID()}`;
   if (editable && builderData.emptyStory && !blocks.length) {
     // The starter module is not an edit: opening an empty draft must not mark it changed (that would autosave, move it to review and write an audit entry).
@@ -103,7 +103,7 @@ if (form && blocksField) {
     if (summary) summary.textContent = modular ? `${blocks.length} modules` : 'Markdown story';
     const start = document.getElementById('module-start-writing');
     if (start) start.hidden = !(blocks.length === 1 && blocks[0].type === 'text' && !blocks[0].text);
-    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-add-module="image"]')) {
+    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-add-module="image"], [data-add-module="gallery"]')) {
       button.disabled = !editable || !photos.some((p) => p.src);
       button.title = photos.some((p) => p.src) ? 'Place a story photo in the text' : 'Upload a photo in Photos first';
     }
@@ -229,6 +229,38 @@ if (form && blocksField) {
       field(block, 'Link label', 'label', block.label || 'Read more');
       field(block, 'Link address (https://, mailto: or tel:)', 'url', block.url || '');
     }
+    if (block.type === 'gallery') {
+      fields.append(node('p', 'Choose at least two story photos. Their saved focal points and zoom are kept.', 'admin-note'));
+      const choices = node('fieldset'); choices.append(node('legend', 'Gallery photos'));
+      for (const [i, photo] of photos.entries()) {
+        if (!photo.src) continue;
+        const label = node('label', `${i + 1}. ${photo.alt || 'Story photo'}`);
+        const input = node('input'); input.type = 'checkbox'; input.dataset.galleryPhoto = String(photo.id); input.checked = !!block.photos?.some((p) => p.photoId === photo.id);
+        input.addEventListener('change', () => {
+          const next = (block.photos ?? []).filter((p) => p.photoId !== photo.id);
+          if (input.checked) next.push({ photoId: photo.id });
+          update(block, 'photos', next); renderFields(); fields.querySelector<HTMLInputElement>(`[data-gallery-photo="${photo.id}"]`)?.focus();
+        });
+        label.prepend(input); choices.append(label);
+      }
+      fields.append(choices);
+      const order = node('ol'); order.setAttribute('aria-label', 'Gallery photo order');
+      for (const [i, ref] of (block.photos ?? []).entries()) {
+        const row = node('li', photos.find((p) => p.id === ref.photoId)?.alt || `Photo ${i + 1}`);
+        const reorder = (to: number) => {
+          const next = [...(block.photos ?? [])]; [next[i], next[to]] = [next[to], next[i]];
+          update(block, 'photos', next); renderFields();
+          fields.querySelector<HTMLElement>(`[data-gallery-order="${to}"]`)?.focus();
+        };
+        const up = button('Earlier', () => reorder(i - 1), `Move gallery photo ${i + 1} earlier`); up.disabled = !editable || i === 0; row.dataset.galleryOrder = String(i); row.tabIndex = -1;
+        const down = button('Later', () => reorder(i + 1), `Move gallery photo ${i + 1} later`); down.disabled = !editable || i === (block.photos?.length ?? 0) - 1;
+        row.append(up, down); order.append(row);
+      }
+      fields.append(order);
+      const label = node('label', 'Gallery columns'), select = node('select'); select.dataset.moduleField = 'columns'; select.setAttribute('aria-label', 'Gallery columns');
+      for (const n of [2, 3]) { const option = node('option', `${n} columns`); option.value = String(n); option.selected = (block.columns ?? 2) === n; select.append(option); }
+      select.addEventListener('change', () => update(block, 'columns', Number(select.value))); label.append(select); fields.append(label);
+    }
     if (block.type === 'image') {
       const label = node('label', 'Story photo');
       const select = node('select'); select.dataset.moduleField = 'photoId';
@@ -328,13 +360,14 @@ if (form && blocksField) {
     if (!editable || !modular) return;
     if (blocks.length >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
     const type = add.dataset.addModule as StoryBlock['type'];
-    if (type === 'image' && !photos.some((p) => p.src)) return;
+    if (['image', 'gallery'].includes(type) && !photos.some((p) => p.src)) return;
     remember();
     const block: StoryBlock = { id: uid(), type };
     if (['text', 'heading', 'quote'].includes(type)) block.text = '';
     if (type === 'heading') block.level = 2;
     if (type === 'list') block.items = [''];
     if (type === 'button') { block.label = 'Read more'; block.url = ''; }
+    if (type === 'gallery') { block.columns = 2; block.photos = photos.filter((p) => p.src).map((p) => ({ photoId: p.id })); }
     if (type === 'image') { block.photoId = photos.find((p) => p.src)!.id; block.alt = photos.find((p) => p.id === block.photoId)?.alt || ''; }
     const at = blocks.findIndex((b) => b.id === selected);
     blocks.splice(at < 0 ? blocks.length : at + 1, 0, block); selected = block.id;

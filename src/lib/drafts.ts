@@ -1,3 +1,4 @@
+import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
 // Story drafts: the rows in `drafts` / `draft_photos` and the uploaded photo files under DATA_DIR/uploads/.
 // Submitter contact fields live here for signed-in editors to read. They are never logged or committed.
 import fs from 'node:fs';
@@ -330,10 +331,10 @@ export function saveDraft(id: number, expected: number, f: DraftFields, photoAlt
     if (!cur) return fail('invalid', 'draft_gone') as SaveResult;
     if (!isEditable({ status: cur.status })) return fail('locked', 'closed') as SaveResult;
     const blocks = f.storyBlocks === undefined ? parseStoredStoryBlocks(cur.story_blocks) : normalizeStoryBlocks(f.storyBlocks);
-    if (blocks.some((b) => b.type === 'image' && b.url)) return fail('invalid', 'block_image_url');
+    if (storyBlockPhotos(blocks).some((b) => b.url)) return fail('invalid', 'block_image_url');
     try { checkStoryBlockLength(blocks); } catch { return fail('invalid', 'body_long'); }
     const ownedPhotos = listPhotos(id);
-    if (blocks.some((b) => b.type === 'image' && b.photoId !== undefined && !ownedPhotos.some((p) => p.id === b.photoId))) return fail('invalid', 'photo_gone');
+    if (storyBlockPhotos(blocks).some((b) => b.photoId !== undefined && !ownedPhotos.some((p) => p.id === b.photoId))) return fail('invalid', 'photo_gone');
     const body = blocks.length ? storyBlocksToMarkdown(blocks) : f.body;
     const v = takeVersion(id, expected, userId, "status = 'in_review'");
     if (v === null) return CONFLICT;
@@ -415,8 +416,8 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
       removed = photos[i].path;
       getDb().prepare('DELETE FROM draft_photos WHERE id = ?').run(photoId);
       const blocks = getDraft(draftId)?.storyBlocks ?? [];
-      if (blocks.some((b) => b.type === 'image' && b.photoId === photoId)) {
-        const kept = blocks.filter((b) => b.type !== 'image' || b.photoId !== photoId);
+      if (storyBlockPhotos(blocks).some((b) => b.photoId === photoId)) {
+        const kept = mapStoryPhotos(blocks, (p) => p.photoId === photoId ? null : p);
         getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(kept), storyBlocksToMarkdown(kept), draftId);
       }
     } else if (op === 'lead') {
@@ -559,11 +560,11 @@ export function reloadDraftFromStory(id: number, userId: number, f: DraftFields,
 /** Resolve published image module URLs to this draft's newly assigned photo ids. */
 function remapStoryBlocks(id: number, input: StoryBlock[] | undefined): void {
   const photos = listPhotos(id);
-  const blocks = normalizeStoryBlocks(input ?? []).map((b) => {
-    if (b.type !== 'image' || b.url === undefined) return b;
-    const photo = photos.find((p) => p.url === b.url);
+  const blocks = mapStoryPhotos(normalizeStoryBlocks(input ?? []), (b) => {
+    if (b.url === undefined) return b;
+    const photo = b.photoIndex !== undefined && photos[b.photoIndex]?.url === b.url ? photos[b.photoIndex] : photos.find((p) => p.url === b.url);
     if (!photo) throw new Error(OWN_PHOTO_ERROR); // only this story's own photos
-    return { ...b, photoId: photo.id, url: undefined, focalX: undefined, focalY: undefined, zoom: undefined };
+    return { ...b, photoId: photo.id, photoIndex: undefined, url: undefined, focalX: undefined, focalY: undefined, zoom: undefined };
   });
   // The Markdown box shows the modules' projection, as createDraft does, so a page without JavaScript saves cleanly.
   if (blocks.length) getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(blocks), storyBlocksToMarkdown(blocks), id);

@@ -27,6 +27,11 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
       case 'button':
         if (b.url) out.push(`<p class="story-module story-module-action"${attr}><a class="btn" href="${escapeHtml(b.url)}">${plain(b.label || b.url)}</a></p>`);
         break;
+      case 'gallery': {
+        const tiles = await renderStoryBlocksSafe((b.photos ?? []).map((p, i) => ({ ...p, id: `gallery-photo-${i}`, type: 'image' as const })), options);
+        if (tiles) out.push(`<section class="story-module story-inline-gallery" data-columns="${b.columns ?? 2}" aria-label="Story photo gallery"${attr}>${tiles.replace(/ data-module-id="[^"]*"/g, '')}</section>`);
+        break;
+      }
       case 'image': {
         const photo = b.photoId ? options.resolvePhoto?.(b.photoId) : undefined;
         const url = photo?.url || b.url || '';

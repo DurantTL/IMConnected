@@ -214,6 +214,24 @@ try {
   assert.equal(loadedEdge.fields.storyBlocks[3].label, '<' + 'b'.repeat(119));
 
   // Studio crop compatibility: real prepared requests and publish transactions.
+  // Visual galleries keep ordered references through duplicate-byte publish/reopen and photo removal.
+  const gid = m.createDraft({ source: 'editor', userId: user, fields: { title: 'Synthetic visual gallery', author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic gallery text.' } });
+  const gp1 = addPhoto(gid, 'First slot', 90), gp2 = addPhoto(gid, 'Second slot', 90);
+  const gblocks = [{ id: 'gtext', type: 'text', text: 'Synthetic gallery text.' }, { id: 'gallery', type: 'gallery', columns: 3, photos: [{ photoId: gp2.id, alt: 'Second <slot>' }, { photoId: gp1.id }] }];
+  const gs = m.saveDraft(gid, m.getDraft(gid).updatedAt, { ...m.getDraft(gid), storyBlocks: gblocks }, new Map([[gp1.id, 'Corrected description']]), user, null, new Map([[gp2.id, { zoom: 2.5, focalX: 0 }]]));
+  assert.equal(gs.ok, true);
+  assert.equal(m.saveDraft(gid, gs.updatedAt, { ...m.getDraft(gid), storyBlocks: [{ ...gblocks[1], photos: [{ photoId: photo.id }] }] }, new Map(), user).ok, false, 'gallery cannot claim another draft photo');
+  const gpub = await m.publishDraft(m.getDraft(gid), m.listPhotos(gid), gs.updatedAt, user);
+  const gst = m.getStoryBySlug(gpub.slug), grefs = gst.storyBlocks[1].photos;
+  assert.deepEqual(grefs.map((p) => p.photoIndex), [1, 0]); assert.deepEqual(grefs.map((p) => p.zoom), [2.5, 1]);
+  assert.equal(grefs[0].url, grefs[1].url, 'fixture intentionally has identical bytes');
+  assert.equal(grefs[1].alt, 'Corrected description', 'gallery without an override follows the photo description at publish'); assert.equal(grefs[0].alt, 'Second &lt;slot>'); assert.ok(grefs.every((p) => !p.photoId));
+  const gl = m.loadStory(gpub.slug); m.reloadDraftFromStory(gid, user, gl.fields, gl.photos);
+  const gr = m.listPhotos(gid), gd = m.getDraft(gid);
+  assert.deepEqual(gd.storyBlocks[1].photos.map((p) => p.photoId), [gr[1].id, gr[0].id], 'same-URL gallery positions remap to the correct distinct draft IDs');
+  assert.equal(m.changePhoto(gid, gd.updatedAt, user, 'delete', gr[1].id).ok, true);
+  assert.deepEqual(m.getDraft(gid).storyBlocks[1].photos.map((p) => p.photoId), [gr[0].id], 'deleting one photo preserves other gallery references and text');
+  await assert.rejects(() => m.publishDraft(m.getDraft(gid), m.listPhotos(gid), m.getDraft(gid).updatedAt, user), (e) => e.code === 'blocks_bad');
   const pngData = (shade) => `data:image/png;base64,${syntheticPng(shade).toString('base64')}`;
   const studioRequest = (photos, title = 'Synthetic Studio crops') => ({ newsletter: { name: 'Synthetic review', issueDate: '2026-01-08' }, stories: [{ ref: 'studio-crop', title, author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic Studio crop compatibility story.', photoLayout: 'mosaic', photos }] });
   const sendStudio = (request) => m.publishStudioStories(m.prepareStudioPublish(request).stories);

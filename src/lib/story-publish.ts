@@ -1,3 +1,4 @@
+import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
 // Publishing to the database (epic #25, step 4). Server-side only. There is no git and no GitHub call anywhere here.
 //
 // A publish is: (1) check and build everything in memory, (2) copy the photos into DATA_DIR/media/stories/<slug>/
@@ -186,6 +187,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   const dek = oneLine(draft.dek);
   let draftBlocks: StoryBlock[];
   try { draftBlocks = normalizeStoryBlocks(draft.storyBlocks ?? []); } catch { throw new EditorError('blocks_bad'); }
+  if (draftBlocks.some((b) => b.type === 'gallery' && (b.photos?.length ?? 0) < 2)) throw new EditorError('blocks_bad');
   if (draftBlocks.some((b) => b.type === 'button' && !b.url)) throw new EditorError('link_unsafe');
   // The Markdown is built and measured as typed (the same rule as saving); every "<" becomes &lt; only when it is written
   // (here for the body, in writeStory for the modules), so escaping can never push a field over its limit.
@@ -237,12 +239,11 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
 
   const existing = getStoryBySlug(slug, { includeUnpublished: true });
   const stored = await storePhotos(slug, items, existing);
-  const storyBlocks: StoryBlock[] = draftBlocks.map((block) => {
-    if (block.type !== 'image') return block;
+  const storyBlocks: StoryBlock[] = mapStoryPhotos(draftBlocks, (block) => {
     const index = photos.findIndex((p) => p.id === block.photoId);
     if (index < 0) { removeFiles(stored.created); throw new EditorError('photo_missing'); }
     const photo = photos[index];
-    return { ...block, photoId: undefined, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50, zoom: photo.zoom ?? 1 };
+    return { ...block, photoId: undefined, photoIndex: index, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50, zoom: photo.zoom ?? 1 };
   });
   stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; row.zoom = photos[i].zoom ?? 1; });
   const now = Date.now();
@@ -307,7 +308,7 @@ export function loadStory(slug: string): LoadedStory | null {
   if (!getSection(s.section)) throw new EditorError('section_unknown');
   const sources = [...(s.image ? [s.image] : []), ...s.photos];
   // Image modules can only show the story's own photos (writes refuse anything else); drop one that does not, never add a source.
-  const storyBlocks = s.storyBlocks && unescapeStoryBlockPlainText(s.storyBlocks).filter((b) => b.type !== 'image' || (b.url && sources.includes(b.url)));
+  const storyBlocks = s.storyBlocks && mapStoryPhotos(unescapeStoryBlockPlainText(s.storyBlocks), (p) => p.url && sources.includes(p.url) ? p : null);
   const alts = [s.imageAlt ?? '', ...s.photoAlts];
   return {
     fields: {
@@ -315,7 +316,7 @@ export function loadStory(slug: string): LoadedStory | null {
       church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks,
     },
     photos: sources.map((url, i) => {
-      const inline = storyBlocks?.find((b) => b.type === 'image' && b.url === url);
+      const inline = storyBlockPhotos(storyBlocks ?? []).find((b) => b.url === url);
       return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50, zoom: s.photoRows.find((p) => p.position === i)?.zoom ?? inline?.zoom ?? 1 };
     }),
   };

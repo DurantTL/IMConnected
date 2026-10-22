@@ -137,7 +137,7 @@ try {
   await page.locator('#module-library-search').fill('no-such-module');
   check('library no-results state has a visible recovery action', await page.locator('#module-library-empty').isVisible() && await page.locator('[data-add-module]:visible').count() === 0 && await page.locator('#module-library-reset').isVisible());
   await page.locator('#module-library-reset').click();
-  check('clearing library search restores the same seven module controls without changing content', await page.locator('[data-add-module]:visible').count() === 7 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
+  check('clearing library search restores the same eight module controls without changing content', await page.locator('[data-add-module]:visible').count() === 8 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
   for (const layout of ['news', 'recap', 'announcement']) {
     await page.getByRole('button', { name: /^1\. Paragraph/ }).click();
     const before = await blocks();
@@ -504,6 +504,27 @@ try {
   await publicPage.locator('.story-inline-gallery a').first().click();
   check('gallery photos use the same enlargement viewer', await publicPage.locator('dialog.viewer').evaluate((dialog) => dialog.open));
   await publicPage.keyboard.press('Escape');
+  legacyId = await createLegacy(); await saveLegacy('twoUp'); await uploadLegacy(); await uploadLegacy();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(BASE + `/admin/drafts/${legacyId}`); await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
+  await page.locator('[data-add-module="gallery"]').click();
+  const visualBefore = JSON.parse(await page.locator('#story-blocks').inputValue());
+  assert.equal(visualBefore.at(-1).type, 'gallery'); assert.equal(visualBefore.at(-1).photos.length, 2);
+  check('Gallery module selects the available story photos and exposes labelled controls', visualBefore.at(-1).type === 'gallery' && visualBefore.at(-1).photos.length === 2 && await page.locator('#module-fields').getByLabel('Gallery columns', { exact: true }).count() === 1);
+  await page.getByRole('button', { name: 'Move gallery photo 2 earlier', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  check('gallery keyboard reorder retains focus on the moved row at the boundary', await page.locator('[data-gallery-order="0"]').evaluate((el) => el === document.activeElement));
+  await page.locator('#module-fields').getByLabel('Gallery columns', { exact: true }).selectOption('3');
+  const visualOrdered = JSON.parse(await page.locator('#story-blocks').inputValue());
+  check('Gallery keyboard controls reverse ordered stable IDs and save column settings', visualOrdered.at(-1).photos[0].photoId === visualBefore.at(-1).photos[1].photoId && visualOrdered.at(-1).columns === 3);
+  await page.getByRole('button', { name: 'Duplicate module', exact: true }).click();
+  check('Gallery duplication uses a new module ID and retains photo ordering', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).id !== visualOrdered.at(-1).id);
+  await page.locator('#blocks-undo').click();
+  check('Gallery duplication can be undone atomically', JSON.stringify(JSON.parse(await page.locator('#story-blocks').inputValue())) === JSON.stringify(visualOrdered));
+  await page.waitForFunction(() => document.getElementById('preview')?.contentDocument?.querySelectorAll('.story-inline-gallery img').length === 2);
+  const visualSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await visualSave).status(), 200); await publishLegacy();
+  check('published Gallery module excludes its photos from the surrounding layout', await publicPage.locator('.story-inline-gallery img').count() === 2 && await publicPage.locator('article img').count() === 2 && await publicPage.locator('[data-photo-layout]').count() === 0);
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {
