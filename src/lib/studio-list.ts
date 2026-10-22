@@ -1,3 +1,4 @@
+import { belongsToSection } from './site';
 // The story list IMConnected Studio imports from (GET /api/stories).
 //
 // "Published" means live on the site NOW: the rows of the stories table that are live, newest first, exactly the
@@ -49,6 +50,7 @@ function draftAsFeedSource(slugOrId: string, d: Draft, photos: DraftPhoto[]): Fe
       title: d.title || 'Untitled story',
       dek: d.dek || undefined,
       section: d.section,
+      additionalSections: d.additionalSections,
       area: d.area || undefined,
       column: d.column || undefined,
       author: d.author,
@@ -81,7 +83,7 @@ export async function listPublishedForStudio(site: URL, opts: { limit: number; s
     throw new StoriesUnavailable(err);
   }
   return live
-    .filter((s) => !opts.section || s.data.section === opts.section)
+    .filter((s) => !opts.section || belongsToSection(s.data, opts.section))
     .slice(0, opts.limit)
     .map((s) => ({ ...feedItem(s, site), excerpt: storyExcerpt(s.body), status: 'published' as const, source: sources.get(s.id) ?? 'site' }));
 }

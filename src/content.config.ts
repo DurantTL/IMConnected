@@ -13,6 +13,7 @@ const stories = defineCollection({
     /** One- or two-sentence summary shown under the headline and on cards */
     dek: z.string().optional(),
     section: z.enum(SECTION_KEYS),
+    additionalSections: z.array(z.enum(SECTION_KEYS)).max(20).optional(),
     /** Sub-area within a section, e.g. news → churches */
     area: z.string().optional(),
     /** Column name, for section: columns */

@@ -142,7 +142,7 @@ function readStory(file) {
   if (bad) throw new Error(`a link or image target is not a web, mail or tel link: ${bad.slice(0, 40)}`);
   if (body.replace(/&lt;/g, '<').length > LIMITS.bodyMax || body.length > 4 * LIMITS.bodyMax) throw new Error(`story text is longer than ${LIMITS.bodyMax} characters`);
   return {
-    slug, title, dek: str(fm.dek) || undefined, section, area, column: str(fm.column) || undefined, author, authorTitle: str(fm.authorTitle) || undefined,
+    slug, title, dek: str(fm.dek) || undefined, section, additionalSections: fm.additionalSections === undefined ? undefined : site.normalizeAdditionalSections(fm.additionalSections, section), area, column: str(fm.column) || undefined, author, authorTitle: str(fm.authorTitle) || undefined,
     church: str(fm.church) || undefined, date, image, imageAlt: str(fm.imageAlt) || undefined, photoCredit: str(fm.photoCredit) || undefined,
     announcement: announcementMod.normalizeAnnouncement(fm.announcement), photos, photoAlts, photoLayout, storyBlocks, photoFocus, featured: fm.featured === true, draft: fm.draft === true, body,
   };
@@ -185,7 +185,7 @@ const same = (row, s) =>
   row.title === s.title && (row.dek ?? undefined) === s.dek && row.section === s.section && (row.area ?? undefined) === s.area && (row.story_column ?? undefined) === s.column &&
   row.author === s.author && (row.author_title ?? undefined) === s.authorTitle && (row.church ?? undefined) === s.church && row.date === s.date &&
   (row.image ?? undefined) === s.image && (row.image_alt ?? undefined) === s.imageAlt && (row.photo_credit ?? undefined) === s.photoCredit &&
-  row.photos === JSON.stringify(s.photos) && row.photo_alts === JSON.stringify(s.photoAlts) && row.photo_layout === s.photoLayout && (row.announcement ?? null) === (s.announcement ? JSON.stringify(s.announcement) : null) && (row.story_blocks ?? '[]') === JSON.stringify(s.storyBlocks) && (row.featured === 1) === s.featured &&
+  row.photos === JSON.stringify(s.photos) && row.photo_alts === JSON.stringify(s.photoAlts) && row.photo_layout === s.photoLayout && (row.additional_sections ?? '[]') === JSON.stringify(s.additionalSections) && (row.announcement ?? null) === (s.announcement ? JSON.stringify(s.announcement) : null) && (row.story_blocks ?? '[]') === JSON.stringify(s.storyBlocks) && (row.featured === 1) === s.featured &&
   (row.draft === 1) === s.draft && String(row.body).replace(/\r\n?/g, '\n').trim() === s.body &&
   db.prepare('SELECT focal_x, focal_y, zoom FROM story_photos WHERE story_id = ? ORDER BY position').all(row.id).every((p, i) => p.focal_x === (s.photoFocus[i]?.focalX ?? 50) && p.focal_y === (s.photoFocus[i]?.focalY ?? 50) && p.zoom === (s.photoFocus[i]?.zoom ?? 1));
 
@@ -195,6 +195,8 @@ for (const f of files) {
   try {
     const s = readStory(path.join(DIR, f));
     const row = db.prepare('SELECT * FROM stories WHERE slug = ?').get(slug);
+    const requestedAdditionalSections = s.additionalSections;
+    s.additionalSections = site.normalizeAdditionalSections(s.additionalSections === undefined ? JSON.parse(row?.additional_sections ?? '[]') : s.additionalSections, s.section);
     const edited = row && (row.source !== 'git' || row.edited_at !== null);
     if (row && edited && !FORCE) { tally.skipped++; console.log(`  skip     ${slug}  (changed in the dashboard or Studio since its last import, or unpublished or republished there: the database copy is newer than this file, so it is left alone. --force overwrites it with this file)`); continue; }
     if (!row && s.draft) { tally.skipped++; console.log(`  skip     ${slug}  (draft: true, not published)`); continue; }
@@ -224,19 +226,21 @@ for (const f of files) {
       }
       const now = Date.now();
       const status = s.draft ? 'unpublished' : 'live';
-      const cols = [s.title, s.dek ?? null, s.section, s.area ?? null, s.column ?? null, s.author, s.authorTitle ?? null, s.church ?? null, s.date, s.image ?? null, s.imageAlt ?? null, s.photoCredit ?? null,
-        JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, status, 'git', Date.parse(s.date), now, sha256(JSON.stringify([s, rows])), s.photoLayout, JSON.stringify(s.storyBlocks), s.announcement ? JSON.stringify(s.announcement) : null];
       db.exec('BEGIN IMMEDIATE');
       try {
+        const current = db.prepare('SELECT additional_sections FROM stories WHERE slug=?').get(slug);
+        s.additionalSections = site.normalizeAdditionalSections(requestedAdditionalSections === undefined ? JSON.parse(current?.additional_sections ?? '[]') : requestedAdditionalSections, s.section);
+        const cols = [s.title, s.dek ?? null, s.section, s.area ?? null, s.column ?? null, s.author, s.authorTitle ?? null, s.church ?? null, s.date, s.image ?? null, s.imageAlt ?? null, s.photoCredit ?? null,
+          JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, status, 'git', Date.parse(s.date), now, sha256(JSON.stringify([s, rows])), s.photoLayout, JSON.stringify(s.storyBlocks), s.announcement ? JSON.stringify(s.announcement) : null, JSON.stringify(s.additionalSections)];
         let id;
         if (row) {
           id = Number(row.id);
           db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-            photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, published_at=?, updated_at=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, edited_at=NULL, rev=rev+1 WHERE id = ?`).run(...cols, id);
+            photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, published_at=?, updated_at=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, additional_sections=?, edited_at=NULL, rev=rev+1 WHERE id = ?`).run(...cols, id);
           db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
         } else {
           id = Number(db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-            photos, photo_alts, featured, draft, body, status, source, published_at, updated_at, content_hash, photo_layout, story_blocks, announcement, slug) VALUES (${Array(cols.length + 1).fill('?').join(',')})`).run(...cols, slug).lastInsertRowid);
+            photos, photo_alts, featured, draft, body, status, source, published_at, updated_at, content_hash, photo_layout, story_blocks, announcement, additional_sections, slug) VALUES (${Array(cols.length + 1).fill('?').join(',')})`).run(...cols, slug).lastInsertRowid);
         }
         const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         for (const r of rows) ins.run(id, r.position, r.kind, r.path, r.url, r.alt, r.sha256, r.bytes, s.photoFocus[r.position]?.focalX ?? 50, s.photoFocus[r.position]?.focalY ?? 50, s.photoFocus[r.position]?.zoom ?? 1);

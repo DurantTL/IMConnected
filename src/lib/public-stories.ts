@@ -28,6 +28,7 @@ export function toPublicStory(s: Story): PublicStory {
       title: s.title,
       dek: s.dek,
       section: s.section,
+      additionalSections: s.additionalSections,
       area: s.area,
       column: s.column,
       author: s.author,

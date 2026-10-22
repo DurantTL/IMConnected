@@ -1,3 +1,4 @@
+import { normalizeAdditionalSections } from './site';
 import { normalizeAnnouncement, type Announcement } from './announcement';
 // Validates a request from the AI agent (POST /api/agent/stories) into a story draft.
 // The agent's text gets the same treatment as a dashboard draft: control characters removed, every "<" in the
@@ -31,6 +32,7 @@ export interface AgentStory {
   body: string;
   /** '' when the agent sent none: the editor picks it. */
   section: string;
+  additionalSections?: string[];
   area: string;
   author: string;
   church: string;
@@ -132,11 +134,13 @@ export function parseAgentStory(input: unknown): AgentStory {
     photos = o.photos.map(parsePhoto);
   }
 
+  let additionalSections: string[] | undefined;
+  if (o.additionalSections !== undefined) { try { additionalSections = normalizeAdditionalSections(o.additionalSections, section); } catch (e) { throw new AgentError('bad_additional_sections', (e as Error).message); } }
   let announcement: Announcement | null | undefined;
   if (o.announcement !== undefined) {
     try { announcement = normalizeAnnouncement(o.announcement); } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
   }
-  return { announcement, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos };
+  return { additionalSections, announcement, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos };
 }
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----

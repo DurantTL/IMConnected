@@ -134,6 +134,11 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   {SECTIONS.map((s) => <option value={s.key} selected={s.key === draft.section}>{s.label}</option>)}
                 </select>
               </label>
+              <fieldset class="full additional-sections"><legend>Additional sections</legend>
+                <input type="hidden" name="additionalSectionsPresent" value="1" />
+                <p class="hint">Keep one primary section above. Add other sections where readers should also find this story; its category belongs to the primary section.</p>
+                <div style="display:flex;flex-wrap:wrap;gap:12px 24px">{SECTIONS.map((s) => <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="additionalSections" value={s.key} checked={s.key === draft.section || draft.additionalSections?.includes(s.key)} disabled={s.key === draft.section} />{s.label}</label>)}</div>
+              </fieldset>
               <label id="f-area-wrap">Category
                 <select name="area" id="f-area">
                   <option value="" data-section="" hidden={!!SECTIONS.find((s) => s.key === draft.section)?.areas}>None</option>

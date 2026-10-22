@@ -525,7 +525,11 @@ try {
   check('Gallery duplication can be undone atomically', JSON.stringify(JSON.parse(await page.locator('#story-blocks').inputValue())) === JSON.stringify(visualOrdered));
   await page.waitForFunction(() => document.getElementById('preview')?.contentDocument?.querySelectorAll('.story-inline-gallery img').length === 2);
   const visualSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
-  await page.locator('#save-btn').click(); assert.equal((await visualSave).status(), 200); await publishLegacy();
+  await page.locator('#save-btn').click(); assert.equal((await visualSave).status(), 200);
+  // An earlier in-flight autosave may satisfy visualSave; publish only the intended post-undo snapshot.
+  for (let attempt = 0; attempt < 100 && JSON.stringify(JSON.parse(legacyDraft().story_blocks)) !== JSON.stringify(visualOrdered); attempt++) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(JSON.parse(legacyDraft().story_blocks), visualOrdered, 'the intended Gallery state must be persisted before direct test publication');
+  await publishLegacy();
   check('published Gallery module excludes its photos from the surrounding layout', await publicPage.locator('.story-inline-gallery img').count() === 2 && await publicPage.locator('article img').count() === 2 && await publicPage.locator('[data-photo-layout]').count() === 0);
   legacyId = await createLegacy(); await saveLegacy('heroGrid'); await uploadLegacy();
   await page.goto(BASE + `/admin/drafts/${legacyId}`);

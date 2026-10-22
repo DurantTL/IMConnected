@@ -1,3 +1,4 @@
+import { normalizeAdditionalSections, parseAdditionalSections, sectionMembershipSql } from './site';
 import { editorialSnapshot, recordDraftRevision, readDraftRevision } from './draft-revisions';
 import { restoreMediaMarkers } from './revision-media';
 import { audit } from './auth/audit';
@@ -32,6 +33,7 @@ export interface DraftFields {
   title: string;
   dek: string;
   section: string;
+  additionalSections?: string[];
   area: string;
   column: string;
   author: string;
@@ -95,6 +97,7 @@ export interface DraftListItem {
   source: DraftSource;
   title: string;
   section: string;
+  additionalSections?: string[];
   slug: string | null;
   church: string;
   author: string;
@@ -123,6 +126,7 @@ function toDraft(r: Row): Draft {
     title: s(r.title),
     dek: s(r.dek),
     section: s(r.section),
+    additionalSections: parseAdditionalSections(r.additional_sections, s(r.section)),
     area: s(r.area),
     column: s(r.story_column),
     author: s(r.author),
@@ -215,7 +219,7 @@ export function createDraft(opts: NewDraft): number {
       now, opts.userId ?? null, now, opts.userId ?? null, opts.sourceUrl ?? null, opts.agentNote ?? null,
     );
   const id = Number(r.lastInsertRowid);
-  getDb().prepare('UPDATE drafts SET announcement = ? WHERE id = ?').run(bulletin, id);
+  getDb().prepare('UPDATE drafts SET announcement = ?, additional_sections = ? WHERE id = ?').run(bulletin, JSON.stringify(normalizeAdditionalSections(f.additionalSections, f.section)), id);
   if (blocks !== undefined) getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(blocks), blocks.length ? storyBlocksToMarkdown(blocks) : f.body, id);
   return id;
 }
@@ -261,8 +265,8 @@ export function listDrafts(filter: { status: StatusFilter; section?: string; sou
     args.push(filter.status);
   }
   if (filter.section) {
-    where.push('d.section = ?');
-    args.push(filter.section);
+    where.push(sectionMembershipSql('d.'));
+    args.push(filter.section, filter.section);
   }
   if (filter.source) {
     where.push('d.source = ?');
@@ -270,7 +274,7 @@ export function listDrafts(filter: { status: StatusFilter; section?: string; sou
   }
   const rows = getDb()
     .prepare(
-      `SELECT d.id, d.status, d.source, d.title, d.section, d.slug, d.church, d.author, d.submitter_church, d.email_verified, d.created_at, d.updated_at,
+      `SELECT d.id, d.status, d.source, d.title, d.section, d.additional_sections, d.slug, d.church, d.author, d.submitter_church, d.email_verified, d.created_at, d.updated_at,
          (SELECT COUNT(*) FROM draft_photos ph WHERE ph.draft_id = d.id) AS photo_count
        FROM drafts d ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY d.created_at DESC, d.id DESC LIMIT 500`,
     )
@@ -281,6 +285,7 @@ export function listDrafts(filter: { status: StatusFilter; section?: string; sou
     source: r.source as DraftSource,
     title: s(r.title),
     section: s(r.section),
+    additionalSections: parseAdditionalSections(r.additional_sections, s(r.section)),
     slug: sn(r.slug),
     church: s(r.submitter_church) || s(r.church),
     author: s(r.author),
@@ -325,6 +330,7 @@ const CONFLICT = fail('conflict', 'conflict');
 /** Validation common to saving (lenient) — publishing enforces the full rules. */
 export function checkFieldValues(f: DraftFields): ErrorCode | null {
   if (!getSection(f.section)) return 'bad_section';
+  try { normalizeAdditionalSections(f.additionalSections, f.section); } catch { return 'bad_section'; }
   if (f.date && !validDate(f.date)) return 'bad_date';
   if (!isPhotoLayout(f.photoLayout)) return 'bad_layout';
   return null;
@@ -361,6 +367,7 @@ function saveDraftInTransaction(id: number, expected: number, f: DraftFields, ph
     for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
     const focus = getDb().prepare('UPDATE draft_photos SET focal_x = COALESCE(?, focal_x), focal_y = COALESCE(?, focal_y), zoom = COALESCE(?, zoom) WHERE id = ? AND draft_id = ?');
     for (const [pid, f] of photoFocus) focus.run(f.focalX ?? null, f.focalY ?? null, f.zoom ?? null, pid, id);
+    getDb().prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(f.additionalSections === undefined ? cur.additionalSections : f.additionalSections, f.section)), id);
     const after = editorialSnapshot(id, getDraft(id)!);
     if (forceRevision || JSON.stringify(before) !== JSON.stringify(after)) recordDraftRevision(id, userId, before);
     return { ok: true, updatedAt: v } as SaveResult;
@@ -615,7 +622,7 @@ export function resetDraftFromStory(id: number, userId: number | null, f: DraftF
         "UPDATE drafts SET status = 'in_review', rejected_at = NULL, studio_overwrote_at = NULL, title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = ?, featured = ?, body = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE id = ?",
       )
       .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
-    getDb().prepare('UPDATE drafts SET announcement = ? WHERE id = ?').run(announcementJson(f.announcement), id);
+    getDb().prepare('UPDATE drafts SET announcement = ?, additional_sections = ? WHERE id = ?').run(announcementJson(f.announcement), JSON.stringify(normalizeAdditionalSections(f.additionalSections, f.section)), id);
     const old = replacePhotos(id, photos);
     remapStoryBlocks(id, f.storyBlocks);
     return old;
@@ -664,6 +671,7 @@ export interface SubmissionInput {
   title: string;
   dek: string;
   section: string;
+  additionalSections?: string[];
   area?: string;
   /** Already safe Markdown (textToMarkdown). */
   body: string;
@@ -715,6 +723,7 @@ export interface StudioStory {
   title: string;
   dek: string;
   section: string;
+  additionalSections?: string[];
   area?: string;
   author: string;
   date: string;
@@ -755,7 +764,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
   {
     const now = Date.now();
     for (const st of stories) {
-      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, area: st.area ?? '', author: st.author, date: st.date, photoCredit: st.photoCredit, photoLayout: st.photoLayout, body: st.body, announcement: st.announcement });
+      const fields = emptyFields({ title: st.title, dek: st.dek, section: st.section, additionalSections: st.additionalSections, area: st.area ?? '', author: st.author, date: st.date, photoCredit: st.photoCredit, photoLayout: st.photoLayout, body: st.body, announcement: st.announcement });
       const cur = getDraftBySlug(st.slug);
       let id: number;
       if (cur && isEditable(cur)) {
@@ -777,6 +786,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
         // Photos: only a Studio draft's own are replaced (it holds no uploads); another draft's uploaded files are never deleted.
         // A rejected draft may still hold its uploads: they are replaced and the files deleted once the commit below succeeds.
         const keepsUploads = cur && cur.source !== 'studio' && cur.status !== 'rejected' && listPhotos(id).some((p) => p.path);
+        if (st.additionalSections !== undefined) getDb().prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(st.additionalSections, st.section)), id);
         if (st.announcement !== undefined) getDb().prepare('UPDATE drafts SET announcement = ? WHERE id = ?').run(announcementJson(st.announcement), id);
         if (!keepsUploads) oldUploads = oldUploads.concat(replacePhotos(id, st.photos));
       }
@@ -793,6 +803,7 @@ export interface AgentDraftInput {
   /** Already safe Markdown. */
   body: string;
   section: string;
+  additionalSections?: string[];
   area: string;
   author: string;
   church: string;
@@ -838,6 +849,8 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
           )
           .run(input.title, input.dek, input.body, input.section, input.area, input.author, input.church, input.note || null, input.photoLayout, input.announcement !== undefined ? 1 : 0, input.announcement === undefined ? null : announcementJson(input.announcement), input.date, input.date, now, id);
         if (Number(r.changes) !== 1) return { ok: false, id };
+        const current = getDraft(id)!;
+        db.prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(input.additionalSections === undefined ? current.additionalSections : input.additionalSections, input.section)), id);
         if (input.photos) {
           oldFiles = listPhotos(id).map((p) => p.path).filter((p): p is string => !!p);
           db.prepare('DELETE FROM draft_photos WHERE draft_id = ?').run(id);
@@ -847,7 +860,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         id = createDraft({
           source: 'agent',
           status: 'new',
-          fields: { announcement: input.announcement, title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
+          fields: { additionalSections: input.additionalSections, announcement: input.announcement, title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
           sourceUrl: input.sourceUrl,
           agentNote: input.note || null,
         });
@@ -874,8 +887,8 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
 /** The newest drafts still waiting for an editor (new or in review), for the Studio story list. */
 export function listOpenDraftsNewestFirst(limit: number, section?: string): { draft: Draft; photos: DraftPhoto[] }[] {
   const rows = getDb()
-    .prepare(`SELECT id FROM drafts WHERE status IN ('new', 'in_review')${section ? ' AND section = ?' : ''} ORDER BY created_at DESC, id DESC LIMIT ?`)
-    .all(...(section ? [section, limit] : [limit])) as { id: number }[];
+    .prepare(`SELECT id FROM drafts WHERE status IN ('new', 'in_review')${section ? ' AND ' + sectionMembershipSql() : ''} ORDER BY created_at DESC, id DESC LIMIT ?`)
+    .all(...(section ? [section, section, limit] : [limit])) as { id: number }[];
   const out: { draft: Draft; photos: DraftPhoto[] }[] = [];
   for (const r of rows) {
     const draft = getDraft(Number(r.id));

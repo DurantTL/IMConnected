@@ -230,6 +230,7 @@ if (form) {
 
   // ---- section decides which categories and the column field are offered ----
   function syncSection() {
+    for (const checkbox of form.querySelectorAll<HTMLInputElement>('input[name=additionalSections]')) { const primary = checkbox.value === section.value; checkbox.disabled = primary; if (primary) checkbox.checked = true; }
     const hasAreas = Array.from(area.options).some((o) => o.value !== '' && o.dataset.section === section.value);
     for (const opt of Array.from(area.options)) opt.hidden = opt.value === '' ? hasAreas : opt.dataset.section !== section.value;
     if (area.selectedOptions[0]?.hidden) {

@@ -1,7 +1,7 @@
 // RSS 2.0 feed of the newest stories. Rendered on the server from the stories table; the middleware caches the result.
 import type { APIRoute } from 'astro';
 import { getFeedItems } from '../lib/feed';
-import { SITE } from '../lib/site';
+import { SITE, getSection } from '../lib/site';
 import { asUnavailable } from '../lib/public-stories';
 
 // Strips characters XML 1.0 forbids (one stray control character would break the whole feed), then escapes.
@@ -30,6 +30,7 @@ export const GET: APIRoute = async ({ site }) => {
       `      <pubDate>${new Date(`${s.date}T12:00:00Z`).toUTCString()}</pubDate>`,
       `      <dc:creator>${xml(s.author)}</dc:creator>`,
       `      <category>${xml(category)}</category>`,
+      ...(s.additionalSections ?? []).map((key) => `      <category>${xml(getSection(key)?.label ?? key)}</category>`),
       ...(s.dek ? [`      <description>${xml(s.dek)}</description>`] : []),
       ...(s.image
         ? [`      <media:content url="${xml(s.image)}" medium="image">${s.imageAlt ? `<media:description>${xml(s.imageAlt)}</media:description>` : ''}</media:content>`]

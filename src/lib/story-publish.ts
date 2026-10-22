@@ -248,7 +248,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; row.zoom = photos[i].zoom ?? 1; });
   const now = Date.now();
   const story: StoryInput = {
-    slug, title, dek: dek || undefined, section, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
+    slug, title, dek: dek || undefined, section, additionalSections: draft.additionalSections, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
     date: draft.date, photoCredit: stored.sources.length && photoCredit ? photoCredit : undefined,
     ...photoFields(stored, alts, title),
     announcement: draft.announcement, photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body), storyBlocks,
@@ -312,7 +312,7 @@ export function loadStory(slug: string): LoadedStory | null {
   const alts = [s.imageAlt ?? '', ...s.photoAlts];
   return {
     fields: {
-      title: s.title, dek: s.dek ?? '', section: s.section, area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
+      title: s.title, dek: s.dek ?? '', section: s.section, additionalSections: s.additionalSections, area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
       church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', announcement: s.announcement, photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks,
     },
     photos: sources.map((url, i) => {
@@ -372,14 +372,14 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
           row.zoom = p.photos[i].zoom ?? previous?.zoom ?? 1;
         });
         writeStory({
-          slug: p.slug, title: p.title, dek: p.dek || undefined, section: p.section, area: p.area, author: p.author, date: p.date,
+          slug: p.slug, title: p.title, dek: p.dek || undefined, section: p.section, additionalSections: p.additionalSections, area: p.area, author: p.author, date: p.date,
           photoCredit: stored.sources.length && p.photoCredit ? p.photoCredit : undefined,
           ...photoFields(stored, [p.leadAlt, ...p.photos.slice(1).map((ph) => ph.alt)], p.title),
           photoLayout: p.photoLayout, featured: false, draft: false, body: p.body, status: 'live', source: 'studio', publishedAt: now, editedAt: now, photoRows: stored.rows,
         }, now);
       }
       const rec = recordStudioPublish(planned.map(({ p, stored }) => ({
-        slug: p.slug, title: p.title, dek: p.dek, section: p.section, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body, announcement: getStoryBySlug(p.slug, { includeUnpublished: true })?.announcement ?? null,
+        slug: p.slug, title: p.title, dek: p.dek, section: p.section, additionalSections: getStoryBySlug(p.slug, { includeUnpublished: true })?.additionalSections, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body, announcement: getStoryBySlug(p.slug, { includeUnpublished: true })?.announcement ?? null,
         photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption, focalX: stored.rows[i].focalX, focalY: stored.rows[i].focalY, zoom: stored.rows[i].zoom })),
       })));
       ids = rec.ids; overwrote = rec.overwrote; oldUploads = rec.oldUploads;

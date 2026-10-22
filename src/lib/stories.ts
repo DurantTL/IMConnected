@@ -1,3 +1,4 @@
+import { belongsToSection } from './site';
 import type { Announcement } from './announcement';
 import type { StoryBlock } from './story-blocks';
 import { getCollection, type CollectionEntry } from 'astro:content';
@@ -23,6 +24,7 @@ export interface PublicStory {
     title: string;
     dek?: string;
     section: string;
+    additionalSections?: string[];
     area?: string;
     column?: string;
     author: string;
@@ -45,6 +47,6 @@ export interface PublicStory {
 
 export function bySection<T extends PublicStory>(stories: T[], section: string, area?: string): T[] {
   return stories.filter(
-    (s) => s.data.section === section && (!area || s.data.area === area),
+    (s) => belongsToSection(s.data, section) && (!area || s.data.section === section && s.data.area === area),
   );
 }

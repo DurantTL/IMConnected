@@ -1,3 +1,4 @@
+import { sectionMembershipSql } from './site';
 // The FTS5 index over the stories table (migration 013) and the query against it (epic #25, step 3).
 //
 // stories_fts holds each story's title, dek, author, church and plain body text, with the story's id as its rowid and
@@ -83,11 +84,11 @@ export async function reindexAll(db: DatabaseSync, yieldToLoop: () => Promise<vo
 /** Live, non-draft stories matching every word, best first, at most MAX_RESULTS. */
 export function searchIndex(db: DatabaseSync, terms: string[], section?: string): SearchHit[] {
   const args: (string | number)[] = [ftsQuery(terms)];
-  if (section) args.push(section);
+  if (section) args.push(section, section);
   args.push(MAX_RESULTS);
   const rows = db.prepare(
     `SELECT s.slug, s.title, s.dek, s.section, s.date, s.author, s.church, s.body FROM stories_fts JOIN stories s ON s.id = stories_fts.rowid
-     WHERE stories_fts MATCH ? AND s.status = 'live' AND s.draft = 0 ${section ? 'AND s.section = ?' : ''}
+     WHERE stories_fts MATCH ? AND s.status = 'live' AND s.draft = 0 ${section ? 'AND ' + sectionMembershipSql('s.') : ''}
      ORDER BY bm25(stories_fts, 10, 4, 3, 2, 1), s.date DESC, s.slug ASC LIMIT ?`,
   ).all(...args) as unknown as { slug: string; title: string; dek: string | null; section: string; date: string; author: string; church: string | null; body: string }[];
   return rows.map((r) => toHit({ slug: r.slug, title: r.title, dek: r.dek ?? undefined, section: r.section, date: r.date, author: r.author, church: r.church ?? undefined, body: r.body }, terms));
