@@ -353,20 +353,37 @@ if (form && blocksField) {
   new MutationObserver(syncPanes).observe(split, { attributes: true, attributeFilter: ['data-view'] });
   const librarySearch = document.getElementById('module-library-search') as HTMLInputElement;
   const libraryReset = document.getElementById('module-library-reset') as HTMLButtonElement;
+  const libraryCategory = document.getElementById('module-library-category') as HTMLSelectElement;
+  const pinKey = 'imconnected-module-pins-v1';
+  let pinned = new Set(['text', 'image', 'button']);
+  try { const saved = JSON.parse(localStorage.getItem(pinKey) ?? 'null'); if (Array.isArray(saved)) pinned = new Set(saved.filter((v) => typeof v === 'string' && Object.hasOwn(labels, v))); } catch { /* preferences never affect story access */ }
+  for (const pin of document.querySelectorAll<HTMLInputElement>('[data-pin-module]')) {
+    pin.checked = pinned.has(pin.dataset.pinModule!);
+    pin.addEventListener('input', (e) => e.stopPropagation());
+    pin.addEventListener('change', (e) => {
+      e.stopPropagation(); if (pin.checked) pinned.add(pin.dataset.pinModule!); else pinned.delete(pin.dataset.pinModule!);
+      let saved = true; try { localStorage.setItem(pinKey, JSON.stringify([...pinned])); } catch { saved = false; }
+      document.getElementById('module-pin-status')!.textContent = saved ? 'Quick access saved.' : 'Quick access changed for this visit; browser storage is unavailable.';
+      filterLibrary();
+    });
+  }
   function filterLibrary() {
     const query = librarySearch.value.trim().toLocaleLowerCase();
     let matches = 0;
     for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) {
-      const matchesQuery = `${add.textContent} ${add.dataset.addModule}`.toLocaleLowerCase().includes(query);
+      const category = libraryCategory.value;
+      const matchesQuery = `${add.textContent} ${add.dataset.addModule}`.toLocaleLowerCase().includes(query) && (category === 'all' || category === 'favorites' && pinned.has(add.dataset.addModule!) || add.dataset.libraryCategory === category);
       add.hidden = !matchesQuery;
       if (matchesQuery) matches++;
     }
     document.getElementById('module-library-results')!.textContent = `${matches} ${matches === 1 ? 'module' : 'modules'}${query ? ' found' : ''}`;
     document.getElementById('module-library-empty')!.hidden = matches > 0;
-    libraryReset.hidden = !librarySearch.value;
+    libraryReset.hidden = !librarySearch.value && libraryCategory.value === 'all';
   }
   librarySearch.addEventListener('input', (event) => { event.stopPropagation(); filterLibrary(); });
-  libraryReset.addEventListener('click', () => { librarySearch.value = ''; filterLibrary(); librarySearch.focus(); });
+  libraryReset.addEventListener('click', () => { librarySearch.value = ''; libraryCategory.value = 'all'; filterLibrary(); librarySearch.focus(); });
+  libraryCategory.addEventListener('input', (e) => e.stopPropagation());
+  libraryCategory.addEventListener('change', (e) => { e.stopPropagation(); filterLibrary(); });
   const layouts: Record<string, { label: string; types: StoryBlock['type'][] }> = {
     news: { label: 'News story', types: ['text', 'heading', 'text', 'quote'] },
     recap: { label: 'Event recap', types: ['heading', 'text', 'list', 'text'] },

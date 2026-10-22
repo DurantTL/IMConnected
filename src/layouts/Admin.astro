@@ -5,25 +5,28 @@ import { countOpenDrafts } from '../lib/drafts';
 
 interface Props {
   title: string;
-  current?: 'dashboard' | 'drafts' | 'published' | 'editors' | 'account';
+  current?: 'dashboard' | 'drafts' | 'announcements' | 'events' | 'navigation' | 'published' | 'editors' | 'account';
   /** Wider main column (the story editor). */
   wide?: boolean;
 }
 const { title, current, wide } = Astro.props;
 const user = Astro.locals.user;
-let waiting = 0;
+const waiting: Record<string, number> = {};
 if (user && Astro.locals.session?.mfaPassed) {
   try {
-    waiting = countOpenDrafts();
+    waiting.drafts = countOpenDrafts('story'); waiting.announcements = countOpenDrafts('announcement'); waiting.events = countOpenDrafts('event');
   } catch {
     /* the badge is a convenience */
   }
 }
 const nav = [
-  { key: 'drafts', href: '/admin', label: 'Drafts' },
+  { key: 'drafts', href: '/admin', label: 'Stories' },
+  { key: 'announcements', href: '/admin/announcements', label: 'Announcements' },
+  { key: 'events', href: '/admin/events', label: 'Events' },
   { key: 'published', href: '/admin/published', label: 'Published' },
   { key: 'editors', href: '/admin/editors', label: 'Editors' },
   { key: 'account', href: '/admin/account', label: 'My account' },
+  ...(user?.role === 'admin' ? [{ key: 'navigation', href: '/admin/navigation', label: 'Website menu' }] : []),
 ];
 ---
 <!doctype html>
@@ -42,7 +45,7 @@ const nav = [
       {user && (
         <nav aria-label="Editor navigation">
           {Astro.locals.session?.mfaPassed && nav.map((n) => (
-            <a href={n.href} aria-current={current === n.key ? 'page' : undefined}>{n.label}{n.key === 'drafts' && waiting > 0 && <span class="nav-count"><span aria-hidden="true">{waiting}</span><span class="visually-hidden"> {waiting === 1 ? 'draft' : 'drafts'} waiting</span></span>}</a>
+            <a href={n.href} aria-current={current === n.key ? 'page' : undefined}>{n.label}{waiting[n.key] > 0 && <span class="nav-count"><span aria-hidden="true">{waiting[n.key]}</span><span class="visually-hidden"> {waiting[n.key] === 1 ? 'draft' : 'drafts'} waiting</span></span>}</a>
           ))}
           <form method="post" action="/api/admin/logout"><button type="submit">Sign out</button></form>
         </nav>

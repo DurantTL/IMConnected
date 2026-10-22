@@ -1,5 +1,20 @@
 # Magazine and editorial studio redesign
 
+## Event spotlight and editable menus
+
+Issue #72 adapts [durant.xyz](https://durant.xyz/)'s restrained entrances, growing navigation underline and expanding phone menu to the magazine. Entrances translate content by 14 pixels once; text stays fully opaque throughout. Reduced motion skips/cancels spatial animation. The new homepage event rail uses full-aspect flyers, native scrolling and deliberate Previous/Next controls without autoplay. Upcoming dates use the conference's Central time calendar; only published events appear.
+
+Administrators can edit website link labels, destinations, order and visibility at `/admin/navigation`; version checks protect concurrent edits. The editor's module library now offers categories and browser-local Favorites. Stories, Announcements and Events have separate draft screens and creation actions, with All drafts retained for oversight. See the [workflow and configuration guide](COMMUNITY-NAVIGATION.md).
+
+These captures use only synthetic accounts, text and generated flyer graphics:
+
+- [Homepage with event spotlight, desktop](design/community-home-desktop.png) and [phone](design/community-home-mobile.png).
+- [Website menu editor, desktop](design/website-menu-editor.png) and [phone](design/website-menu-mobile.png).
+- [Module favorites and quick-access settings](design/module-library-quick-access.png).
+- [Announcements queue](design/announcements-queue.png) and [Events queue](design/events-queue.png).
+
+Verification includes the production build, 66 new community-navigation integration/browser checks, 205 agent API checks, 57 module checks, 172 builder browser checks, builder persistence/crop compatibility, the pending-save publish regression, and the responsive crawl's 104 checks across 30 screens with axe WCAG A/AA. Independent read-only Sol review's date-boundary and menu-ID findings were fixed and exercised by the new suite. The wider crawl also caught a lost story-section active marker and transient text contrast during fades; both were corrected, with the complete crawl passing afterward. This branch includes the previously merged video-popup work and does not deploy or publish content.
+
 This change follows the content-outline, task-focused panels, labelled actions, mobile reflow and private-preview direction in [IMSDA Events #1114](https://github.com/DurantTL/IMSDA-Events/issues/1114). It keeps IMConnected's routes, editorial permissions, SQLite source of truth and human publishing action.
 
 ## Canvas and search follow-up

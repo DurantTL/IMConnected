@@ -50,6 +50,8 @@ Tests: `SCRATCH=/tmp/imc-photo-layouts node scripts/test-photo-layouts.mjs` afte
 
 ## Modular story editor and image focus
 
+The [community navigation guide](docs/COMMUNITY-NAVIGATION.md) covers the homepage event rail, administrator website-menu settings, separate Stories/Announcements/Events queues and customizable module quick access.
+
 See the [design review and screenshots](docs/DESIGN_REVIEW.md) for the magazine layout and dedicated editor workspace. The editor separates **Content**, **Story settings**, **Photos**, and **Review & publish**; inactive panels leave the keyboard tab order, while their fields remain included in saves. A sticky toolbar keeps Save and private Preview available.
 
 The editor at `/admin/drafts/<id>` supports Markdown and a modular story workspace. Choose **Use modules** to preserve existing Markdown inside paragraph modules, then add paragraphs, headings, quotes, lists, inline story images, buttons/links, and dividers. The outline has drag reordering and labelled Move up/Move down controls. Modules can be duplicated, deleted, undone and redone before leaving the page. Text modules support Markdown formatting; raw HTML remains inert. Click a module in the private preview to select its settings. Desktop and Phone change only the preview width, and previewing never publishes.

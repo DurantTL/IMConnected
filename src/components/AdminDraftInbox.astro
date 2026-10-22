@@ -1,0 +1,128 @@
+---
+import Admin from '../layouts/Admin.astro';
+import { SECTIONS } from '../lib/site';
+import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, listRecentPublished, type StatusFilter } from '../lib/drafts';
+import { fmtTime, sectionLabel } from '../lib/admin-ui';
+import { siteUrl } from '../lib/draft-http';
+import { driveConfig } from '../lib/db/gdrive.mjs';
+
+cleanupRejectedPhotos();
+const { fixedKind, basePath = '/admin' } = Astro.props as { fixedKind?: 'announcement' | 'event'; basePath?: string };
+const q = Astro.url.searchParams;
+const kind = fixedKind ?? (['story', 'announcement', 'event', 'all'].includes(q.get('kind') || '') ? q.get('kind')! : 'story');
+const queueTitle = kind === 'event' ? 'Events' : kind === 'announcement' ? 'Announcements' : kind === 'all' ? 'All drafts' : 'Stories';
+const newKind = kind === 'all' ? 'story' : kind;
+const queueLinks = [['story','Stories','/admin'],['announcement','Announcements','/admin/announcements'],['event','Events','/admin/events'],['all','All drafts','/admin?kind=all']];
+const queueHref = (path: string) => { const u = new URL(path, Astro.url); for (const key of ['status','section','source']) if (q.has(key)) u.searchParams.set(key,q.get(key)!); return u.pathname + u.search; };
+const wanted = q.get('status') ?? 'open';
+const status = (STATUS_FILTERS.some((f) => f.value === wanted) ? wanted : 'open') as StatusFilter;
+const section = SECTIONS.some((s) => s.key === q.get('section')) ? (q.get('section') as string) : '';
+const fromAgent = q.get('source') === 'agent';
+const drafts = listDrafts({ status, section: section || undefined, source: fromAgent ? 'agent' : undefined, ...(kind !== 'all' ? { kind: kind as 'story' | 'announcement' | 'event' } : {}) });
+// The overview is for the plain inbox; a filtered view shows only what was asked for.
+const showHome = basePath === '/admin' && !q.has('status') && !q.has('section') && !q.has('source');
+const newest = showHome ? drafts.slice(0, 5) : [];
+const recentPublished = showHome ? listRecentPublished(5) : [];
+const base = siteUrl();
+// Administrators are told when nightly backups are not set up (no email is sent for that).
+const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
+const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
+---
+<Admin title={queueTitle} current={kind === 'event' ? 'events' : kind === 'announcement' ? 'announcements' : 'drafts'} wide>
+  <div class="cms-bar">
+    <h1>{queueTitle}</h1>
+    <form method="post" action="/api/admin/drafts/new"><input type="hidden" name="kind" value={newKind} /><button class="cms-btn" type="submit">New {newKind}</button></form>
+  </div>
+
+  <nav class="content-queues" aria-label="Content types">{queueLinks.map(([key,label,path]) => <a href={queueHref(path)} aria-current={kind === key ? 'page' : undefined}>{label}</a>)}</nav>
+
+  {showHome && backupsOff && (
+    <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Stories, photos and editor accounts live only on this server, and the database is now the only copy of the published stories. <a href="/admin/backups">See how</a>.</p>
+  )}
+
+  {showHome && <div class="cms-home">
+    <section class="admin-card" aria-labelledby="home-new">
+      <h2 id="home-new">Newest drafts</h2>
+      {newest.length === 0 ? <p class="admin-note">Nothing waiting.</p> : (
+        <ul>
+          {newest.map((d) => (
+            <li>
+              <a href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
+              <span class="cms-meta">
+                <span class={`cms-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
+                {d.source === 'form' && d.emailVerified && <span class="cms-badge ok">Email verified</span>}
+                {d.source === 'agent' && <span class="cms-badge">From AI agent</span>}
+                <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+    <section class="admin-card" aria-labelledby="home-pub">
+      <h2 id="home-pub">Newest published</h2>
+      {recentPublished.length === 0 ? <p class="admin-note">Nothing published yet.</p> : (
+        <ul>
+          {recentPublished.map((d) => (
+            <li>
+              <a href={`${base}/stories/${d.slug}/`} rel="noopener">{d.title || d.slug}</a>
+              <span class="cms-meta">
+                {d.publishedAt && <time datetime={new Date(d.publishedAt).toISOString()} data-local>{fmtTime(d.publishedAt)}</time>}
+                {d.publishedByName && <span>by {d.publishedByName}</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  </div>}
+
+  <form class="cms-filters" method="get" action={basePath}>
+    {kind === 'all' && <input type="hidden" name="kind" value="all" />}
+    <label>Status
+      <select name="status">
+        {STATUS_FILTERS.map((f) => <option value={f.value} selected={f.value === status}>{f.label}</option>)}
+      </select>
+    </label>
+    <label>Section
+      <select name="section">
+        <option value="">All sections</option>
+        {SECTIONS.map((s) => <option value={s.key} selected={s.key === section}>{s.label}</option>)}
+      </select>
+    </label>
+    <label>Source
+      <select name="source">
+        <option value="">All sources</option>
+        <option value="agent" selected={fromAgent}>Source: AI agent</option>
+      </select>
+    </label>
+    <button class="cms-btn secondary" type="submit">Filter</button>
+  </form>
+
+  {drafts.length === 0 ? (
+    <p class="admin-note">No drafts match. Items of this content type will appear here. Switch to All drafts to review every type together.</p>
+  ) : (
+    <ul class="cms-list">
+      {drafts.map((d) => (
+        <li class="cms-item">
+          <a class="title" href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
+          <div class="cms-meta">
+            <span class={`cms-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
+            <span class="cms-badge">{d.source === 'agent' ? 'From AI agent' : SOURCE_LABEL[d.source]}</span>
+            <span>{sectionLabel(d.section)}</span>
+            {d.church && <span>{d.church}</span>}
+            {d.source !== 'editor' && d.source !== 'agent' && (d.emailVerified ? <span class="cms-badge ok">Email verified</span> : <span class="cms-badge warn">Email not verified</span>)}
+            <span>{d.photoCount} {d.photoCount === 1 ? 'photo' : 'photos'}</span>
+            <span>Received <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time></span>
+          </div>
+        </li>
+      ))}
+    </ul>
+  )}
+</Admin>
+<script is:inline>
+  document.querySelectorAll('time[data-local]').forEach(function (t) {
+    var d = new Date(t.getAttribute('datetime'));
+    if (!isNaN(d)) t.textContent = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  });
+</script>
