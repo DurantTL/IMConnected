@@ -3,6 +3,7 @@
 // npm run build
 // [PLAYWRIGHT_ROOT=<folder>] [CHROMIUM_PATH=<browser>] [CHROMIUM_NO_SANDBOX=1] [AXE_JS=<axe.min.js>] node scripts/test-story-builder-ui.mjs
 import assert from 'node:assert/strict';
+import { normalizeStoryBlocks } from '../src/lib/story-blocks.ts';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -527,8 +528,9 @@ try {
   const visualSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
   await page.locator('#save-btn').click(); assert.equal((await visualSave).status(), 200);
   // An earlier in-flight autosave may satisfy visualSave; publish only the intended post-undo snapshot.
-  for (let attempt = 0; attempt < 100 && JSON.stringify(JSON.parse(legacyDraft().story_blocks)) !== JSON.stringify(visualOrdered); attempt++) await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.deepEqual(JSON.parse(legacyDraft().story_blocks), visualOrdered, 'the intended Gallery state must be persisted before direct test publication');
+  const expectedVisual = normalizeStoryBlocks(visualOrdered);
+  for (let attempt = 0; attempt < 100 && JSON.stringify(JSON.parse(legacyDraft().story_blocks)) !== JSON.stringify(expectedVisual); attempt++) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(JSON.parse(legacyDraft().story_blocks), expectedVisual, 'the intended Gallery state must be persisted before direct test publication');
   await publishLegacy();
   check('published Gallery module excludes its photos from the surrounding layout', await publicPage.locator('.story-inline-gallery img').count() === 2 && await publicPage.locator('article img').count() === 2 && await publicPage.locator('[data-photo-layout]').count() === 0);
   legacyId = await createLegacy(); await saveLegacy('heroGrid'); await uploadLegacy();
