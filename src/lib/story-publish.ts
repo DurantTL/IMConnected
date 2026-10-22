@@ -329,6 +329,12 @@ export interface StudioPublished {
   status: 'created' | 'updated';
 }
 
+function photoIdentity(photo: StoryPhoto): string {
+  if (photo.path) return `file:${photo.path}:${photo.sha256}`;
+  try { return photo.url && new URL(photo.url).protocol === 'https:' ? `url:${new URL(photo.url).href}` : ''; }
+  catch { return ''; }
+}
+
 /**
  * Publish the stories of one Studio request in ONE transaction, with the dashboard records. The photos' bytes are
  * written first; if the transaction fails they are deleted again and nothing else has changed.
@@ -351,6 +357,19 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
     tx(() => {
       assertFilesExist(planned.flatMap(({ stored }) => stored.files));
       for (const { p, stored } of planned) {
+        // Resolve inheritance now, after all asynchronous file preparation, so an
+        // older client cannot overwrite a more recent crop with a stale snapshot.
+        const latest = getStoryBySlug(p.slug, { includeUnpublished: true });
+        const used = new Set<number>();
+        stored.rows.forEach((row, i) => {
+          const identity = photoIdentity(row);
+          const same = latest?.photoRows.filter((old) => !!identity && !used.has(old.position) && photoIdentity(old) === identity) ?? [];
+          const previous = same.find((old) => old.position === i) ?? same[0];
+          if (previous) used.add(previous.position);
+          row.focalX = p.photos[i].focalX ?? previous?.focalX ?? 50;
+          row.focalY = p.photos[i].focalY ?? previous?.focalY ?? 50;
+          row.zoom = p.photos[i].zoom ?? previous?.zoom ?? 1;
+        });
         writeStory({
           slug: p.slug, title: p.title, dek: p.dek || undefined, section: p.section, area: p.area, author: p.author, date: p.date,
           photoCredit: stored.sources.length && p.photoCredit ? p.photoCredit : undefined,
@@ -360,7 +379,7 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
       }
       const rec = recordStudioPublish(planned.map(({ p, stored }) => ({
         slug: p.slug, title: p.title, dek: p.dek, section: p.section, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body,
-        photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption })),
+        photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption, focalX: stored.rows[i].focalX, focalY: stored.rows[i].focalY, zoom: stored.rows[i].zoom })),
       })));
       ids = rec.ids; overwrote = rec.overwrote; oldUploads = rec.oldUploads;
     });

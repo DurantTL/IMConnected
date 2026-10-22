@@ -1,19 +1,18 @@
-# Plan: import IMConnected stories into IMConnected Studio
+# IMConnected Studio photo compatibility
 
 IMConnected Studio (`imconnected.html` in the `imsda/utilities` repo, hosted at
-`https://tools.imsda.org/imconnected.html`) builds the newsletter email. Today
-every story is retyped there. The site now has an authenticated story list,
-`GET /api/stories`, so the builder can fill story blocks from it.
+`https://tools.imsda.org/imconnected.html`) builds the newsletter email. Its
+authenticated `GET /api/stories` import fills story cards with teasers and photos.
 
-The utilities repo marks `imconnected.html` as managed by someone else, so this
-repo doesn't change it. This page is the hand-off for whoever maintains Studio.
-(The button is already merged there; this page records what the site gives it.)
+The owner explicitly authorized the compatibility update to `imconnected.html`
+in utilities and tools-public. Keep those two self-contained files identical;
+no other secondary-repository files are part of this change.
 
 ## 1. "Import from IMConnected" button
 
 Studio reads **`GET <site>/api/stories?limit=50`**, not the public
-`/stories.json`. The public feed is only the last build and needs a CORS header
-added by the reverse proxy; the API needs neither.
+`/stories.json`. Both read the live database without a build. The authenticated
+API additionally lists waiting drafts and supplies the allowed browser CORS policy.
 
 - **Auth and CORS** are the same as for publishing: `Authorization: Bearer
   <PUBLISH_TOKEN>` (the value Studio already holds for "Publish to IMConnected"),
@@ -28,7 +27,8 @@ added by the reverse proxy; the API needs neither.
   - `stories`: live stories, newest first. Each item is exactly an item of
     `/stories.json` (`id`, `url`, `title`, `dek`, `section`, `sectionLabel`,
     `area`, `areaLabel`, `column`, `author`, `authorTitle`, `church`, `date`,
-    `image`, `imageAlt`, `photoCredit`, `photos`, `photoAlts`, `featured`) plus
+    `image`, `imageAlt`, `photoCredit`, `photos`, `photoAlts`, `photoLayout`, optional
+    `photoFocus`, `featured`) plus
     `status: "published"` and `source`. It includes stories published since the
     last site build, and leaves out unpublished ones.
   - `drafts`: the 20 newest drafts waiting for an editor (`status` `new` or
@@ -47,16 +47,48 @@ added by the reverse proxy; the API needs neither.
 |---|---|
 | `tag` | `areaLabel` if present, otherwise `sectionLabel`, in capitals (e.g. `CHURCHES`, `FEATURES`) |
 | `title` | `title` |
-| `body` | `dek` (if empty, leave the body for the editor to write) |
+| `body` | `dek`, otherwise the API's safe `excerpt` |
 | `link` | `url` |
 | `buttonLabel` | `Read full story` (Studio's default) |
 | `photos[0].url` / `alt` | `image` / `imageAlt` |
 | `photos[0].caption` | `photoCredit`, as "Photo: …", if present |
+| `photos[1…].url` / `alt` | `photos` / `photoAlts`, in order |
+| `photos[i].focalX`, `focalY`, `zoom` | Aligned `photoFocus[i]`; defaults 50/50/1 |
+| `layout` | `photoLayout` |
 
 - Don't copy the story body. The email should send readers to the site.
+- Retain `importedFrom`: imported live stories and waiting drafts cannot be sent
+  through Studio's publish action. In particular, a teaser must not replace a full article.
+- Import up to six permitted photos. Apply crop metadata before filtering unsafe
+  addresses so the remaining photos keep their correct focus. WordPress copies
+  resolve the same stable photo ID and unchanged source URL after each upload,
+  preserving edits/reorders/deletions made while a copy is in flight.
 - Keep the existing draft format and `localStorage` keys unchanged (a rule in
   the utilities repo).
 - The public `/stories.json` and `/rss.xml` stay as they are for feed readers.
+
+## Studio-native publishing
+
+`POST /api/publish` accepts optional `focalX`/`focalY` (finite JSON numbers 0–100)
+and `zoom` (1–3) on each photo. Invalid present values, including null/strings,
+are rejected. The publish transaction re-reads the latest photo rows and inherits
+omitted values only for the same photo identity (content path/hash or normalized
+HTTPS URL). New photos default to 50/50/1. For duplicate identities, matching
+prefers the same prior position and then an unmatched occurrence. Explicit defaults
+reset the crop. Live photos and closed Studio draft photos use the same effective
+values; an editor's open draft remains intact. Original bytes are unchanged.
+
+Studio keeps document schema/storage keys unchanged. Old drafts acquire centered
+100% zoom through normalization. The per-photo Zoom range persists and affects
+cropped email/web slots. Natural-height slots and WordPress block exports retain
+the original framing. Email clients supporting object-fit receive the full crop;
+the width/margin fallback preserves proportions, but needs measured image dimensions
+for vertical pan. Preview/export is not a guarantee that every email client renders
+identical CSS.
+
+Validation uses `test-story-builder.mjs` for server transactions and
+`STUDIO_HTML=../tools-public/imconnected.html node scripts/test-studio-client.mjs`
+with Playwright configured for the real import/publish UI, persistence and copy races.
 
 ## 2. Match the IMConnected template to the site's colors
 
