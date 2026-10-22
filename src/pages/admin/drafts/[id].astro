@@ -1,4 +1,5 @@
 ---
+import { countStoryBlocks } from '../../../lib/story-blocks';
 import Admin from '../../../layouts/Admin.astro';
 import { photoFocusStyle } from '../../../lib/story-blocks';
 import { SECTIONS } from '../../../lib/site';
@@ -216,7 +217,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <aside class="sb-outline" aria-label="Story modules"><details class="sb-library-disclosure" open><summary>Module library &amp; starter layouts</summary>
                     <p class="sb-insert-help">Insert after the selected module. Existing content stays in place.</p>
                     <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
-                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">10 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
+                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">11 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
                     <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
                     <div class="sb-library" role="group" aria-label="Add content module">
                       <button type="button" data-add-module="text">Paragraph</button>
@@ -229,6 +230,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                       <button type="button" data-add-module="video">Video</button>
                       <button type="button" data-add-module="button">Button / link</button>
                       <button type="button" data-add-module="divider">Divider</button>
+                      <button type="button" data-add-module="section">Section / columns</button>
                     </div>
                     <h3 class="sb-library-heading">Starter layouts</h3>
                     <p class="sb-insert-help">Add an empty structure, then write your own story.</p>
@@ -349,7 +351,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
       {editable && (
         <section class="ed-card studio-review" id="studio-panel-review" data-studio-panel="review" role="tabpanel" aria-labelledby="studio-tab-review">
           <div class="studio-panel-heading"><div><span class="sb-eyebrow">Ready for readers?</span><h2>Review before publishing</h2><p class="admin-note">This is the last stop before your story appears on the public website.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>Open private preview</button></div>
-          <div class="studio-review-summary"><div><span>Story</span><strong data-review-title>{draft.title || 'Untitled story'}</strong></div><div><span>Author</span><strong data-review-author>{draft.author || 'Add an author in Story settings'}</strong></div><div><span>Content</span><strong data-review-content>{draft.storyBlocks?.length ? `${draft.storyBlocks.length} modules` : 'Markdown story'}</strong></div><div><span>Photos</span><strong>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</strong></div></div>
+          <div class="studio-review-summary"><div><span>Story</span><strong data-review-title>{draft.title || 'Untitled story'}</strong></div><div><span>Author</span><strong data-review-author>{draft.author || 'Add an author in Story settings'}</strong></div><div><span>Content</span><strong data-review-content>{draft.storyBlocks?.length ? `${countStoryBlocks(draft.storyBlocks)} modules` : 'Markdown story'}</strong></div><div><span>Photos</span><strong>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</strong></div></div>
           <ul class="studio-review-checklist"><li>Check the headline, names and facts.</li><li>Confirm permission to use the story and photos.</li><li>Read the phone preview and describe your images with alt text.</li></ul>
           {backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
           <p class="admin-note">

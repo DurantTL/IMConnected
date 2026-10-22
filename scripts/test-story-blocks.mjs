@@ -15,7 +15,7 @@ const check = (name, fn) => { fn(); count++; console.log(`PASS ${name}`); };
 try {
   const require = createRequire(import.meta.url);
   await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts', media: 'src/lib/story-media-render.ts', excerpt: 'src/lib/excerpt.ts', search: 'src/lib/search.ts', index: 'src/lib/search-index.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri') return { id: require.resolve(id), external: true }; } }] });
-  const { normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, parseStoryVideo, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
+  const { walkStoryBlocks, countStoryBlocks, normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, parseStoryVideo, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
   const { renderStoryBlocksSafe } = await import(pathToFileURL(path.join(scratch, 'render.js')));
   const { renderMediaMarkdown } = await import(pathToFileURL(path.join(scratch, 'media.js')));
   const { storyExcerpt } = await import(pathToFileURL(path.join(scratch, 'excerpt.js')));
@@ -86,6 +86,14 @@ try {
   const galleryFlyer = await renderMediaMarkdown('{{gallery 1-2 columns=2}}', mediaPhotos, true, 0);
   const inheritedFlyer = await renderStoryBlocksSafe([{ id: 'old-image', type: 'image', url: mediaPhotos[0].src, photoIndex: 0, zoom: 3 }], { flyerUrl: mediaPhotos[0].src });
   check('announcement first-photo markers, galleries and older Image modules retain full flyer framing', () => { for (const html of [inlineFlyer.html, galleryFlyer.html, inheritedFlyer]) { assert.match(html, /story-flyer/); const img = html.match(/<img[^>]+>/)?.[0] ?? ''; assert.doesNotMatch(img, /scale:|aspect-ratio:16/); } });
+  const sections = [{ id: 'section', type: 'section', content: [[{ id: 'left', type: 'text', text: 'Left **column** <tag>.' }, { id: 'nested-image', type: 'image', url: mediaPhotos[0].src }], [{ id: 'right', type: 'text', text: 'Right column.' }]] }];
+  const sectionHtml = await renderStoryBlocksSafe(sections);
+  check('sections preserve column-major projection, escaped children and globally counted nodes', () => { assert.equal(countStoryBlocks(sections), 4); assert.deepEqual(walkStoryBlocks(sections).map((b) => b.id), ['section', 'left', 'nested-image', 'right']); assert.equal(blocksToMarkdown(sections), 'Left **column** <tag>.\n\nRight column.'); assert.match(sectionHtml, /story-section" data-columns="2"/); assert.match(sectionHtml, /&lt;tag&gt;/); assert.doesNotMatch(JSON.stringify(escapeStoryBlocks(sections)), /<tag>/); });
+  check('sections reject nesting, global duplicate IDs, third columns and aggregate overflow', () => {
+    for (const content of [[[{ id: 's', type: 'section', content: [[]] }]], [[{ id: 'same', type: 'text' }], [{ id: 'same', type: 'text' }]], [[], [], []], [Array.from({ length: 60 }, (_, i) => ({ id: `child${i}`, type: 'divider' }))]]) assert.throws(() => normalizeStoryBlocks([{ id: 'outer', type: 'section', content }]));
+    assert.throws(() => checkStoryBlockLength([{ id: 'outer', type: 'section', content: [[{ id: 't1', type: 'text', text: 'x'.repeat(10001) }], [{ id: 't2', type: 'text', text: 'y'.repeat(10001) }]] }]), /too long/);
+    assert.throws(() => assertOwnStoryImages(sections, []), /own photos/);
+  });
   check('legacy absence is an empty module list', () => assert.deepEqual(normalizeStoryBlocks(undefined), []));
   check('IDs must be stable and unique', () => assert.throws(() => normalizeStoryBlocks([{ id: 'same', type: 'text' }, { id: 'same', type: 'divider' }])));
   check('unknown module types are rejected', () => assert.throws(() => normalizeStoryBlocks([{ id: 'html', type: 'raw-html' }])));

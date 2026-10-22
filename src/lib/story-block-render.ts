@@ -22,6 +22,11 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
   for (const b of blocks) {
     const attr = ` data-module-id="${escapeHtml(b.id)}"`;
     switch (b.type) {
+      case 'section': {
+        const columns = await Promise.all((b.content ?? []).map(async (column) => `<div class="story-section-column">${await renderStoryBlocksSafe(column, options)}</div>`));
+        out.push(`<div class="story-module story-section" data-columns="${columns.length}"${attr}>${columns.join('')}</div>`);
+        break;
+      }
       case 'text': out.push(`<div class="story-module story-module-text"${attr}>${(await renderMarkdownSafe(b.text || '')).html}</div>`); break;
       case 'heading': out.push(`<h${b.level || 2} class="story-module"${attr}>${plain(b.text || '')}</h${b.level || 2}>`); break;
       case 'quote': out.push(`<blockquote class="story-module"${attr}>${(await renderMarkdownSafe(b.text || '')).html}</blockquote>`); break;

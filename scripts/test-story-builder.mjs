@@ -235,6 +235,18 @@ try {
   assert.equal(m.changePhoto(gid, gd.updatedAt, user, 'delete', gr[1].id).ok, true);
   assert.deepEqual(m.getDraft(gid).storyBlocks[1].photos.map((p) => p.photoId), [gr[0].id], 'deleting one photo preserves other gallery references and text');
   await assert.rejects(() => m.publishDraft(m.getDraft(gid), m.listPhotos(gid), m.getDraft(gid).updatedAt, user), (e) => e.code === 'blocks_bad');
+  const sid = m.createDraft({ source: 'editor', userId: user, fields: { title: 'Synthetic section story', author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic grouped text.' } });
+  const sp = addPhoto(sid, 'Column image', 101);
+  const sblocks = [{ id: 'section', type: 'section', content: [[{ id: 'c1', type: 'text', text: 'First <column> **story**.' }, { id: 'ci', type: 'image', photoId: sp.id }], [{ id: 'c2', type: 'text', text: 'Second column story.' }, { id: 'cb', type: 'button', label: 'Read details', url: 'https://example.invalid/columns' }]] }];
+  const ss = m.saveDraft(sid, m.getDraft(sid).updatedAt, { ...m.getDraft(sid), storyBlocks: sblocks }, new Map(), user); assert.equal(ss.ok, true);
+  const forgedSections = [{ id: 'section', type: 'section', content: [[{ id: 'foreign', type: 'image', photoId: reopenedPhoto.id }]] }];
+  assert.equal(m.saveDraft(sid, ss.updatedAt, { ...m.getDraft(sid), storyBlocks: forgedSections }, new Map(), user).ok, false, 'nested image IDs must belong to this draft');
+  const spp = await m.publishDraft(m.getDraft(sid), m.listPhotos(sid), ss.updatedAt, user), sst = m.getStoryBySlug(spp.slug);
+  assert.equal(sst.storyBlocks[0].content[0][1].photoIndex, 0); assert.equal(sst.storyBlocks[0].content[0][1].photoId, undefined); assert.match(sst.storyBlocks[0].content[0][0].text, /&lt;column>/);
+  const sl = m.loadStory(spp.slug); m.reloadDraftFromStory(sid, user, sl.fields, sl.photos);
+  assert.equal(m.getDraft(sid).storyBlocks[0].content[0][1].photoId, m.listPhotos(sid)[0].id);
+  assert.equal(m.changePhoto(sid, m.getDraft(sid).updatedAt, user, 'delete', m.listPhotos(sid)[0].id).ok, true);
+  assert.equal(m.storyBlockPhotos(m.getDraft(sid).storyBlocks).length, 0); assert.equal(m.getDraft(sid).storyBlocks[0].content[1][0].text, 'Second column story.');
   // Typed agent announcements preserve omission/clearing and remain subject to human review.
   const agentBase = { title: 'Synthetic event flyer', body: 'Accessible synthetic event summary.', author: 'Synthetic Editor', section: 'news', area: 'conference', sourceUrl: 'https://example.invalid/source/bulletin', photos: [{ data: `data:image/png;base64,${syntheticPng(33).toString('base64')}`, alt: 'Synthetic event flyer' }] };
   const bulletin = { kind: 'event', eventDate: '2026-12-01', location: 'Synthetic Hall <north>', links: [{ label: 'Register <here>', url: 'https://example.invalid/register' }], videoUrl: 'https://youtu.be/abcdefghijk' };

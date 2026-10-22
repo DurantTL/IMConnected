@@ -137,7 +137,7 @@ try {
   await page.locator('#module-library-search').fill('no-such-module');
   check('library no-results state has a visible recovery action', await page.locator('#module-library-empty').isVisible() && await page.locator('[data-add-module]:visible').count() === 0 && await page.locator('#module-library-reset').isVisible());
   await page.locator('#module-library-reset').click();
-  check('clearing library search restores the same ten module controls without changing content', await page.locator('[data-add-module]:visible').count() === 10 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
+  check('clearing library search restores the same eleven module controls without changing content', await page.locator('[data-add-module]:visible').count() === 11 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
   for (const layout of ['news', 'recap', 'announcement']) {
     await page.getByRole('button', { name: /^1\. Paragraph/ }).click();
     const before = await blocks();
@@ -580,6 +580,35 @@ try {
   check('local human unpublish succeeds', unlisted.status === 303);
   const boardAfter = await (await fetch(BASE + '/announcements/')).text();
   check('unpublish immediately invalidates cached board and removes that announcement', !boardAfter.includes('data-board-kind="announcement"') && boardAfter.includes('data-board-kind="event"'));
+  legacyId = await createLegacy(); await saveLegacy('one'); await uploadLegacy();
+  await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(BASE + `/admin/drafts/${legacyId}`); await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
+  await page.locator('[data-add-module=section]').click();
+  const sectionState = JSON.parse(await page.locator('#story-blocks').inputValue()), section = sectionState.at(-1);
+  check('Section inserts two columns with distinct stable paragraph IDs', section.type === 'section' && section.content.length === 2 && section.content[0][0].id !== section.content[1][0].id && await page.locator('#module-count').textContent() === '4');
+  const choose = async (id) => page.locator(`[data-select-module="${id}"]`).click();
+  await choose(section.content[0][0].id); await page.locator('[data-module-field=text]').fill('Synthetic left column text.');
+  await page.locator('[data-add-module=image]').click();
+  await choose(section.content[1][0].id); await page.locator('[data-module-field=text]').fill('Synthetic right column text.');
+  const beforeCrossDrop = await page.locator('#story-blocks').inputValue();
+  await page.locator(`#module-outline [data-module-id="${section.content[0][0].id}"]`).evaluate((target, id) => { const dataTransfer = new DataTransfer(); dataTransfer.setData('text/plain', id); target.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer })); }, section.content[1][0].id);
+  check('cross-column drag is rejected visibly without reordering the source', await page.locator('#story-blocks').inputValue() === beforeCrossDrop && (await page.locator('#module-status').textContent()).includes('Move to column'));
+  await page.getByRole('button', { name: 'Move to column 1', exact: true }).click();
+  check('child modules can move across columns without losing content', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0].at(-1).text === 'Synthetic right column text.');
+  await page.getByRole('button', { name: 'Move to column 2', exact: true }).click();
+  await choose(section.id); const beforeSectionDuplicate = await page.locator('#story-blocks').inputValue();
+  await page.getByRole('button', { name: 'Duplicate module', exact: true }).click();
+  const duplicatedSections = JSON.parse(await page.locator('#story-blocks').inputValue()); const flattenedSections = duplicatedSections.flatMap((b) => [b, ...(b.content?.flat() ?? [])]);
+  check('section duplication regenerates every descendant ID', new Set(flattenedSections.map((b) => b.id)).size === flattenedSections.length && duplicatedSections.at(-1).content[0][0].text === 'Synthetic left column text.');
+  await page.locator('#blocks-undo').click(); check('section duplication is one undo step', await page.locator('#story-blocks').inputValue() === beforeSectionDuplicate);
+  await page.getByLabel('Section columns', { exact: true }).selectOption('1');
+  check('changing to one column preserves all children in reading order', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0].length === 3);
+  await page.locator('#blocks-undo').click();
+  await page.waitForFunction((id) => document.getElementById('preview')?.contentDocument?.querySelector(`[data-module-id="${id}"]`), section.content[1][0].id);
+  await page.frameLocator('#preview').locator(`[data-module-id="${section.content[1][0].id}"]`).focus(); await page.frameLocator('#preview').locator(`[data-module-id="${section.content[1][0].id}"]`).press('Enter');
+  check('keyboard canvas selection opens a nested child inspector', await page.locator('[data-module-field=text]').inputValue() === 'Synthetic right column text.');
+  const sectionSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST'); await page.locator('#save-btn').click(); assert.equal((await sectionSave).status(), 200); await publishLegacy();
+  for (const [width, columns] of [[1440, 2], [390, 1]]) { await publicPage.setViewportSize({ width, height: 1000 }); check(`section reads in ${columns} columns at ${width}px`, await publicPage.locator('.story-section').evaluate((el, n) => getComputedStyle(el).gridTemplateColumns.split(' ').length === n && el.textContent.indexOf('left column') < el.textContent.indexOf('right column') && document.documentElement.scrollWidth <= innerWidth, columns)); if (shots) await publicPage.screenshot({ path: path.join(shots, `story-sections-${width}.png`), fullPage: true }); }
+  check('nested image appears once and section source order survives publishing', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-section img').count() === 1);
   const brokenData = path.join(scratch, 'synthetic-broken-db'); fs.mkdirSync(brokenData); fs.writeFileSync(path.join(brokenData, 'imconnected.db'), 'synthetic invalid sqlite fixture');
   const unavailableServer = spawn(process.execPath, ['dist/server/entry.mjs'], { cwd: ROOT, env: { ...process.env, HOST: '127.0.0.1', PORT: String(PORT + 1), DATA_DIR: brokenData, SITE_URL: `http://localhost:${PORT + 1}`, AUTH_SECRET: 'synthetic-unavailable-' + 'x'.repeat(32), RESEND_API_KEY: '', GDRIVE_SERVICE_ACCOUNT_JSON: '', GDRIVE_FOLDER_ID: '', PUBLISH_TOKEN: '', AGENT_API_TOKEN: '' }, stdio: 'ignore' });
   try {

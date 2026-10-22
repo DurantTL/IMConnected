@@ -1,4 +1,4 @@
-import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
+import { walkStoryBlocks, storyBlockPhotos, mapStoryPhotos } from './story-blocks';
 // Publishing to the database (epic #25, step 4). Server-side only. There is no git and no GitHub call anywhere here.
 //
 // A publish is: (1) check and build everything in memory, (2) copy the photos into DATA_DIR/media/stories/<slug>/
@@ -187,8 +187,8 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   const dek = oneLine(draft.dek);
   let draftBlocks: StoryBlock[];
   try { draftBlocks = normalizeStoryBlocks(draft.storyBlocks ?? []); } catch { throw new EditorError('blocks_bad'); }
-  if (draftBlocks.some((b) => b.type === 'gallery' && (b.photos?.length ?? 0) < 2)) throw new EditorError('blocks_bad');
-  if (draftBlocks.some((b) => ['button', 'video'].includes(b.type) && !b.url)) throw new EditorError('link_unsafe');
+  if (walkStoryBlocks(draftBlocks).some((b) => b.type === 'gallery' && (b.photos?.length ?? 0) < 2)) throw new EditorError('blocks_bad');
+  if (walkStoryBlocks(draftBlocks).some((b) => ['button', 'video'].includes(b.type) && !b.url)) throw new EditorError('link_unsafe');
   // The Markdown is built and measured as typed (the same rule as saving); every "<" becomes &lt; only when it is written
   // (here for the body, in writeStory for the modules), so escaping can never push a field over its limit.
   const body = clean(draftBlocks.length ? storyBlocksToMarkdown(draftBlocks) : draft.body).trim();

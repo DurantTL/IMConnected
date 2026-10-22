@@ -39,7 +39,7 @@ const stories = defineCollection({
   }).superRefine((d, ctx) => {
     // An image module can only show one of the story's own photos (its lead image or gallery).
     const own = new Set([...(d.image ? [d.image] : []), ...d.photos]);
-    if (storyBlockPhotos(d.storyBlocks ?? []).some((b) => b.url && !own.has(b.url))) ctx.addIssue({ code: 'custom', path: ['storyBlocks'], message: OWN_PHOTO_ERROR });
+    if (storyBlockPhotos(d.storyBlocks ?? []).some((b) => b.url && (!own.has(b.url) || b.photoIndex !== undefined && [...(d.image ? [d.image] : []), ...d.photos][b.photoIndex] !== b.url))) ctx.addIssue({ code: 'custom', path: ['storyBlocks'], message: OWN_PHOTO_ERROR });
   }),
 });
 

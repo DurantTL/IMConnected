@@ -1,4 +1,4 @@
-import { STORY_BLOCK_LIMIT, splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
+import { walkStoryBlocks, mapStoryBlocks, countStoryBlocks, findStoryBlockLocation, STORY_BLOCK_LIMIT, splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
 const blocksField = document.getElementById('story-blocks') as HTMLInputElement | null;
@@ -50,7 +50,7 @@ if (form && blocksField) {
   const future: string[] = [];
   let editKey = '';
   let editAt = 0;
-  const labels: Record<StoryBlock['type'], string> = { text: 'Paragraph', heading: 'Heading', quote: 'Quote', list: 'List', image: 'Image', gallery: 'Gallery', flyer: 'Flyer', video: 'Video', button: 'Button / link', divider: 'Divider' };
+  const labels: Record<StoryBlock['type'], string> = { text: 'Paragraph', heading: 'Heading', quote: 'Quote', list: 'List', image: 'Image', gallery: 'Gallery', flyer: 'Flyer', video: 'Video', section: 'Section / columns', button: 'Button / link', divider: 'Divider' };
   const uid = () => `module-${crypto.randomUUID()}`;
   if (editable && builderData.emptyStory && !blocks.length) {
     // The starter module is not an edit: opening an empty draft must not mark it changed (that would autosave, move it to review and write an audit entry).
@@ -98,9 +98,9 @@ if (form && blocksField) {
     undo.disabled = !editable || !history.length;
     redo.disabled = !editable || !future.length;
     const count = document.getElementById('module-count');
-    if (count) count.textContent = String(blocks.length);
+    if (count) count.textContent = String(countStoryBlocks(blocks));
     const summary = document.querySelector('[data-review-content]');
-    if (summary) summary.textContent = modular ? `${blocks.length} modules` : 'Markdown story';
+    if (summary) summary.textContent = modular ? `${countStoryBlocks(blocks)} modules` : 'Markdown story';
     const start = document.getElementById('module-start-writing');
     if (start) start.hidden = !(blocks.length === 1 && blocks[0].type === 'text' && !blocks[0].text);
     for (const button of document.querySelectorAll<HTMLButtonElement>('[data-add-module="image"], [data-add-module="gallery"], [data-add-module="flyer"]')) {
@@ -123,22 +123,23 @@ if (form && blocksField) {
     return el;
   }
   function move(id: string, to: number) {
-    const from = blocks.findIndex((b) => b.id === id);
-    if (!editable || from < 0 || to < 0 || to >= blocks.length || from === to) return;
+    const location = findStoryBlockLocation(blocks, id);
+    if (!editable || !location || to < 0 || to >= location.siblings.length || location.index === to) return;
     remember();
-    blocks.splice(to, 0, blocks.splice(from, 1)[0]);
-    selected = id;
-    render(); changed(); announce(`Module moved to position ${to + 1}.`);
-    focusSelected();
+    location.siblings.splice(to, 0, location.siblings.splice(location.index, 1)[0]); selected = id;
+    render(); changed(); announce(`Module moved to position ${to + 1} in its current column.`); focusSelected();
   }
   function renderOutline() {
     outline.replaceChildren();
-    for (const [index, block] of blocks.entries()) {
+    let number = 0;
+    const renderList = (siblings: StoryBlock[], column?: number) => { for (const [index, block] of siblings.entries()) {
+      const display = ++number;
       const item = node('li');
       item.draggable = editable;
       item.dataset.moduleId = block.id;
+      if (column !== undefined) item.style.marginLeft = '16px';
       // No aria-label: the visible text ("1. Paragraph ...") is the accessible name (WCAG 2.5.3 label in name).
-      const select = button(`${index + 1}. ${labels[block.type]}`, () => { selected = block.id; render(); focusSelected(); });
+      const select = button(`${display}. ${labels[block.type]}${column !== undefined ? ` · Column ${column + 1}` : ''}`, () => { selected = block.id; render(); focusSelected(); });
       select.dataset.selectModule = block.id;
       const grip = node('span', '⠿', 'sb-grip'); grip.setAttribute('aria-hidden', 'true'); select.prepend(grip);
       select.setAttribute('aria-pressed', String(selected === block.id));
@@ -147,10 +148,10 @@ if (form && blocksField) {
       if (summary) select.append(node('small', summary.slice(0, 64)));
       item.append(select);
       const actions = node('div', undefined, 'sb-module-actions');
-      const up = button('Move up', () => move(block.id, index - 1), `Move up, module ${index + 1}`);
+      const up = button('Move up', () => move(block.id, index - 1), `Move up, module ${display}`);
       up.disabled = !editable || index === 0;
-      const down = button('Move down', () => move(block.id, index + 1), `Move down, module ${index + 1}`);
-      down.disabled = !editable || index === blocks.length - 1;
+      const down = button('Move down', () => move(block.id, index + 1), `Move down, module ${display}`);
+      down.disabled = !editable || index === siblings.length - 1;
       actions.append(up, down);
       item.append(actions);
       item.addEventListener('dragstart', (event) => {
@@ -161,9 +162,16 @@ if (form && blocksField) {
       });
       item.addEventListener('dragend', () => item.classList.remove('dragging'));
       item.addEventListener('dragover', (event) => { if (editable) event.preventDefault(); });
-      item.addEventListener('drop', (event) => { event.preventDefault(); move(event.dataTransfer?.getData('text/plain') || '', index); });
+      item.addEventListener('drop', (event) => {
+        event.preventDefault();
+        const id = event.dataTransfer?.getData('text/plain') || '', source = findStoryBlockLocation(blocks, id);
+        if (source && source.siblings !== siblings) { announce('Drag within the current column. Use Move to column in module settings to move between columns.'); return; }
+        move(id, index);
+      });
       outline.append(item);
-    }
+      for (const [col, children] of (block.content ?? []).entries()) renderList(children, col);
+    } };
+    renderList(blocks);
   }
   function update(block: StoryBlock, key: string, value: unknown) {
     if (!editable) return;
@@ -205,13 +213,38 @@ if (form && blocksField) {
   }
   function renderFields() {
     fields.replaceChildren();
-    const block = blocks.find((b) => b.id === selected);
+    const location = findStoryBlockLocation(blocks, selected);
+    const block = location?.siblings[location.index];
     if (!block) { title.textContent = 'Module settings'; fields.append(node('p', 'Choose a module, or add one to start your story.', 'admin-note')); return; }
     title.textContent = `${labels[block.type]} settings`;
+    if (block.type === 'section') {
+      const label = node('label', 'Section columns'), select = node('select'); select.setAttribute('aria-label', 'Section columns');
+      for (const n of [1, 2]) { const option = node('option', `${n} ${n === 1 ? 'column' : 'columns'}`); option.value = String(n); option.selected = block.content?.length === n; select.append(option); }
+      select.addEventListener('change', () => {
+        const columns = block.content ?? [[]];
+        remember(); block.content = Number(select.value) === 1 ? [columns.flat()] : columns.length === 1 ? [columns[0], []] : columns;
+        render(); changed(); fields.querySelector<HTMLSelectElement>('[aria-label="Section columns"]')?.focus(); announce('Section columns updated; all content is preserved.');
+      }); label.append(select); fields.append(label);
+      for (const [i, column] of (block.content ?? []).entries()) {
+        fields.append(node('p', `Column ${i + 1}: ${column.length} modules`, 'admin-note'));
+        fields.append(button(`Add paragraph to column ${i + 1}`, () => {
+          if (countStoryBlocks(blocks) >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules, including sections.'); return; }
+          remember(); const added: StoryBlock = { id: uid(), type: 'text', text: '' }; column.push(added); selected = added.id; render(); changed(); fields.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+        }));
+      }
+      fields.append(node('p', 'Columns read from left to right, then stack in that order on phones. Select a child module to insert beside it or move it to another column.', 'admin-note'));
+    }
+    if (location?.section) {
+      const controls = node('div', undefined, 'sb-controls');
+      for (const [i, column] of (location.section.content ?? []).entries()) if (i !== location.column) controls.append(button(`Move to column ${i + 1}`, () => {
+        remember(); location.siblings.splice(location.index, 1); column.push(block); render(); changed(); focusSelected(); announce(`Module moved to column ${i + 1}.`);
+      }));
+      controls.append(button('Move outside section', () => { remember(); location.siblings.splice(location.index, 1); blocks.splice(blocks.indexOf(location.section!) + 1, 0, block); render(); changed(); focusSelected(); })); fields.append(controls);
+    }
     if (block.type === 'text') {
       const start = node('div', undefined, 'sb-start-writing');
       start.id = 'module-start-writing';
-      start.hidden = !(blocks.length === 1 && !block.text);
+      start.hidden = !(countStoryBlocks(blocks) === 1 && !block.text);
       start.append(node('p', 'Start writing your story. Your first paragraph is ready.'));
       start.append(button('Start writing', () => fields.querySelector<HTMLTextAreaElement>('textarea')?.focus()));
       fields.append(start);
@@ -287,11 +320,11 @@ if (form && blocksField) {
     if (block.type === 'divider') fields.append(node('p', 'A simple divider gives the next part of your story room to breathe.', 'admin-note'));
     const actions = node('div', undefined, 'sb-controls');
     actions.append(button('Duplicate module', () => {
-      if (blocks.length >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
-      remember(); const copy = clone([block])[0]; copy.id = uid(); blocks.splice(blocks.indexOf(block) + 1, 0, copy); selected = copy.id; render(); focusSelected(); changed(); announce('Module duplicated.');
+      if (countStoryBlocks(blocks) + countStoryBlocks([block]) > STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules, including sections.'); return; }
+      remember(); const copy = mapStoryBlocks(clone([block]), (b) => ({ ...b, id: uid() }))[0]; location!.siblings.splice(location!.index + 1, 0, copy); selected = copy.id; render(); focusSelected(); changed(); announce('Module duplicated.');
     }), button('Delete module', () => {
       if (!window.confirm(`Delete this ${labels[block.type].toLowerCase()} module? You can undo this change.`)) return;
-      remember(); const at = blocks.indexOf(block); blocks.splice(at, 1); selected = blocks[Math.min(at, blocks.length - 1)]?.id || ''; render(); focusSelected(); changed(); announce('Module deleted. Use Undo module change to restore it.');
+      remember(); const at = location!.index, siblings = location!.siblings; siblings.splice(at, 1); selected = siblings[Math.min(at, siblings.length - 1)]?.id || location!.section?.id || '';  render(); focusSelected(); changed(); announce('Module deleted. Use Undo module change to restore it.');
     }));
     fields.append(actions);
   }
@@ -330,7 +363,7 @@ if (form && blocksField) {
     if (!editable || !modular) return;
     const layout = layouts[insert.dataset.insertLayout || ''];
     if (!layout) return;
-    if (blocks.length + layout.types.length > STORY_BLOCK_LIMIT) {
+    if (countStoryBlocks(blocks) + layout.types.length > STORY_BLOCK_LIMIT) {
       announce(`${layout.label} needs ${layout.types.length} spaces. A story can have up to ${STORY_BLOCK_LIMIT} modules. No modules were added.`);
       return;
     }
@@ -340,8 +373,8 @@ if (form && blocksField) {
       ...(type === 'list' ? { items: [''] } : {}),
     }));
     remember();
-    const at = blocks.findIndex((block) => block.id === selected);
-    blocks.splice(at < 0 ? blocks.length : at + 1, 0, ...added);
+    const at = findStoryBlockLocation(blocks, selected);
+    (at?.siblings ?? blocks).splice(at ? at.index + 1 : blocks.length, 0, ...added);
     selected = added[0].id;
     render(); changed();
     fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
@@ -364,9 +397,10 @@ if (form && blocksField) {
   });
   for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) add.addEventListener('click', () => {
     if (!editable || !modular) return;
-    if (blocks.length >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
+    if (countStoryBlocks(blocks) >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
     const type = add.dataset.addModule as StoryBlock['type'];
     if (['image', 'gallery', 'flyer'].includes(type) && !photos.some((p) => p.src)) return;
+    if (type === 'section' && countStoryBlocks(blocks) + 3 > STORY_BLOCK_LIMIT) { announce('A two-column section needs three module spaces.'); return; }
     remember();
     const block: StoryBlock = { id: uid(), type };
     if (['text', 'heading', 'quote'].includes(type)) block.text = '';
@@ -374,10 +408,14 @@ if (form && blocksField) {
     if (type === 'list') block.items = [''];
     if (type === 'button') { block.label = 'Read more'; block.url = ''; }
     if (type === 'gallery') { block.columns = 2; block.photos = photos.filter((p) => p.src).map((p) => ({ photoId: p.id })); }
+    if (type === 'section') {
+      block.content = [[{ id: uid(), type: 'text', text: '' }], [{ id: uid(), type: 'text', text: '' }]];
+    }
     if (type === 'video') { block.label = 'Event video'; block.url = ''; }
     if (['image', 'flyer'].includes(type)) { block.photoId = photos.find((p) => p.src)!.id; if (type === 'image') block.alt = photos.find((p) => p.id === block.photoId)?.alt || ''; }
-    const at = blocks.findIndex((b) => b.id === selected);
-    blocks.splice(at < 0 ? blocks.length : at + 1, 0, block); selected = block.id;
+    const at = type === 'section' ? undefined : findStoryBlockLocation(blocks, selected);
+    const rootIndex = type === 'section' ? blocks.findIndex((b) => b.id === selected || b.content?.flat().some((c) => c.id === selected)) : -1;
+    (at?.siblings ?? blocks).splice(at ? at.index + 1 : rootIndex >= 0 ? rootIndex + 1 : blocks.length, 0, block); selected = block.id;
     render(); changed(); announce(`${labels[type]} module added.`);
     fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
   });
@@ -407,10 +445,11 @@ if (form && blocksField) {
     if (!doc) return;
     // The parent owns these DOM controls; the sandbox never gains script permission.
     if (editable && modular) for (const module of doc.querySelectorAll<HTMLElement>('[data-module-id]')) {
-      const index = blocks.findIndex((block) => block.id === module.dataset.moduleId);
+      const flattened = walkStoryBlocks(blocks);
+      const index = flattened.findIndex((block) => block.id === module.dataset.moduleId);
       if (index < 0) continue;
       module.tabIndex = 0;
-      module.setAttribute('aria-description', `${labels[blocks[index].type]} module ${index + 1}. Press Enter or Space to edit.`);
+      module.setAttribute('aria-description', `${labels[flattened[index].type]} module ${index + 1}. Press Enter or Space to edit.`);
       module.title = 'Select this module to edit its settings';
       module.style.cursor = 'pointer';
       module.style.minHeight = '24px';
@@ -419,7 +458,7 @@ if (form && blocksField) {
     const selectFromCanvas = (target: Element) => {
       if (!editable || !modular) return;
       const id = target.closest<HTMLElement>('[data-module-id]')?.dataset.moduleId;
-      if (!id || !blocks.some((block) => block.id === id)) return;
+      if (!id || !walkStoryBlocks(blocks).some((block) => block.id === id)) return;
       selected = id;
       // On phones, selecting a canvas module opens the Build view before focusing its field.
       split.dataset.view = 'write';

@@ -1,6 +1,6 @@
 // Version-one story modules. Pure validation and Markdown projection shared by the editor and server.
 // The Markdown body remains available to search, feeds and older consumers; the structured modules own layout.
-export const STORY_BLOCK_TYPES = ['text', 'heading', 'quote', 'list', 'image', 'gallery', 'flyer', 'video', 'button', 'divider'] as const;
+export const STORY_BLOCK_TYPES = ['text', 'heading', 'quote', 'list', 'image', 'gallery', 'flyer', 'video', 'button', 'divider', 'section'] as const;
 export type StoryBlockType = (typeof STORY_BLOCK_TYPES)[number];
 export interface StoryPhotoRef {
   photoId?: number;
@@ -19,6 +19,7 @@ export interface StoryBlock extends StoryPhotoRef {
   items?: string[];
   photos?: StoryPhotoRef[];
   columns?: 2 | 3;
+  content?: StoryBlock[][];
   label?: string;
 }
 
@@ -59,12 +60,30 @@ export function assertOwnStoryImages(blocks: readonly StoryBlock[], own: Iterabl
   for (const p of storyBlockPhotos(blocks)) if (p.url && (!allowed.has(p.url) || p.photoIndex !== undefined && ordered[p.photoIndex] !== p.url)) error(OWN_PHOTO_ERROR);
 }
 
+/** Sections keep column-major source order and globally unique node IDs. */
+export function walkStoryBlocks(blocks: readonly StoryBlock[]): StoryBlock[] {
+  return blocks.flatMap((b) => [b, ...(b.content ? b.content.flatMap((column) => walkStoryBlocks(column)) : [])]);
+}
+export const countStoryBlocks = (blocks: readonly StoryBlock[]): number => walkStoryBlocks(blocks).length;
+export function mapStoryBlocks(blocks: StoryBlock[], map: (block: StoryBlock) => StoryBlock | null): StoryBlock[] {
+  return blocks.flatMap((b) => { const result = map({ ...b, ...(b.content ? { content: b.content.map((column) => mapStoryBlocks(column, map)) } : {}) }); return result ? [result] : []; });
+}
+export function findStoryBlockLocation(blocks: StoryBlock[], id: string): { siblings: StoryBlock[]; index: number; section?: StoryBlock; column?: number } | undefined {
+  const index = blocks.findIndex((b) => b.id === id);
+  if (index >= 0) return { siblings: blocks, index };
+  for (const section of blocks) for (const [column, children] of (section.content ?? []).entries()) {
+    const i = children.findIndex((b) => b.id === id);
+    if (i >= 0) return { siblings: children, index: i, section, column };
+  }
+}
+
 /** Shared traversal keeps photo ownership, publishing and derived data aligned. */
 export function storyBlockPhotos(blocks: readonly StoryBlock[]): StoryPhotoRef[] {
-  return blocks.flatMap((b) => ['image', 'flyer'].includes(b.type) ? [b] : b.type === 'gallery' ? b.photos ?? [] : []);
+  return walkStoryBlocks(blocks).flatMap((b) => ['image', 'flyer'].includes(b.type) ? [b] : b.type === 'gallery' ? b.photos ?? [] : []);
 }
 export function mapStoryPhotos(blocks: StoryBlock[], map: (photo: StoryPhotoRef) => StoryPhotoRef | null): StoryBlock[] {
   return blocks.flatMap((b) => {
+    if (b.content) return [{ ...b, content: b.content.map((column) => mapStoryPhotos(column, map)) }];
     if (['image', 'flyer'].includes(b.type)) { const photo = map(b); return photo ? [{ ...b, ...photo }] : []; }
     if (b.type === 'gallery') return [{ ...b, photos: (b.photos ?? []).flatMap((p) => { const photo = map(p); return photo ? [photo] : []; }) }];
     return [b];
@@ -142,13 +161,19 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
   if (!Array.isArray(input) || input.length > STORY_BLOCK_LIMIT) return error(`A story can have at most ${STORY_BLOCK_LIMIT} modules.`);
   const ids = new Set<string>();
   let total = 0;
-  return input.map((raw) => {
+  const parse = (values: unknown[], depth = 0): StoryBlock[] => values.map((raw) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return error('Every module must be an object.');
     const r = raw as Record<string, unknown>;
     if (typeof r.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(r.id) || ids.has(r.id)) return error('Every module needs a unique valid ID.');
     if (!STORY_BLOCK_TYPES.includes(r.type as StoryBlockType)) return error('Choose a supported story module.');
     ids.add(r.id);
+    if (ids.size > STORY_BLOCK_LIMIT) return error(`A story can have at most ${STORY_BLOCK_LIMIT} modules, including sections.`);
     const b: StoryBlock = { id: r.id, type: r.type as StoryBlockType };
+    if (b.type === 'section') {
+      if (depth > 0) return error('Sections cannot be nested.');
+      if (!Array.isArray(r.content) || r.content.length < 1 || r.content.length > 2 || !r.content.every(Array.isArray)) return error('A section needs one or two columns.');
+      b.content = r.content.map((column) => parse(column as unknown[], depth + 1));
+    }
     if (['text', 'heading', 'quote'].includes(b.type)) {
       b.text = text(r.text, b.type === 'heading' ? 300 : 20_000, 'Module text');
       total += b.text.length;
@@ -190,6 +215,7 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
     if (total > 100_000) return error('The story modules contain too much text.');
     return b;
   });
+  return parse(input);
 }
 
 /** Modules become the Markdown body, which publishing limits to 20,000 characters: refuse at save with a clear message. */
@@ -206,7 +232,7 @@ const lt = (v: string) => v.replace(/</g, '&lt;');
  * holds a tag, comment or autolink. Safe to apply twice. The renderer shows these fields as plain text (see story-block-render).
  */
 export function escapeStoryBlocks(blocks: StoryBlock[]): StoryBlock[] {
-  return blocks.map((b) => {
+  return mapStoryBlocks(blocks, (b) => {
     const o: StoryBlock = { ...b };
     if (o.text !== undefined) o.text = lt(o.text);
     if (o.items) o.items = o.items.map(lt);
@@ -234,6 +260,7 @@ const plainMarkdown = (value: string) => value.replace(/[\\`*_[\]>#]/g, (c) => `
 export function storyBlocksToMarkdown(blocks: StoryBlock[]): string {
   return normalizeStoryBlocks(blocks).map((b) => {
     switch (b.type) {
+      case 'section': return (b.content ?? []).map((column) => storyBlocksToMarkdown(column)).filter(Boolean).join('\n\n');
       case 'text': return b.text || '';
       case 'heading': return `${'#'.repeat(b.level || 2)} ${plainMarkdown(b.text || '')}`;
       case 'quote': return (b.text || '').split('\n').map((line) => `> ${line}`).join('\n');
@@ -275,7 +302,7 @@ export function splitMarkdownIntoModules(markdown: string, max = 20_000): string
  */
 export function unescapeStoryBlockPlainText(blocks: StoryBlock[]): StoryBlock[] {
   const un = (v: string) => v.replace(/&lt;/g, '<');
-  return blocks.map((b) => {
+  return mapStoryBlocks(blocks, (b) => {
     const o: StoryBlock = { ...b };
     if (o.text !== undefined) o.text = un(o.text); // paragraph and quote too: the editor shows what was typed, and every "<" is escaped again on write
     if (o.items) o.items = o.items.map(un);
