@@ -1,0 +1,30 @@
+import { getDb } from './db';
+import type { DraftFields } from './drafts';
+import { normalizeStoryBlocks } from './story-blocks';
+import { normalizeAnnouncement } from './announcement';
+export interface RevisionPhoto { id: number; key: string; alt: string; caption: string; focalX: number; focalY: number; zoom: number }
+export interface EditorialSnapshot { fields: DraftFields; photos: RevisionPhoto[] }
+/** Explicit editorial whitelist. Never spread Draft: it contains private submission/account data. */
+export function editorialSnapshot(id: number, f: DraftFields): EditorialSnapshot {
+  const fields: DraftFields = {
+    title: f.title, dek: f.dek, section: f.section, area: f.area, column: f.column, author: f.author, authorTitle: f.authorTitle,
+    church: f.church, date: f.date, photoCredit: f.photoCredit, photoLayout: f.photoLayout, featured: f.featured, body: f.body,
+    storyBlocks: normalizeStoryBlocks(f.storyBlocks ?? []), announcement: normalizeAnnouncement(f.announcement),
+  };
+  const rows = getDb().prepare('SELECT id, media_key, alt, caption, focal_x, focal_y, zoom FROM draft_photos WHERE draft_id=? ORDER BY position').all(id) as Record<string, unknown>[];
+  const photos = rows.map((p) => ({ id: Number(p.id), key: String(p.media_key), alt: String(p.alt), caption: String(p.caption), focalX: Number(p.focal_x), focalY: Number(p.focal_y), zoom: Number(p.zoom) }));
+  return { fields, photos };
+}
+export function recordDraftRevision(id: number, userId: number, snapshot: EditorialSnapshot): void {
+  const payload = JSON.stringify(snapshot);
+  if (payload.length > 600_000) throw new Error('The story revision is too large.');
+  getDb().prepare('INSERT INTO draft_revisions(draft_id,user_id,created_at,payload) VALUES(?,?,?,?)').run(id, userId, Date.now(), payload);
+  getDb().prepare('DELETE FROM draft_revisions WHERE draft_id=? AND id NOT IN (SELECT id FROM draft_revisions WHERE draft_id=? ORDER BY id DESC LIMIT 20)').run(id, id);
+}
+export function listDraftRevisions(id: number): { id: number; createdAt: number; editor: string }[] {
+  return (getDb().prepare("SELECT r.id,r.created_at,COALESCE(u.name,'Former editor') editor FROM draft_revisions r LEFT JOIN users u ON u.id=r.user_id WHERE r.draft_id=? ORDER BY r.id DESC LIMIT 20").all(id) as { id: number; created_at: number; editor: string }[]).map((r) => ({ id: r.id, createdAt: r.created_at, editor: r.editor }));
+}
+export function readDraftRevision(draftId: number, revisionId: number): EditorialSnapshot | null {
+  const row = getDb().prepare('SELECT payload FROM draft_revisions WHERE draft_id=? AND id=?').get(draftId, revisionId) as { payload: string } | undefined;
+  return row ? JSON.parse(row.payload) as EditorialSnapshot : null;
+}
