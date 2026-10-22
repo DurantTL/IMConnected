@@ -1,3 +1,4 @@
+import { parseAnnouncement, announcementJson, type Announcement } from './announcement';
 // Stories and their photos in the database. Since epic #25 step 4 this is the source of truth: publishing, editing and
 // unpublishing write here (src/lib/story-publish.ts) and nothing reads the build for content after the one-time
 // adoption (src/lib/story-adopt.ts). Every function is synchronous like the rest of the db code and every query is
@@ -30,6 +31,7 @@ export interface StoryPhoto {
 
 /** The content schema's fields (src/content.config.ts) plus what the database adds. Optional fields are undefined when absent. */
 export interface StoryInput {
+  announcement?: Announcement | null;
   slug: string;
   title: string;
   dek?: string;
@@ -96,6 +98,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
     draft: Number(r.draft) === 1,
     body: String(r.body),
     storyBlocks: escapeStoryBlocks(parseStoredStoryBlocks(r.story_blocks)),
+    announcement: parseAnnouncement(r.announcement),
     status: r.status as StoryStatus,
     source: r.source as StorySource,
     draftId: optNum(r.draft_id),
@@ -204,26 +207,26 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   // draft_id and published_by are plain columns (no foreign keys, see migration 011), so check them here.
   if (s.draftId !== undefined && !db.prepare('SELECT 1 FROM drafts WHERE id = ?').get(s.draftId)) throw new Error('writeStory: unknown draft');
   if (s.publishedBy !== undefined && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(s.publishedBy)) throw new Error('writeStory: unknown user');
-  const cur = mode === 'insert' ? undefined : (db.prepare('SELECT id, content_hash, status, source FROM stories WHERE slug = ?').get(s.slug) as
-    { id: number; content_hash: string | null; status: string; source: string } | undefined);
+  const cur = mode === 'insert' ? undefined : (db.prepare('SELECT id, content_hash, status, source, announcement FROM stories WHERE slug = ?').get(s.slug) as
+    { id: number; content_hash: string | null; status: string; source: string; announcement: string | null } | undefined);
   if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source) return { outcome: 'unchanged', id: Number(cur.id) };
   // Module text follows the body contract (every "<" is &lt;), and an image module may only show this story's own photos.
   const blocks = escapeStoryBlocks(normalizeStoryBlocks(s.storyBlocks ?? []));
   assertOwnStoryImages(blocks, [...(s.image ? [s.image] : []), ...s.photos]);
   const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
     JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
-    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout), JSON.stringify(blocks)];
+    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout), JSON.stringify(blocks), s.announcement === undefined ? cur?.announcement ?? null : announcementJson(s.announcement)];
   const editedAt = s.editedAt === undefined ? null : editStamp(s.editedAt);
   let id: number;
   if (cur) {
     id = Number(cur.id);
     db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
     db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
   } else {
     const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, edited_at, slug)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...cols, editedAt, s.slug);
+      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, announcement, edited_at, slug)
+      VALUES (${Array(cols.length + 2).fill('?').join(',')})`).run(...cols, editedAt, s.slug);
     id = Number(r.lastInsertRowid);
   }
   const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');

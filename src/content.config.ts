@@ -1,3 +1,5 @@
+import { normalizeAnnouncement } from './lib/announcement';
+import { storyBlockPhotos } from './lib/story-blocks';
 import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
 import { z } from 'astro/zod';
@@ -29,6 +31,7 @@ const stories = defineCollection({
     photoAlts: z.array(z.string()).default([]),
     /** How the story page arranges the photos (Studio's story layouts). Missing means one: the lead photo, the others in a row. Values live in src/lib/photo-layouts.ts. */
     photoLayout: z.enum(['one', 'twoUp', 'heroGrid', 'mosaic', 'stack']).default('one'),
+    announcement: z.unknown().optional().transform((value) => normalizeAnnouncement(value)),
     storyBlocks: z.unknown().optional().transform((value) => normalizeStoryBlocks(value)),
     photoFocus: z.array(z.object({ focalX: z.number().min(0).max(100), focalY: z.number().min(0).max(100), zoom: z.number().min(1).max(3).default(1) })).default([]),
     featured: z.boolean().default(false),
@@ -36,7 +39,7 @@ const stories = defineCollection({
   }).superRefine((d, ctx) => {
     // An image module can only show one of the story's own photos (its lead image or gallery).
     const own = new Set([...(d.image ? [d.image] : []), ...d.photos]);
-    if (d.storyBlocks?.some((b) => b.type === 'image' && b.url && !own.has(b.url))) ctx.addIssue({ code: 'custom', path: ['storyBlocks'], message: OWN_PHOTO_ERROR });
+    if (storyBlockPhotos(d.storyBlocks ?? []).some((b) => b.url && (!own.has(b.url) || b.photoIndex !== undefined && [...(d.image ? [d.image] : []), ...d.photos][b.photoIndex] !== b.url))) ctx.addIssue({ code: 'custom', path: ['storyBlocks'], message: OWN_PHOTO_ERROR });
   }),
 });
 

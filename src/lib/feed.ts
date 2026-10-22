@@ -1,10 +1,12 @@
+import type { Announcement } from './announcement';
 // Story feed data shared by /stories.json and /rss.xml.
 // URLs are absolute so the items work outside the site (email, feed readers).
-import { escapeStoryBlocks, type StoryBlock } from './story-blocks';
+import { mapStoryPhotos, escapeStoryBlocks, type StoryBlock } from './story-blocks';
 import { storyUrl } from './stories';
 import { getPublicStories } from './public-stories';
 import { getSection, areaLabel } from './site';
 import { photoLayoutOrDefault } from './photo-layouts';
+import { stripMediaMarkers } from './story-media';
 
 /** How many of the newest stories the feeds include. */
 export const FEED_LIMIT = 50;
@@ -33,6 +35,7 @@ export interface FeedItem {
   /** How the story page arranges the photos: one, twoUp, heroGrid, mosaic or stack (one = lead photo, others in a row) */
   photoLayout: string;
   storyBlocks?: StoryBlock[];
+  announcement?: Announcement | null;
   photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
   featured: boolean;
 }
@@ -57,6 +60,7 @@ export interface FeedSource {
     photoAlts: string[];
     photoLayout?: string;
     storyBlocks?: StoryBlock[];
+    announcement?: Announcement | null;
     photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
     featured: boolean;
   };
@@ -69,7 +73,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     id: story.id,
     url: abs(storyUrl(story)),
     title: d.title,
-    dek: d.dek,
+    dek: d.dek ? stripMediaMarkers(d.dek) : undefined,
     section: d.section,
     sectionLabel: getSection(d.section)?.label ?? d.section,
     area: d.area,
@@ -85,8 +89,9 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     photos: d.photos.map(abs),
     photoAlts: d.photos.map((_, i) => d.photoAlts[i] ?? ''),
     photoLayout: photoLayoutOrDefault(d.photoLayout),
-    ...(d.storyBlocks?.length ? { storyBlocks: escapeStoryBlocks(d.storyBlocks).map((b) => b.type === 'image' && b.url ? { ...b, url: abs(b.url) } : b) } : {}),
+    ...(d.storyBlocks?.length ? { storyBlocks: mapStoryPhotos(escapeStoryBlocks(d.storyBlocks), (b) => b.url ? { ...b, url: abs(b.url) } : b) } : {}),
     ...(d.photoFocus?.some((p) => p.focalX !== 50 || p.focalY !== 50 || (p.zoom ?? 1) !== 1) ? { photoFocus: d.photoFocus } : {}),
+    ...(d.announcement ? { announcement: d.announcement } : {}),
     featured: d.featured,
   };
 }

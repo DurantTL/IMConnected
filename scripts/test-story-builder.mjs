@@ -44,6 +44,9 @@ try {
         if (id === '\0story-builder-test:db') return 'export function getDb(){return globalThis.__storyBuilderTestDb}';
         if (id === '\0story-builder-test:entry') return [
           `export * from ${JSON.stringify(path.join(root, 'src/lib/drafts.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/agent.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/announcement.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/announcement-render.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/draft-form.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-publish.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/publish.ts'))};`,
@@ -214,6 +217,66 @@ try {
   assert.equal(loadedEdge.fields.storyBlocks[3].label, '<' + 'b'.repeat(119));
 
   // Studio crop compatibility: real prepared requests and publish transactions.
+  // Visual galleries keep ordered references through duplicate-byte publish/reopen and photo removal.
+  const gid = m.createDraft({ source: 'editor', userId: user, fields: { title: 'Synthetic visual gallery', author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic gallery text.' } });
+  const gp1 = addPhoto(gid, 'First slot', 90), gp2 = addPhoto(gid, 'Second slot', 90);
+  const gblocks = [{ id: 'gtext', type: 'text', text: 'Synthetic gallery text.' }, { id: 'gallery', type: 'gallery', columns: 3, photos: [{ photoId: gp2.id, alt: 'Second <slot>' }, { photoId: gp1.id }] }];
+  const gs = m.saveDraft(gid, m.getDraft(gid).updatedAt, { ...m.getDraft(gid), storyBlocks: gblocks }, new Map([[gp1.id, 'Corrected description']]), user, null, new Map([[gp2.id, { zoom: 2.5, focalX: 0 }]]));
+  assert.equal(gs.ok, true);
+  assert.equal(m.saveDraft(gid, gs.updatedAt, { ...m.getDraft(gid), storyBlocks: [{ ...gblocks[1], photos: [{ photoId: photo.id }] }] }, new Map(), user).ok, false, 'gallery cannot claim another draft photo');
+  const gpub = await m.publishDraft(m.getDraft(gid), m.listPhotos(gid), gs.updatedAt, user);
+  const gst = m.getStoryBySlug(gpub.slug), grefs = gst.storyBlocks[1].photos;
+  assert.deepEqual(grefs.map((p) => p.photoIndex), [1, 0]); assert.deepEqual(grefs.map((p) => p.zoom), [2.5, 1]);
+  assert.equal(grefs[0].url, grefs[1].url, 'fixture intentionally has identical bytes');
+  assert.equal(grefs[1].alt, 'Corrected description', 'gallery without an override follows the photo description at publish'); assert.equal(grefs[0].alt, 'Second &lt;slot>'); assert.ok(grefs.every((p) => !p.photoId));
+  const gl = m.loadStory(gpub.slug); m.reloadDraftFromStory(gid, user, gl.fields, gl.photos);
+  const gr = m.listPhotos(gid), gd = m.getDraft(gid);
+  assert.deepEqual(gd.storyBlocks[1].photos.map((p) => p.photoId), [gr[1].id, gr[0].id], 'same-URL gallery positions remap to the correct distinct draft IDs');
+  assert.equal(m.changePhoto(gid, gd.updatedAt, user, 'delete', gr[1].id).ok, true);
+  assert.deepEqual(m.getDraft(gid).storyBlocks[1].photos.map((p) => p.photoId), [gr[0].id], 'deleting one photo preserves other gallery references and text');
+  await assert.rejects(() => m.publishDraft(m.getDraft(gid), m.listPhotos(gid), m.getDraft(gid).updatedAt, user), (e) => e.code === 'blocks_bad');
+  const sid = m.createDraft({ source: 'editor', userId: user, fields: { title: 'Synthetic section story', author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic grouped text.' } });
+  const sp = addPhoto(sid, 'Column image', 101);
+  const sblocks = [{ id: 'section', type: 'section', content: [[{ id: 'c1', type: 'text', text: 'First <column> **story**.' }, { id: 'ci', type: 'image', photoId: sp.id }], [{ id: 'c2', type: 'text', text: 'Second column story.' }, { id: 'cb', type: 'button', label: 'Read details', url: 'https://example.invalid/columns' }]] }];
+  const ss = m.saveDraft(sid, m.getDraft(sid).updatedAt, { ...m.getDraft(sid), storyBlocks: sblocks }, new Map(), user); assert.equal(ss.ok, true);
+  const forgedSections = [{ id: 'section', type: 'section', content: [[{ id: 'foreign', type: 'image', photoId: reopenedPhoto.id }]] }];
+  assert.equal(m.saveDraft(sid, ss.updatedAt, { ...m.getDraft(sid), storyBlocks: forgedSections }, new Map(), user).ok, false, 'nested image IDs must belong to this draft');
+  const spp = await m.publishDraft(m.getDraft(sid), m.listPhotos(sid), ss.updatedAt, user), sst = m.getStoryBySlug(spp.slug);
+  assert.equal(sst.storyBlocks[0].content[0][1].photoIndex, 0); assert.equal(sst.storyBlocks[0].content[0][1].photoId, undefined); assert.match(sst.storyBlocks[0].content[0][0].text, /&lt;column>/);
+  const sl = m.loadStory(spp.slug); m.reloadDraftFromStory(sid, user, sl.fields, sl.photos);
+  assert.equal(m.getDraft(sid).storyBlocks[0].content[0][1].photoId, m.listPhotos(sid)[0].id);
+  assert.equal(m.changePhoto(sid, m.getDraft(sid).updatedAt, user, 'delete', m.listPhotos(sid)[0].id).ok, true);
+  assert.equal(m.storyBlockPhotos(m.getDraft(sid).storyBlocks).length, 0); assert.equal(m.getDraft(sid).storyBlocks[0].content[1][0].text, 'Second column story.');
+  // Typed agent announcements preserve omission/clearing and remain subject to human review.
+  const agentBase = { title: 'Synthetic event flyer', body: 'Accessible synthetic event summary.', author: 'Synthetic Editor', section: 'news', area: 'conference', sourceUrl: 'https://example.invalid/source/bulletin', photos: [{ data: `data:image/png;base64,${syntheticPng(33).toString('base64')}`, alt: 'Synthetic event flyer' }] };
+  const bulletin = { kind: 'event', eventDate: '2026-12-01', location: 'Synthetic Hall <north>', links: [{ label: 'Register <here>', url: 'https://example.invalid/register' }], videoUrl: 'https://youtu.be/abcdefghijk' };
+  const ainput = m.parseAgentStory({ ...agentBase, announcement: bulletin });
+  const acreated = m.upsertAgentDraft(ainput), aid = acreated.id;
+  assert.equal(m.getDraft(aid).status, 'new'); assert.equal(m.getDraft(aid).source, 'agent'); assert.equal(m.getDraft(aid).announcement.videoUrl, 'https://www.youtube.com/watch?v=abcdefghijk');
+  const without = m.parseAgentStory({ ...agentBase, photos: undefined });
+  assert.equal(m.upsertAgentDraft(without).ok, true); assert.equal(m.getDraft(aid).announcement.kind, 'event');
+  assert.equal(m.upsertAgentDraft({ ...without, announcement: null }).ok, true); assert.equal(m.getDraft(aid).announcement, null);
+  m.upsertAgentDraft({ ...without, announcement: ainput.announcement });
+  for (const bad of [{ kind: 'other' }, { kind: 'event', eventDate: '2026-02-30' }, { kind: 'event', links: [{ label: 'Bad', url: 'javascript:alert(1)' }] }, { kind: 'announcement', videoUrl: 'https://youtube.com.evil.invalid/embed/abcdefghijk' }, { kind: 'event', links: Array.from({ length: 4 }, () => ({ label: 'Link', url: 'https://example.invalid/' })) }]) assert.throws(() => m.parseAgentStory({ ...agentBase, announcement: bad }), (e) => e.code === 'bad_announcement');
+  const ap = m.listPhotos(aid)[0];
+  const ablocks = [{ id: 'summary', type: 'text', text: agentBase.body }, { id: 'flyer', type: 'flyer', photoId: ap.id }, { id: 'video', type: 'video', label: 'Synthetic video <title>', url: 'https://vimeo.com/12345678' }, { id: 'link', type: 'button', label: 'Register', url: 'https://example.invalid/register' }];
+  const asaved = m.saveDraft(aid, m.getDraft(aid).updatedAt, { ...m.getDraft(aid), storyBlocks: ablocks, announcement: undefined }, new Map(), user, null, new Map([[ap.id, { zoom: 3, focalX: 0 }]]));
+  assert.equal(asaved.ok, true); assert.equal(m.getDraft(aid).announcement.kind, 'event', 'older editor forms preserve metadata');
+  assert.equal(m.upsertAgentDraft(without).ok, false, 'agent cannot change a reviewed event');
+  const apub = await m.publishDraft(m.getDraft(aid), m.listPhotos(aid), asaved.updatedAt, user);
+  const ast = m.getStoryBySlug(apub.slug);
+  assert.equal(ast.announcement.kind, 'event');
+  const ahtml = await m.renderStoryBlocksSafe(ast.storyBlocks);
+  assert.match(ahtml, /story-flyer/); assert.doesNotMatch(ahtml.slice(ahtml.indexOf('story-flyer'), ahtml.indexOf('story-module-video')), /aspect-ratio:16|scale:3/); assert.match(ahtml, /data-video-embed="https:\/\/player.vimeo.com\/video\/12345678"/); assert.doesNotMatch(ahtml, /<iframe|<title>/);
+  const aprivate = await m.renderStoryBlocksSafe(ast.storyBlocks, { preview: true }); assert.doesNotMatch(aprivate, /data-load-video|<iframe/);
+  const details = await m.renderAnnouncementDetails(ast.announcement);
+  assert.match(details, /Synthetic Hall &lt;north&gt;/); assert.match(details, /Register &lt;here&gt;/); assert.doesNotMatch(details, /<north>/);
+  const al = m.loadStory(apub.slug); m.reloadDraftFromStory(aid, user, al.fields, al.photos); assert.equal(m.getDraft(aid).announcement.kind, 'event'); assert.equal(m.getDraft(aid).storyBlocks[1].photoId, m.listPhotos(aid)[0].id);
+  const aold = m.getDraft(aid); assert.equal(m.saveDraft(aid, aold.updatedAt - 1, { ...aold, announcement: null }, new Map(), user).reason, 'conflict'); assert.equal(m.getDraft(aid).announcement.kind, 'event', 'stale save does not clear event metadata');
+  // Old Studio payloads retain live metadata and carry it to closed history; open editor work is preserved.
+  const astro = m.prepareStudioPublish({ newsletter: { name: 'Synthetic bulletin review', issueDate: ast.date }, stories: [{ title: ast.title, section: 'news', area: 'conference', author: ast.author, date: ast.date, body: agentBase.body, photos: [{ url: agentBase.photos[0].data, alt: 'Synthetic event flyer', caption: '' }], }] });
+  assert.equal(astro.stories[0].slug, apub.slug);
+  await m.publishStudioStories(astro.stories); assert.equal(m.getStoryBySlug(apub.slug).announcement.kind, 'event'); assert.equal(m.getDraft(aid).announcement.kind, 'event');
   const pngData = (shade) => `data:image/png;base64,${syntheticPng(shade).toString('base64')}`;
   const studioRequest = (photos, title = 'Synthetic Studio crops') => ({ newsletter: { name: 'Synthetic review', issueDate: '2026-01-08' }, stories: [{ ref: 'studio-crop', title, author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic Studio crop compatibility story.', photoLayout: 'mosaic', photos }] });
   const sendStudio = (request) => m.publishStudioStories(m.prepareStudioPublish(request).stories);

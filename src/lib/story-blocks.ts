@@ -1,20 +1,26 @@
 // Version-one story modules. Pure validation and Markdown projection shared by the editor and server.
 // The Markdown body remains available to search, feeds and older consumers; the structured modules own layout.
-export const STORY_BLOCK_TYPES = ['text', 'heading', 'quote', 'list', 'image', 'button', 'divider'] as const;
+export const STORY_BLOCK_TYPES = ['text', 'heading', 'quote', 'list', 'image', 'gallery', 'flyer', 'video', 'button', 'divider', 'section'] as const;
 export type StoryBlockType = (typeof STORY_BLOCK_TYPES)[number];
-export interface StoryBlock {
+export interface StoryPhotoRef {
+  photoId?: number;
+  photoIndex?: number;
+  url?: string;
+  alt?: string;
+  focalX?: number;
+  focalY?: number;
+  zoom?: number;
+}
+export interface StoryBlock extends StoryPhotoRef {
   id: string;
   type: StoryBlockType;
   text?: string;
   level?: 2 | 3;
   items?: string[];
-  photoId?: number;
-  url?: string;
+  photos?: StoryPhotoRef[];
+  columns?: 2 | 3;
+  content?: StoryBlock[][];
   label?: string;
-  alt?: string;
-  focalX?: number;
-  focalY?: number;
-  zoom?: number;
 }
 
 export interface PhotoCrop { focalX?: number; focalY?: number; zoom?: number }
@@ -50,8 +56,55 @@ export const OWN_PHOTO_ERROR = "Image modules can only use this story's own phot
 
 /** Every image module with an address must point at one of the story's own photos (`own` = its lead image and gallery). */
 export function assertOwnStoryImages(blocks: readonly StoryBlock[], own: Iterable<string>): void {
-  const allowed = new Set(own);
-  for (const b of blocks) if (b.type === 'image' && b.url && !allowed.has(b.url)) error(OWN_PHOTO_ERROR);
+  const ordered = [...own], allowed = new Set(ordered);
+  for (const p of storyBlockPhotos(blocks)) if (p.url && (!allowed.has(p.url) || p.photoIndex !== undefined && ordered[p.photoIndex] !== p.url)) error(OWN_PHOTO_ERROR);
+}
+
+/** Sections keep column-major source order and globally unique node IDs. */
+export function walkStoryBlocks(blocks: readonly StoryBlock[]): StoryBlock[] {
+  return blocks.flatMap((b) => [b, ...(b.content ? b.content.flatMap((column) => walkStoryBlocks(column)) : [])]);
+}
+export const countStoryBlocks = (blocks: readonly StoryBlock[]): number => walkStoryBlocks(blocks).length;
+export function mapStoryBlocks(blocks: StoryBlock[], map: (block: StoryBlock) => StoryBlock | null): StoryBlock[] {
+  return blocks.flatMap((b) => { const result = map({ ...b, ...(b.content ? { content: b.content.map((column) => mapStoryBlocks(column, map)) } : {}) }); return result ? [result] : []; });
+}
+export function findStoryBlockLocation(blocks: StoryBlock[], id: string): { siblings: StoryBlock[]; index: number; section?: StoryBlock; column?: number } | undefined {
+  const index = blocks.findIndex((b) => b.id === id);
+  if (index >= 0) return { siblings: blocks, index };
+  for (const section of blocks) for (const [column, children] of (section.content ?? []).entries()) {
+    const i = children.findIndex((b) => b.id === id);
+    if (i >= 0) return { siblings: children, index: i, section, column };
+  }
+}
+
+/** Shared traversal keeps photo ownership, publishing and derived data aligned. */
+export function storyBlockPhotos(blocks: readonly StoryBlock[]): StoryPhotoRef[] {
+  return walkStoryBlocks(blocks).flatMap((b) => ['image', 'flyer'].includes(b.type) ? [b] : b.type === 'gallery' ? b.photos ?? [] : []);
+}
+export function mapStoryPhotos(blocks: StoryBlock[], map: (photo: StoryPhotoRef) => StoryPhotoRef | null): StoryBlock[] {
+  return blocks.flatMap((b) => {
+    if (b.content) return [{ ...b, content: b.content.map((column) => mapStoryPhotos(column, map)) }];
+    if (['image', 'flyer'].includes(b.type)) { const photo = map(b); return photo ? [{ ...b, ...photo }] : []; }
+    if (b.type === 'gallery') return [{ ...b, photos: (b.photos ?? []).flatMap((p) => { const photo = map(p); return photo ? [photo] : []; }) }];
+    return [b];
+  });
+}
+function normalizePhoto(r: Record<string, unknown>): StoryPhotoRef {
+  const p: StoryPhotoRef = {};
+  if (r.photoId !== undefined) {
+    if (typeof r.photoId !== 'number' || !Number.isSafeInteger(r.photoId) || r.photoId < 1) return error('Choose a valid story photo.');
+    p.photoId = r.photoId;
+  }
+  if (r.photoIndex !== undefined) {
+    if (!Number.isInteger(r.photoIndex) || Number(r.photoIndex) < 0 || Number(r.photoIndex) > 5) return error('Choose a valid story photo position.');
+    p.photoIndex = r.photoIndex as number;
+  }
+  if (r.url !== undefined && r.url !== '') { if (!isStoryImageUrl(r.url)) return error(OWN_PHOTO_ERROR); p.url = r.url; }
+  p.alt = text(r.alt, 300, 'Photo description');
+  if (r.focalX !== undefined) p.focalX = focalPoint(r.focalX);
+  if (r.focalY !== undefined) p.focalY = focalPoint(r.focalY);
+  if (r.zoom !== undefined) p.zoom = photoZoom(r.zoom);
+  return p;
 }
 
 /** Explicit action links only. No script schemes, protocol-relative addresses or embedded credentials. */
@@ -61,6 +114,25 @@ export function isStoryButtonUrl(value: unknown): value is string {
     const u = new URL(value);
     return ['http:', 'https:', 'mailto:', 'tel:'].includes(u.protocol) && !u.username && !u.password;
   } catch { return false; }
+}
+
+/** Derive embed URLs from exact providers/IDs; never accept iframe HTML or arbitrary embed addresses. */
+export function parseStoryVideo(value: unknown): { provider: 'YouTube' | 'Vimeo'; url: string; embed: string } | null {
+  if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f\\<>"']/.test(value)) return null;
+  try {
+    const u = new URL(value);
+    if (u.protocol !== 'https:' || u.username || u.password || u.port) return null;
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtube-nocookie.com', 'youtube-nocookie.com'].includes(u.hostname)) {
+      const id = u.hostname === 'youtu.be' ? /^\/([A-Za-z0-9_-]{11})\/?$/.exec(u.pathname)?.[1] : u.pathname === '/watch' ? u.searchParams.get('v') : /^\/(?:embed|shorts)\/([A-Za-z0-9_-]{11})\/?$/.exec(u.pathname)?.[1];
+      if (!id || !/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+      return { provider: 'YouTube', url: `https://www.youtube.com/watch?v=${id}`, embed: `https://www.youtube-nocookie.com/embed/${id}?rel=0` };
+    }
+    if (['vimeo.com', 'www.vimeo.com', 'player.vimeo.com'].includes(u.hostname)) {
+      const id = /^\/(?:video\/)?([1-9]\d{0,11})\/?$/.exec(u.pathname)?.[1];
+      if (id) return { provider: 'Vimeo', url: `https://vimeo.com/${id}`, embed: `https://player.vimeo.com/video/${id}` };
+    }
+  } catch { /* unsupported input */ }
+  return null;
 }
 
 export function focalPoint(value: unknown): number {
@@ -89,13 +161,19 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
   if (!Array.isArray(input) || input.length > STORY_BLOCK_LIMIT) return error(`A story can have at most ${STORY_BLOCK_LIMIT} modules.`);
   const ids = new Set<string>();
   let total = 0;
-  return input.map((raw) => {
+  const parse = (values: unknown[], depth = 0): StoryBlock[] => values.map((raw) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return error('Every module must be an object.');
     const r = raw as Record<string, unknown>;
     if (typeof r.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(r.id) || ids.has(r.id)) return error('Every module needs a unique valid ID.');
     if (!STORY_BLOCK_TYPES.includes(r.type as StoryBlockType)) return error('Choose a supported story module.');
     ids.add(r.id);
+    if (ids.size > STORY_BLOCK_LIMIT) return error(`A story can have at most ${STORY_BLOCK_LIMIT} modules, including sections.`);
     const b: StoryBlock = { id: r.id, type: r.type as StoryBlockType };
+    if (b.type === 'section') {
+      if (depth > 0) return error('Sections cannot be nested.');
+      if (!Array.isArray(r.content) || r.content.length < 1 || r.content.length > 2 || !r.content.every(Array.isArray)) return error('A section needs one or two columns.');
+      b.content = r.content.map((column) => parse(column as unknown[], depth + 1));
+    }
     if (['text', 'heading', 'quote'].includes(b.type)) {
       b.text = text(r.text, b.type === 'heading' ? 300 : 20_000, 'Module text');
       total += b.text.length;
@@ -109,20 +187,24 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
       b.items = ((r.items ?? []) as unknown[]).map((item) => text(item, 2000, 'List item'));
       total += b.items.join('').length;
     }
-    if (b.type === 'image') {
-      if (r.photoId !== undefined) {
-        if (typeof r.photoId !== 'number' || !Number.isSafeInteger(r.photoId) || r.photoId < 1) return error('Choose a valid story photo.');
-        b.photoId = r.photoId;
-      }
-      if (r.url !== undefined && r.url !== '') {
-        if (!isStoryImageUrl(r.url)) return error(OWN_PHOTO_ERROR);
-        b.url = r.url;
-      }
-      b.alt = text(r.alt, 300, 'Photo description');
-      if (r.focalX !== undefined) b.focalX = focalPoint(r.focalX);
-      if (r.focalY !== undefined) b.focalY = focalPoint(r.focalY);
-      if (r.zoom !== undefined) b.zoom = photoZoom(r.zoom);
-      total += b.alt.length;
+    if (['image', 'flyer'].includes(b.type)) { Object.assign(b, normalizePhoto(r)); total += b.alt?.length ?? 0; }
+    if (b.type === 'gallery') {
+      if (r.columns !== undefined && r.columns !== 2 && r.columns !== 3) return error('Gallery columns must be 2 or 3.');
+      b.columns = r.columns === 3 ? 3 : 2;
+      if (r.photos !== undefined && (!Array.isArray(r.photos) || r.photos.length > 6)) return error('A gallery can contain up to 6 story photos.');
+      b.photos = ((r.photos ?? []) as unknown[]).map((p) => {
+        if (!p || typeof p !== 'object' || Array.isArray(p)) return error('Choose a valid story photo.');
+        return normalizePhoto(p as Record<string, unknown>);
+      });
+      const identities = b.photos.map((p) => p.photoId ? `id:${p.photoId}` : p.photoIndex !== undefined ? `index:${p.photoIndex}` : p.url);
+      if (new Set(identities).size !== identities.length) return error('Choose each gallery photo once.');
+      total += b.photos.reduce((n, p) => n + (p.alt?.length ?? 0), 0);
+    }
+    if (b.type === 'video') {
+      b.label = text(r.label, 120, 'Video title');
+      b.url = text(r.url, 2048, 'Video URL');
+      if (b.url) { const video = parseStoryVideo(b.url); if (!video) return error('Use a supported HTTPS YouTube or Vimeo video URL.'); b.url = video.url; }
+      total += b.label.length + b.url.length;
     }
     if (b.type === 'button') {
       b.label = text(r.label, 120, 'Button label');
@@ -133,6 +215,7 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
     if (total > 100_000) return error('The story modules contain too much text.');
     return b;
   });
+  return parse(input);
 }
 
 /** Modules become the Markdown body, which publishing limits to 20,000 characters: refuse at save with a clear message. */
@@ -149,11 +232,12 @@ const lt = (v: string) => v.replace(/</g, '&lt;');
  * holds a tag, comment or autolink. Safe to apply twice. The renderer shows these fields as plain text (see story-block-render).
  */
 export function escapeStoryBlocks(blocks: StoryBlock[]): StoryBlock[] {
-  return blocks.map((b) => {
+  return mapStoryBlocks(blocks, (b) => {
     const o: StoryBlock = { ...b };
     if (o.text !== undefined) o.text = lt(o.text);
     if (o.items) o.items = o.items.map(lt);
     if (o.alt !== undefined) o.alt = lt(o.alt);
+    if (o.photos) o.photos = o.photos.map((p) => ({ ...p, alt: lt(p.alt ?? '') }));
     if (o.label !== undefined) o.label = lt(o.label);
     return o;
   });
@@ -176,10 +260,14 @@ const plainMarkdown = (value: string) => value.replace(/[\\`*_[\]>#]/g, (c) => `
 export function storyBlocksToMarkdown(blocks: StoryBlock[]): string {
   return normalizeStoryBlocks(blocks).map((b) => {
     switch (b.type) {
+      case 'section': return (b.content ?? []).map((column) => storyBlocksToMarkdown(column)).filter(Boolean).join('\n\n');
       case 'text': return b.text || '';
       case 'heading': return `${'#'.repeat(b.level || 2)} ${plainMarkdown(b.text || '')}`;
       case 'quote': return (b.text || '').split('\n').map((line) => `> ${line}`).join('\n');
       case 'list': return (b.items || []).map((item) => `- ${plainMarkdown(item)}`).join('\n');
+      case 'video': return b.url ? `[${plainMarkdown(b.label || 'Watch video')}](${b.url})` : '';
+      case 'flyer': return '';
+      case 'gallery': return '';
       case 'image': return ''; // an image has no text of its own: its description is an attribute, not a paragraph
       case 'button': return b.url ? `[${plainMarkdown(b.label || b.url)}](${b.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})` : plainMarkdown(b.label || '');
       case 'divider': return '---';
@@ -214,11 +302,12 @@ export function splitMarkdownIntoModules(markdown: string, max = 20_000): string
  */
 export function unescapeStoryBlockPlainText(blocks: StoryBlock[]): StoryBlock[] {
   const un = (v: string) => v.replace(/&lt;/g, '<');
-  return blocks.map((b) => {
+  return mapStoryBlocks(blocks, (b) => {
     const o: StoryBlock = { ...b };
     if (o.text !== undefined) o.text = un(o.text); // paragraph and quote too: the editor shows what was typed, and every "<" is escaped again on write
     if (o.items) o.items = o.items.map(un);
     if (o.alt !== undefined) o.alt = un(o.alt);
+    if (o.photos) o.photos = o.photos.map((p) => ({ ...p, alt: un(p.alt ?? '') }));
     if (o.label !== undefined) o.label = un(o.label);
     return o;
   });

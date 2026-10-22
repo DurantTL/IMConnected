@@ -1,17 +1,21 @@
 ---
 // The whole story page.
 // The default slot is the rendered story body.
+import { renderAnnouncementDetails } from '../lib/announcement-render';
 import Base from '../layouts/Base.astro';
 import StoryCard from './StoryCard.astro';
 import { getSection, areaLabel, formatDate, SITE } from '../lib/site';
 import StoryPhotos from './StoryPhotos.astro';
 import type { PublicStory } from '../lib/stories';
 import { photoLayoutOrDefault, planPhotos } from '../lib/photo-layouts';
-import { photoFocusStyle } from '../lib/story-blocks';
+import { storyBlockPhotos, photoFocusStyle } from '../lib/story-blocks';
+import { INLINE_MEDIA_CSS } from '../lib/story-media-render';
 
 interface Props {
   story: PublicStory;
   related: PublicStory[];
+  inlinePhotoUrls?: Set<string>;
+  inlinePhotoIndices?: Set<number>;
 }
 const { story, related } = Astro.props;
 const d = story.data;
@@ -25,18 +29,22 @@ const enc = encodeURIComponent;
 // the text and the others in a row under it. Another layout puts the lead and the others together above the text; photos it
 // has no place for (a fifth in Hero + grid, a third in Two up) stay in the row under the text.
 const layout = photoLayoutOrDefault(d.photoLayout);
-const inlinePhotos = new Set((d.storyBlocks ?? []).filter((b) => b.type === 'image' && b.url).map((b) => b.url));
+const inlinePhotos = Astro.props.inlinePhotoUrls ?? new Set(storyBlockPhotos(d.storyBlocks ?? []).filter((b) => b.url && b.photoIndex === undefined).map((b) => b.url!));
+const inlineIndices = Astro.props.inlinePhotoIndices ?? new Set<number>(storyBlockPhotos(d.storyBlocks ?? []).flatMap((p) => p.photoIndex !== undefined ? [p.photoIndex] : []));
+const inlineCount = inlinePhotos.size + inlineIndices.size;
 const allPhotos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] || '' }))]
   .map((p, i) => ({ ...p, ...d.photoFocus?.[i], alt: p.alt || `Photo ${i + (d.image ? 1 : 2)} from “${d.title}”` }))
-  .filter((p) => !inlinePhotos.has(p.src));
+  .filter((p, i) => !inlinePhotos.has(p.src) && !inlineIndices.has(i));
 const plan = planPhotos(layout, allPhotos.length);
-const laid = plan.mode === 'layout' && (!!d.image || inlinePhotos.size > 0);
+const laid = !d.announcement && plan.mode === 'layout' && (!!d.image || inlineCount > 0);
 const galleryPhotos = laid ? plan.rest.map((i) => allPhotos[i]) : null;
-const leadPhoto = d.image && !inlinePhotos.has(d.image) ? allPhotos[0] : undefined;
+const leadPhoto = d.image && !inlinePhotos.has(d.image) && !inlineIndices.has(0) ? allPhotos[0] : undefined;
 const plainGallery = leadPhoto ? allPhotos.slice(1) : allPhotos;
-const leadFocus = photoFocusStyle(leadPhoto);
+const leadFocus = d.announcement ? undefined : photoFocusStyle(leadPhoto);
+const announcementDetails = await renderAnnouncementDetails(d.announcement);
 ---
 <Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section}>
+  <style is:inline slot="head" set:html={INLINE_MEDIA_CSS}></style>
   <script type="application/ld+json" slot="head" set:html={JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'NewsArticle',
@@ -68,13 +76,14 @@ const leadFocus = photoFocusStyle(leadPhoto);
 
       {leadPhoto && !laid && (
         <figure>
-          {(leadPhoto.zoom ?? 1) > 1 ? <a class="story-lead-crop" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge story photo'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={`${leadFocus}aspect-ratio:16/9;object-fit:cover;`} /></a> : <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />}
+          {d.announcement ? <a class="story-flyer" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge flyer'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style="width:100%;height:auto;object-fit:contain;" /></a> : (leadPhoto.zoom ?? 1) > 1 ? <a class="story-lead-crop" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge story photo'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={`${leadFocus}aspect-ratio:16/9;object-fit:cover;`} /></a> : <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />}
           {(d.imageAlt || d.photoCredit) && (
             <figcaption>{d.imageAlt}{d.photoCredit && ` Photo: ${d.photoCredit}`}</figcaption>
           )}
         </figure>
       )}
 
+      <Fragment set:html={announcementDetails} />
       <div class="prose">
         <slot />
       </div>
@@ -91,7 +100,7 @@ const leadFocus = photoFocusStyle(leadPhoto);
         </section>
       )}
 
-      {d.photoCredit && inlinePhotos.size > 0 && !laid && !leadPhoto && <p class="photo-credit">Photo: {d.photoCredit}</p>}
+      {d.photoCredit && inlineCount > 0 && !laid && !leadPhoto && <p class="photo-credit">Photo: {d.photoCredit}</p>}
 
       <div class="share">
         <span>Share:</span>
@@ -122,6 +131,7 @@ const leadFocus = photoFocusStyle(leadPhoto);
 </Base>
 <script>
   import '../scripts/photo-viewer';
+  import '../scripts/story-video';
 
   document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((b) =>
     b.addEventListener('click', async () => {

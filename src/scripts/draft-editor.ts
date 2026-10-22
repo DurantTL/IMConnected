@@ -81,7 +81,8 @@ if (form) {
     return !conflict;
   }
 
-  form.addEventListener('input', () => {
+  form.addEventListener('input', (event) => {
+    if (event.target instanceof Element && event.target.closest('[data-editor-local]')) return;
     dirty = true;
     schedulePreview();
   });

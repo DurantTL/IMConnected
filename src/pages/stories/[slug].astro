@@ -1,6 +1,6 @@
 ---
 import StoryPage from '../../components/StoryPage.astro';
-import { asUnavailable, getPublicStories, getPublicStory, renderStoryBody } from '../../lib/public-stories';
+import { asUnavailable, getPublicStories, getPublicStory, renderStoryContent } from '../../lib/public-stories';
 import { bySection } from '../../lib/stories';
 
 // Rendered on the server from the stories table; the middleware caches the result.
@@ -17,6 +17,6 @@ try {
   return asUnavailable(err);
 }
 const related = bySection(all, story.data.section).filter((s) => s.id !== story.id).slice(0, 3);
-const html = await renderStoryBody(story);
+const { html, used, usedPhotoIndices } = await renderStoryContent(story);
 ---
-<StoryPage story={story} related={related}><Fragment set:html={html} /></StoryPage>
+<StoryPage story={story} related={related} inlinePhotoUrls={used} inlinePhotoIndices={usedPhotoIndices}><Fragment set:html={html} /></StoryPage>

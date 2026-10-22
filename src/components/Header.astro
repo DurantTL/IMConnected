@@ -25,10 +25,12 @@ const { current } = Astro.props as { current?: string };
     <div class="section-nav-row"><nav class="nav" aria-label="Sections">
       <a href="/" aria-current={current === 'home' ? 'page' : undefined}>Latest</a>
       {SECTIONS.map((s) => <a href={`/${s.key}/`} aria-current={current === s.key ? 'page' : undefined}>{s.label}</a>)}
+      <a href="/announcements/" aria-current={current === 'announcements' ? 'page' : undefined}>Announcements</a>
     </nav><span class="masthead-edition">Iowa + Missouri</span></div>
     <nav class="mobile-nav" id="mobile-nav" data-open="false" aria-label="Sections">
       <a href="/" aria-current={current === 'home' ? 'page' : undefined}>Latest</a>
       {SECTIONS.map((s) => <a href={`/${s.key}/`} aria-current={current === s.key ? 'page' : undefined}>{s.label}</a>)}
+      <a href="/announcements/" aria-current={current === 'announcements' ? 'page' : undefined}>Announcements</a>
       <a href="/search/" aria-current={current === 'search' ? 'page' : undefined}>Search</a>
       <a class="btn accent" href="/submit/">Submit a Story</a>
     </nav>

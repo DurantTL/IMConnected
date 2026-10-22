@@ -1,4 +1,5 @@
 ---
+import { countStoryBlocks } from '../../../lib/story-blocks';
 import Admin from '../../../layouts/Admin.astro';
 import { photoFocusStyle } from '../../../lib/story-blocks';
 import { SECTIONS } from '../../../lib/site';
@@ -152,6 +153,15 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               <label>Photo credit
                 <input type="text" name="photoCredit" value={draft.photoCredit} maxlength="120" autocomplete="off" />
               </label>
+              <label>Content type
+                <select name="announcementKind"><option value="story" selected={!draft.announcement}>Story</option><option value="announcement" selected={draft.announcement?.kind === 'announcement'}>Announcement</option><option value="event" selected={draft.announcement?.kind === 'event'}>Event</option></select>
+              </label>
+              <label>Event date <span class="hint">optional</span><input type="date" name="eventDate" value={draft.announcement?.eventDate ?? ''} /></label>
+              <label class="full">Event location <input name="eventLocation" maxlength="200" value={draft.announcement?.location ?? ''} /></label>
+              <label class="full">Announcement video <span class="hint">HTTPS YouTube or Vimeo URL</span><input name="announcementVideo" maxlength="2048" value={draft.announcement?.videoUrl ?? ''} /></label>
+              <fieldset class="full"><legend>Announcement link buttons</legend><p class="admin-note">Choose Announcement or Event above. The first photo is its full-height flyer. Add a text summary so the flyer is also accessible.</p>
+                {[0, 1, 2].map((i) => <div class="ed-grid"><label>Link {i + 1} label<input name={`announcementLink${i}Label`} maxlength="120" value={draft.announcement?.links[i]?.label ?? ''} /></label><label>Link {i + 1} address<input name={`announcementLink${i}Url`} maxlength="2048" value={draft.announcement?.links[i]?.url ?? ''} placeholder="https://" /></label></div>)}
+              </fieldset>
               <label class="ed-check"><input type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
             </div>
             <div class="studio-submitter-notes">      {isAgent && (
@@ -207,7 +217,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <aside class="sb-outline" aria-label="Story modules"><details class="sb-library-disclosure" open><summary>Module library &amp; starter layouts</summary>
                     <p class="sb-insert-help">Insert after the selected module. Existing content stays in place.</p>
                     <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
-                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">7 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
+                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">11 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
                     <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
                     <div class="sb-library" role="group" aria-label="Add content module">
                       <button type="button" data-add-module="text">Paragraph</button>
@@ -215,8 +225,12 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                       <button type="button" data-add-module="quote">Quote</button>
                       <button type="button" data-add-module="list">List</button>
                       <button type="button" data-add-module="image">Image</button>
+                      <button type="button" data-add-module="gallery">Gallery</button>
+                      <button type="button" data-add-module="flyer">Flyer</button>
+                      <button type="button" data-add-module="video">Video</button>
                       <button type="button" data-add-module="button">Button / link</button>
                       <button type="button" data-add-module="divider">Divider</button>
+                      <button type="button" data-add-module="section">Section / columns</button>
                     </div>
                     <h3 class="sb-library-heading">Starter layouts</h3>
                     <p class="sb-insert-help">Add an empty structure, then write your own story.</p>
@@ -238,6 +252,15 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <button type="button" data-md="quote" aria-label="Quote">“ ”</button>
                   <button type="button" data-md="link" aria-label="Link">Link</button>
                   <button type="button" data-md="list" aria-label="List">• List</button>
+                  <label>Story photo<select id="inline-photo-choice" data-editor-local aria-label="Story photo to insert"><option value="">Choose a photo</option>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}{p.alt ? ` — ${p.alt}` : ''}</option>)}</select></label>
+                  <button type="button" id="insert-inline-photo" disabled={!photos.length}>Insert photo</button>
+                </div>
+                <div class="ed-toolbar" role="group" aria-label="Insert photo gallery">
+                  <label>From photo<select id="gallery-photo-start" data-editor-local>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}</option>)}</select></label>
+                  <label>To photo<select id="gallery-photo-end" data-editor-local>{photos.map((p, i) => <option value={i + 1} selected={i === photos.length - 1}>Photo {i + 1}</option>)}</select></label>
+                  <label>Gallery columns<select id="gallery-columns" data-editor-local><option value="2">2 columns</option><option value="3">3 columns</option></select></label>
+                  <button type="button" id="insert-inline-gallery" disabled={photos.length < 2}>Insert gallery</button>
+                  <span id="gallery-marker-status" role="status"></span>
                 </div>
                 {draft.storyBlocks?.length ? <noscript><p class="admin-error">This story is built from modules, which need JavaScript to edit. Without it the text below is read-only.</p></noscript> : null}
                 <textarea class="body" name="body" id="f-body" aria-label="Story text" readonly={!!draft.storyBlocks?.length}>{draft.body}</textarea>
@@ -328,7 +351,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
       {editable && (
         <section class="ed-card studio-review" id="studio-panel-review" data-studio-panel="review" role="tabpanel" aria-labelledby="studio-tab-review">
           <div class="studio-panel-heading"><div><span class="sb-eyebrow">Ready for readers?</span><h2>Review before publishing</h2><p class="admin-note">This is the last stop before your story appears on the public website.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>Open private preview</button></div>
-          <div class="studio-review-summary"><div><span>Story</span><strong data-review-title>{draft.title || 'Untitled story'}</strong></div><div><span>Author</span><strong data-review-author>{draft.author || 'Add an author in Story settings'}</strong></div><div><span>Content</span><strong data-review-content>{draft.storyBlocks?.length ? `${draft.storyBlocks.length} modules` : 'Markdown story'}</strong></div><div><span>Photos</span><strong>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</strong></div></div>
+          <div class="studio-review-summary"><div><span>Story</span><strong data-review-title>{draft.title || 'Untitled story'}</strong></div><div><span>Author</span><strong data-review-author>{draft.author || 'Add an author in Story settings'}</strong></div><div><span>Content</span><strong data-review-content>{draft.storyBlocks?.length ? `${countStoryBlocks(draft.storyBlocks)} modules` : 'Markdown story'}</strong></div><div><span>Photos</span><strong>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</strong></div></div>
           <ul class="studio-review-checklist"><li>Check the headline, names and facts.</li><li>Confirm permission to use the story and photos.</li><li>Read the phone preview and describe your images with alt text.</li></ul>
           {backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
           <p class="admin-note">

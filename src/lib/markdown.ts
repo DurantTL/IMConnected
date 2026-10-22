@@ -37,6 +37,11 @@ export function safeUrl(raw: string): boolean {
  */
 export async function renderMarkdownSafe(markdown: string): Promise<{ html: string; unsafeLinks: boolean }> {
   const { code } = await (await getProcessor()).render(escapeHtmlInMarkdown(markdown));
+  return checkMarkdownLinks(code);
+}
+
+/** Shared URL policy for the plain Markdown renderer and trusted inline-media plugin. */
+export function checkMarkdownLinks(code: string): { html: string; unsafeLinks: boolean } {
   let unsafeLinks = false;
   const attrs = /\b(href|src|srcset|action|formaction|poster|data|xlink:href)=("([^"]*)"|'([^']*)'|([^\s>]+))/gi;
   const html = code.replace(/<[a-z][^>]*>/gi, (tag) =>

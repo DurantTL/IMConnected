@@ -325,6 +325,19 @@ try {
     check('...and each update moves the draft version forward (an open editor page gets a conflict)', r3.status === 201 && q('SELECT updated_at FROM drafts WHERE id = ?', id1)[0].updated_at > v);
   }
 
+  // Typed bulletin metadata uses the same draft-only, idempotent endpoint.
+  {
+    const announcement = { kind: 'event', eventDate: '2026-12-01', location: 'Synthetic Hall', links: [{ label: 'Register', url: 'https://example.invalid/register' }], videoUrl: 'https://youtu.be/abcdefghijk' };
+    let r = await agentPost(story({ photos: undefined, announcement }));
+    check('agent event metadata is accepted and stored with a canonical video URL', r.status === 201 && JSON.parse(q('SELECT announcement FROM drafts WHERE id=?', id1)[0].announcement).videoUrl === 'https://www.youtube.com/watch?v=abcdefghijk');
+    r = await agentPost(story({ photos: undefined }));
+    check('older agent updates preserve event metadata when omitted', r.status === 201 && JSON.parse(q('SELECT announcement FROM drafts WHERE id=?', id1)[0].announcement).kind === 'event');
+    r = await agentPost(story({ photos: undefined, announcement: null }));
+    check('explicit null clears event metadata', r.status === 201 && q('SELECT announcement FROM drafts WHERE id=?', id1)[0].announcement === null);
+    r = await agentPost(story({ photos: undefined, announcement: { ...announcement, videoUrl: 'https://evil.invalid/embed/video' } }));
+    check('unsupported video host is a typed 400 and cannot change the stored draft', r.status === 400 && r.data.error === 'bad_announcement' && q('SELECT announcement FROM drafts WHERE id=?', id1)[0].announcement === null);
+  }
+
   // ================= after an editor touches it: 409 =================
   {
     const d = q('SELECT updated_at, title FROM drafts WHERE id = ?', id1)[0];
@@ -438,7 +451,7 @@ try {
     check('the server log has the draft id only: no title, text, note, source link or token', /\[agent\] draft #\d+ created/.test(log) && !log.includes('Pathfinder') && !log.includes('knot tying') && !log.includes('Picked because') && !log.includes('facebook.com') && !log.includes(AGENT_TOKEN) && !log.includes(PUBLISH_TOKEN));
     const au = q("SELECT action, target, detail, user_id FROM audit_log WHERE action = 'agent.story' ORDER BY id");
     check('audit entries "agent.story" exist, with the draft as target and no text', au.length >= 4 && au.every((a) => /^draft:\d+$/.test(a.target) && a.user_id === null && !/Pathfinder|facebook|knot/.test(a.detail ?? '')), JSON.stringify(au[0]));
-    check('...one per accepted request (draft 1: created + 3 updates) and none for the 409', q("SELECT COUNT(*) c FROM audit_log WHERE action = 'agent.story' AND target = ?", `draft:${id1}`)[0].c === 4);
+    check('...one per accepted request (draft 1: created + 6 updates) and none for the 409', q("SELECT COUNT(*) c FROM audit_log WHERE action = 'agent.story' AND target = ?", `draft:${id1}`)[0].c === 7);
 
     // no CORS
     const pre = await fetch(BASE + '/api/agent/stories', { method: 'OPTIONS', headers: { Origin: TOOLS_ORIGIN, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' } });

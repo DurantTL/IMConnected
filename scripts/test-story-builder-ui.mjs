@@ -137,7 +137,7 @@ try {
   await page.locator('#module-library-search').fill('no-such-module');
   check('library no-results state has a visible recovery action', await page.locator('#module-library-empty').isVisible() && await page.locator('[data-add-module]:visible').count() === 0 && await page.locator('#module-library-reset').isVisible());
   await page.locator('#module-library-reset').click();
-  check('clearing library search restores the same seven module controls without changing content', await page.locator('[data-add-module]:visible').count() === 7 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
+  check('clearing library search restores the same eleven module controls without changing content', await page.locator('[data-add-module]:visible').count() === 11 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
   for (const layout of ['news', 'recap', 'announcement']) {
     await page.getByRole('button', { name: /^1\. Paragraph/ }).click();
     const before = await blocks();
@@ -427,9 +427,9 @@ try {
   let legacyId = await createLegacy();
   const legacyDraft = () => db.prepare('SELECT * FROM drafts WHERE id=?').get(legacyId);
   const credit = 'Synthetic Photographer <em>escaped credit</em>';
-  const saveLegacy = async (photoLayout) => {
+  const saveLegacy = async (photoLayout, bodyText = legacy) => {
     const data = new FormData();
-    for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: 'Synthetic legacy credit', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: legacy, photoCredit: credit, photoLayout })) data.set(key, String(value));
+    for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: 'Synthetic legacy credit', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: bodyText, photoCredit: credit, photoLayout })) data.set(key, String(value));
     assert.equal((await post(`/api/admin/drafts/${legacyId}/save`, data)).status, 200);
   };
   const uploadLegacy = async () => {
@@ -462,6 +462,160 @@ try {
   await publishLegacy();
   check('noninline photo layout keeps the existing credit exactly once', await publicPage.locator('[data-photo-layout="twoUp"]').count() === 1 && (await publicPage.locator('article').innerText()).split(credit).length - 1 === 1);
   check('paired photos clip zoom at edge focal points without losing their links', await publicPage.locator('[data-photo-layout="twoUp"] img').evaluateAll((images) => images.length === 2 && images.every((image) => image.style.scale === '2.2' && image.style.objectPosition === '0% 100%' && getComputedStyle(image.parentElement).overflow === 'hidden' && image.parentElement.href === image.src)));
+  legacyId = await createLegacy();
+  await saveLegacy('one'); await uploadLegacy(); await uploadLegacy();
+  await page.goto(BASE + `/admin/drafts/${legacyId}`);
+  await page.locator('[data-studio-tab=content]').click();
+  await page.locator('#f-body').fill('Before the inline photo.\n\nAfter the inline photo.');
+  await page.locator('#f-body').evaluate((body) => { body.setSelectionRange(24, 24); });
+  await page.locator('#inline-photo-choice').selectOption('2');
+  await page.locator('#insert-inline-photo').click();
+  check('Markdown Insert photo places the chosen story-owned marker at the cursor', (await page.locator('#f-body').inputValue()).includes('{{photo 2}}'));
+  await page.waitForFunction(() => document.getElementById('preview')?.contentDocument?.querySelector('.story-inline-photo img'));
+  check('Markdown private preview resolves the marker through the authenticated photo endpoint', await page.frameLocator('#preview').locator('.story-inline-photo img').getAttribute('src').then((src) => /^\/api\/admin\/photos\/\d+$/.test(src)));
+  const inlineSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await inlineSave).status(), 200);
+  await publishLegacy();
+  check('published photo marker is inline once and excluded from the separate photo group', await publicPage.locator('.prose .story-inline-photo').count() === 1 && await publicPage.locator('article img').count() === 2 && await publicPage.locator('.gallery').count() === 0);
+  await publicPage.locator('.story-inline-photo a').click();
+  check('inline marker photos use the existing enlargement viewer', await publicPage.locator('dialog.viewer').evaluate((dialog) => dialog.open));
+  await publicPage.keyboard.press('Escape');
+  legacyId = await createLegacy();
+  await saveLegacy('heroGrid'); await uploadLegacy(); await uploadLegacy(); await uploadLegacy();
+  await page.goto(BASE + `/admin/drafts/${legacyId}`);
+  await page.locator('[data-studio-tab=content]').click();
+  await page.locator('#f-body').fill('Before the gallery.\n\nAfter the gallery.');
+  await page.locator('#gallery-photo-start').selectOption('3');
+  await page.locator('#gallery-photo-end').selectOption('1');
+  await page.locator('#insert-inline-gallery').click();
+  check('gallery picker refuses reversed ranges without changing the text', !(await page.locator('#f-body').inputValue()).includes('{{gallery') && (await page.locator('#gallery-marker-status').innerText()).includes('ascending'));
+  await page.locator('#gallery-photo-start').selectOption('1'); await page.locator('#gallery-photo-end').selectOption('3'); await page.locator('#gallery-columns').selectOption('3');
+  await page.locator('#insert-inline-gallery').click();
+  check('gallery picker inserts its bounded range and chosen columns', (await page.locator('#f-body').inputValue()).includes('{{gallery 1-3 columns=3}}'));
+  const gallerySave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await gallerySave).status(), 200);
+  await publishLegacy();
+  check('published gallery renders every selected slot exactly once', await publicPage.locator('.story-inline-gallery img').count() === 3 && await publicPage.locator('article img').count() === 3);
+  for (const [width, columns] of [[1440, 3], [390, 2]]) {
+    await publicPage.setViewportSize({ width, height: 900 });
+    check(`gallery uses ${columns} columns at ${width}px without overflow`, await publicPage.locator('.story-inline-gallery').evaluate((el, count) => getComputedStyle(el).gridTemplateColumns.split(' ').length === count && document.documentElement.scrollWidth <= innerWidth, columns));
+    if (shots) await publicPage.screenshot({ path: path.join(shots, `story-gallery-${width}.png`), fullPage: true });
+  }
+  await publicPage.locator('.story-inline-gallery a').first().click();
+  check('gallery photos use the same enlargement viewer', await publicPage.locator('dialog.viewer').evaluate((dialog) => dialog.open));
+  await publicPage.keyboard.press('Escape');
+  legacyId = await createLegacy(); await saveLegacy('twoUp'); await uploadLegacy(); await uploadLegacy();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(BASE + `/admin/drafts/${legacyId}`); await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
+  await page.locator('[data-add-module="gallery"]').click();
+  const visualBefore = JSON.parse(await page.locator('#story-blocks').inputValue());
+  assert.equal(visualBefore.at(-1).type, 'gallery'); assert.equal(visualBefore.at(-1).photos.length, 2);
+  check('Gallery module selects the available story photos and exposes labelled controls', visualBefore.at(-1).type === 'gallery' && visualBefore.at(-1).photos.length === 2 && await page.locator('#module-fields').getByLabel('Gallery columns', { exact: true }).count() === 1);
+  await page.getByRole('button', { name: 'Move gallery photo 2 earlier', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  check('gallery keyboard reorder retains focus on the moved row at the boundary', await page.locator('[data-gallery-order="0"]').evaluate((el) => el === document.activeElement));
+  await page.locator('#module-fields').getByLabel('Gallery columns', { exact: true }).selectOption('3');
+  const visualOrdered = JSON.parse(await page.locator('#story-blocks').inputValue());
+  check('Gallery keyboard controls reverse ordered stable IDs and save column settings', visualOrdered.at(-1).photos[0].photoId === visualBefore.at(-1).photos[1].photoId && visualOrdered.at(-1).columns === 3);
+  await page.getByRole('button', { name: 'Duplicate module', exact: true }).click();
+  check('Gallery duplication uses a new module ID and retains photo ordering', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).id !== visualOrdered.at(-1).id);
+  await page.locator('#blocks-undo').click();
+  check('Gallery duplication can be undone atomically', JSON.stringify(JSON.parse(await page.locator('#story-blocks').inputValue())) === JSON.stringify(visualOrdered));
+  await page.waitForFunction(() => document.getElementById('preview')?.contentDocument?.querySelectorAll('.story-inline-gallery img').length === 2);
+  const visualSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await visualSave).status(), 200); await publishLegacy();
+  check('published Gallery module excludes its photos from the surrounding layout', await publicPage.locator('.story-inline-gallery img').count() === 2 && await publicPage.locator('article img').count() === 2 && await publicPage.locator('[data-photo-layout]').count() === 0);
+  legacyId = await createLegacy(); await saveLegacy('heroGrid'); await uploadLegacy();
+  await page.goto(BASE + `/admin/drafts/${legacyId}`);
+  await page.locator('[data-studio-tab=settings]').click();
+  await page.locator('[name=announcementKind]').selectOption('event');
+  await page.locator('[name=eventDate]').fill('2026-12-01'); await page.locator('[name=eventLocation]').fill('Synthetic Hall <north>');
+  await page.locator('[name=announcementLink0Label]').fill('Register'); await page.locator('[name=announcementLink0Url]').fill('https://example.invalid/register');
+  await page.locator('[name=announcementVideo]').fill('https://youtu.be/abcdefghijk');
+  const flyerPhotoId = db.prepare('SELECT id FROM draft_photos WHERE draft_id=?').get(legacyId).id;
+  await page.locator('[name="photo_' + flyerPhotoId + '_zoom"]').evaluate((el) => { el.value = '3'; });
+  await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
+  await page.locator('[data-add-module="flyer"]').click();
+  await page.locator('[data-studio-tab=photos]').click(); await page.locator('[name="photo_' + flyerPhotoId + '_alt"]').fill('Corrected synthetic flyer description'); await page.locator('[data-studio-tab=content]').click();
+  await page.locator('[data-add-module="video"]').click(); await page.locator('[data-module-field=label]').fill('Synthetic event overview'); await page.locator('[data-module-field=url]').fill('https://vimeo.com/12345678');
+  await page.locator('[data-add-module="button"]').click(); await page.locator('[data-module-field=label]').fill('Event page'); await page.locator('[data-module-field=url]').fill('https://example.invalid/event');
+  await page.waitForFunction(() => { const doc = document.getElementById('preview')?.contentDocument; return doc?.querySelector('.story-flyer img') && doc.querySelectorAll('.story-module-video a').length === 2; });
+  check('announcement private preview shows the full flyer and safe provider links without players', await page.frameLocator('#preview').locator('iframe,[data-load-video]').count() === 0 && await page.frameLocator('#preview').locator('.story-flyer img').evaluate((img) => img.alt === 'Corrected synthetic flyer description' && !img.style.scale && !img.style.aspectRatio.includes('16')));
+  const announcementSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await announcementSave).status(), 200); await publishLegacy();
+  check('announcement publishes details, module links and one uncropped flyer', await publicPage.locator('.story-flyer img').count() === 1 && await publicPage.locator('article img').count() === 1 && (await publicPage.locator('.announcement-details').innerText()).includes('Synthetic Hall <north>') && await publicPage.getByRole('link', { name: 'Event page', exact: true }).count() === 1);
+  check('announcement video players make no embedded request before reader action', await publicPage.locator('iframe').count() === 0 && await publicPage.locator('[data-load-video]').count() === 2);
+  const mediaFeed = await (await fetch(BASE + '/stories.json')).json();
+  check('feed keeps version1 and adds typed announcement fields', mediaFeed.version === 1 && mediaFeed.stories.find((s) => s.id === legacyDraft().slug)?.announcement?.kind === 'event');
+  for (const width of [1440, 390]) {
+    await publicPage.setViewportSize({ width, height: 1000 });
+    check(`flyer stays full aspect and article fits at ${width}px`, await publicPage.locator('.story-flyer img').evaluate((img) => Math.abs(img.getBoundingClientRect().height / img.getBoundingClientRect().width - img.naturalHeight / img.naturalWidth) < .02 && !img.style.scale && document.documentElement.scrollWidth <= innerWidth));
+    if (shots) await publicPage.screenshot({ path: path.join(shots, `announcement-story-${width}.png`), fullPage: true });
+  }
+  if (process.env.AXE_JS) { await publicPage.addScriptTag({ path: process.env.AXE_JS }); const scan = await publicPage.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })); check('announcement details, flyer, buttons and video affordances pass axe', scan.violations.length === 0); }
+  await publicPage.getByRole('button', { name: 'Play video: Announcement video', exact: true }).focus(); await publicPage.keyboard.press('Enter');
+  check('keyboard Play loads only the derived privacy-provider iframe with a title', await publicPage.locator('iframe').count() === 1 && await publicPage.locator('iframe').getAttribute('src') === 'https://www.youtube-nocookie.com/embed/abcdefghijk?rel=0' && await publicPage.locator('iframe').getAttribute('title') === 'Announcement video');
+  legacyId = await createLegacy(); await saveLegacy('one', 'Synthetic inline flyer.\n\n{{photo 1}}\n\nEvent summary.'); await uploadLegacy();
+  const markerForm = new FormData(); for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: 'Synthetic inline flyer', author: 'Synthetic Editor', section: 'news', area: 'conference', date: legacyDraft().date, body: legacyDraft().body, announcementKind: 'announcement' })) markerForm.set(key, String(value));
+  assert.equal((await post(`/api/admin/drafts/${legacyId}/save`, markerForm)).status, 200);
+  const markerPreview = await (await post(`/api/admin/drafts/${legacyId}/preview`, markerForm)).json();
+  check('announcement inline marker preview shows one full flyer', (markerPreview.doc.match(/<img /g) || []).length === 1 && markerPreview.doc.includes('story-inline-photo story-flyer'));
+  await publishLegacy(); check('announcement inline marker publishes one full flyer with no crop', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-flyer img').evaluate((img) => !img.style.scale && img.style.aspectRatio === 'auto'));
+  await publicPage.goto(BASE + '/announcements/');
+  check('public board lists live event and announcement types and exposes navigation', await publicPage.locator('[data-board-kind=event]').count() === 1 && await publicPage.locator('[data-board-kind=announcement]').count() === 1 && await publicPage.locator('.nav a[aria-current=page][href="/announcements/"]').count() === 1);
+  await publicPage.getByRole('button', { name: /^Events / }).click();
+  check('board filters events and announces its result count', await publicPage.locator('[data-board-kind]:visible').count() === 1 && await publicPage.locator('#board-count').textContent() === '1 update');
+  await publicPage.getByRole('button', { name: /^All updates / }).click();
+  for (const width of [1440, 390]) {
+    await publicPage.setViewportSize({ width, height: 1000 });
+    check(`announcements board fits at ${width}px without flyer cropping`, await publicPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('.board-flyer img')].every((img) => getComputedStyle(img).objectFit === 'contain')));
+    if (shots) await publicPage.screenshot({ path: path.join(shots, `announcements-board-${width}.png`), fullPage: true });
+  }
+  if (process.env.AXE_JS) { await publicPage.addScriptTag({ path: process.env.AXE_JS }); const boardAxe = await publicPage.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })); check('public announcements board passes axe', boardAxe.violations.length === 0); }
+  const boardSource = await (await fetch(BASE + '/announcements/')).text();
+  check('board server response contains both types and no private photo endpoint', (boardSource.match(/data-board-kind=/g) || []).length === 2 && !boardSource.includes('/api/admin/photos/'));
+  // Prime the origin cache, then a human-only local test action removes the announcement.
+  const hideAnnouncement = new FormData(); hideAnnouncement.set('slug', legacyDraft().slug);
+  const unlisted = await post('/api/admin/stories/unpublish', hideAnnouncement);
+  check('local human unpublish succeeds', unlisted.status === 303);
+  const boardAfter = await (await fetch(BASE + '/announcements/')).text();
+  check('unpublish immediately invalidates cached board and removes that announcement', !boardAfter.includes('data-board-kind="announcement"') && boardAfter.includes('data-board-kind="event"'));
+  legacyId = await createLegacy(); await saveLegacy('one'); await uploadLegacy();
+  await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(BASE + `/admin/drafts/${legacyId}`); await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
+  await page.locator('[data-add-module=section]').click();
+  const sectionState = JSON.parse(await page.locator('#story-blocks').inputValue()), section = sectionState.at(-1);
+  check('Section inserts two columns with distinct stable paragraph IDs', section.type === 'section' && section.content.length === 2 && section.content[0][0].id !== section.content[1][0].id && await page.locator('#module-count').textContent() === '4');
+  const choose = async (id) => page.locator(`[data-select-module="${id}"]`).click();
+  await choose(section.content[0][0].id); await page.locator('[data-module-field=text]').fill('Synthetic left column text.');
+  await page.locator('[data-add-module=image]').click();
+  await choose(section.content[1][0].id); await page.locator('[data-module-field=text]').fill('Synthetic right column text.');
+  const beforeCrossDrop = await page.locator('#story-blocks').inputValue();
+  await page.locator(`#module-outline [data-module-id="${section.content[0][0].id}"]`).evaluate((target, id) => { const dataTransfer = new DataTransfer(); dataTransfer.setData('text/plain', id); target.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer })); }, section.content[1][0].id);
+  check('cross-column drag is rejected visibly without reordering the source', await page.locator('#story-blocks').inputValue() === beforeCrossDrop && (await page.locator('#module-status').textContent()).includes('Move to column'));
+  await page.getByRole('button', { name: 'Move to column 1', exact: true }).click();
+  check('child modules can move across columns without losing content', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0].at(-1).text === 'Synthetic right column text.');
+  await page.getByRole('button', { name: 'Move to column 2', exact: true }).click();
+  await choose(section.id); const beforeSectionDuplicate = await page.locator('#story-blocks').inputValue();
+  await page.getByRole('button', { name: 'Duplicate module', exact: true }).click();
+  const duplicatedSections = JSON.parse(await page.locator('#story-blocks').inputValue()); const flattenedSections = duplicatedSections.flatMap((b) => [b, ...(b.content?.flat() ?? [])]);
+  check('section duplication regenerates every descendant ID', new Set(flattenedSections.map((b) => b.id)).size === flattenedSections.length && duplicatedSections.at(-1).content[0][0].text === 'Synthetic left column text.');
+  await page.locator('#blocks-undo').click(); check('section duplication is one undo step', await page.locator('#story-blocks').inputValue() === beforeSectionDuplicate);
+  await page.getByLabel('Section columns', { exact: true }).selectOption('1');
+  check('changing to one column preserves all children in reading order', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0].length === 3);
+  await page.locator('#blocks-undo').click();
+  await page.waitForFunction((id) => document.getElementById('preview')?.contentDocument?.querySelector(`[data-module-id="${id}"]`), section.content[1][0].id);
+  await page.frameLocator('#preview').locator(`[data-module-id="${section.content[1][0].id}"]`).focus(); await page.frameLocator('#preview').locator(`[data-module-id="${section.content[1][0].id}"]`).press('Enter');
+  check('keyboard canvas selection opens a nested child inspector', await page.locator('[data-module-field=text]').inputValue() === 'Synthetic right column text.');
+  const sectionSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST'); await page.locator('#save-btn').click(); assert.equal((await sectionSave).status(), 200); await publishLegacy();
+  for (const [width, columns] of [[1440, 2], [390, 1]]) { await publicPage.setViewportSize({ width, height: 1000 }); check(`section reads in ${columns} columns at ${width}px`, await publicPage.locator('.story-section').evaluate((el, n) => getComputedStyle(el).gridTemplateColumns.split(' ').length === n && el.textContent.indexOf('left column') < el.textContent.indexOf('right column') && document.documentElement.scrollWidth <= innerWidth, columns)); if (shots) await publicPage.screenshot({ path: path.join(shots, `story-sections-${width}.png`), fullPage: true }); }
+  check('nested image appears once and section source order survives publishing', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-section img').count() === 1);
+  const brokenData = path.join(scratch, 'synthetic-broken-db'); fs.mkdirSync(brokenData); fs.writeFileSync(path.join(brokenData, 'imconnected.db'), 'synthetic invalid sqlite fixture');
+  const unavailableServer = spawn(process.execPath, ['dist/server/entry.mjs'], { cwd: ROOT, env: { ...process.env, HOST: '127.0.0.1', PORT: String(PORT + 1), DATA_DIR: brokenData, SITE_URL: `http://localhost:${PORT + 1}`, AUTH_SECRET: 'synthetic-unavailable-' + 'x'.repeat(32), RESEND_API_KEY: '', GDRIVE_SERVICE_ACCOUNT_JSON: '', GDRIVE_FOLDER_ID: '', PUBLISH_TOKEN: '', AGENT_API_TOKEN: '' }, stdio: 'ignore' });
+  try {
+    let unavailableResponse;
+    for (let attempt = 0; attempt < 80; attempt++) { try { unavailableResponse = await fetch(`http://localhost:${PORT + 1}/announcements/`); break; } catch { await sleep(100); } }
+    check('unreadable database makes the board503/no-store with no frozen archive fallback', unavailableResponse?.status === 503 && unavailableResponse.headers.get('cache-control') === 'no-store' && !(await unavailableResponse.text()).includes('data-board-kind'));
+  } finally { const stopped = new Promise((resolve) => unavailableServer.once('exit', resolve)); unavailableServer.kill('SIGTERM'); await Promise.race([stopped, sleep(2000)]); if (unavailableServer.exitCode === null) unavailableServer.kill('SIGKILL'); }
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {

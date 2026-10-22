@@ -99,3 +99,11 @@ AXE_JS=/path/to/axe.min.js node scripts/test-design-review.mjs
 ```
 
 The editor, submission, public-page, photo-layout, search, import and agent suites are listed in `AGENTS.md`. This branch contains code changes only and has not been deployed or merged to the production branch.
+
+## Inline galleries
+
+The Markdown gallery picker places a bounded range of story photos inside the article. Requested three-column galleries use two columns on phones; crops and original-image links remain available. Synthetic captures: [desktop](design/story-gallery-1440.png) and [phone](design/story-gallery-390.png). The built editor passed 106 browser checks with axe; the marker/module contract suite passed 47 checks.
+
+## Announcements and event flyers
+
+The community board adds a magazine-style invitation header, full-aspect flyer cards, event dates/locations, link actions and accessible type filters. Detail pages support full-height flyers and click-to-load video players. Synthetic screenshots: [board desktop](design/announcements-board-desktop.png), [board phone](design/announcements-board-mobile.png), [article desktop](design/announcement-story-desktop.png), [article phone](design/announcement-story-mobile.png).

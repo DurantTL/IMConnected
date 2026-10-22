@@ -9,6 +9,7 @@
 // from stories.updated_at (rows from before migration 013, or written some other way). The sync pass does that for the
 // whole table before search first uses the index; a request only repairs a few rows, at most once a minute, without waiting.
 import type { DatabaseSync } from 'node:sqlite';
+import { stripMediaMarkers } from './story-media';
 import { cleanField, ftsQuery, MAX_RESULTS, plainText, toHit, type SearchHit } from './search';
 
 interface IndexRow { id: number; slug: string; title: string; dek: string | null; author: string; church: string | null; body: string; updated_at: number }
@@ -16,7 +17,7 @@ interface IndexRow { id: number; slug: string; title: string; dek: string | null
 function writeRow(db: DatabaseSync, r: IndexRow): void {
   db.prepare('DELETE FROM stories_fts WHERE rowid = ?').run(r.id);
   db.prepare('INSERT INTO stories_fts (rowid, title, dek, author, church, body, stamp) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(r.id, cleanField(r.title), cleanField(r.dek), cleanField(r.author), cleanField(r.church), plainText(r.body), r.updated_at);
+    .run(r.id, cleanField(r.title), cleanField(stripMediaMarkers(r.dek ?? '')), cleanField(r.author), cleanField(r.church), plainText(r.body), r.updated_at);
 }
 
 /** Index one story. Call it inside the transaction that wrote the story. */

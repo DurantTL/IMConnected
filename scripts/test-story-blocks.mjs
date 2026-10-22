@@ -14,9 +14,86 @@ let count = 0;
 const check = (name, fn) => { fn(); count++; console.log(`PASS ${name}`); };
 try {
   const require = createRequire(import.meta.url);
-  await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri') return { id: require.resolve(id), external: true }; } }] });
-  const { normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
+  await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts', media: 'src/lib/story-media-render.ts', excerpt: 'src/lib/excerpt.ts', search: 'src/lib/search.ts', index: 'src/lib/search-index.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri') return { id: require.resolve(id), external: true }; } }] });
+  const { walkStoryBlocks, countStoryBlocks, normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, parseStoryVideo, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
   const { renderStoryBlocksSafe } = await import(pathToFileURL(path.join(scratch, 'render.js')));
+  const { renderMediaMarkdown } = await import(pathToFileURL(path.join(scratch, 'media.js')));
+  const { storyExcerpt } = await import(pathToFileURL(path.join(scratch, 'excerpt.js')));
+  const { toHit } = await import(pathToFileURL(path.join(scratch, 'search.js')));
+  const { indexStory } = await import(pathToFileURL(path.join(scratch, 'index.js')));
+  const { DatabaseSync } = await import('node:sqlite');
+  const mediaPhotos = [{ src: '/media/stories/synthetic/a.png', alt: 'Synthetic <scene>', focalX: 0, focalY: 100, zoom: 2 }, { src: '/media/stories/synthetic/b.png', alt: '' }];
+  const inline = await renderMediaMarkdown('Before **bold**.\n{{photo 1}}\nAfter.', mediaPhotos);
+  check('standalone photo markers split paragraph boundaries safely and keep the crop/viewer', () => {
+    assert.match(inline.html, /<strong>bold<\/strong>/); assert.match(inline.html, /class="story-inline-photo"/); assert.match(inline.html, /alt="Synthetic &lt;scene&gt;"/); assert.match(inline.html, /scale:2/); assert.match(inline.html, /data-photo/); assert.deepEqual([...inline.used], [0]); assert.doesNotMatch(inline.html, /\{\{photo|<p>\s*<figure/);
+  });
+  const codeExamples = await renderMediaMarkdown('`{{photo 1}}`\n\n```text\n{{photo 2}}\n```\n\nA `multi\n{{photo 1}}\nline` code span.\n\n[{{photo 1}}](https://example.invalid/)', mediaPhotos);
+  check('code spans, fences and linked marker-like text stay inert', () => { assert.equal(codeExamples.used.size, 0); assert.doesNotMatch(codeExamples.html, /story-inline-photo/); assert.match(codeExamples.html, /\{\{photo 1\}\}/); });
+  for (const marker of ['{{photo 99}}', '{{photo -1}}', '{{photo <script>}}', '{{photo 0}}', '{{photo 999999999999999999}}', '{{photo 1', '{{photo 1}']) {
+    const publicResult = await renderMediaMarkdown(marker, mediaPhotos);
+    const previewResult = await renderMediaMarkdown(marker, mediaPhotos, true);
+    check(`invalid marker is hidden publicly and warns safely in preview: ${marker}`, () => { assert.equal(publicResult.used.size, 0); assert.equal(publicResult.html, ''); assert.match(previewResult.html, /story-media-warning/); assert.doesNotMatch(previewResult.html, /<script/); });
+  }
+  const isolated = await Promise.all([renderMediaMarkdown('{{photo 1}}', mediaPhotos), renderMediaMarkdown('{{photo 2}}', mediaPhotos)]);
+  check('concurrent renderer requests do not share photo state', () => { assert.deepEqual([...isolated[0].used], [0]); assert.deepEqual([...isolated[1].used], [1]); });
+  check('derived excerpts skip marker-only paragraphs and marker fragments', () => { assert.equal(storyExcerpt('{{photo 1}}\n\nSynthetic article text.'), 'Synthetic article text.'); assert.equal(storyExcerpt('Before {{photo 99}} after.'), 'Before after.'); });
+  const duplicates = await renderMediaMarkdown('{{photo 2}}', [mediaPhotos[0], { ...mediaPhotos[0], alt: 'Second slot', zoom: 3 }]);
+  check('duplicate image addresses still refer to distinct ordered photo slots', () => { assert.deepEqual([...duplicates.used], [1]); assert.match(duplicates.html, /alt="Second slot"/); assert.match(duplicates.html, /scale:3/); });
+  for (const prose of ['{{photo 1}} This happened next.', '{{photo note}} Keep sentence.']) {
+    const result = await renderMediaMarkdown(prose, mediaPhotos);
+    check('marker-like prose is preserved literally: ' + prose, () => { assert.equal(result.used.size, 0); assert.ok(result.html.includes(prose)); });
+  }
+  check('malformed marker fragments do not leak into derived text', () => { assert.equal(storyExcerpt('Before {{photo 1}'), 'Before'); assert.equal(storyExcerpt('{{photo 1}oops\n\nNext paragraph.'), 'oops'); assert.equal(storyExcerpt('{{photo note} Keep sentence.'), 'Keep sentence.'); });
+  check('search strips markers from both indexed summaries and displayed snippets', () => {
+    const dek = 'Synthetic {{photo 1}} summary {{photo 2}';
+    const hit = toHit({ slug: 'sample', title: 'Sample', section: 'news', date: '2026-01-01', author: 'Synthetic', body: 'Body.', dek }, ['synthetic']);
+    assert.doesNotMatch(hit.snippet, /photo|[{}]/);
+    const db = new DatabaseSync(':memory:');
+    try {
+      db.exec('CREATE VIRTUAL TABLE stories_fts USING fts5(title, dek, author, church, body, stamp UNINDEXED)');
+      indexStory(db, 1, { title: 'Sample', author: 'Synthetic', body: '{{photo 1}}\n\nBody.', dek }, 1);
+      const row = db.prepare('SELECT dek, body FROM stories_fts').get();
+      assert.equal(row.dek, 'Synthetic summary'); assert.equal(row.body, 'Body.');
+    } finally { db.close(); }
+  });
+  const gallery = await renderMediaMarkdown('Before.\n\n{{gallery 1-2 columns=3}}\n\nAfter.', mediaPhotos);
+  check('gallery markers use only the selected slots with crops, links and bounded columns', () => { assert.deepEqual([...gallery.used], [0, 1]); assert.match(gallery.html, /story-inline-gallery" data-columns="3"/); assert.equal((gallery.html.match(/data-photo/g) || []).length, 2); assert.match(gallery.html, /scale:2/); });
+  for (const marker of ['{{gallery 2-1 columns=2}}', '{{gallery 1-99 columns=3}}', '{{gallery 1-1 columns=2}}', '{{gallery 1-2 columns=99}}', '{{gallery 1-2 columns=invalid}}']) {
+    const result = await renderMediaMarkdown(marker, mediaPhotos);
+    const preview = await renderMediaMarkdown(marker, mediaPhotos, true);
+    check('invalid gallery is skipped as a whole: ' + marker, () => { assert.equal(result.html, ''); assert.equal(result.used.size, 0); assert.match(preview.html, /story-media-warning/); });
+  }
+  const galleryBlock = [{ id: 'visual-gallery', type: 'gallery', columns: 3, photos: mediaPhotos.map((p, i) => ({ url: p.src, alt: p.alt, focalX: p.focalX, focalY: p.focalY, zoom: p.zoom, photoIndex: i })) }];
+  const galleryHtml = await renderStoryBlocksSafe(galleryBlock);
+  check('Gallery modules reuse safe crop rendering and expose one canvas selection target', () => { assert.equal((galleryHtml.match(/data-module-id=/g) || []).length, 1); assert.equal((galleryHtml.match(/data-photo/g) || []).length, 2); assert.match(galleryHtml, /scale:2/); assert.equal(blocksToMarkdown(galleryBlock), ''); });
+  check('Gallery modules enforce finite columns, photo count, unique slots and own addresses', () => {
+    for (const extra of [{ columns: 4 }, { photos: Array.from({ length: 7 }, (_, i) => ({ photoId: i + 1 })) }, { photos: [{ photoId: 1 }, { photoId: 1 }] }, { photos: [{ url: 'https://example.invalid/a.png' }] }]) assert.throws(() => normalizeStoryBlocks([{ ...galleryBlock[0], ...extra }]));
+    assert.throws(() => assertOwnStoryImages(galleryBlock, [mediaPhotos[1].src, mediaPhotos[0].src]), /own photos/);
+    assert.doesNotThrow(() => assertOwnStoryImages(galleryBlock, mediaPhotos.map((p) => p.src)));
+  });
+  const longGallery = await renderStoryBlocksSafe([{ ...galleryBlock[0], id: 'g'.repeat(80) }]);
+  check('valid maximum-length Gallery IDs render without synthetic-ID overflow', () => { assert.equal((longGallery.match(/data-photo/g) || []).length, 2); assert.match(longGallery, new RegExp(`data-module-id="${'g'.repeat(80)}"`)); });
+  check('video parser derives exact provider URLs and rejects arbitrary embed/html inputs', () => {
+    for (const url of ['https://youtu.be/abcdefghijk', 'https://www.youtube.com/watch?v=abcdefghijk&t=12', 'https://www.youtube-nocookie.com/embed/abcdefghijk', 'https://vimeo.com/12345678']) assert.ok(parseStoryVideo(url));
+    for (const url of ['http://youtu.be/abcdefghijk', 'https://youtube.com.evil.invalid/watch?v=abcdefghijk', 'https://youtube.com@evil.invalid/watch?v=abcdefghijk', 'https://youtube.com:444/watch?v=abcdefghijk', 'javascript:alert(1)', '<iframe src=x>', 'https://vimeo.com/123/anything', 'https://youtu.be/a', 'https://youtu.be/abcdefghijk\n']) assert.equal(parseStoryVideo(url), null, url);
+  });
+  const flyer = await renderStoryBlocksSafe([{ id: 'flyer', type: 'flyer', url: mediaPhotos[0].src, alt: '<synthetic flyer>', zoom: 3 }]);
+  check('Flyer modules preserve the full image and escaped accessible description', () => { assert.match(flyer, /height:auto;object-fit:contain/); assert.match(flyer, /alt="&lt;synthetic flyer&gt;"/); assert.doesNotMatch(flyer, /scale:3|aspect-ratio:16/); });
+  const video = await renderStoryBlocksSafe([{ id: 'vid', type: 'video', url: 'https://youtu.be/abcdefghijk', label: '<synthetic video>' }]);
+  const previewVideo = await renderStoryBlocksSafe([{ id: 'vid', type: 'video', url: 'https://youtu.be/abcdefghijk' }], { preview: true });
+  check('video players require explicit load and retain a provider link; preview is link-only', () => { assert.match(video, /data-load-video/); assert.match(video, /youtube-nocookie.com/); assert.doesNotMatch(video, /<iframe|<synthetic/); assert.doesNotMatch(previewVideo, /data-load-video|data-video-embed|<iframe/); assert.match(previewVideo, /https:\/\/www.youtube.com\/watch/); });
+  const inlineFlyer = await renderMediaMarkdown('{{photo 1}}', mediaPhotos, false, 0);
+  const galleryFlyer = await renderMediaMarkdown('{{gallery 1-2 columns=2}}', mediaPhotos, true, 0);
+  const inheritedFlyer = await renderStoryBlocksSafe([{ id: 'old-image', type: 'image', url: mediaPhotos[0].src, photoIndex: 0, zoom: 3 }], { flyerUrl: mediaPhotos[0].src });
+  check('announcement first-photo markers, galleries and older Image modules retain full flyer framing', () => { for (const html of [inlineFlyer.html, galleryFlyer.html, inheritedFlyer]) { assert.match(html, /story-flyer/); const img = html.match(/<img[^>]+>/)?.[0] ?? ''; assert.doesNotMatch(img, /scale:|aspect-ratio:16/); } });
+  const sections = [{ id: 'section', type: 'section', content: [[{ id: 'left', type: 'text', text: 'Left **column** <tag>.' }, { id: 'nested-image', type: 'image', url: mediaPhotos[0].src }], [{ id: 'right', type: 'text', text: 'Right column.' }]] }];
+  const sectionHtml = await renderStoryBlocksSafe(sections);
+  check('sections preserve column-major projection, escaped children and globally counted nodes', () => { assert.equal(countStoryBlocks(sections), 4); assert.deepEqual(walkStoryBlocks(sections).map((b) => b.id), ['section', 'left', 'nested-image', 'right']); assert.equal(blocksToMarkdown(sections), 'Left **column** <tag>.\n\nRight column.'); assert.match(sectionHtml, /story-section" data-columns="2"/); assert.match(sectionHtml, /&lt;tag&gt;/); assert.doesNotMatch(JSON.stringify(escapeStoryBlocks(sections)), /<tag>/); });
+  check('sections reject nesting, global duplicate IDs, third columns and aggregate overflow', () => {
+    for (const content of [[[{ id: 's', type: 'section', content: [[]] }]], [[{ id: 'same', type: 'text' }], [{ id: 'same', type: 'text' }]], [[], [], []], [Array.from({ length: 60 }, (_, i) => ({ id: `child${i}`, type: 'divider' }))]]) assert.throws(() => normalizeStoryBlocks([{ id: 'outer', type: 'section', content }]));
+    assert.throws(() => checkStoryBlockLength([{ id: 'outer', type: 'section', content: [[{ id: 't1', type: 'text', text: 'x'.repeat(10001) }], [{ id: 't2', type: 'text', text: 'y'.repeat(10001) }]] }]), /too long/);
+    assert.throws(() => assertOwnStoryImages(sections, []), /own photos/);
+  });
   check('legacy absence is an empty module list', () => assert.deepEqual(normalizeStoryBlocks(undefined), []));
   check('IDs must be stable and unique', () => assert.throws(() => normalizeStoryBlocks([{ id: 'same', type: 'text' }, { id: 'same', type: 'divider' }])));
   check('unknown module types are rejected', () => assert.throws(() => normalizeStoryBlocks([{ id: 'html', type: 'raw-html' }])));
