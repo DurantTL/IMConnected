@@ -70,8 +70,8 @@ function parsePhoto(raw: unknown): AgentPhoto {
   if ((b64.length * 3) / 4 > PHOTO_MAX_BYTES + 3) throw new AgentError('photo_too_large', `A photo is larger than ${LIMITS.maxPhotoMB} MB.`);
   const bytes = Buffer.from(b64, 'base64');
   if (bytes.length > PHOTO_MAX_BYTES) throw new AgentError('photo_too_large', `A photo is larger than ${LIMITS.maxPhotoMB} MB.`);
-  const ext = sniffImage(new Uint8Array(bytes.subarray(0, 16)));
-  if (!ext) throw new AgentError('photo_not_image', 'A photo is not a JPG, PNG or WebP image.');
+  const ext = sniffImage(bytes);
+  if (!ext) throw new AgentError('photo_not_image', 'A photo is not a JPG, PNG, WebP or AVIF image.');
   const alt = oneLine(optional(p, 'alt')).slice(0, AGENT_LIMITS.alt);
   return { bytes: new Uint8Array(bytes), ext, alt };
 }

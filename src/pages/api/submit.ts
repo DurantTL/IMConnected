@@ -104,7 +104,7 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     for (const p of sub.photos) {
       const bytes = new Uint8Array(await p.arrayBuffer());
       const ext = sniffImage(bytes);
-      if (!ext) throw new ValidationError(`"${p.name}" isn't a JPG, PNG or WebP image.`);
+      if (!ext) throw new ValidationError(`"${p.name}" isn't a JPG, PNG, WebP or AVIF image.`);
       photos.push({ bytes, ext });
     }
 
