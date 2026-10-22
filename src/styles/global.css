@@ -291,6 +291,17 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .article > figure > a { display: block; } /* a block link around the inline image keeps the figure's height, and gives the focus ring a box to draw around */
 
 html.viewer-open { overflow: hidden; }
+html.video-open { overflow: hidden; }
+.story-video-dialog { width:min(960px,calc(100vw - 32px)); max-width:calc(100vw - 32px); max-height:calc(100dvh - 32px); margin:auto; padding:20px; border:0; border-radius:16px; background:#102d35; color:#fff; box-sizing:border-box; overflow:auto; }
+.story-video-dialog::backdrop { background:rgba(8,10,14,.86); }
+.story-video-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
+.story-video-heading h2 { margin:0; font:600 1.2rem/1.35 var(--sans); overflow-wrap:anywhere; }
+.story-video-heading .btn { flex-shrink:0; background:#fff; color:#102d35; }
+.story-video-stage { position:relative; aspect-ratio:16/9; max-height:65dvh; background:#000; }
+.story-video-stage iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+.story-video-dialog a { color:#c0efef; }
+.story-video-dialog :focus-visible { outline:3px solid #fff; outline-offset:3px; }
+@media(max-width:520px) { .story-video-dialog { padding:14px; } .story-video-heading { align-items:flex-start; gap:8px; } .story-video-heading h2 { font-size:1rem; } }
 .viewer { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100vh; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; background: rgba(8, 10, 14, 0.94); color: #fff; overflow: hidden; touch-action: pinch-zoom; }
 .viewer[open] { display: grid; place-items: center; }
 .viewer::backdrop { background: rgba(8, 10, 14, 0.94); }

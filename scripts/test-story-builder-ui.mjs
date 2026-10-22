@@ -96,7 +96,9 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   // Secure cookies are accepted for localhost by Chromium, matching the application's local development contract.
   await context.addCookies([{ name: '__Host-imc_session', value: token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
-  await context.route('**/*', (route) => { const url = new URL(route.request().url()); return url.origin === BASE || url.protocol === 'data:' || url.protocol === 'about:' ? route.continue() : route.abort(); });
+  await context.route('**/*', (route) => { const url = new URL(route.request().url());
+    if (['www.youtube-nocookie.com', 'player.vimeo.com'].includes(url.hostname)) return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="en"><head><title>Synthetic player</title><style>body{margin:0;display:grid;place-items:center;min-height:100vh;background:#18242c;color:#e9f3f5;font:16px Arial,sans-serif;text-align:center}</style></head><body><main>Local mock video player</main></body></html>' });
+    return url.origin === BASE || url.protocol === 'data:' || url.protocol === 'about:' ? route.continue() : route.abort(); });
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error)));
@@ -555,6 +557,26 @@ try {
   if (process.env.AXE_JS) { await publicPage.addScriptTag({ path: process.env.AXE_JS }); const scan = await publicPage.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })); check('announcement details, flyer, buttons and video affordances pass axe', scan.violations.length === 0); }
   await publicPage.getByRole('button', { name: 'Play video: Announcement video', exact: true }).focus(); await publicPage.keyboard.press('Enter');
   check('keyboard Play loads only the derived privacy-provider iframe with a title', await publicPage.locator('iframe').count() === 1 && await publicPage.locator('iframe').getAttribute('src') === 'https://www.youtube-nocookie.com/embed/abcdefghijk?rel=0' && await publicPage.locator('iframe').getAttribute('title') === 'Announcement video');
+  check('video opens a labelled native popup and focuses its close control', await publicPage.locator('dialog.story-video-dialog').evaluate((d) => d.open && d.getAttribute('aria-labelledby') === 'story-video-title' && d.querySelector('button') === document.activeElement));
+  await publicPage.frameLocator('dialog.story-video-dialog iframe').getByText('Local mock video player').waitFor();
+  if (process.env.AXE_JS) { const scan = await publicPage.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })); check('open video popup passes axe', scan.violations.length === 0); }
+  for (const width of [1440, 390]) {
+    await publicPage.setViewportSize({ width, height: 900 });
+    check(`video popup stays inside the viewport at ${width}px`, await publicPage.locator('dialog.story-video-dialog').evaluate((d) => { const r = d.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight && document.documentElement.scrollWidth <= innerWidth; }));
+    if (shots) await publicPage.screenshot({ path: path.join(shots, `video-popup-${width}.png`), fullPage: true });
+  }
+  await publicPage.keyboard.press('Escape');
+  await publicPage.waitForFunction(() => !document.querySelector('dialog.story-video-dialog')?.open && !document.querySelector('dialog.story-video-dialog iframe'));
+  check('Escape closes the popup, removes its player and restores opener focus', await publicPage.locator('iframe').count() === 0 && await publicPage.getByRole('button', { name: 'Play video: Announcement video', exact: true }).evaluate((b) => b === document.activeElement) && await publicPage.locator('html').evaluate((e) => !e.classList.contains('video-open')));
+  await publicPage.getByRole('button', { name: 'Play video: Synthetic event overview', exact: true }).click();
+  check('another video reuses one popup and derives the Vimeo player', await publicPage.locator('dialog.story-video-dialog').count() === 1 && await publicPage.locator('iframe').getAttribute('src') === 'https://player.vimeo.com/video/12345678');
+  await publicPage.getByRole('button', { name: 'Close video', exact: true }).click();
+  await publicPage.waitForFunction(() => !document.querySelector('dialog.story-video-dialog')?.open && !document.querySelector('dialog.story-video-dialog iframe'));
+  check('close button stops playback and restores the second opener', await publicPage.locator('iframe').count() === 0 && await publicPage.getByRole('button', { name: 'Play video: Synthetic event overview', exact: true }).evaluate((b) => b === document.activeElement));
+  await publicPage.getByRole('button', { name: 'Play video: Announcement video', exact: true }).click();
+  await publicPage.mouse.click(2, 2);
+  await publicPage.waitForFunction(() => !document.querySelector('dialog.story-video-dialog')?.open && !document.querySelector('dialog.story-video-dialog iframe'));
+  check('backdrop closes the popup and removes the embedded player', await publicPage.locator('iframe').count() === 0 && !await publicPage.locator('dialog.story-video-dialog').evaluate((d) => d.open));
   legacyId = await createLegacy(); await saveLegacy('one', 'Synthetic inline flyer.\n\n{{photo 1}}\n\nEvent summary.'); await uploadLegacy();
   const markerForm = new FormData(); for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: 'Synthetic inline flyer', author: 'Synthetic Editor', section: 'news', area: 'conference', date: legacyDraft().date, body: legacyDraft().body, announcementKind: 'announcement' })) markerForm.set(key, String(value));
   assert.equal((await post(`/api/admin/drafts/${legacyId}/save`, markerForm)).status, 200);
