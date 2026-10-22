@@ -12,6 +12,7 @@ import { getDb } from './db';
 import { validDate } from './storyfile';
 import { storyExcerpt } from './excerpt';
 import { listOpenDraftsNewestFirst, type Draft, type DraftPhoto, type DraftSource } from './drafts';
+import { studioDraftFlyer, type StudioDraftFlyer } from './studio-draft-flyer';
 
 export const STUDIO_LIST_MAX = 100;
 export const STUDIO_DRAFT_LIMIT = 20;
@@ -24,6 +25,7 @@ export interface StudioStory extends FeedItem {
   source: DraftSource | 'site';
 }
 export interface StudioDraft extends Omit<FeedItem, 'id' | 'url'> {
+  draftFlyer?: StudioDraftFlyer;
   excerpt: string;
   id: number;
   status: 'new' | 'in_review';
@@ -88,6 +90,7 @@ export function listDraftsForStudio(site: URL, opts: { section?: string; limit?:
   return listOpenDraftsNewestFirst(opts.limit ?? STUDIO_DRAFT_LIMIT, opts.section).map(({ draft, photos }) => {
     // A draft is not live: no `url`, and its `id` is the draft's own.
     const { id: _slug, url: _url, ...item } = feedItem(draftAsFeedSource(String(draft.id), draft, photos), site);
-    return { ...item, excerpt: storyExcerpt(draft.body), id: draft.id, status: draft.status as 'new' | 'in_review', source: draft.source };
+    const flyer = draft.announcement ? studioDraftFlyer(draft.id) : null;
+    return { ...item, ...(flyer ? { draftFlyer: flyer } : {}), excerpt: storyExcerpt(draft.body), id: draft.id, status: draft.status as 'new' | 'in_review', source: draft.source };
   });
 }

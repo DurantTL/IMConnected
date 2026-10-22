@@ -58,3 +58,7 @@ Ordinary stories can use these modules too. Announcement metadata is additive in
 ## Public announcements and events page
 
 Published announcements/events appear at `/announcements/` as well as their normal `/stories/<slug>/` detail addresses. The navigation links to the board, where readers can filter events and announcements. Drafts, unpublished stories and ordinary story types do not appear. Publishing or unpublishing invalidates the origin page cache immediately; existing browser/CDN cache lifetimes still apply. If the story database is unavailable, the page reports503 instead of showing the frozen archive.
+
+## Studio import of the reviewed material
+
+Studio imports typed announcements/events as flyer-style announcement/event cards with their date, location, action links and video link. Published flyers use the existing public-photo transfer. The communication director may also import the lead uploaded flyer of an open announcement draft through the separate Studio-token-only `/api/studio-draft-flyer` endpoint. This is not an agent endpoint and grants the agent no read or publishing rights. Local flyer previews require a public WordPress image before email delivery; failed or oversized transfers are shown explicitly. The website continues to show published announcements on the board and detail pages with uncropped flyers.
