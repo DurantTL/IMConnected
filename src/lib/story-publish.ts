@@ -108,7 +108,7 @@ export async function storePhotos(slug: string, items: PhotoInput[], existing: S
         continue;
       }
       // A photo already in this story's media folder (for example an uploaded photo the draft now points at).
-      const m = /^\/media\/(stories\/([A-Za-z0-9][A-Za-z0-9._-]{0,150})\/[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.(?:jpg|png|webp))$/.exec(item.url);
+      const m = /^\/media\/(stories\/([A-Za-z0-9][A-Za-z0-9._-]{0,150})\/[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.(?:jpg|png|webp|avif))$/.exec(item.url);
       const found = m && m[2] === slug ? resolveMediaFile(m[1]) : null;
       if (!found) throw fail('photo_link_bad');
       const bytes = await fs.promises.readFile(found.file);
@@ -230,7 +230,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     } catch {
       throw new EditorError('photo_missing');
     }
-    const ext = sniffImage(new Uint8Array(bytes.subarray(0, 16)));
+    const ext = sniffImage(bytes);
     if (!ext) throw new EditorError('photo_not_image');
     items.push({ kind: 'file', bytes, ext, alt: '', draftPhotoId: p.id });
   }

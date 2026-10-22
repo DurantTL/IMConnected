@@ -9,7 +9,7 @@ import { builtClientDir } from './story-adopt';
 import { getStoryBySlug } from './story-store';
 import { resolveMediaFile } from './media';
 
-const PHOTO_PATH = /^\/(images|media)\/stories\/([A-Za-z0-9][A-Za-z0-9._-]{0,150})\/([A-Za-z0-9][A-Za-z0-9._-]{0,150}\.(?:[Jj][Pp][Ee]?[Gg]|[Pp][Nn][Gg]|[Ww][Ee][Bb][Pp]))$/;
+const PHOTO_PATH = /^\/(images|media)\/stories\/([A-Za-z0-9][A-Za-z0-9._-]{0,150})\/([A-Za-z0-9][A-Za-z0-9._-]{0,150}\.(?:[Jj][Pp][Ee]?[Gg]|[Pp][Nn][Gg]|[Ww][Ee][Bb][Pp]|[Aa][Vv][Ii][Ff]))$/;
 
 /** The site-relative path of a photo URL from /api/stories, or null when it is not an allowed shape or not on this site. */
 export function photoPathFromSrc(src: string, siteOrigin: string): { kind: 'images' | 'media'; slug: string; file: string; path: string } | null {

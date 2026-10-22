@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { IMAGE_TYPES, sniffImage } from '../src/lib/image-formats.mjs';
 // Import Markdown stories that were committed by hand into the database (epic #25, step 4).
 //
 // Stories live in the database now. The Markdown files in src/content/stories are a frozen archive that the site never
@@ -92,16 +93,9 @@ function linkTargets(md) {
   return out;
 }
 
-const MEDIA_TYPES = { jpg: 1, png: 1, webp: 1 };
+const MEDIA_TYPES = IMAGE_TYPES;
 const SLUG = /^[a-z0-9][a-z0-9-]{0,159}$/;
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
-/** jpg, png or webp by the file's first bytes (the extension is not trusted). */
-function sniff(b) {
-  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
-  if (b.length >= 8 && b[0] === 0x89 && b.toString('latin1', 1, 4) === 'PNG') return 'png';
-  if (b.length >= 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') return 'webp';
-  return null;
-}
 const str = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : undefined);
 
 function readStory(file) {
@@ -158,12 +152,12 @@ function planPhotos(s) {
     if (/^https:\/\//i.test(p.src)) return { ...p, position, remote: true };
     if (!/^\/images\/[A-Za-z0-9._\-/]+$/.test(p.src) || p.src.includes('..')) throw new Error(`photo address not allowed: ${p.src}`);
     const ext = path.extname(p.src).slice(1).toLowerCase().replace('jpeg', 'jpg');
-    if (!MEDIA_TYPES[ext]) throw new Error(`photo is not a jpg, png or webp: ${p.src}`);
+    if (!MEDIA_TYPES[ext]) throw new Error(`photo is not a jpg, png, webp or avif: ${p.src}`);
     const file = path.join(PUBLIC, p.src);
     if (!file.startsWith(path.join(PUBLIC, 'images') + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`photo file not found: ${p.src}`);
     if (fs.statSync(file).size > LIMITS.maxPhotoMB * 1024 * 1024) throw new Error(`photo is larger than ${LIMITS.maxPhotoMB} MB: ${p.src}`);
     const bytes = fs.readFileSync(file);
-    if (sniff(bytes) !== ext) throw new Error(`photo is not really a ${ext} image: ${p.src}`);
+    if (sniffImage(bytes) !== ext) throw new Error(`photo is not really a ${ext} image: ${p.src}`);
     return { ...p, position, ext, file, bytes, sha: sha256(bytes) };
   });
 }
