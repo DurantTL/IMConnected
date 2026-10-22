@@ -241,3 +241,5 @@
 }
 .editor-studio .sb-properties :is(input,textarea,select) { font:inherit; line-height:1.5; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); }
 .editor-studio .sb-properties :is(input,select) { min-height:44px; }
+
+.sb-library-category{display:grid;gap:6px;font-size:.74rem;font-weight:650;margin:12px 0}.sb-library-category select{min-width:0;width:100%;min-height:44px;padding:8px;font:inherit;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface)}.sb-library-preferences{margin:10px 0 16px;border:1px solid var(--line);padding:10px;border-radius:8px;font-size:.75rem}.sb-library-preferences summary{cursor:pointer;min-height:32px;align-content:center}.sb-library-preferences label{display:flex;align-items:center;gap:8px;min-height:36px;font-weight:500}.sb-library-preferences input{width:18px;height:18px}.sb-library-preferences p{color:var(--ink-2);font-size:.7rem;line-height:1.5}

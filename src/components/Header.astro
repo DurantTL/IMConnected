@@ -1,8 +1,14 @@
 ---
-import { SECTIONS, SITE } from '../lib/site';
+import { SITE } from '../lib/site';
+import { defaultNavigation, currentNavigation } from '../lib/site-navigation';
+import { readNavigation } from '../lib/navigation-store';
 const { current } = Astro.props as { current?: string };
+let items = defaultNavigation();
+// Prerendered submission/search/error pages never open the database during a build.
+if (!Astro.isPrerendered) { try { items = readNavigation().items; } catch { /* retain safe default links if settings are temporarily unavailable */ } }
+const active = currentNavigation(items, Astro.url, current);
 ---
-<header class="site-header">
+<header class="site-header" data-navigation-section={current}>
   <div class="publication-line"><div class="wrap"><span>Faith in action. Close to home.</span><a href={SITE.publisherUrl}>Iowa-Missouri Conference <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M7 7h10v10" /></svg></a></div></div>
   <div class="wrap">
     <div class="bar">
@@ -22,25 +28,25 @@ const { current } = Astro.props as { current?: string };
       </button>
       </div>
     </div>
-    <div class="section-nav-row"><nav class="nav" aria-label="Sections">
-      <a href="/" aria-current={current === 'home' ? 'page' : undefined}>Latest</a>
-      {SECTIONS.map((s) => <a href={`/${s.key}/`} aria-current={current === s.key ? 'page' : undefined}>{s.label}</a>)}
-      <a href="/announcements/" aria-current={current === 'announcements' ? 'page' : undefined}>Announcements</a>
+    <div class="section-nav-row"><nav class="nav" aria-label="Sections" data-navigation-items>
+      {items.filter((i) => i.visible).map((i) => <a href={i.href} aria-current={active === i.id ? 'page' : undefined}>{i.label}</a>)}
     </nav><span class="masthead-edition">Iowa + Missouri</span></div>
-    <nav class="mobile-nav" id="mobile-nav" data-open="false" aria-label="Sections">
-      <a href="/" aria-current={current === 'home' ? 'page' : undefined}>Latest</a>
-      {SECTIONS.map((s) => <a href={`/${s.key}/`} aria-current={current === s.key ? 'page' : undefined}>{s.label}</a>)}
-      <a href="/announcements/" aria-current={current === 'announcements' ? 'page' : undefined}>Announcements</a>
+    <nav class="mobile-nav" id="mobile-nav" data-open="false" aria-label="Sections" inert>
+      <div class="mobile-nav-inner"><div data-navigation-items>
+        {items.filter((i) => i.visible).map((i) => <a href={i.href} aria-current={active === i.id ? 'page' : undefined}>{i.label}</a>)}
+      </div>
       <a href="/search/" aria-current={current === 'search' ? 'page' : undefined}>Search</a>
       <a class="btn accent" href="/submit/">Submit a Story</a>
+      </div>
     </nav>
   </div>
 </header>
 <script>
+  import { normalizeNavigation, currentNavigation } from '../lib/site-navigation';
   const btn = document.querySelector<HTMLButtonElement>('.menu-toggle');
   const nav = document.getElementById('mobile-nav');
   const setOpen = (open: boolean) => {
-    if (nav) nav.dataset.open = String(open);
+    if (nav) { nav.dataset.open = String(open); nav.inert = !open; }
     btn?.setAttribute('aria-expanded', String(open));
     btn?.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
   };
@@ -59,4 +65,14 @@ const { current } = Astro.props as { current?: string };
   matchMedia('(min-width: 921px)').addEventListener('change', (event) => {
     if (event.matches) setOpen(false);
   });
+  // Refresh prerendered/cached headers too; failure retains the complete server-rendered menu.
+  void fetch('/api/navigation', { credentials: 'omit', cache: 'no-store' }).then(async (response) => {
+    if (!response.ok) return;
+    const data = await response.json(), items = normalizeNavigation(data.items), active = currentNavigation(items, new URL(location.href), document.querySelector<HTMLElement>('.site-header')?.dataset.navigationSection);
+    for (const list of document.querySelectorAll('[data-navigation-items]')) {
+      const links = items.filter((i) => i.visible).map((i) => { const a = document.createElement('a'); a.href = i.href; a.textContent = i.label; if (i.id === active) a.setAttribute('aria-current', 'page'); return a; });
+      // Do not replace a keyboard user's focused menu link while the request finishes.
+      if (!list.contains(document.activeElement)) list.replaceChildren(...links);
+    }
+  }).catch(() => {});
 </script>

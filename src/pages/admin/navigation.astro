@@ -1,0 +1,71 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { readNavigation, saveNavigation } from '../../lib/navigation-store';
+import { defaultNavigation, NAVIGATION_LIMIT, type NavigationItem } from '../../lib/site-navigation';
+import { readFormLimited } from '../../lib/draft-http';
+import { clientIp } from '../../lib/request';
+import { randomUUID } from 'node:crypto';
+export const prerender = false;
+const user = Astro.locals.user!;
+if (user.role !== 'admin') return new Response('Administrators only.', { status: 403 });
+let navigation = readNavigation(), error = '', success = '';
+if (Astro.request.method === 'POST') {
+  try {
+    const form = await readFormLimited(Astro.request, 96 * 1024);
+    if (!form || form === 'too_big') throw new Error('The menu form is unreadable or too large.');
+    const expected = Number(form.get('version'));
+    if (!form.has('version') || !String(form.get('version')).match(/^\d{1,12}$/)) throw new Error('Reload the menu before saving.');
+    const ordered: { item: NavigationItem; order: number; row: number }[] = [];
+    if (form.get('action') !== 'reset') for (let i = 0; i < NAVIGATION_LIMIT; i++) {
+      const label = form.get(`label.${i}`), href = form.get(`href.${i}`), id = form.get(`id.${i}`);
+      if ((label === '' && href === '') || (label === null && href === null)) continue;
+      if (typeof label !== 'string' || typeof href !== 'string' || typeof id !== 'string') throw new Error('Each menu link needs a label and address.');
+      const order = Number(form.get(`order.${i}`));
+      if (!Number.isSafeInteger(order) || order < 1 || order > NAVIGATION_LIMIT) throw new Error('Menu positions must be between 1 and 12.');
+      ordered.push({ item: { id, label, href, visible: form.has(`visible.${i}`) }, order, row: i });
+    }
+    const items = form.get('action') === 'reset' ? defaultNavigation() : ordered.sort((a, b) => a.order - b.order || a.row - b.row).map((r) => r.item);
+    if (!saveNavigation(items, expected, user.id, clientIp(Astro.request, Astro.clientAddress))) { Astro.response.status = 409; error = 'Someone else changed this menu. Review the current version below and apply your changes again.'; }
+    else success = 'Website menu saved. Public pages will use these links.';
+    navigation = readNavigation();
+  } catch (e) { Astro.response.status = 400; error = e instanceof Error ? e.message : 'The menu could not be saved.'; }
+}
+const used = new Set(navigation.items.map((i) => i.id));
+const rows = Array.from({ length: NAVIGATION_LIMIT }, (_, i) => {
+  if (navigation.items[i]) return navigation.items[i];
+  let id: string; do { id = `custom-${randomUUID()}`; } while (used.has(id));
+  used.add(id); return { id, label: '', href: '', visible: true };
+});
+---
+<Admin title="Website menu" current="navigation" wide>
+  <div class="cms-bar"><div><p class="sb-eyebrow">Website settings</p><h1>Make it easy to find.</h1><p class="admin-note">Edit the website menu’s labels, links and order. Uncheck a link to hide it; clear its label and address to remove it. Blank rows add new links.</p></div></div>
+  {error && <p class="admin-error" role="alert">{error}</p>}
+  {success && <p class="admin-ok" role="status">{success}</p>}
+  <form method="post" class="navigation-editor">
+    <input type="hidden" name="version" value={navigation.version} />
+    <div class="navigation-editor-actions"><button class="cms-btn" type="submit" name="action" value="save">Save website menu</button><button class="cms-btn secondary" type="submit" name="action" value="reset" formnovalidate>Restore default menu</button></div>
+    <p class="admin-note">Up to 12 links. Use a public /page/ address or a full HTTPS link. Search and Submit a Story stay available outside this menu. These changes affect navigation, not the story sections themselves.</p>
+    <ol class="navigation-rows">{rows.map((item, i) => <li class="navigation-row">
+      <input type="hidden" name={`id.${i}`} value={item.id} />
+      <label>Position<input type="number" name={`order.${i}`} min="1" max={NAVIGATION_LIMIT} value={i + 1} /></label>
+      <label>Link {i + 1} label<input type="text" name={`label.${i}`} maxlength="40" value={item.label} /></label>
+      <label>Link {i + 1} address<input type="text" name={`href.${i}`} maxlength="2048" value={item.href} placeholder="/announcements/ or https://…" /></label>
+      <label class="navigation-visible"><input type="checkbox" name={`visible.${i}`} checked={item.visible} />Show link {i + 1}</label>
+      <div class="navigation-order"><button type="button" class="cms-btn secondary" data-nav-move="-1" aria-label={`Move link ${i + 1} earlier`} disabled={i === 0}>↑</button><button type="button" class="cms-btn secondary" data-nav-move="1" aria-label={`Move link ${i + 1} later`} disabled={i === NAVIGATION_LIMIT - 1}>↓</button></div>
+    </li>)}</ol>
+  </form>
+</Admin>
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-nav-move]')) button.addEventListener('click', () => {
+    const row = button.closest<HTMLElement>('.navigation-row')!, rows = Array.from(document.querySelectorAll<HTMLElement>('.navigation-row')), index = rows.indexOf(row), next = rows[index + Number(button.dataset.navMove)];
+    if (!next) return;
+    const from = row.querySelector<HTMLInputElement>('input[type=number]')!, to = next.querySelector<HTMLInputElement>('input[type=number]')!;
+    [from.value, to.value] = [to.value, from.value];
+    const ordered = [...rows].sort((a, b) => Number(a.querySelector<HTMLInputElement>('input[type=number]')!.value) - Number(b.querySelector<HTMLInputElement>('input[type=number]')!.value));
+    ordered.forEach((r, i) => { row.parentElement!.append(r); r.querySelector<HTMLInputElement>('input[type=number]')!.value = String(i + 1); const controls = r.querySelectorAll<HTMLButtonElement>('[data-nav-move]'); controls[0].disabled = i === 0; controls[1].disabled = i === ordered.length - 1; });
+    button.focus();
+  });
+</script>
+<style>
+  .navigation-editor-actions{display:flex;flex-wrap:wrap;gap:12px}.navigation-rows{padding:0;list-style:none;display:grid;gap:12px}.navigation-row{display:grid;grid-template-columns:90px minmax(120px,1fr) minmax(200px,2fr) auto auto;gap:12px;align-items:end;padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.navigation-row label{display:grid;gap:6px;font-size:.85rem;font-weight:600;min-width:0}.navigation-row input{width:100%;min-height:44px;padding:9px;border:1px solid var(--line);border-radius:7px;font:inherit;color:var(--ink);background:var(--bg)}.navigation-row .navigation-visible{display:flex;align-items:center;min-height:44px;gap:8px}.navigation-visible input{width:22px;min-height:22px;height:22px}.navigation-order{display:flex;gap:6px}.navigation-order button{min-width:44px}@media(max-width:1000px){.navigation-row{grid-template-columns:80px minmax(0,1fr)}.navigation-row label:nth-of-type(3){grid-column:1/-1}.navigation-visible{grid-column:1}.navigation-order{justify-self:end}}@media(max-width:420px){.navigation-row{padding:12px;gap:10px}}
+</style>

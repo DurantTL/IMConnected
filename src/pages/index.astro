@@ -1,6 +1,8 @@
 ---
 import Base from '../layouts/Base.astro';
 import StoryCard from '../components/StoryCard.astro';
+import EventSpotlight from '../components/EventSpotlight.astro';
+import { upcomingEvents } from '../lib/event-spotlight';
 import { SECTIONS, SITE, getSection } from '../lib/site';
 import { asUnavailable, getPublicStories } from '../lib/public-stories';
 import { bySection } from '../lib/stories';
@@ -31,13 +33,14 @@ const kids = bySection(stories, 'kids').slice(0, 3);
 ---
 <Base current="home">
   <div class="wrap magazine-home">
-    <section class="home-intro" aria-labelledby="home-title">
+    <section class="home-intro" aria-labelledby="home-title" data-reveal>
       <div>
         <p class="eyebrow">The conference story magazine</p>
         <h1 id="home-title">A connected community.<br /><em>A living faith.</em></h1>
       </div>
       <p class="home-intro-note">{SITE.tagline}.<br /><a class="intro-link" href="/news/">Discover what’s happening <span aria-hidden="true">→</span></a></p>
     </section>
+    <EventSpotlight events={upcomingEvents(stories)} />
     {lead ? (
       <section class="hero" aria-label="Top stories">
         <StoryCard story={lead} variant="lead" />

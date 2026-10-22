@@ -26,6 +26,11 @@ const notice = noticeText(q.get('n'));
 const error = errorText(q.get('e'));
 const liveUrl = draft?.slug ? `${siteUrl()}/stories/${draft.slug}/` : '';
 const isAgent = draft?.source === 'agent';
+const libraryModules = [
+  ['text','Paragraph','writing'],['heading','Heading','writing'],['quote','Quote','writing'],['list','List','writing'],
+  ['image','Image','media'],['gallery','Gallery','media'],['flyer','Flyer','media'],['video','Video','media'],
+  ['button','Button / link','actions'],['divider','Divider','layout'],['section','Section / columns','layout'],
+];
 // Administrators are reminded on the publish screen when backups are off: the database is the only copy of the stories.
 const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
 // Only an http(s) address becomes a link (the API checks it too; this is the last line of defence).
@@ -33,7 +38,7 @@ const originalPost = draft?.sourceUrl && /^https?:\/\//i.test(draft.sourceUrl) ?
 const hasSubmitter = !!draft && !isAgent && (draft.source !== 'editor' || !!(draft.submitterName || draft.submitterEmail || draft.submitterPhone || draft.submitterChurch));
 const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
 ---
-<Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current="drafts" wide>
+<Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current={draft?.announcement?.kind === 'event' ? 'events' : draft?.announcement ? 'announcements' : 'drafts'} wide>
   {!draft ? (
     <>
       <h1>Draft not found</h1>
@@ -44,7 +49,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
       <header class="studio-head">
         <div class="studio-titlebar">
           <div class="studio-identity">
-            <a class="studio-back" href="/admin">← All drafts</a>
+            <a class="studio-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
             <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1><span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span>{isAgent && <span class="cms-badge">From AI agent</span>}</div>
             <span class="ed-status" id="save-status" role="status" aria-live="polite">
               {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
@@ -229,18 +234,10 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                     <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
                     <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">11 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
                     <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
+                    <label class="sb-library-category" for="module-library-category">Browse modules<select id="module-library-category"><option value="all">All modules</option><option value="favorites">My quick access</option><option value="writing">Writing</option><option value="media">Images &amp; video</option><option value="layout">Layout &amp; structure</option><option value="actions">Links &amp; buttons</option></select></label>
+                    <details class="sb-library-preferences"><summary>Customize quick access</summary><p>Choose your go-to modules. Saved in this browser.</p>{libraryModules.map(([type,label]) => <label><input type="checkbox" data-pin-module={type} />{label}</label>)}<p id="module-pin-status" role="status"></p></details>
                     <div class="sb-library" role="group" aria-label="Add content module">
-                      <button type="button" data-add-module="text">Paragraph</button>
-                      <button type="button" data-add-module="heading">Heading</button>
-                      <button type="button" data-add-module="quote">Quote</button>
-                      <button type="button" data-add-module="list">List</button>
-                      <button type="button" data-add-module="image">Image</button>
-                      <button type="button" data-add-module="gallery">Gallery</button>
-                      <button type="button" data-add-module="flyer">Flyer</button>
-                      <button type="button" data-add-module="video">Video</button>
-                      <button type="button" data-add-module="button">Button / link</button>
-                      <button type="button" data-add-module="divider">Divider</button>
-                      <button type="button" data-add-module="section">Section / columns</button>
+                      {libraryModules.map(([type,label,category]) => <button type="button" data-add-module={type} data-library-category={category}>{label}</button>)}
                     </div>
                     <h3 class="sb-library-heading">Starter layouts</h3>
                     <p class="sb-insert-help">Add an empty structure, then write your own story.</p>

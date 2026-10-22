@@ -15,7 +15,7 @@ const section = getSection(d.section);
 const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
 const Heading = variant === 'lead' ? 'h2' : 'h3';
 ---
-<a class:list={['card', variant, { 'with-photo': !!d.image, 'without-photo': !d.image }]} href={storyUrl(story)} data-sec={d.section}>
+<a class:list={['card', variant, { 'with-photo': !!d.image, 'without-photo': !d.image }]} href={storyUrl(story)} data-sec={d.section} data-reveal>
   {variant !== 'text' && d.image && (
     <div class="media">
         <img src={d.image} alt={d.imageAlt ?? ''} loading={variant === 'lead' ? 'eager' : 'lazy'} style={photoFocusStyle(d.photoFocus?.[0])} />

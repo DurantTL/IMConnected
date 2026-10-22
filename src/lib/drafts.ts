@@ -250,9 +250,11 @@ export const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
 ];
 
-export function listDrafts(filter: { status: StatusFilter; section?: string; source?: DraftSource }): DraftListItem[] {
+export type ContentKind = 'story' | 'announcement' | 'event';
+export function listDrafts(filter: { status: StatusFilter; section?: string; source?: DraftSource; kind?: ContentKind }): DraftListItem[] {
   const where: string[] = [];
   const args: (string | number)[] = [];
+  if (filter.kind) { where.push("CASE WHEN json_valid(d.announcement) THEN COALESCE(json_extract(d.announcement,'$.kind'),'story') ELSE 'story' END = ?"); args.push(filter.kind); }
   if (filter.status === 'open') where.push("d.status IN ('new', 'in_review')");
   else if (filter.status !== 'all') {
     where.push('d.status = ?');
@@ -653,8 +655,9 @@ export function saveAuditDue(userId: number, draftId: number): boolean {
 }
 
 /** New plus in-review drafts (the badge on the Drafts nav item). */
-export function countOpenDrafts(): number {
-  return Number((getDb().prepare("SELECT COUNT(*) AS c FROM drafts WHERE status IN ('new', 'in_review')").get() as { c: number }).c);
+export function countOpenDrafts(kind?: ContentKind): number {
+  const condition = kind ? " AND CASE WHEN json_valid(announcement) THEN COALESCE(json_extract(announcement,'$.kind'),'story') ELSE 'story' END = ?" : '';
+  return Number((getDb().prepare("SELECT COUNT(*) AS c FROM drafts WHERE status IN ('new', 'in_review')" + condition).get(...(kind ? [kind] : [])) as { c: number }).c);
 }
 
 export interface SubmissionInput {
