@@ -4,6 +4,7 @@ export const ERRORS = {
   generic: 'Something went wrong. Please try again.',
   conflict: 'Someone else changed this draft. Reload to see their changes.',
   closed: 'This draft is closed. Restore or reopen it to edit.',
+  revision_gone: 'That saved revision is no longer available. Reload the history.',
   draft_gone: 'That draft no longer exists.',
   bad_date: 'The date is not valid.',
   bad_layout: 'That photo layout is not one of the choices.',

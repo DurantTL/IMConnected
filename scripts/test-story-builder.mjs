@@ -33,7 +33,7 @@ try {
     input: 'story-builder-test:entry',
     output: { file: bundle, format: 'esm' },
     platform: 'node',
-    external: [/^node:/, '@astrojs/markdown-satteri'],
+    external: [/^node:/, '@astrojs/markdown-satteri', 'satteri'],
     plugins: [{
       name: 'isolated-story-builder-db',
       resolveId(source) {
@@ -44,6 +44,8 @@ try {
         if (id === '\0story-builder-test:db') return 'export function getDb(){return globalThis.__storyBuilderTestDb}';
         if (id === '\0story-builder-test:entry') return [
           `export * from ${JSON.stringify(path.join(root, 'src/lib/drafts.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/draft-revisions.ts'))};`,
+          `export * from ${JSON.stringify(path.join(root, 'src/lib/revision-media.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/editor-layouts.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/agent.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/announcement.ts'))};`,
@@ -330,6 +332,45 @@ try {
   await sendStudio(studioRequest([{ url: 'https://example.invalid/synthetic.png' }], 'Synthetic remote crop'));
   assert.equal(m.getStoryBySlug(remote.stories[0].slug).photoRows[0].zoom, 1.9, 'normalized remote URLs inherit crop without fetching remote bytes');
 
+  // Persisted revisions are editorial-only, bounded, atomic and never publish or bind reused photo IDs.
+  const rid = m.createDraft({ source: 'editor', userId: user, fields: { title: 'Revision baseline', author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic revision body.' }, submitter: { name: 'Private submitter sentinel', email: 'private-sentinel@example.invalid', phone: '555-0100' }, sourceUrl: 'https://example.invalid/private-source', agentNote: 'Private agent note sentinel' });
+  const rsave = (patch = {}) => m.saveDraft(rid, m.getDraft(rid).updatedAt, { ...m.getDraft(rid), ...patch }, new Map(), user);
+  assert.equal(rsave().ok, true); assert.equal(m.listDraftRevisions(rid).length, 0, 'unchanged save has no revision');
+  for (let i = 0; i < 25; i++) assert.equal(rsave({ title: 'Revision title ' + i }).ok, true);
+  assert.equal(m.listDraftRevisions(rid).length, 20);
+  const privatePayload = db.prepare('SELECT payload FROM draft_revisions WHERE draft_id=?').all(rid).map((r) => r.payload).join('');
+  for (const secret of ['Private submitter sentinel', 'private-sentinel@example.invalid', '555-0100', 'private-source', 'Private agent note sentinel', 'submitterEmail', 'agentNote', 'sourceUrl']) assert.ok(!privatePayload.includes(secret), 'revision excludes ' + secret);
+  const targetRevision = m.listDraftRevisions(rid)[0].id, beforeRestore = m.getDraft(rid), storiesBeforeRestore = db.prepare('SELECT COUNT(*) n FROM stories').get().n;
+  assert.equal(m.restoreDraftRevision(rid, beforeRestore.updatedAt - 1, targetRevision, user).reason, 'conflict');
+  assert.equal(m.restoreDraftRevision(rid, beforeRestore.updatedAt, m.listDraftRevisions(id)[0].id, user).code, 'revision_gone', 'cross-draft revision cannot be restored');
+  const restored = m.restoreDraftRevision(rid, beforeRestore.updatedAt, targetRevision, user); assert.equal(restored.ok, true); assert.equal(m.getDraft(rid).title, 'Revision title 23');
+  assert.equal(m.listDraftRevisions(rid).length, 20); assert.equal(db.prepare('SELECT COUNT(*) n FROM stories').get().n, storiesBeforeRestore, 'restore never publishes');
+  assert.equal(m.readDraftRevision(rid, m.listDraftRevisions(rid)[0].id).fields.title, 'Revision title 24', 'restoring records the current state as a new revision');
+  assert.ok(db.prepare("SELECT 1 FROM audit_log WHERE action='draft.revision_restore' AND target=?").get(`draft:${rid}`));
+  db.prepare("UPDATE drafts SET status='published' WHERE id=?").run(rid); assert.equal(m.restoreDraftRevision(rid, m.getDraft(rid).updatedAt, targetRevision, user).reason, 'locked'); db.prepare("UPDATE drafts SET status='in_review' WHERE id=?").run(rid);
+  const rollbackRevisionBefore = m.getDraft(rid), revisionIdsBefore = m.listDraftRevisions(rid).map((r) => r.id);
+  db.exec(`CREATE TRIGGER synthetic_revision_failure BEFORE INSERT ON draft_revisions WHEN NEW.draft_id=${rid} BEGIN SELECT RAISE(ABORT,'synthetic revision failure'); END`);
+  assert.throws(() => rsave({ title: 'Must rollback' }), /synthetic revision failure/); assert.equal(m.getDraft(rid).title, rollbackRevisionBefore.title); assert.equal(m.getDraft(rid).updatedAt, rollbackRevisionBefore.updatedAt); assert.deepEqual(m.listDraftRevisions(rid).map((r) => r.id), revisionIdsBefore);
+  const failedUpload = m.writeUpload(rid, syntheticPng(31), 'png'); assert.throws(() => m.addUploadedPhotos(rid, m.getDraft(rid).updatedAt, user, [{ rel: failedUpload, ext: 'png' }]), /synthetic revision failure/); assert.ok(!fs.existsSync(path.join(scratch, 'uploads', failedUpload)), 'history failure cleans newly written uploads');
+  db.exec('DROP TRIGGER synthetic_revision_failure');
+  db.exec("CREATE TRIGGER synthetic_revision_audit_failure BEFORE INSERT ON audit_log WHEN NEW.action='draft.revision_restore' BEGIN SELECT RAISE(ABORT,'synthetic audit failure'); END");
+  assert.throws(() => m.restoreDraftRevision(rid, m.getDraft(rid).updatedAt, targetRevision, user), /synthetic audit failure/); assert.equal(m.getDraft(rid).updatedAt, rollbackRevisionBefore.updatedAt); assert.deepEqual(m.listDraftRevisions(rid).map((r) => r.id), revisionIdsBefore); db.exec('DROP TRIGGER synthetic_revision_audit_failure');
+  const mediaDraft = m.createDraft({ source: 'editor', userId: user, fields: { title: 'Revision media example', author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic media revision body.' } });
+  const priorPhoto = addPhoto(mediaDraft, 'Old description', 77);
+  const mediaBlocks = [{ id: 'revision-text', type: 'text', text: 'Synthetic media revision body.' }, { id: 'revision-image', type: 'image', photoId: priorPhoto.id }];
+  assert.equal(m.saveDraft(mediaDraft, m.getDraft(mediaDraft).updatedAt, { ...m.getDraft(mediaDraft), storyBlocks: mediaBlocks }, new Map(), user, null, new Map([[priorPhoto.id, { zoom: 3, focalX: 0 }]])).ok, true);
+  const priorKey = db.prepare('SELECT media_key FROM draft_photos WHERE id=?').get(priorPhoto.id).media_key;
+  assert.equal(m.changePhoto(mediaDraft, m.getDraft(mediaDraft).updatedAt, user, 'delete', priorPhoto.id).ok, true); const mediaRevision = m.listDraftRevisions(mediaDraft)[0].id;
+  const replacement = addPhoto(mediaDraft, 'Replacement description', 88), replacementKey = db.prepare('SELECT media_key FROM draft_photos WHERE id=?').get(replacement.id).media_key;
+  assert.equal(replacement.id, priorPhoto.id, 'fixture exercises SQLite integer ID reuse'); assert.notEqual(replacementKey, priorKey);
+  const restoredMedia = m.restoreDraftRevision(mediaDraft, m.getDraft(mediaDraft).updatedAt, mediaRevision, user); assert.equal(restoredMedia.ok, true); assert.equal(restoredMedia.warnings.length, 1);
+  assert.equal(m.storyBlockPhotos(m.getDraft(mediaDraft).storyBlocks).length, 0, 'old image reference cannot bind a replacement with the same integer ID'); assert.equal(m.listPhotos(mediaDraft)[0].zoom, 1); assert.equal(m.listPhotos(mediaDraft)[0].alt, 'Replacement description'); assert.ok(!fs.existsSync(path.join(scratch, 'uploads', priorPhoto.path))); assert.ok(fs.existsSync(path.join(scratch, 'uploads', replacement.path)));
+  const beforeNoopHistory = m.listDraftRevisions(mediaDraft).length; assert.equal(m.changePhoto(mediaDraft, m.getDraft(mediaDraft).updatedAt, user, 'lead', replacement.id).ok, true); assert.equal(m.listDraftRevisions(mediaDraft).length, beforeNoopHistory, 'boundary photo no-op does not churn history');
+  const markerSource = 'Before.\n{{photo 1}}\n{{photo 2}}\n{{gallery 1-2 columns=2}}\n\n`{{photo 1}}`\n\n```text\n{{photo 1}}\n```\n\n[{{photo 1}}](https://example.invalid/)\n\n\\{{photo 1}}';
+  const remappedMarkers = m.restoreMediaMarkers(markerSource, ['gone', 'kept'], ['kept', 'replacement']);
+  assert.ok(remappedMarkers.missing); assert.match(remappedMarkers.body, /^\{\{photo missing\}\}$/m); assert.match(remappedMarkers.body, /^\{\{gallery missing\}\}$/m); assert.match(remappedMarkers.body, /`\{\{photo 1\}\}`/); assert.match(remappedMarkers.body, /```text\n\{\{photo 1\}\}\n```/); assert.ok(remappedMarkers.body.endsWith('\\{{photo 1}}'));
+  assert.equal(m.restoreMediaMarkers('{{photo 3}}', ['gone'], ['a', 'b', 'new']).body, '{{photo missing}}', 'old invalid index cannot acquire a replacement photo');
+  console.log('PASS persisted revisions: privacy, retention20, unchanged saves, draft scope, conflicts, atomic restore/audit, failure cleanup, ID reuse and inert marker examples');
   console.log('PASS modules and Studio crop compatibility: migration, legacy save, conflicts, publish/reopen, validation, identity/reorder, partial omissions, races, open drafts and rollback');
 } finally {
   db?.close();

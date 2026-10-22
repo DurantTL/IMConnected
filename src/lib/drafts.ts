@@ -1,3 +1,6 @@
+import { editorialSnapshot, recordDraftRevision, readDraftRevision } from './draft-revisions';
+import { restoreMediaMarkers } from './revision-media';
+import { audit } from './auth/audit';
 import { parseAnnouncement, announcementJson, type Announcement } from './announcement';
 import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
 // Story drafts: the rows in `drafts` / `draft_photos` and the uploaded photo files under DATA_DIR/uploads/.
@@ -326,17 +329,21 @@ export function checkFieldValues(f: DraftFields): ErrorCode | null {
 }
 
 export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null, photoFocus: Map<number, PhotoCrop> = new Map()): SaveResult {
+  return tx(() => saveDraftInTransaction(id, expected, f, photoAlts, userId, layout, photoFocus));
+}
+
+function saveDraftInTransaction(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null, photoFocus: Map<number, PhotoCrop> = new Map(), forceRevision = false): SaveResult {
   const bulletin = f.announcement === undefined ? undefined : announcementJson(f.announcement);
   const bad = checkFieldValues(f);
   if (bad) return fail('invalid', bad);
   // null = the form did not carry the picker: keep the draft's layout.
   if (layout !== null && !isPhotoLayout(layout)) return fail('invalid', 'bad_layout');
   const area = isValidArea(f.section, f.area) ? f.area : '';
-  return tx(() => {
-    const cur = getDb().prepare('SELECT status, story_blocks FROM drafts WHERE id = ?').get(id) as { status: DraftStatus; story_blocks: string } | undefined;
+  {
+    const cur = getDraft(id);
     if (!cur) return fail('invalid', 'draft_gone') as SaveResult;
     if (!isEditable({ status: cur.status })) return fail('locked', 'closed') as SaveResult;
-    const blocks = f.storyBlocks === undefined ? parseStoredStoryBlocks(cur.story_blocks) : normalizeStoryBlocks(f.storyBlocks);
+    const blocks = f.storyBlocks === undefined ? cur.storyBlocks ?? [] : normalizeStoryBlocks(f.storyBlocks);
     if (storyBlockPhotos(blocks).some((b) => b.url)) return fail('invalid', 'block_image_url');
     try { checkStoryBlockLength(blocks); } catch { return fail('invalid', 'body_long'); }
     const ownedPhotos = listPhotos(id);
@@ -344,6 +351,7 @@ export function saveDraft(id: number, expected: number, f: DraftFields, photoAlt
     const body = blocks.length ? storyBlocksToMarkdown(blocks) : f.body;
     const v = takeVersion(id, expected, userId, "status = 'in_review'");
     if (v === null) return CONFLICT;
+    const before = editorialSnapshot(id, cur);
     getDb()
       .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = COALESCE(?, photo_layout), featured = ?, body = ?, story_blocks = ?, announcement = CASE WHEN ? THEN ? ELSE announcement END WHERE id = ?')
       .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, layout, f.featured ? 1 : 0, body, JSON.stringify(blocks), bulletin !== undefined ? 1 : 0, bulletin ?? null, id);
@@ -351,7 +359,45 @@ export function saveDraft(id: number, expected: number, f: DraftFields, photoAlt
     for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
     const focus = getDb().prepare('UPDATE draft_photos SET focal_x = COALESCE(?, focal_x), focal_y = COALESCE(?, focal_y), zoom = COALESCE(?, zoom) WHERE id = ? AND draft_id = ?');
     for (const [pid, f] of photoFocus) focus.run(f.focalX ?? null, f.focalY ?? null, f.zoom ?? null, pid, id);
+    const after = editorialSnapshot(id, getDraft(id)!);
+    if (forceRevision || JSON.stringify(before) !== JSON.stringify(after)) recordDraftRevision(id, userId, before);
     return { ok: true, updatedAt: v } as SaveResult;
+  }
+}
+
+export type RevisionRestoreResult = { ok: true; updatedAt: number; warnings: string[] } | Failure;
+export function restoreDraftRevision(id: number, expected: number, revisionId: number, userId: number): RevisionRestoreResult {
+  return tx((): RevisionRestoreResult => {
+    const cur = getDraft(id);
+    if (!cur) return fail('invalid', 'draft_gone');
+    if (!isEditable(cur)) return fail('locked', 'closed');
+    if (cur.updatedAt !== expected) return CONFLICT;
+    const snapshot = readDraftRevision(id, revisionId);
+    if (!snapshot) return fail('invalid', 'revision_gone');
+    const current = editorialSnapshot(id, cur);
+    const byKey = new Map(current.photos.map((p) => [p.key, p]));
+    const oldToCurrent = new Map(snapshot.photos.flatMap((p) => { const match = byKey.get(p.key); return match ? [[p.id, match] as const] : []; }));
+    const ordered = [...snapshot.photos.flatMap((p) => byKey.has(p.key) ? [byKey.get(p.key)!] : []), ...current.photos.filter((p) => !snapshot.photos.some((old) => old.key === p.key))];
+    let removedReferences = false;
+    const blocks = mapStoryPhotos(normalizeStoryBlocks(snapshot.fields.storyBlocks ?? []), (p) => {
+      if (p.photoId === undefined) return p;
+      const match = oldToCurrent.get(p.photoId);
+      if (!match) { removedReferences = true; return null; }
+      return { ...p, photoId: match.id };
+    });
+    const markers = snapshot.fields.storyBlocks?.length ? { body: snapshot.fields.body, missing: false } : restoreMediaMarkers(snapshot.fields.body, snapshot.photos.map((p) => p.key), ordered.map((p) => p.key));
+    const fields = { ...snapshot.fields, body: markers.body, storyBlocks: blocks };
+    const alts = new Map<number, string>(), focus = new Map<number, PhotoCrop>();
+    for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) { alts.set(match.id, p.alt); focus.set(match.id, { focalX: p.focalX, focalY: p.focalY, zoom: p.zoom }); } }
+    const saved = saveDraftInTransaction(id, expected, fields, alts, userId, fields.photoLayout, focus, true);
+    if (!saved.ok) return saved;
+    const position = getDb().prepare('UPDATE draft_photos SET position=? WHERE draft_id=? AND id=?');
+    ordered.forEach((p, index) => position.run(index, id, p.id));
+    const caption = getDb().prepare('UPDATE draft_photos SET caption=? WHERE draft_id=? AND id=?');
+    for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) caption.run(p.caption, id, match.id); }
+    const missing = removedReferences || markers.missing || snapshot.photos.some((p) => !byKey.has(p.key));
+    audit('draft.revision_restore', { userId, target: `draft:${id}`, detail: { revisionId, missingMedia: missing } });
+    return { ok: true, updatedAt: saved.updatedAt, warnings: missing ? ['Some older photos are no longer available. Missing module references were removed; review inline markers and the first photo or flyer before publishing.'] : [] };
   });
 }
 
@@ -389,14 +435,17 @@ function removeUploadFiles(rels: (string | null)[]): void {
 
 /** Add uploaded photos (already validated and written to disk). On a conflict the files are removed again. */
 export function addUploadedPhotos(draftId: number, expected: number, userId: number, files: { rel: string; ext: string }[]): OpResult {
-  const res = tx((): OpResult => {
+  let res: OpResult;
+  try { res = tx((): OpResult => {
     const v = takeVersion(draftId, expected, userId);
     if (v === null) return lockFailure(draftId);
+    if (files.length) recordDraftRevision(draftId, userId, editorialSnapshot(draftId, getDraft(draftId)!));
     const start = Number((getDb().prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM draft_photos WHERE draft_id = ?').get(draftId) as { p: number }).p);
     const ins = getDb().prepare('INSERT INTO draft_photos (draft_id, path, ext, position, created_at) VALUES (?, ?, ?, ?, ?)');
     files.forEach((f, i) => ins.run(draftId, f.rel, f.ext, start + i, Date.now()));
     return { ok: true, updatedAt: v };
   });
+  } catch (err) { removeUploadFiles(files.map((f) => f.rel)); throw err; }
   if (!res.ok) removeUploadFiles(files.map((f) => f.rel));
   return res;
 }
@@ -416,6 +465,7 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
     if (i === -1) return fail('invalid', 'photo_gone');
     const v = takeVersion(draftId, expected, userId);
     if (v === null) return lockFailure(draftId);
+    const before = editorialSnapshot(draftId, getDraft(draftId)!);
     const order = photos.map((p) => p.id);
     if (op === 'delete') {
       order.splice(i, 1);
@@ -435,6 +485,7 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
     }
     const set = getDb().prepare('UPDATE draft_photos SET position = ? WHERE id = ?');
     order.forEach((id, pos) => set.run(pos, id));
+    if (JSON.stringify(before) !== JSON.stringify(editorialSnapshot(draftId, getDraft(draftId)!))) recordDraftRevision(draftId, userId, before);
     return { ok: true, updatedAt: v };
   });
   if (res.ok && removed) removeUploadFiles([removed]);

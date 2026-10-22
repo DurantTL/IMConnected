@@ -34,6 +34,55 @@ if (form) {
     statusEl.style.color = bad ? '#8a1f11' : '';
   };
 
+  const revisionChoice = document.getElementById('draft-revision-choice') as HTMLSelectElement | null;
+  const revisionRestore = document.getElementById('restore-draft-revision') as HTMLButtonElement | null;
+  const revisionStatus = document.getElementById('draft-revision-status');
+  let restoringRevision = false;
+  async function loadRevisions() {
+    if (!revisionChoice || !revisionRestore || !form!.dataset.revisions) return;
+    try {
+      const selected = revisionChoice.value;
+      const response = await fetch(form!.dataset.revisions, { credentials: 'same-origin' }), data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load revision history.');
+      revisionChoice.replaceChildren(new Option(data.revisions.length ? 'Choose a previous save' : 'No previous saves yet', ''));
+      for (const revision of data.revisions) revisionChoice.append(new Option(`Before save ${new Date(revision.createdAt).toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'medium', timeStyle: 'short' })} CT — ${revision.editor}`, String(revision.id)));
+      revisionChoice.value = selected; revisionRestore.disabled = restoringRevision || !editable || !revisionChoice.value;
+    } catch (error) { if (revisionStatus) revisionStatus.textContent = error instanceof Error ? error.message : 'Could not load revision history.'; }
+  }
+  revisionChoice?.addEventListener('change', () => { if (revisionRestore) revisionRestore.disabled = restoringRevision || !editable || !revisionChoice.value; });
+  revisionRestore?.addEventListener('click', async () => {
+    const revisionId = revisionChoice?.value;
+    if (restoringRevision || !editable || !revisionId || !window.confirm('Save your current edits and restore this previous revision? It will remain a draft.')) return;
+    restoringRevision = true;
+    revisionRestore.disabled = true;
+    const workspace = form!.closest<HTMLElement>('.editor-studio');
+    const fields = form!.querySelector('fieldset');
+    const wasInert = workspace?.inert ?? false, wasDisabled = fields?.disabled ?? false;
+    let navigating = false;
+    try {
+      if (!(await flushSaves())) return;
+      // A restore replaces the form on reload. Prevent edits and photo/module actions
+      // after the final save, rather than silently losing input during its request.
+      if (workspace) { workspace.inert = true; workspace.setAttribute('aria-busy', 'true'); }
+      if (fields) fields.disabled = true;
+      const data = new FormData(); data.set('version', String((form!.elements.namedItem('version') as HTMLInputElement).value)); data.set('revisionId', revisionId);
+      const response = await fetch(form!.dataset.revisions!, { method: 'POST', credentials: 'same-origin', body: data }), result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Could not restore this revision.');
+      dirty = false; setVersion(result.updatedAt);
+      window.location.assign(`${window.location.pathname}?revision_restored=1${result.warnings?.length ? '&missing_media=1' : ''}#review`);
+      navigating = true;
+    } catch (error) { if (revisionStatus) revisionStatus.textContent = error instanceof Error ? error.message : 'Could not restore this revision.'; }
+    finally {
+      if (!navigating) {
+        if (workspace) { workspace.inert = wasInert; workspace.removeAttribute('aria-busy'); }
+        if (fields) fields.disabled = wasDisabled;
+        restoringRevision = false;
+        revisionRestore.disabled = !editable || !revisionChoice?.value;
+      }
+    }
+  });
+  void loadRevisions();
+
   // ---- save ----
   async function save(): Promise<boolean> {
     if (!editable || conflict) return !conflict;
@@ -47,6 +96,7 @@ if (form) {
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.ok) {
           setVersion(data.updatedAt);
+          void loadRevisions();
           const t = new Date(data.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           say(`Last saved ${t} by ${data.savedBy}`);
           return true;

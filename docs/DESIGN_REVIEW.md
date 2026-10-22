@@ -107,3 +107,7 @@ The Markdown gallery picker places a bounded range of story photos inside the ar
 ## Announcements and event flyers
 
 The community board adds a magazine-style invitation header, full-aspect flyer cards, event dates/locations, link actions and accessible type filters. Detail pages support full-height flyers and click-to-load video players. Synthetic screenshots: [board desktop](design/announcements-board-desktop.png), [board phone](design/announcements-board-mobile.png), [article desktop](design/announcement-story-desktop.png), [article phone](design/announcement-story-mobile.png).
+
+## Saved draft revisions
+
+Review & publish includes persisted revision history, separate from canvas Undo. Restore returns to Review with visible confirmation and, when needed, a missing-photo warning outside the closed history disclosure. Draft controls are temporarily unavailable while restore is pending, and become available again if it fails. The [synthetic review capture](design/story-revision-history.png) shows both notices without exposing private submission data. The browser regression opens history for an axe audit, exercises delayed restore failure and retry, and verifies that a deleted photo's reused numeric ID cannot attach an older marker to its replacement.

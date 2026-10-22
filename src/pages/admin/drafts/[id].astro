@@ -76,6 +76,8 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
       )}
       {notice && !published && <p class="admin-ok" role="status">{notice}</p>}
       {error && <p class="admin-error" role="alert">{error}</p>}
+      {Astro.url.searchParams.get('revision_restored') === '1' && <p role="status" class="admin-ok" id="revision-restored">Saved revision restored to this draft. Review it before publishing.</p>}
+      {Astro.url.searchParams.get('missing_media') === '1' && <p role="alert" class="admin-error" id="revision-missing-media">Some older photos are no longer available. Missing module references were removed; review inline markers and the first photo or flyer before publishing.</p>}
       {draft.studioOverwroteAt && (draft.status === 'new' || draft.status === 'in_review') && (
         <p class="admin-error" role="status">IMConnected Studio published over this story on <time datetime={new Date(draft.studioOverwroteAt).toISOString()} data-local>{fmtTime(draft.studioOverwroteAt)}</time>; your saved edits here are not live.</p>
       )}
@@ -109,7 +111,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
 
 
 
-      <form id="draft-form" method="post" action={`/api/admin/drafts/${draft.id}/save`} data-save={`/api/admin/drafts/${draft.id}/save`} data-preview={`/api/admin/drafts/${draft.id}/preview`}>
+      <form id="draft-form" method="post" action={`/api/admin/drafts/${draft.id}/save`} data-save={`/api/admin/drafts/${draft.id}/save`} data-preview={`/api/admin/drafts/${draft.id}/preview`} data-revisions={`/api/admin/drafts/${draft.id}/revisions`}>
         <input type="hidden" name="version" value={draft.updatedAt} />
         <fieldset disabled={!editable} class="ed">
           <section class="ed-card studio-settings" id="studio-panel-settings" data-studio-panel="settings" role="tabpanel" aria-labelledby="studio-tab-settings">
@@ -359,6 +361,12 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
         <section class="ed-card studio-review" id="studio-panel-review" data-studio-panel="review" role="tabpanel" aria-labelledby="studio-tab-review">
           <div class="studio-panel-heading"><div><span class="sb-eyebrow">Ready for readers?</span><h2>Review before publishing</h2><p class="admin-note">This is the last stop before your story appears on the public website.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>Open private preview</button></div>
           <div class="studio-review-summary"><div><span>Story</span><strong data-review-title>{draft.title || 'Untitled story'}</strong></div><div><span>Author</span><strong data-review-author>{draft.author || 'Add an author in Story settings'}</strong></div><div><span>Content</span><strong data-review-content>{draft.storyBlocks?.length ? `${countStoryBlocks(draft.storyBlocks)} modules` : 'Markdown story'}</strong></div><div><span>Photos</span><strong>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</strong></div></div>
+          <details class="ed-card"><summary>Saved revision history</summary>
+            <p class="admin-note">The latest 20 previous saved states are available. Restoring saves your current edits first and changes only this draft.</p>
+            <label>Saved revision<select id="draft-revision-choice" data-editor-local aria-label="Saved revision"><option value="">Loading history…</option></select></label>
+            <button type="button" class="cms-btn secondary" id="restore-draft-revision" disabled>Restore selected revision</button>
+            <p id="draft-revision-status" role="status" class="admin-note"></p>
+          </details>
           <ul class="studio-review-checklist"><li>Check the headline, names and facts.</li><li>Confirm permission to use the story and photos.</li><li>Read the phone preview and describe your images with alt text.</li></ul>
           {backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
           <p class="admin-note">

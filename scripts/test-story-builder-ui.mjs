@@ -636,6 +636,83 @@ try {
   for (const [width, columns] of [[1440, 2], [390, 1]]) { await publicPage.setViewportSize({ width, height: 1000 }); check(`section reads in ${columns} columns at ${width}px`, await publicPage.locator('.story-section').evaluate((el, n) => getComputedStyle(el).gridTemplateColumns.split(' ').length === n && el.textContent.indexOf('left column') < el.textContent.indexOf('right column') && document.documentElement.scrollWidth <= innerWidth, columns)); if (shots) await publicPage.screenshot({ path: path.join(shots, `story-sections-${width}.png`), fullPage: true }); }
   check('public selected-text formatting and finite alignment/spacing survive publish', await publicPage.locator('.story-section [data-align=center]').evaluate((el) => getComputedStyle(el).textAlign === 'center' && getComputedStyle(el).marginBlockStart === '40px' && el.querySelector('strong').textContent === 'left'));
   check('nested image appears once and section source order survives publishing', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-section img').count() === 1);
+  // Saved history must survive a reload and save unsaved edits before restoring.
+  legacyId = await createLegacy();
+  const revisionBaseline = 'Synthetic saved revision baseline.';
+  await saveLegacy('one', revisionBaseline);
+  await page.goto(BASE + `/admin/drafts/${legacyId}`);
+  await page.locator('#f-body').fill('Synthetic newer saved text.');
+  const revisionSave = page.waitForResponse((r) => r.url() === BASE + `/api/admin/drafts/${legacyId}/save` && r.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await revisionSave).status(), 200);
+  const revisionTarget = db.prepare('SELECT id FROM draft_revisions WHERE draft_id=? AND json_extract(payload,\'$.fields.body\')=? ORDER BY id DESC LIMIT 1').get(legacyId, revisionBaseline).id;
+  await page.reload();
+  await page.locator('#f-body').fill('Synthetic unsaved edits preserved before restore.');
+  await page.locator('[data-studio-tab=review]').click();
+  await page.getByText('Saved revision history', { exact: true }).click();
+  await page.waitForFunction((id) => [...document.getElementById('draft-revision-choice').options].some((o) => o.value === String(id)), revisionTarget);
+  await page.locator('#draft-revision-choice').selectOption(String(revisionTarget));
+  if (axePath) {
+    await page.addScriptTag({ path: axePath });
+    const historyAxe = await page.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } }));
+    check('open revision history passes axe WCAG A/AA checks', historyAxe.violations.length === 0);
+  }
+  let releaseRestore;
+  const restoreGate = new Promise((resolve) => { releaseRestore = resolve; });
+  let restoreRequests = 0;
+  const restoreUrl = BASE + `/api/admin/drafts/${legacyId}/revisions`;
+  const holdRestore = async (route) => {
+    if (route.request().method() === 'POST' && ++restoreRequests === 1) {
+      await restoreGate;
+      return route.fulfill({ status: 503, json: { ok: false, error: 'Synthetic restore unavailable.' } });
+    }
+    return route.continue();
+  };
+  await page.route(restoreUrl, holdRestore);
+  await page.locator('#restore-draft-revision').click();
+  await page.waitForFunction(() => document.querySelector('.editor-studio').inert);
+  check('pending restore disables draft editing and all workspace actions after flushing saves', await page.locator('#draft-form > fieldset').evaluate((el) => el.disabled) && await page.locator('#f-body').isDisabled() && await page.locator('#restore-draft-revision').isDisabled() && legacyDraft().body === 'Synthetic unsaved edits preserved before restore.');
+  await page.locator('#restore-draft-revision').dispatchEvent('click');
+  await page.keyboard.type('Text attempted during restore');
+  await page.waitForTimeout(50);
+  check('pending restore rejects duplicate activation and cannot accept typing that reload would lose', restoreRequests === 1 && await page.locator('#f-body').inputValue() === 'Synthetic unsaved edits preserved before restore.');
+  releaseRestore();
+  await page.waitForFunction(() => document.getElementById('draft-revision-status').textContent === 'Synthetic restore unavailable.');
+  check('failed restore re-enables the editor and retry without losing saved edits', !(await page.locator('#f-body').isDisabled()) && !(await page.locator('#restore-draft-revision').isDisabled()) && !(await page.locator('.editor-studio').evaluate((el) => el.inert)) && legacyDraft().body === 'Synthetic unsaved edits preserved before restore.');
+  await page.locator('#restore-draft-revision').click();
+  await page.waitForURL('**?revision_restored=1#review');
+  await page.unroute(restoreUrl, holdRestore);
+  check('restoring a persisted revision returns to Review with visible confirmation', await page.locator('#revision-restored').isVisible() && await page.locator('#studio-panel-review').isVisible() && legacyDraft().body === revisionBaseline);
+  check('restore first saves unsaved edits into recoverable history without publishing', !!db.prepare('SELECT id FROM draft_revisions WHERE draft_id=? AND json_extract(payload,\'$.fields.body\')=?').get(legacyId, 'Synthetic unsaved edits preserved before restore.') && legacyDraft().status === 'in_review' && legacyDraft().slug === null);
+  const history = await (await fetch(BASE + `/api/admin/drafts/${legacyId}/revisions`, { headers: { Cookie: `__Host-imc_session=${token}` } })).json();
+  check('history API returns metadata only', history.ok && history.revisions.length >= 3 && history.revisions.every((r) => Object.keys(r).sort().join(',') === 'createdAt,editor,id'));
+  const unauthHistory = await fetch(BASE + `/api/admin/drafts/${legacyId}/revisions`, { redirect: 'manual' });
+  check('revision history requires editor authentication', [401, 302, 303].includes(unauthHistory.status));
+  const restoreForm = (version, revisionId) => { const data = new FormData(); data.set('version', String(version)); data.set('revisionId', String(revisionId)); return data; };
+  check('stale HTTP restore refuses to overwrite newer edits', (await post(`/api/admin/drafts/${legacyId}/revisions`, restoreForm(legacyDraft().updated_at - 1, revisionTarget))).status === 409 && legacyDraft().body === revisionBaseline);
+  const otherRevisionDraft = await createLegacy();
+  const otherRevisionVersion = db.prepare('SELECT updated_at FROM drafts WHERE id=?').get(otherRevisionDraft).updated_at;
+  check('HTTP restore cannot apply another draft revision', (await post(`/api/admin/drafts/${otherRevisionDraft}/revisions`, restoreForm(otherRevisionVersion, revisionTarget))).status === 404);
+
+  // A deleted upload's numeric ID can be reused. History must never attach to that replacement.
+  legacyId = await createLegacy(); await saveLegacy('one'); await uploadLegacy();
+  const removedPhoto = db.prepare('SELECT id,media_key FROM draft_photos WHERE draft_id=?').get(legacyId);
+  const markerBaseline = 'Synthetic older photo.\n\n{{photo 1}}';
+  await saveLegacy('one', markerBaseline); await saveLegacy('one', 'Synthetic newer text without a marker.');
+  const photoRevision = db.prepare('SELECT id FROM draft_revisions WHERE draft_id=? AND json_extract(payload,\'$.fields.body\')=? ORDER BY id DESC LIMIT 1').get(legacyId, markerBaseline).id;
+  const remove = new FormData(); remove.set('version', String(legacyDraft().updated_at)); remove.set('op', `delete:${removedPhoto.id}`);
+  assert.equal((await post(`/api/admin/drafts/${legacyId}/photos`, remove)).status, 303);
+  await uploadLegacy();
+  const replacementPhoto = db.prepare('SELECT id,media_key FROM draft_photos WHERE draft_id=?').get(legacyId);
+  check('browser missing-media fixture reuses the deleted photo ID with a fresh identity', replacementPhoto.id === removedPhoto.id && replacementPhoto.media_key !== removedPhoto.media_key);
+  await page.goto(BASE + `/admin/drafts/${legacyId}#review`);
+  await page.getByText('Saved revision history', { exact: true }).click();
+  await page.waitForFunction((id) => [...document.getElementById('draft-revision-choice').options].some((o) => o.value === String(id)), photoRevision);
+  await page.locator('#draft-revision-choice').selectOption(String(photoRevision));
+  await page.locator('#restore-draft-revision').click();
+  await page.waitForURL('**?revision_restored=1&missing_media=1#review');
+  check('missing-media warning stays visible outside the closed history disclosure', await page.locator('#revision-missing-media').isVisible() && !(await page.locator('details').filter({ has: page.locator('#draft-revision-choice') }).evaluate((el) => el.open)));
+  check('restored missing marker cannot silently bind a replacement upload', legacyDraft().body === 'Synthetic older photo.\n\n{{photo missing}}' && db.prepare('SELECT media_key FROM draft_photos WHERE draft_id=?').get(legacyId).media_key === replacementPhoto.media_key);
+  if (shots) await page.screenshot({ path: path.join(shots, 'story-revision-history.png'), fullPage: true });
   const brokenData = path.join(scratch, 'synthetic-broken-db'); fs.mkdirSync(brokenData); fs.writeFileSync(path.join(brokenData, 'imconnected.db'), 'synthetic invalid sqlite fixture');
   const unavailableServer = spawn(process.execPath, ['dist/server/entry.mjs'], { cwd: ROOT, env: { ...process.env, HOST: '127.0.0.1', PORT: String(PORT + 1), DATA_DIR: brokenData, SITE_URL: `http://localhost:${PORT + 1}`, AUTH_SECRET: 'synthetic-unavailable-' + 'x'.repeat(32), RESEND_API_KEY: '', GDRIVE_SERVICE_ACCOUNT_JSON: '', GDRIVE_FOLDER_ID: '', PUBLISH_TOKEN: '', AGENT_API_TOKEN: '' }, stdio: 'ignore' });
   try {
