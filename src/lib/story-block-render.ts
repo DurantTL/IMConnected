@@ -44,7 +44,7 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
         const video = parseStoryVideo(b.url);
         if (!video) break;
         const label = b.label || `${video.provider} video`;
-        out.push(`<div class="story-module story-module-video"${attr}>${options.preview ? '' : `<div class="story-video-player" data-video-embed="${escapeHtml(video.embed)}" data-video-title="${plain(label)}"><button type="button" class="btn" data-load-video>Play video: ${plain(label)}</button><p>The player loads from ${video.provider} when you press Play.</p></div>`}<p><a href="${escapeHtml(video.url)}">Watch ${plain(label)} on ${video.provider}</a></p></div>`);
+        out.push(`<div class="story-module story-module-video"${attr}>${options.preview ? '' : `<div class="story-video-player" data-video-embed="${escapeHtml(video.embed)}" data-video-title="${plain(label)}"><button type="button" class="btn" data-load-video aria-haspopup="dialog">Play video: ${plain(label)}</button><p>Opens a video popup. The player loads from ${video.provider} when you press Play.</p></div>`}<p><a href="${escapeHtml(video.url)}">Watch ${plain(label)} on ${video.provider}</a></p></div>`);
         break;
       }
       case 'flyer':

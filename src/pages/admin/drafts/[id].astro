@@ -160,7 +160,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               </label>
               <label>Event date <span class="hint">optional</span><input type="date" name="eventDate" value={draft.announcement?.eventDate ?? ''} /></label>
               <label class="full">Event location <input name="eventLocation" maxlength="200" value={draft.announcement?.location ?? ''} /></label>
-              <label class="full">Announcement video <span class="hint">HTTPS YouTube or Vimeo URL</span><input name="announcementVideo" maxlength="2048" value={draft.announcement?.videoUrl ?? ''} /></label>
+              <label class="full">Announcement video <span class="hint">Paste a YouTube or Vimeo link; readers open it in a video popup.</span><input name="announcementVideo" maxlength="2048" value={draft.announcement?.videoUrl ?? ''} /></label>
               <fieldset class="full"><legend>Announcement link buttons</legend><p class="admin-note">Choose Announcement or Event above. The first photo is its full-height flyer. Add a text summary so the flyer is also accessible.</p>
                 {[0, 1, 2].map((i) => <div class="ed-grid"><label>Link {i + 1} label<input name={`announcementLink${i}Label`} maxlength="120" value={draft.announcement?.links[i]?.label ?? ''} /></label><label>Link {i + 1} address<input name={`announcementLink${i}Url`} maxlength="2048" value={draft.announcement?.links[i]?.url ?? ''} placeholder="https://" /></label></div>)}
               </fieldset>

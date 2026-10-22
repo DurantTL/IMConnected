@@ -112,6 +112,14 @@ The community board adds a magazine-style invitation header, full-aspect flyer c
 
 Review & publish includes persisted revision history, separate from canvas Undo. Restore returns to Review with visible confirmation and, when needed, a missing-photo warning outside the closed history disclosure. Draft controls are temporarily unavailable while restore is pending, and become available again if it fails. The [synthetic review capture](design/story-revision-history.png) shows both notices without exposing private submission data. The browser regression opens history for an axe audit, exercises delayed restore failure and retry, and verifies that a deleted photo's reused numeric ID cannot attach an older marker to its replacement.
 
+## Video popup review
+
+Website Video modules and announcement videos use a responsive native dialog. A reader's explicit Play action creates a trusted provider-derived iframe; closing the dialog removes it and restores focus. Studio's standalone Video block and announcement preview controls use the same interaction in the editor and website export. Email keeps watch links, and standalone WordPress output uses a native Embed block. No React, thumbnail fetches, provider scripts or player requests are needed before a click.
+
+Synthetic captures use intercepted local mock players, not live videos: [website desktop](design/video-popup-desktop.png), [website phone](design/video-popup-mobile.png), [Studio website export desktop](design/studio-video-desktop.png), [Studio website export phone](design/studio-video-mobile.png). They show the popup layout; real playback still depends on the provider allowing embedding.
+
+The extended story-builder browser suite checks popup labelling, focus, Escape/button/backdrop close, player removal, mobile fit and axe. `STUDIO_HTML=../utilities/imconnected.html node scripts/test-video-popups.mjs` checks the Video library/inspector workflow, saved version9 drafts, safe provider parsing and hostile labels, email/website/WordPress export and no-JavaScript fallback. Use the browser/axe environment settings above. Native close-event assertions wait for the browser's asynchronous cleanup before checking focus and player removal.
+
 ## Studio announcement cards
 
 Typed announcements and events now import into Studio's flyer-style event cards instead of ordinary story teasers. All three actions, event details and the video link survive email, website HTML and WordPress block export. Synthetic captures: [desktop](design/studio-announcement-desktop.png), [phone](design/studio-announcement-mobile.png). The private draft-flyer path is authenticated and isolated from public media; local fallback, quota errors, manual replacement and asynchronous transfer races have browser coverage.

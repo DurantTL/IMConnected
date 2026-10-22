@@ -300,7 +300,7 @@ if (form && blocksField) {
     if (block.type === 'video') {
       field(block, 'Video title', 'label', block.label || '');
       field(block, 'YouTube or Vimeo URL (HTTPS)', 'url', block.url || '');
-      fields.append(node('p', 'Readers press Play to load the provider. Private preview shows a safe provider link.', 'admin-note'));
+      fields.append(node('p', 'Paste the video link. Readers press Play to open an embedded video popup. Private preview shows a safe provider link.', 'admin-note'));
     }
     if (['image', 'flyer'].includes(block.type)) {
       const label = node('label', 'Story photo');
