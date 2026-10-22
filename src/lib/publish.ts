@@ -60,8 +60,8 @@ function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: st
     if (!m) throw new PublishError('A photo data URL must be base64 encoded.', ref);
     const bytes = Buffer.from(m[1].replace(/\s+/g, ''), 'base64');
     if (bytes.length > LIMITS.maxPhotoMB * 1024 * 1024) throw new PublishError(`A photo is larger than ${LIMITS.maxPhotoMB} MB.`, ref);
-    const ext = sniffImage(new Uint8Array(bytes.subarray(0, 16)));
-    if (!ext) throw new PublishError('A photo is not a JPG, PNG or WebP image.', ref);
+    const ext = sniffImage(bytes);
+    if (!ext) throw new PublishError('A photo is not a JPG, PNG, WebP or AVIF image.', ref);
     return { photo: { url: '', alt, caption, ...crop }, data: { ext, bytes } };
   }
   if (url.length > PUBLISH_LIMITS.url) throw new PublishError('A photo URL is too long.', ref);

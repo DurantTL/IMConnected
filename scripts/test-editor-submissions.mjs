@@ -234,7 +234,7 @@ try {
 
     // a bad photo is refused before anything is saved
     const bad = await postForm(BASE, '/api/submit', form({ title: 'Bad photo story' }), [{ bytes: Buffer.from('this is not an image'), filename: 'x.png' }]);
-    check('a non-image photo is refused (400) and no draft is created', bad.status === 400 && /isn't a JPG, PNG or WebP/.test(bad.data.error) && q("SELECT COUNT(*) n FROM drafts WHERE title = 'Bad photo story'")[0].n === 0, bad.text.slice(0, 200));
+    check('a non-image photo is refused (400) and no draft is created', bad.status === 400 && /isn't a JPG, PNG, WebP or AVIF/.test(bad.data.error) && q("SELECT COUNT(*) n FROM drafts WHERE title = 'Bad photo story'")[0].n === 0, bad.text.slice(0, 200));
     // the old checks still apply
     const trap = await postForm(BASE, '/api/submit', form({ title: 'Trap story', website: 'http://spam.example' }));
     check('honeypot still pretends success but saves nothing', trap.status === 200 && q("SELECT COUNT(*) n FROM drafts WHERE title = 'Trap story'")[0].n === 0);

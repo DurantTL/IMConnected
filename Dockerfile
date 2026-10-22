@@ -35,7 +35,7 @@ COPY package.json ./
 # site.ts (sections) and limits.ts (photo and body limits) are what the import script validates against.
 COPY scripts ./scripts
 COPY src/lib/db ./src/lib/db
-COPY src/lib/site.ts src/lib/limits.ts ./src/lib/
+COPY src/lib/site.ts src/lib/limits.ts src/lib/story-blocks.ts src/lib/announcement.ts src/lib/image-formats.mjs ./src/lib/
 # SQLite database lives on a volume at /data
 RUN mkdir -p /data && chown node:node /data
 ENV DATA_DIR=/data
