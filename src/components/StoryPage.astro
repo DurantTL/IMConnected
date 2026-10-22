@@ -8,10 +8,13 @@ import StoryPhotos from './StoryPhotos.astro';
 import type { PublicStory } from '../lib/stories';
 import { photoLayoutOrDefault, planPhotos } from '../lib/photo-layouts';
 import { photoFocusStyle } from '../lib/story-blocks';
+import { INLINE_MEDIA_CSS } from '../lib/story-media-render';
 
 interface Props {
   story: PublicStory;
   related: PublicStory[];
+  inlinePhotoUrls?: Set<string>;
+  inlinePhotoIndices?: Set<number>;
 }
 const { story, related } = Astro.props;
 const d = story.data;
@@ -25,18 +28,21 @@ const enc = encodeURIComponent;
 // the text and the others in a row under it. Another layout puts the lead and the others together above the text; photos it
 // has no place for (a fifth in Hero + grid, a third in Two up) stay in the row under the text.
 const layout = photoLayoutOrDefault(d.photoLayout);
-const inlinePhotos = new Set((d.storyBlocks ?? []).filter((b) => b.type === 'image' && b.url).map((b) => b.url));
+const inlinePhotos = Astro.props.inlinePhotoUrls ?? new Set((d.storyBlocks ?? []).filter((b) => b.type === 'image' && b.url).map((b) => b.url));
+const inlineIndices = Astro.props.inlinePhotoIndices ?? new Set<number>();
+const inlineCount = inlinePhotos.size + inlineIndices.size;
 const allPhotos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] || '' }))]
   .map((p, i) => ({ ...p, ...d.photoFocus?.[i], alt: p.alt || `Photo ${i + (d.image ? 1 : 2)} from “${d.title}”` }))
-  .filter((p) => !inlinePhotos.has(p.src));
+  .filter((p, i) => !inlinePhotos.has(p.src) && !inlineIndices.has(i));
 const plan = planPhotos(layout, allPhotos.length);
-const laid = plan.mode === 'layout' && (!!d.image || inlinePhotos.size > 0);
+const laid = plan.mode === 'layout' && (!!d.image || inlineCount > 0);
 const galleryPhotos = laid ? plan.rest.map((i) => allPhotos[i]) : null;
-const leadPhoto = d.image && !inlinePhotos.has(d.image) ? allPhotos[0] : undefined;
+const leadPhoto = d.image && !inlinePhotos.has(d.image) && !inlineIndices.has(0) ? allPhotos[0] : undefined;
 const plainGallery = leadPhoto ? allPhotos.slice(1) : allPhotos;
 const leadFocus = photoFocusStyle(leadPhoto);
 ---
 <Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section}>
+  <style is:inline slot="head" set:html={INLINE_MEDIA_CSS}></style>
   <script type="application/ld+json" slot="head" set:html={JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'NewsArticle',
@@ -91,7 +97,7 @@ const leadFocus = photoFocusStyle(leadPhoto);
         </section>
       )}
 
-      {d.photoCredit && inlinePhotos.size > 0 && !laid && !leadPhoto && <p class="photo-credit">Photo: {d.photoCredit}</p>}
+      {d.photoCredit && inlineCount > 0 && !laid && !leadPhoto && <p class="photo-credit">Photo: {d.photoCredit}</p>}
 
       <div class="share">
         <span>Share:</span>

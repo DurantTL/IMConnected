@@ -9,8 +9,8 @@ import { getStoryBySlug, listStories, LIST_MAX, type Story } from './story-store
 import { adoptionDone, adoptionInFlight } from './story-adopt';
 import { getDb } from './db';
 import { cacheGeneration, TTL_MS } from './public-cache';
-import { renderMarkdownSafe } from './markdown';
 import { renderStoryBlocksSafe } from './story-block-render';
+import { renderMediaMarkdown } from './story-media-render';
 
 /** The /media address of a photo we hold, else the photo's own address. */
 function photoUrl(s: Story, index: number, original: string): string {
@@ -129,6 +129,13 @@ export async function getPublicStory(slug: string): Promise<PublicStory | undefi
 
 /** A story's body as HTML. Raw HTML in the Markdown is neutralised, and links with a script scheme become "#". */
 export async function renderStoryBody(story: PublicStory): Promise<string> {
-  if (story.data.storyBlocks?.length) return renderStoryBlocksSafe(story.data.storyBlocks);
-  return (await renderMarkdownSafe(story.body ?? '')).html;
+  return (await renderStoryContent(story)).html;
+}
+
+export async function renderStoryContent(story: PublicStory): Promise<{ html: string; used: Set<string>; usedPhotoIndices?: Set<number> }> {
+  if (story.data.storyBlocks?.length) return { html: await renderStoryBlocksSafe(story.data.storyBlocks), used: new Set(story.data.storyBlocks.filter((b) => b.type === 'image' && b.url).map((b) => b.url!)) };
+  const d = story.data;
+  const photos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] ?? '' }))].map((photo, i) => ({ ...photo, ...d.photoFocus?.[i] }));
+  const rendered = await renderMediaMarkdown(story.body ?? '', photos);
+  return { html: rendered.html, used: new Set(), usedPhotoIndices: rendered.used };
 }

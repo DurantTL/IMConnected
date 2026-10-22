@@ -1,3 +1,4 @@
+import { stripMediaMarkers } from './story-media';
 // Story search, the pure part (epic #25, step 3): turning a visitor's text into a safe query, plain text out of
 // Markdown, and escaped, highlighted snippets. No imports from the database or Astro, so both the SQLite FTS5 path
 // (search-index.ts) and the in-memory fallback over the built collection (search-run.ts) share it.
@@ -76,7 +77,7 @@ const ENTITIES: Record<string, string> = { '&lt;': '<', '&gt;': '>', '&quot;': '
  * escaped again on the way out. Control and private-use characters are replaced by spaces.
  */
 export function plainText(markdown: string): string {
-  return markdown
+  return stripMediaMarkers(markdown)
     .replace(/\r\n?/g, '\n')
     .replace(/^\s{0,3}(```|~~~).*$/gm, ' ')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
@@ -177,7 +178,7 @@ export interface SearchHit {
 /** The result for one story: plain-text fields as JSON strings, and the snippet as escaped HTML with <mark>. */
 export function toHit(s: SearchableStory, terms: string[]): SearchHit {
   const body = plainText(s.body);
-  const dek = cleanField(s.dek);
+  const dek = cleanField(stripMediaMarkers(s.dek ?? ''));
   const rules = matchRules(terms);
   const has = (text: string) => wordsOf(text).some((w) => rules.some((r) => ruleHit(r, w.folded)));
   const source = has(body) ? body : has(dek) ? dek : dek || body;

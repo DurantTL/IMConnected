@@ -1,4 +1,5 @@
-// A plain-text excerpt of a story body, for Studio's list (GET /api/stories). Plain TypeScript, no imports.
+// A plain-text excerpt of a story body, for Studio's list (GET /api/stories).
+import { stripMediaMarkers } from './story-media';
 
 const ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ', '#39': "'" };
 
@@ -25,7 +26,7 @@ function decodeEntities(s: string): string {
 /** First non-empty paragraph of a Markdown body as plain text, at most `max` characters, cut at a word boundary with an ellipsis. */
 export function storyExcerpt(body: string | undefined | null, max = 400): string {
   if (!body) return '';
-  const paragraphs = body.replace(/\r\n?/g, '\n').replace(/^---\n[\s\S]*?\n---\n/, '').split(/\n\s*\n/);
+  const paragraphs = stripMediaMarkers(body).replace(/\r\n?/g, '\n').replace(/^---\n[\s\S]*?\n---\n/, '').split(/\n\s*\n/);
   for (const raw of paragraphs) {
     // A heading on its own is a title, not the story's first paragraph.
     if (raw.split('\n').every((l) => !l.trim() || /^\s{0,3}#{1,6}(\s|$)/.test(l))) continue;

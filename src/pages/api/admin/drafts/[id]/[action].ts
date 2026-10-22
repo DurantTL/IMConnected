@@ -9,7 +9,8 @@ import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages
 import { LIMITS } from '../../../../../lib/limits';
 import { sniffImage } from '../../../../../lib/submission';
 import { renderStoryBlocksSafe } from '../../../../../lib/story-block-render';
-import { renderMarkdownSafe, escapeHtml, restrictPreviewImages } from '../../../../../lib/markdown';
+import { escapeHtml, restrictPreviewImages } from '../../../../../lib/markdown';
+import { renderMediaMarkdown, INLINE_MEDIA_CSS } from '../../../../../lib/story-media-render';
 import { audit } from '../../../../../lib/auth/audit';
 import { clientIp } from '../../../../../lib/request';
 import { jsonResponse, readFormLimited, redirectTo, siteUrl } from '../../../../../lib/draft-http';
@@ -58,13 +59,13 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       if (!photo) return undefined;
       const point = { ...photo, ...focus.get(photoId) };
       return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: photo.alt, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom };
-    } }) : (await renderMarkdownSafe(fields.body)).html;
+    } }) : (await renderMediaMarkdown(fields.body, draftPhotos.map((photo) => ({ src: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: photo.alt, ...photo, ...focus.get(photo.id) })), true)).html;
     const ownHosts = [new URL(request.url).hostname];
     try { ownHosts.push(new URL(siteUrl()).hostname); } catch { /* a malformed SITE_URL must not break the preview: the request host alone is used */ }
     html = restrictPreviewImages(html, ownHosts);
     const byline = [fields.author, fields.authorTitle, fields.church].filter(Boolean).map(escapeHtml).join(' · ');
     const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(fields.title || 'Untitled story')} — private preview</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https:"><style>body{font:17px/1.6 Georgia,serif;margin:0;padding:16px;color:#1b1b1b;background:#fff;overflow-wrap:anywhere}h1{font-size:1.7rem;line-height:1.2;margin:.2em 0}.dek{font-size:1.1rem;color:#444}.by{font:600 .85rem system-ui,sans-serif;color:#555}img{max-width:100%;height:auto}blockquote{margin:1em 0;padding-left:1em;border-left:4px solid #bbb;color:#333}a{color:#0b5cad}</style></head><body><article><h1>${escapeHtml(fields.title || 'Untitled')}</h1>${fields.dek ? `<p class="dek">${escapeHtml(fields.dek)}</p>` : ''}${byline ? `<p class="by">${byline}</p>` : ''}${html || '<p><em>Nothing to preview yet.</em></p>'}</article></body></html>`;
-    return jsonResponse(200, { ok: true, doc });
+    return jsonResponse(200, { ok: true, doc: doc.replace('</head>', `<style>${INLINE_MEDIA_CSS}</style></head>`) });
   }
 
   if (action === 'save') {

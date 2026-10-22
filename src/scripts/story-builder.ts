@@ -10,6 +10,13 @@ if (form && blocksField) {
   const fields = document.getElementById('module-fields')!;
   const title = document.getElementById('module-title')!;
   const status = document.getElementById('module-status')!;
+  document.getElementById('insert-inline-photo')?.addEventListener('click', () => {
+    const choice = document.getElementById('inline-photo-choice') as HTMLSelectElement;
+    if (body.readOnly || !choice.value) { status.textContent = 'Choose a story photo first.'; choice.focus(); return; }
+    const marker = `\n\n{{photo ${choice.value}}}\n\n`;
+    body.setRangeText(marker, body.selectionStart, body.selectionEnd, 'end');
+    body.dispatchEvent(new Event('input', { bubbles: true })); body.focus();
+  });
   const undo = document.getElementById('blocks-undo') as HTMLButtonElement;
   const redo = document.getElementById('blocks-redo') as HTMLButtonElement;
   const useModules = document.getElementById('use-modules') as HTMLButtonElement;

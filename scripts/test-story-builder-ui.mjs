@@ -427,9 +427,9 @@ try {
   let legacyId = await createLegacy();
   const legacyDraft = () => db.prepare('SELECT * FROM drafts WHERE id=?').get(legacyId);
   const credit = 'Synthetic Photographer <em>escaped credit</em>';
-  const saveLegacy = async (photoLayout) => {
+  const saveLegacy = async (photoLayout, bodyText = legacy) => {
     const data = new FormData();
-    for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: 'Synthetic legacy credit', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: legacy, photoCredit: credit, photoLayout })) data.set(key, String(value));
+    for (const [key, value] of Object.entries({ version: legacyDraft().updated_at, title: 'Synthetic legacy credit', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: bodyText, photoCredit: credit, photoLayout })) data.set(key, String(value));
     assert.equal((await post(`/api/admin/drafts/${legacyId}/save`, data)).status, 200);
   };
   const uploadLegacy = async () => {
@@ -462,6 +462,24 @@ try {
   await publishLegacy();
   check('noninline photo layout keeps the existing credit exactly once', await publicPage.locator('[data-photo-layout="twoUp"]').count() === 1 && (await publicPage.locator('article').innerText()).split(credit).length - 1 === 1);
   check('paired photos clip zoom at edge focal points without losing their links', await publicPage.locator('[data-photo-layout="twoUp"] img').evaluateAll((images) => images.length === 2 && images.every((image) => image.style.scale === '2.2' && image.style.objectPosition === '0% 100%' && getComputedStyle(image.parentElement).overflow === 'hidden' && image.parentElement.href === image.src)));
+  legacyId = await createLegacy();
+  await saveLegacy('one'); await uploadLegacy(); await uploadLegacy();
+  await page.goto(BASE + `/admin/drafts/${legacyId}`);
+  await page.locator('[data-studio-tab=content]').click();
+  await page.locator('#f-body').fill('Before the inline photo.\n\nAfter the inline photo.');
+  await page.locator('#f-body').evaluate((body) => { body.setSelectionRange(24, 24); });
+  await page.locator('#inline-photo-choice').selectOption('2');
+  await page.locator('#insert-inline-photo').click();
+  check('Markdown Insert photo places the chosen story-owned marker at the cursor', (await page.locator('#f-body').inputValue()).includes('{{photo 2}}'));
+  await page.waitForFunction(() => document.getElementById('preview')?.contentDocument?.querySelector('.story-inline-photo img'));
+  check('Markdown private preview resolves the marker through the authenticated photo endpoint', await page.frameLocator('#preview').locator('.story-inline-photo img').getAttribute('src').then((src) => /^\/api\/admin\/photos\/\d+$/.test(src)));
+  const inlineSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
+  await page.locator('#save-btn').click(); assert.equal((await inlineSave).status(), 200);
+  await publishLegacy();
+  check('published photo marker is inline once and excluded from the separate photo group', await publicPage.locator('.prose .story-inline-photo').count() === 1 && await publicPage.locator('article img').count() === 2 && await publicPage.locator('.gallery').count() === 0);
+  await publicPage.locator('.story-inline-photo a').click();
+  check('inline marker photos use the existing enlargement viewer', await publicPage.locator('dialog.viewer').evaluate((dialog) => dialog.open));
+  await publicPage.keyboard.press('Escape');
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {

@@ -5,6 +5,7 @@ import { storyUrl } from './stories';
 import { getPublicStories } from './public-stories';
 import { getSection, areaLabel } from './site';
 import { photoLayoutOrDefault } from './photo-layouts';
+import { stripMediaMarkers } from './story-media';
 
 /** How many of the newest stories the feeds include. */
 export const FEED_LIMIT = 50;
@@ -69,7 +70,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     id: story.id,
     url: abs(storyUrl(story)),
     title: d.title,
-    dek: d.dek,
+    dek: d.dek ? stripMediaMarkers(d.dek) : undefined,
     section: d.section,
     sectionLabel: getSection(d.section)?.label ?? d.section,
     area: d.area,

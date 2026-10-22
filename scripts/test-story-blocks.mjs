@@ -14,9 +14,48 @@ let count = 0;
 const check = (name, fn) => { fn(); count++; console.log(`PASS ${name}`); };
 try {
   const require = createRequire(import.meta.url);
-  await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri') return { id: require.resolve(id), external: true }; } }] });
+  await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts', media: 'src/lib/story-media-render.ts', excerpt: 'src/lib/excerpt.ts', search: 'src/lib/search.ts', index: 'src/lib/search-index.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri') return { id: require.resolve(id), external: true }; } }] });
   const { normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
   const { renderStoryBlocksSafe } = await import(pathToFileURL(path.join(scratch, 'render.js')));
+  const { renderMediaMarkdown } = await import(pathToFileURL(path.join(scratch, 'media.js')));
+  const { storyExcerpt } = await import(pathToFileURL(path.join(scratch, 'excerpt.js')));
+  const { toHit } = await import(pathToFileURL(path.join(scratch, 'search.js')));
+  const { indexStory } = await import(pathToFileURL(path.join(scratch, 'index.js')));
+  const { DatabaseSync } = await import('node:sqlite');
+  const mediaPhotos = [{ src: '/media/stories/synthetic/a.png', alt: 'Synthetic <scene>', focalX: 0, focalY: 100, zoom: 2 }, { src: '/media/stories/synthetic/b.png', alt: '' }];
+  const inline = await renderMediaMarkdown('Before **bold**.\n{{photo 1}}\nAfter.', mediaPhotos);
+  check('standalone photo markers split paragraph boundaries safely and keep the crop/viewer', () => {
+    assert.match(inline.html, /<strong>bold<\/strong>/); assert.match(inline.html, /class="story-inline-photo"/); assert.match(inline.html, /alt="Synthetic &lt;scene&gt;"/); assert.match(inline.html, /scale:2/); assert.match(inline.html, /data-photo/); assert.deepEqual([...inline.used], [0]); assert.doesNotMatch(inline.html, /\{\{photo|<p>\s*<figure/);
+  });
+  const codeExamples = await renderMediaMarkdown('`{{photo 1}}`\n\n```text\n{{photo 2}}\n```\n\nA `multi\n{{photo 1}}\nline` code span.\n\n[{{photo 1}}](https://example.invalid/)', mediaPhotos);
+  check('code spans, fences and linked marker-like text stay inert', () => { assert.equal(codeExamples.used.size, 0); assert.doesNotMatch(codeExamples.html, /story-inline-photo/); assert.match(codeExamples.html, /\{\{photo 1\}\}/); });
+  for (const marker of ['{{photo 99}}', '{{photo -1}}', '{{photo <script>}}', '{{photo 0}}', '{{photo 999999999999999999}}', '{{photo 1', '{{photo 1}']) {
+    const publicResult = await renderMediaMarkdown(marker, mediaPhotos);
+    const previewResult = await renderMediaMarkdown(marker, mediaPhotos, true);
+    check(`invalid marker is hidden publicly and warns safely in preview: ${marker}`, () => { assert.equal(publicResult.used.size, 0); assert.equal(publicResult.html, ''); assert.match(previewResult.html, /story-media-warning/); assert.doesNotMatch(previewResult.html, /<script/); });
+  }
+  const isolated = await Promise.all([renderMediaMarkdown('{{photo 1}}', mediaPhotos), renderMediaMarkdown('{{photo 2}}', mediaPhotos)]);
+  check('concurrent renderer requests do not share photo state', () => { assert.deepEqual([...isolated[0].used], [0]); assert.deepEqual([...isolated[1].used], [1]); });
+  check('derived excerpts skip marker-only paragraphs and marker fragments', () => { assert.equal(storyExcerpt('{{photo 1}}\n\nSynthetic article text.'), 'Synthetic article text.'); assert.equal(storyExcerpt('Before {{photo 99}} after.'), 'Before after.'); });
+  const duplicates = await renderMediaMarkdown('{{photo 2}}', [mediaPhotos[0], { ...mediaPhotos[0], alt: 'Second slot', zoom: 3 }]);
+  check('duplicate image addresses still refer to distinct ordered photo slots', () => { assert.deepEqual([...duplicates.used], [1]); assert.match(duplicates.html, /alt="Second slot"/); assert.match(duplicates.html, /scale:3/); });
+  for (const prose of ['{{photo 1}} This happened next.', '{{photo note}} Keep sentence.']) {
+    const result = await renderMediaMarkdown(prose, mediaPhotos);
+    check('marker-like prose is preserved literally: ' + prose, () => { assert.equal(result.used.size, 0); assert.ok(result.html.includes(prose)); });
+  }
+  check('malformed marker fragments do not leak into derived text', () => { assert.equal(storyExcerpt('Before {{photo 1}'), 'Before'); assert.equal(storyExcerpt('{{photo 1}oops\n\nNext paragraph.'), 'oops'); assert.equal(storyExcerpt('{{photo note} Keep sentence.'), 'Keep sentence.'); });
+  check('search strips markers from both indexed summaries and displayed snippets', () => {
+    const dek = 'Synthetic {{photo 1}} summary {{photo 2}';
+    const hit = toHit({ slug: 'sample', title: 'Sample', section: 'news', date: '2026-01-01', author: 'Synthetic', body: 'Body.', dek }, ['synthetic']);
+    assert.doesNotMatch(hit.snippet, /photo|[{}]/);
+    const db = new DatabaseSync(':memory:');
+    try {
+      db.exec('CREATE VIRTUAL TABLE stories_fts USING fts5(title, dek, author, church, body, stamp UNINDEXED)');
+      indexStory(db, 1, { title: 'Sample', author: 'Synthetic', body: '{{photo 1}}\n\nBody.', dek }, 1);
+      const row = db.prepare('SELECT dek, body FROM stories_fts').get();
+      assert.equal(row.dek, 'Synthetic summary'); assert.equal(row.body, 'Body.');
+    } finally { db.close(); }
+  });
   check('legacy absence is an empty module list', () => assert.deepEqual(normalizeStoryBlocks(undefined), []));
   check('IDs must be stable and unique', () => assert.throws(() => normalizeStoryBlocks([{ id: 'same', type: 'text' }, { id: 'same', type: 'divider' }])));
   check('unknown module types are rejected', () => assert.throws(() => normalizeStoryBlocks([{ id: 'html', type: 'raw-html' }])));
