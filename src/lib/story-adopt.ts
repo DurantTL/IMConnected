@@ -1,3 +1,4 @@
+import { normalizeAdditionalSections, parseAdditionalSections } from './site';
 // ONE-TIME ADOPTION of the built stories (epic #25, step 4). Server-side only.
 //
 // Until step 3 the stories table was a mirror of the built content collection and git was the source of truth.
@@ -253,7 +254,6 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
       if (d.photoLayout && d.photoLayout !== 'one') (base as Record<string, unknown>).photoLayout = d.photoLayout;
       if (d.announcement) (base as Record<string, unknown>).announcement = d.announcement;
       if (d.storyBlocks?.length) (base as Record<string, unknown>).storyBlocks = d.storyBlocks;
-      const contentHash = sha256Of(JSON.stringify([base, photoRows]));
 
       // 2. Then one short write for this story. Everything that decides it is read INSIDE the transaction, because a
       // person may have published, edited or unpublished this story since `prev` was read (the photo hashing above awaits):
@@ -262,15 +262,20 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
       db.exec('BEGIN IMMEDIATE');
       let outcome: 'inserted' | 'updated' | 'unchanged' | 'protected';
       try {
-        const now = db.prepare('SELECT source, updated_at, edited_at, status, content_hash FROM stories WHERE slug = ?').get(slug) as { source: string; updated_at: number; edited_at: number | null; status: string; content_hash: string | null } | undefined;
+        const now = db.prepare('SELECT source, updated_at, edited_at, status, content_hash, additional_sections FROM stories WHERE slug = ?').get(slug) as { source: string; updated_at: number; edited_at: number | null; status: string; content_hash: string | null; additional_sections: string } | undefined;
         if (now && (now.source !== 'git' || (now.edited_at !== null && Number(now.edited_at) > appliedAt) || !prev || Number(now.updated_at) !== prev.updatedAt)) outcome = 'protected';
         else if (!now && prev) outcome = 'protected'; // vanished meanwhile: not ours to recreate
         else {
+          // The old archive may omit the new field. Resolve inheritance only after
+          // rechecking the current row under the write lock, and hash the actual saved memberships.
+          const additionalSections = normalizeAdditionalSections(d.additionalSections === undefined ? parseAdditionalSections(now?.additional_sections) : d.additionalSections, d.section);
+          const hashBase = additionalSections.length ? { ...base, additionalSections } : base;
+          const contentHash = sha256Of(JSON.stringify([hashBase, photoRows]));
           const unpublishedNow = !!db.prepare('SELECT 1 FROM drafts WHERE slug = ? AND unpublished_at IS NOT NULL').get(slug);
           const status = unpublishedNow || held ? 'unpublished' : 'live';
           if (now && now.content_hash === contentHash && now.status === status) outcome = 'unchanged';
           else {
-            const story: StoryInput = { ...base, announcement: d.announcement ?? null, status, source: 'git', publishedAt: Date.parse(date), contentHash, photoRows, photoLayout: photoLayoutOrDefault(d.photoLayout) };
+            const story: StoryInput = { ...base, additionalSections, announcement: d.announcement ?? null, status, source: 'git', publishedAt: Date.parse(date), contentHash, photoRows, photoLayout: photoLayoutOrDefault(d.photoLayout) };
             outcome = writeStory(story, Date.now(), now ? 'upsert' : 'insert').outcome as 'inserted' | 'updated';
             if (status === 'unpublished') result.unpublished++;
           }

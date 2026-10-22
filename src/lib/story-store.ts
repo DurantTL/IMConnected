@@ -1,3 +1,4 @@
+import { normalizeAdditionalSections, parseAdditionalSections, sectionMembershipSql } from './site';
 import { parseAnnouncement, announcementJson, type Announcement } from './announcement';
 // Stories and their photos in the database. Since epic #25 step 4 this is the source of truth: publishing, editing and
 // unpublishing write here (src/lib/story-publish.ts) and nothing reads the build for content after the one-time
@@ -36,6 +37,7 @@ export interface StoryInput {
   title: string;
   dek?: string;
   section: string;
+  additionalSections?: string[];
   area?: string;
   column?: string;
   author: string;
@@ -82,6 +84,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
     title: String(r.title),
     dek: opt(r.dek),
     section: String(r.section),
+    additionalSections: parseAdditionalSections(r.additional_sections, String(r.section)),
     area: opt(r.area),
     column: opt(r.story_column),
     author: String(r.author),
@@ -152,7 +155,7 @@ function filters(opts: ListOptions): { sql: string; args: (string | number)[] } 
   const args: (string | number)[] = [];
   const status = opts.status ?? 'live';
   if (status !== 'all') { where.push('status = ?'); args.push(status); }
-  if (opts.section) { where.push('section = ?'); args.push(opts.section); }
+  if (opts.section) { where.push(opts.area ? 'section = ?' : sectionMembershipSql()); args.push(...(opts.area ? [opts.section] : [opts.section, opts.section])); }
   if (opts.area) { where.push('area = ?'); args.push(opts.area); }
   if (opts.featured !== undefined) { where.push('featured = ?'); args.push(opts.featured ? 1 : 0); }
   return { sql: where.length ? 'WHERE ' + where.join(' AND ') : '', args };
@@ -207,25 +210,26 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   // draft_id and published_by are plain columns (no foreign keys, see migration 011), so check them here.
   if (s.draftId !== undefined && !db.prepare('SELECT 1 FROM drafts WHERE id = ?').get(s.draftId)) throw new Error('writeStory: unknown draft');
   if (s.publishedBy !== undefined && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(s.publishedBy)) throw new Error('writeStory: unknown user');
-  const cur = mode === 'insert' ? undefined : (db.prepare('SELECT id, content_hash, status, source, announcement FROM stories WHERE slug = ?').get(s.slug) as
-    { id: number; content_hash: string | null; status: string; source: string; announcement: string | null } | undefined);
-  if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source) return { outcome: 'unchanged', id: Number(cur.id) };
+  const cur = mode === 'insert' ? undefined : (db.prepare('SELECT id, content_hash, status, source, announcement, additional_sections FROM stories WHERE slug = ?').get(s.slug) as
+    { id: number; content_hash: string | null; status: string; source: string; announcement: string | null; additional_sections: string } | undefined);
+  const additionalSections = normalizeAdditionalSections(s.additionalSections === undefined ? parseAdditionalSections(cur?.additional_sections) : s.additionalSections, s.section);
+  if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source && JSON.stringify(parseAdditionalSections(cur.additional_sections, s.section)) === JSON.stringify(additionalSections)) return { outcome: 'unchanged', id: Number(cur.id) };
   // Module text follows the body contract (every "<" is &lt;), and an image module may only show this story's own photos.
   const blocks = escapeStoryBlocks(normalizeStoryBlocks(s.storyBlocks ?? []));
   assertOwnStoryImages(blocks, [...(s.image ? [s.image] : []), ...s.photos]);
   const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
     JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
-    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout), JSON.stringify(blocks), s.announcement === undefined ? cur?.announcement ?? null : announcementJson(s.announcement)];
+    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout), JSON.stringify(blocks), s.announcement === undefined ? cur?.announcement ?? null : announcementJson(s.announcement), JSON.stringify(additionalSections)];
   const editedAt = s.editedAt === undefined ? null : editStamp(s.editedAt);
   let id: number;
   if (cur) {
     id = Number(cur.id);
     db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, additional_sections=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
     db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
   } else {
     const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, announcement, edited_at, slug)
+      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, announcement, additional_sections, edited_at, slug)
       VALUES (${Array(cols.length + 2).fill('?').join(',')})`).run(...cols, editedAt, s.slug);
     id = Number(r.lastInsertRowid);
   }

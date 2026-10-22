@@ -4,7 +4,7 @@ import type { Announcement } from './announcement';
 import { mapStoryPhotos, escapeStoryBlocks, type StoryBlock } from './story-blocks';
 import { storyUrl } from './stories';
 import { getPublicStories } from './public-stories';
-import { getSection, areaLabel } from './site';
+import { getSection, areaLabel, normalizeAdditionalSections } from './site';
 import { photoLayoutOrDefault } from './photo-layouts';
 import { stripMediaMarkers } from './story-media';
 
@@ -17,6 +17,7 @@ export interface FeedItem {
   title: string;
   dek?: string;
   section: string;
+  additionalSections?: string[];
   sectionLabel: string;
   area?: string;
   areaLabel?: string;
@@ -47,6 +48,7 @@ export interface FeedSource {
     title: string;
     dek?: string;
     section: string;
+  additionalSections?: string[];
     area?: string;
     column?: string;
     author: string;
@@ -75,6 +77,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     title: d.title,
     dek: d.dek ? stripMediaMarkers(d.dek) : undefined,
     section: d.section,
+    additionalSections: normalizeAdditionalSections(d.additionalSections, d.section),
     sectionLabel: getSection(d.section)?.label ?? d.section,
     area: d.area,
     areaLabel: areaLabel(d.section, d.area),

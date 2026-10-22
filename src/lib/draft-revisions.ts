@@ -1,3 +1,4 @@
+import { normalizeAdditionalSections } from './site';
 import { getDb } from './db';
 import type { DraftFields } from './drafts';
 import { normalizeStoryBlocks } from './story-blocks';
@@ -7,7 +8,7 @@ export interface EditorialSnapshot { fields: DraftFields; photos: RevisionPhoto[
 /** Explicit editorial whitelist. Never spread Draft: it contains private submission/account data. */
 export function editorialSnapshot(id: number, f: DraftFields): EditorialSnapshot {
   const fields: DraftFields = {
-    title: f.title, dek: f.dek, section: f.section, area: f.area, column: f.column, author: f.author, authorTitle: f.authorTitle,
+    title: f.title, dek: f.dek, section: f.section, additionalSections: normalizeAdditionalSections(f.additionalSections, f.section), area: f.area, column: f.column, author: f.author, authorTitle: f.authorTitle,
     church: f.church, date: f.date, photoCredit: f.photoCredit, photoLayout: f.photoLayout, featured: f.featured, body: f.body,
     storyBlocks: normalizeStoryBlocks(f.storyBlocks ?? []), announcement: normalizeAnnouncement(f.announcement),
   };
@@ -26,5 +27,8 @@ export function listDraftRevisions(id: number): { id: number; createdAt: number;
 }
 export function readDraftRevision(draftId: number, revisionId: number): EditorialSnapshot | null {
   const row = getDb().prepare('SELECT payload FROM draft_revisions WHERE draft_id=? AND id=?').get(draftId, revisionId) as { payload: string } | undefined;
-  return row ? JSON.parse(row.payload) as EditorialSnapshot : null;
+  if (!row) return null;
+  const snapshot = JSON.parse(row.payload) as EditorialSnapshot;
+  snapshot.fields.additionalSections = normalizeAdditionalSections(snapshot.fields.additionalSections, snapshot.fields.section);
+  return snapshot;
 }

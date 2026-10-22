@@ -62,6 +62,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       <div>
         <a class="kicker" href={`/${d.section}/`}>{section.label}</a>
         {sub && (<><span class="kicker"><span class="sep">/</span></span>{subHref ? <a class="kicker" href={subHref}>{sub}</a> : <span class="kicker">{sub}</span>}</>)}
+        {(d.additionalSections ?? []).filter((key) => key !== d.section).map((key) => <><span class="kicker" aria-hidden="true"> · </span><a class="kicker" href={`/${key}/`}>{getSection(key)?.label}</a></>)}
       </div>
       <h1>{d.title}</h1>
       {d.dek && <p class="dek">{d.dek}</p>}

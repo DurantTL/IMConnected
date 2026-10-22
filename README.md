@@ -50,6 +50,8 @@ Tests: `SCRATCH=/tmp/imc-photo-layouts node scripts/test-photo-layouts.mjs` afte
 
 ## Modular story editor and image focus
 
+Stories can belong to multiple sections: choose a primary Section/Category and check Additional sections in Story settings. A News → Camp story can also appear in Youth & Pathfinders without duplicating its article. See [multiple sections and API contracts](docs/MULTIPLE-SECTIONS.md).
+
 Image uploads and flyers accept JPEG, PNG, WebP and AVIF. See [image formats and agent/Studio compatibility](docs/IMAGE-FORMATS.md) for request examples, original-byte handling and email considerations.
 
 The [community navigation guide](docs/COMMUNITY-NAVIGATION.md) covers the homepage event rail, administrator website-menu settings, separate Stories/Announcements/Events queues and customizable module quick access.
@@ -267,6 +269,7 @@ curl -s -X POST https://<your-site>/api/agent/stories \
     "dek": "<one-sentence summary, optional, up to 240>",
     "body": "<plain text or Markdown>",
     "section": "news", "area": "churches",
+    "additionalSections": ["youth"],
     "author": "<byline>", "church": "<optional>",
     "date": "2026-10-19",
     "sourceUrl": "https://www.facebook.com/<page>/posts/<id>",

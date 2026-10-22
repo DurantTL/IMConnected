@@ -10,7 +10,7 @@ export class ReopenConflict extends AgentError {
   constructor(code: string, message: string, public status = 409) { super(code, message); }
 }
 const hash = (v: string) => createHash('sha256').update(v).digest('hex');
-const FIELDS = ['title', 'dek', 'body', 'section', 'area', 'author', 'church', 'date', 'photoLayout', 'announcement'] as const;
+const FIELDS = ['title', 'dek', 'body', 'section', 'area', 'author', 'church', 'date', 'photoLayout', 'announcement', 'additionalSections'] as const;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 export interface ReopenRequest { slug: string; requestHash: string; payloadHash: string; changes: Record<string, unknown>; photos?: unknown[]; note?: string }
 /** RequestId is opaque; retry the identical JSON body. Receipts retain hashes only. */
@@ -21,7 +21,7 @@ export function parseAgentReopen(value: unknown, raw: string): ReopenRequest {
   if (typeof value.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(value.requestId)) throw new AgentError('bad_request_id', 'requestId must contain 8–128 letters, digits, underscores or hyphens.');
   const changes = value.changes === undefined ? {} : value.changes;
   if (!object(changes) || Object.keys(changes).some((k) => !(FIELDS as readonly string[]).includes(k))) throw new AgentError('bad_field', 'changes must contain only supported editorial fields.');
-  for (const [key, v] of Object.entries(changes)) if (key !== 'announcement' && typeof v !== 'string') throw new AgentError('bad_field', `"${key}" must be text.`);
+  for (const [key, v] of Object.entries(changes)) if (key !== 'announcement' && key !== 'additionalSections' && typeof v !== 'string') throw new AgentError('bad_field', `"${key}" must be text.`);
   if (value.photos !== undefined && !Array.isArray(value.photos)) throw new AgentError('photos_invalid', 'photos must be a list of new images to append.');
   if (value.note !== undefined && typeof value.note !== 'string') throw new AgentError('bad_field', 'note must be text.');
   return { slug: value.slug, requestHash: hash(value.requestId), payloadHash: hash(raw), changes, photos: value.photos as unknown[] | undefined, note: value.note as string | undefined };

@@ -75,6 +75,27 @@ export const SECTIONS: Section[] = [
 
 export const SECTION_KEYS = SECTIONS.map((s) => s.key) as [SectionKey, ...SectionKey[]];
 
+/** One primary section retains its area; additional sections only add discovery memberships. */
+export function normalizeAdditionalSections(value: unknown, primary = ''): SectionKey[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 20 || value.some((key) => typeof key !== 'string' || !SECTION_KEYS.includes(key as SectionKey))) {
+    throw new Error('Additional sections must be a list of valid section keys.');
+  }
+  const selected = new Set(value);
+  return SECTION_KEYS.filter((key) => key !== primary && selected.has(key));
+}
+
+export function parseAdditionalSections(value: unknown, primary = ''): SectionKey[] {
+  return normalizeAdditionalSections(typeof value === 'string' ? JSON.parse(value) : value, primary);
+}
+
+export const belongsToSection = (story: { section: string; additionalSections?: string[] }, section: string) =>
+  story.section === section || !!story.additionalSections?.includes(section);
+
+/** Aliases come only from fixed SQL in this repository; values are always bound parameters. */
+export const sectionMembershipSql = (prefix = '') =>
+  `(${prefix}section = ? OR EXISTS (SELECT 1 FROM json_each(${prefix}additional_sections) memberships WHERE memberships.value = ?))`;
+
 export function getSection(key: string): Section | undefined {
   return SECTIONS.find((s) => s.key === key);
 }

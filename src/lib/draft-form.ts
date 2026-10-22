@@ -1,3 +1,4 @@
+import { normalizeAdditionalSections } from './site';
 import { normalizeAnnouncement } from './announcement';
 import { storyBlockPhotos } from './story-blocks';
 // Reads the editor form (save and preview) into draft fields, refusing oversized values instead of cutting them.
@@ -33,6 +34,7 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
     featured: form.get('featured') === '1',
     body: text(form, 'body', FIELD_MAX.body, 'The story text'),
   };
+  if (form.has('additionalSectionsPresent')) fields.additionalSections = normalizeAdditionalSections(form.getAll('additionalSections'), fields.section);
   if (form.has('announcementKind')) {
     const kind = line(form, 'announcementKind', 20, 'Content type');
     if (kind === 'story') fields.announcement = null;

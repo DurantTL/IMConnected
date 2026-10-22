@@ -1,3 +1,4 @@
+import { normalizeAdditionalSections } from './site';
 // Validates a Studio publish request and turns it into stories ready to write to the database (story-publish.ts).
 import { getSection, isValidArea } from './site';
 import { LIMITS } from './limits';
@@ -20,6 +21,7 @@ export interface PreparedStudioStory {
   title: string;
   dek: string;
   section: string;
+  additionalSections?: string[];
   area?: string;
   author: string;
   date: string;
@@ -113,6 +115,8 @@ export function prepareStudioPublish(input: unknown) {
       if (!storyBody) throw fail('Every story needs body text.');
       if (storyBody.length > LIMITS.bodyMax) throw fail('The story body is too long.');
       if (quote.length > PUBLISH_LIMITS.quote || attribution.length > PUBLISH_LIMITS.attribution) throw fail('The quote or attribution is too long.');
+      let additionalSections: string[] | undefined;
+      if (r.additionalSections !== undefined) { try { additionalSections = normalizeAdditionalSections(r.additionalSections, section); } catch (e) { throw fail((e as Error).message); } }
       if (!getSection(section)) throw fail('That section does not exist.');
       if (!isValidArea(section, area)) throw fail('That category is not valid for this section.');
 
@@ -147,7 +151,7 @@ export function prepareStudioPublish(input: unknown) {
         if (attribution) lines.push('>', `> — ${textToMarkdown(attribution).replace(/\n+/g, ' ')}`);
         md += '\n\n' + lines.join('\n');
       }
-      stories.push({ ref, slug, title, dek, section, area, author, date: issueDate, photoCredit: lead?.credit ?? '', photoLayout, leadAlt: lead?.alt ?? '', body: md.trim(), photos });
+      stories.push({ additionalSections, ref, slug, title, dek, section, area, author, date: issueDate, photoCredit: lead?.credit ?? '', photoLayout, leadAlt: lead?.alt ?? '', body: md.trim(), photos });
     }
 
     return { name, issueDate, stories };
