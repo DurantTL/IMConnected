@@ -20,7 +20,8 @@ export function pageWindow(current: number, total: number): (number | null)[] {
   const out: (number | null)[] = [];
   let prev = 0;
   for (const n of [...keep].sort((a, b) => a - b)) {
-    if (n - prev > 1) out.push(null);
+    if (n - prev === 2) out.push(prev + 1); // a gap of one page shows the number, not an ellipsis
+    else if (n - prev > 2) out.push(null);
     out.push(n);
     prev = n;
   }

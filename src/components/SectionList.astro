@@ -31,9 +31,9 @@ const base = area ? `/${section.key}/${area.key}/` : `/${section.key}/`;
       <p>{section.blurb}</p>
       {section.areas && (
         <nav class="chips" aria-label={`${section.label} areas`}>
-          <a class="chip" href={`/${section.key}/`} aria-current={!area ? 'page' : undefined}>All</a>
+          <a class="chip" href={`/${section.key}/`} aria-current={!area ? (page > 1 ? 'true' : 'page') : undefined}>All</a>
           {section.areas.map((a) => (
-            <a class="chip" href={`/${section.key}/${a.key}/`} aria-current={area?.key === a.key ? 'page' : undefined}>{a.label}</a>
+            <a class="chip" href={`/${section.key}/${a.key}/`} aria-current={area?.key === a.key ? (page > 1 ? 'true' : 'page') : undefined}>{a.label}</a>
           ))}
         </nav>
       )}

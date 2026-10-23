@@ -468,9 +468,9 @@ try {
     const now = Date.now();
     const day = (i) => new Date(Date.UTC(2026, 5, 1) - i * 86400000).toISOString().slice(0, 10);
     const nn = (i) => String(i).padStart(2, '0');
-    const add = (slug, section, area, date, extra = '[]') => run("INSERT INTO stories (slug, title, section, area, author, date, photos, status, source, published_at, updated_at, additional_sections, body) VALUES (?, ?, ?, ?, 'Synthetic Author', ?, '[]', 'live', 'editor', ?, ?, ?, 'A made-up paragraph.')", slug, 'Synthetic ' + slug, section, area, date, now, now, extra);
+    const add = (slug, section, area, date, extra = '[]', published = now) => run("INSERT INTO stories (slug, title, section, area, author, date, photos, status, source, published_at, updated_at, additional_sections, body) VALUES (?, ?, ?, ?, 'Synthetic Author', ?, '[]', 'live', 'editor', ?, ?, ?, 'A made-up paragraph.')", slug, 'Synthetic ' + slug, section, area, date, published, now, extra);
     for (let i = 1; i <= 44; i++) add(`synthetic-paging-${nn(i)}`, 'kids', null, day(i));
-    add('synthetic-paging-extra', 'youth', null, day(22), '["kids"]'); // dated like story 22
+    add('synthetic-paging-extra', 'youth', null, day(22), '["kids"]', now + 60000); // dated like story 22
     for (let i = 1; i <= 23; i++) add(`synthetic-camp-${nn(i)}`, 'news', 'camp', day(i));
     await startServer(pdir);
     const slugsOn = (t) => [...mainOf(t).matchAll(/href="\/stories\/([^"/]+)\/"/g)].map((m) => m[1]);
@@ -478,7 +478,7 @@ try {
     const p1 = await pg('/kids/'), p2 = await pg('/kids/page/2/'), p3 = await pg('/kids/page/3/');
     check('(paging) 45 stories in one section: pages hold 20, 20 and 5 stories', p1.status === 200 && p2.status === 200 && p3.status === 200 && [p1, p2, p3].map((p) => new Set(p.slugs).size).join() === '20,20,5', [p1, p2, p3].map((p) => p.slugs.length).join());
     const all = [...p1.slugs, ...p2.slugs, ...p3.slugs];
-    const expected = q("SELECT slug FROM stories WHERE status = 'live' AND (section = 'kids' OR additional_sections LIKE '%\"kids\"%') ORDER BY date DESC, slug ASC").map((r) => r.slug);
+    const expected = q("SELECT slug FROM stories WHERE status = 'live' AND (section = 'kids' OR additional_sections LIKE '%\"kids\"%') ORDER BY date DESC, published_at DESC, slug ASC").map((r) => r.slug);
     check('(paging) newest first across the pages, boundaries are exact (20|21 and 40|41), and every story appears exactly once', all.length === 45 && new Set(all).size === 45 && all.join() === expected.join() && p1.slugs[19] === expected[19] && p2.slugs[0] === expected[20] && p3.slugs[0] === expected[40], all.slice(0, 3).join());
     check('(paging) a story that only has kids as an additional section shows once', all.filter((s) => s === 'synthetic-paging-extra').length === 1);
     // the canonical and prev/next links use SITE_URL from the build, so only their paths are compared
@@ -495,11 +495,18 @@ try {
     const r1 = await get('/kids/page/1/');
     check('(paging) /page/1/ redirects (301) to the plain URL', r1.status === 301 && new URL(r1.loc, BASE).pathname === '/kids/', `${r1.status} ${r1.loc}`);
     const bad = [];
-    for (const u of ['/kids/page/4/', '/kids/page/0/', '/kids/page/abc/', '/kids/page/02/', '/kids/page/-1/', '/kids/page/2.5/', '/kids/page/', '/kids/page/9999999/', '/nope/page/2/', '/kids/page/2/extra/', '/news/camp/page/3/', '/youth/page/2/', '/news/nope/page/2/']) {
+    for (const u of ['/kids/page/4/', '/news/camp/page/3/', '/youth/page/2/']) {
       const r = await get(u);
-      if (r.status !== 404 || /public/.test(r.headers.get('cache-control') ?? '') || !r.text.includes('We couldn’t find that page')) bad.push(`${u} ${r.status} ${r.headers.get('cache-control')}`);
+      if (r.status !== 404 || r.headers.get('cache-control') !== 'no-store' || !r.text.includes('We couldn’t find that page')) bad.push(`${u} ${r.status} ${r.headers.get('cache-control')}`);
     }
-    check('(paging) beyond the last page, page/0, page/abc and other malformed or unknown pages are a 404 with the 404 page, no-store', bad.length === 0, bad.join(' | '));
+    check('(paging) a page beyond the last one (valid keyed URL) is a 404 with the 404 page and Cache-Control: no-store', bad.length === 0, bad.join(' | '));
+    const bad2 = [];
+    for (const u of ['/kids/page/0/', '/kids/page/abc/', '/kids/page/02/', '/kids/page/-1/', '/kids/page/2.5/', '/kids/page/', '/kids/page/9999999/', '/nope/page/2/', '/kids/page/2/extra/', '/news/nope/page/2/']) {
+      const r = await get(u);
+      if (r.status !== 404 || /public/.test(r.headers.get('cache-control') ?? '') || !r.text.includes('We couldn’t find that page')) bad2.push(`${u} ${r.status} ${r.headers.get('cache-control')}`);
+    }
+    check('(paging) malformed or unknown page URLs (page/0, abc, 02, 9999999, unknown section) are a 404 with the 404 page and never publicly cacheable', bad2.length === 0, bad2.join(' | '));
+    check('(paging) two stories with the same date are ordered by published_at (the later one first), not by slug', expected.indexOf('synthetic-paging-extra') < expected.indexOf('synthetic-paging-22') && all.indexOf('synthetic-paging-extra') < all.indexOf('synthetic-paging-22'), `${expected.indexOf('synthetic-paging-extra')} ${expected.indexOf('synthetic-paging-22')}`);
     const a1 = await pg('/news/camp/'), a2 = await pg('/news/camp/page/2/');
     check('(paging) area pages page too: 23 camp stories are 20 + 3, newest first, only that area', a1.slugs.length === 20 && a2.slugs.length === 3 && [...a1.slugs, ...a2.slugs].every((s, i) => s === `synthetic-camp-${nn(i + 1)}`) && canon(a2.text) === `/news/camp/page/2/` && linkRel(a2.text, 'prev') === `/news/camp/` && linkRel(a1.text, 'next') === `/news/camp/page/2/`, `${a1.slugs.length} ${a2.slugs.length}`);
     const ar1 = await get('/news/camp/page/1/');

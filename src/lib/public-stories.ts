@@ -105,7 +105,7 @@ export async function ready(): Promise<void> {
 // The whole list is kept for reuse by the home page, the section pages and the feeds; it goes with every invalidation.
 let listed: { generation: number; at: number; stories: PublicStory[] } | undefined;
 
-/** Published stories, newest first (date, then slug). Throws StoriesUnavailable when the table can't be read. */
+/** Published stories, newest first (date, then published_at, then slug). Throws StoriesUnavailable when the table can't be read. */
 export async function getPublicStories(): Promise<PublicStory[]> {
   try {
     await ready();

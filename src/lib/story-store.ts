@@ -165,12 +165,12 @@ function filters(opts: ListOptions): { sql: string; args: (string | number)[] } 
   return { sql: where.length ? 'WHERE ' + where.join(' AND ') : '', args };
 }
 
-/** Stories, newest first (date, then slug), with paging. */
+/** Stories, newest first (date, then published_at, then slug), with paging. */
 export function listStories(opts: ListOptions = {}): Story[] {
   const { sql, args } = filters(opts);
   const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 20) || 20, 1), LIST_MAX);
   const offset = Math.max(Math.trunc(opts.offset ?? 0) || 0, 0);
-  const rows = getDb().prepare(`SELECT * FROM stories ${sql} ORDER BY date DESC, slug ASC LIMIT ? OFFSET ?`).all(...args, limit, offset) as Row[];
+  const rows = getDb().prepare(`SELECT * FROM stories ${sql} ORDER BY date DESC, published_at DESC, slug ASC LIMIT ? OFFSET ?`).all(...args, limit, offset) as Row[];
   return rows.map((r) => fromRow(r, photosOf(Number(r.id))));
 }
 

@@ -47,8 +47,8 @@ const PAGE_NUMBER = /^[1-9]\d{0,5}$/;
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
 
 /**
- * The cache key for a public path that the server renders (home, a section, an area, a story, /stories.json,
- * /rss.xml), or null for any other path. Pure string work: the middleware calls it for every public request.
+ * The cache key for a public path that the server renders (home, a section, an area, their paged versions
+ * /<section>/page/<n> and /<section>/<area>/page/<n>, a story, /stories.json, /rss.xml), or null for any other path. Pure string work: the middleware calls it for every public request.
  * A trailing slash makes no difference; section and area must be real ones, so random URLs never fill the cache.
  */
 export function publicCacheKey(pathname: string): string | null {
