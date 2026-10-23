@@ -236,7 +236,7 @@ try {
       await page.keyboard.press('ArrowRight'); await sleep(150);
       const after2 = await page.locator('.viewer-pos').textContent();
       check('zoomed portrait photo: ArrowRight (no sideways overflow) still shows the next photo, and the zoom resets', after2 !== pos2 && (await tf(page)).s === 1, `${pos2} -> ${after2}`);
-      check('the zoom group is described by the arrow-key hint', await page.evaluate(() => { const g = document.querySelector('.viewer-zoom'); const h = document.getElementById(g.getAttribute('aria-describedby')); return /arrow keys move the photo; press 0 to reset/.test(h?.textContent ?? ''); }));
+      check('the viewer itself is described by the zoom-key hint, so it is read on open', await page.evaluate(() => { const d = document.querySelector('dialog.viewer'); const ids = (d?.getAttribute('aria-describedby') ?? '').split(/\s+/); const h = ids.includes('viewer-zoom-hint') ? document.getElementById('viewer-zoom-hint') : null; return /arrow keys move the photo where it extends past the screen; 0 resets/.test(h?.textContent ?? ''); }));
 
       // close and focus return
       await page.keyboard.press('+'); await sleep(250);

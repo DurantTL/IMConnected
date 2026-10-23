@@ -7,7 +7,7 @@
 //
 // Zoom (issue #83): the photo opens fitted to the screen (100%) and zooms up to 400%. Buttons (Zoom in, Zoom out, Reset), the
 // keys + - 0, Ctrl+wheel / trackpad pinch, two-finger touch pinch, and double-click / double-tap (fit <-> 200%). A zoomed photo
-// is dragged to pan (the arrow keys pan too while zoomed) and is clamped so it can never leave the screen. Showing another photo
+// is dragged to pan (while zoomed, the arrow keys pan along an axis the photo overflows, else Left/Right change photo) and is clamped so it can never leave the screen. Showing another photo
 // resets the zoom. Only a CSS transform on the already-loaded same-origin image is used. The level is announced politely and
 // debounced ("200%"); with reduced motion every change is instant.
 
@@ -139,16 +139,16 @@ function init(): void {
     d.className = 'viewer';
     d.setAttribute('aria-modal', 'true');
     d.setAttribute('aria-label', 'Photo viewer');
-    d.setAttribute('aria-describedby', 'viewer-desc'); // read on open: the photo's alt text and "n of total"
+    d.setAttribute('aria-describedby', 'viewer-desc viewer-zoom-hint'); // read on open: the photo's alt text, "n of total" and the zoom keys
     d.innerHTML =
       '<div class="viewer-stage"><img class="viewer-img" alt="" decoding="async" draggable="false"></div>' +
       '<button type="button" class="viewer-btn viewer-close" aria-label="Close photo viewer"><span aria-hidden="true">&times;</span></button>' +
-      '<div class="viewer-zoom" role="group" aria-label="Zoom" aria-describedby="viewer-zoom-hint">' +
+      '<div class="viewer-zoom" role="group" aria-label="Zoom">' +
       '<button type="button" class="viewer-btn viewer-zoom-out" aria-label="Zoom out" aria-disabled="true"><span aria-hidden="true">&minus;</span></button>' +
       '<button type="button" class="viewer-btn viewer-zoom-in" aria-label="Zoom in"><span aria-hidden="true">+</span></button>' +
       '<button type="button" class="viewer-btn viewer-zoom-reset" aria-label="Reset zoom" aria-disabled="true">Reset</button>' +
       '<span class="viewer-zoom-level" aria-hidden="true">100%</span></div>' +
-      '<p class="sr-only" id="viewer-zoom-hint">While zoomed, arrow keys move the photo; press 0 to reset.</p>' +
+      '<p class="sr-only" id="viewer-zoom-hint">Plus and minus zoom. While zoomed, arrow keys move the photo where it extends past the screen; 0 resets.</p>' +
       '<p class="sr-only viewer-zoom-status" role="status" aria-live="polite" aria-atomic="true"></p>' +
       (total > 1
         ? '<button type="button" class="viewer-btn viewer-prev" aria-label="Previous photo"><span aria-hidden="true">&#8249;</span></button>' +
@@ -211,7 +211,7 @@ function init(): void {
       // Zoomed: an arrow key pans, a keyboard user's only way to look around, but only along an axis the photo overflows.
       // On an axis it does not overflow Left/Right keep changing photo; Reset (or 0) brings navigation back; the Previous and
       // Next buttons keep working throughout, whichever element has focus.
-      const overflows = scale > 1 && (horizontal ? stageImg.offsetWidth * scale > d.clientWidth : stageImg.offsetHeight * scale > d.clientHeight);
+      const overflows = scale > 1 && (horizontal ? stageImg.offsetWidth * scale - d.clientWidth > 8 : stageImg.offsetHeight * scale - d.clientHeight > 8);
       if (overflows && e.key.startsWith('Arrow')) {
         e.preventDefault();
         if (e.key === 'ArrowLeft') tx += 80; else if (e.key === 'ArrowRight') tx -= 80; else if (e.key === 'ArrowUp') ty += 80; else ty -= 80;
