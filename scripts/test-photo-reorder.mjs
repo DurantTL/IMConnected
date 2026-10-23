@@ -354,8 +354,7 @@ try {
 
   // restore across a replace through the revision history UI
   {
-    await page.goto(`${BASE}/admin/drafts/${rid}#review`);
-    await page.getByText('Saved revision history', { exact: true }).click();
+    await page.goto(`${BASE}/admin/drafts/${rid}#history`);
     await page.waitForFunction((rev) => [...document.getElementById('draft-revision-choice').options].some((o) => o.value === String(rev)), withKeys);
     await page.locator('#draft-revision-choice').selectOption(String(withKeys));
     await page.locator('#restore-draft-revision').click();

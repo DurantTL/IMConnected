@@ -16,7 +16,6 @@ if (form) {
   const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
   const conflictEl = document.getElementById('conflict') as HTMLElement;
   const preview = document.getElementById('preview') as HTMLIFrameElement;
-  const split = document.getElementById('split') as HTMLElement;
   const section = document.getElementById('f-section') as HTMLSelectElement;
   const area = document.getElementById('f-area') as HTMLSelectElement;
   const editable = !form.querySelector('fieldset')?.disabled;
@@ -45,6 +44,7 @@ if (form) {
       if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load revision history.');
       revisionChoice.replaceChildren(new Option(data.revisions.length ? 'Choose a previous save' : 'No previous saves yet', ''));
       for (const revision of data.revisions) revisionChoice.append(new Option(`Before save ${new Date(revision.createdAt).toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'medium', timeStyle: 'short' })} CT — ${revision.editor}`, String(revision.id)));
+      const historyMeta = document.querySelector('[data-meta="history"]'); if (historyMeta) historyMeta.textContent = `${data.revisions.length} saved ${data.revisions.length === 1 ? 'version' : 'versions'}`;
       revisionChoice.value = selected; revisionRestore.disabled = restoringRevision || !editable || !revisionChoice.value;
     } catch (error) { if (revisionStatus) revisionStatus.textContent = error instanceof Error ? error.message : 'Could not load revision history.'; }
   }
@@ -68,7 +68,7 @@ if (form) {
       const response = await fetch(form!.dataset.revisions!, { method: 'POST', credentials: 'same-origin', body: data }), result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || 'Could not restore this revision.');
       dirty = false; setVersion(result.updatedAt);
-      window.location.assign(`${window.location.pathname}?revision_restored=1${result.warnings?.length ? '&missing_media=1' : ''}${result.replacedKept ? '&photo_replaced_kept=1' : ''}#review`);
+      window.location.assign(`${window.location.pathname}?revision_restored=1${result.warnings?.length ? '&missing_media=1' : ''}${result.replacedKept ? '&photo_replaced_kept=1' : ''}#history`);
       navigating = true;
     } catch (error) { if (revisionStatus) revisionStatus.textContent = error instanceof Error ? error.message : 'Could not restore this revision.'; }
     finally {
@@ -218,14 +218,6 @@ if (form) {
     previewTimer = window.setTimeout(renderPreview, 600);
   }
   void renderPreview();
-
-  for (const tab of document.querySelectorAll<HTMLButtonElement>('.ed-tabs [data-view]')) {
-    tab.addEventListener('click', () => {
-      split.dataset.view = tab.dataset.view;
-      for (const t of document.querySelectorAll<HTMLButtonElement>('.ed-tabs [data-view]')) t.setAttribute('aria-pressed', String(t === tab));
-      if (tab.dataset.view === 'preview') void renderPreview();
-    });
-  }
 
   // ---- section decides which categories and the column field are offered ----
   function syncSection() {

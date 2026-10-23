@@ -32,10 +32,9 @@ if (form && blocksField) {
   const useModules = document.getElementById('use-modules') as HTMLButtonElement;
   const useMarkdown = document.getElementById('use-markdown') as HTMLButtonElement;
   const split = document.getElementById('split')!;
-  const writePane = split.querySelector<HTMLElement>('.ed-write')!;
-  const previewPane = split.querySelector<HTMLElement>('.ed-preview')!;
   const inspector = document.getElementById('module-inspector')!;
-  const compact = window.matchMedia('(max-width: 1100px)');
+  // The part of the editor that is open (the outline decides); 'content' is the body, where a module may be selected.
+  let activePanel = 'content';
   const library = document.querySelector<HTMLDetailsElement>('.sb-library-disclosure')!;
   const phone = window.matchMedia('(max-width: 650px)');
   if (phone.matches) library.open = false;
@@ -94,7 +93,13 @@ if (form && blocksField) {
     highlightCanvas();
     useModules.setAttribute('aria-pressed', String(modular));
     useMarkdown.setAttribute('aria-pressed', String(!modular));
-    useModules.textContent = modular ? 'Modules active' : 'Use modules';
+    useModules.textContent = modular ? 'Modules active' : 'Split into modules';
+    const bodyText = document.getElementById('outline-body-text'), bodyModules = document.getElementById('outline-body-modules');
+    if (bodyText) bodyText.hidden = modular;
+    if (bodyModules) bodyModules.hidden = !modular;
+    const bodyHeading = document.getElementById('studio-heading-content');
+    if (bodyHeading) bodyHeading.textContent = modular ? 'Story modules' : 'Body text';
+    markCurrent();
     useMarkdown.textContent = modular ? 'Switch to Markdown' : 'Markdown active';
     undo.disabled = !editable || !history.length;
     redo.disabled = !editable || !future.length;
@@ -140,10 +145,12 @@ if (form && blocksField) {
       item.dataset.moduleId = block.id;
       if (column !== undefined) item.style.marginLeft = '16px';
       // No aria-label: the visible text ("1. Paragraph ...") is the accessible name (WCAG 2.5.3 label in name).
-      const select = button(`${display}. ${labels[block.type]}${column !== undefined ? ` · Column ${column + 1}` : ''}`, () => { selected = block.id; render(); focusSelected(); });
+      const select = button(`${display}. ${labels[block.type]}${column !== undefined ? ` · Column ${column + 1}` : ''}`, () => { selected = block.id; setPanel('content'); render(); focusSelected(); revealPart('module'); });
       select.dataset.selectModule = block.id;
+      select.disabled = false; // choosing a module only changes what is shown, so a closed draft can still be browsed
       const grip = node('span', '⠿', 'sb-grip'); grip.setAttribute('aria-hidden', 'true'); select.prepend(grip);
       select.setAttribute('aria-pressed', String(selected === block.id));
+      if (selected === block.id && activePanel === 'content') select.setAttribute('aria-current', 'true');
       select.className = 'sb-select-module';
       const summary = block.text || block.label || (block.type === 'image' ? photos.find((p) => p.id === block.photoId)?.alt : '') || '';
       if (summary) select.append(node('small', summary.slice(0, 64)));
@@ -353,14 +360,9 @@ if (form && blocksField) {
   }
   function render() { sync(); renderOutline(); renderFields(); }
   function syncPanes() {
-    const previewOnly = compact.matches && split.dataset.view === 'preview';
-    for (const [pane, visible] of [[writePane, !previewOnly], [previewPane, !compact.matches || previewOnly], [inspector, modular && !previewOnly]] as const) {
-      pane.hidden = !visible;
-      pane.inert = !visible;
-    }
+    inspector.hidden = !modular;
+    inspector.inert = !modular;
   }
-  compact.addEventListener('change', syncPanes);
-  new MutationObserver(syncPanes).observe(split, { attributes: true, attributeFilter: ['data-view'] });
   const librarySearch = document.getElementById('module-library-search') as HTMLInputElement;
   const libraryReset = document.getElementById('module-library-reset') as HTMLButtonElement;
   const libraryCategory = document.getElementById('module-library-category') as HTMLSelectElement;
@@ -538,14 +540,13 @@ if (form && blocksField) {
       module.style.minHeight = '24px';
     }
     highlightCanvas();
+    revealPart(activePanel === 'content' ? 'module' : activePanel);
     const selectFromCanvas = (target: Element) => {
       if (!editable || !modular) return;
       const id = target.closest<HTMLElement>('[data-module-id]')?.dataset.moduleId;
       if (!id || !walkStoryBlocks(blocks).some((block) => block.id === id)) return;
       selected = id;
-      // On phones, selecting a canvas module opens the Build view before focusing its field.
-      split.dataset.view = 'write';
-      for (const tab of document.querySelectorAll<HTMLElement>('.ed-tabs [data-view]')) tab.setAttribute('aria-pressed', String(tab.dataset.view === 'write'));
+      setPanel('content');
       render();
       fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
       announce('Module selected from the canvas. Its settings are ready to edit.');
@@ -700,35 +701,68 @@ if (form && blocksField) {
   }
   const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-studio-panel]'));
   const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-studio-tab]'));
+  const studio = document.querySelector<HTMLElement>('.editor-studio');
+  const previewCard = document.getElementById('ed-preview-card');
+  const outlineCard = document.getElementById('ed-outline');
+  studio?.setAttribute('data-js', '');
+  if (outlineCard) outlineCard.hidden = false;
+  if (previewCard) previewCard.hidden = false;
+  // The outline marks the open part with aria-current: the static parts, "Body text", or the selected module.
+  function markCurrent() {
+    for (const tab of tabs) {
+      const current = tab.dataset.studioTab === activePanel && !(activePanel === 'content' && modular);
+      if (current) tab.setAttribute('aria-current', 'true'); else tab.removeAttribute('aria-current');
+    }
+    for (const module of outline.querySelectorAll<HTMLElement>('[data-select-module]')) {
+      if (activePanel === 'content' && module.dataset.selectModule === selected) module.setAttribute('aria-current', 'true'); else module.removeAttribute('aria-current');
+    }
+  }
+  // Selecting a part scrolls the private preview to it when it can (the preview is a same-origin, script-disabled frame).
+  function revealPart(part: string) {
+    const doc = previewFrame.contentDocument, win = previewFrame.contentWindow;
+    if (!doc || !win || !doc.body) return;
+    let target: Element | null = null;
+    if (part === 'module') target = modular ? doc.querySelector(`[data-module-id="${CSS.escape(selected)}"]`) : null;
+    else if (part === 'photos') target = doc.querySelector('.story-photos, .photos, figure, article img');
+    else if (part === 'settings') { win.scrollTo({ top: 0 }); return; }
+    if (!target) return;
+    const box = target.getBoundingClientRect();
+    if (box.top < 0 || box.bottom > win.innerHeight) win.scrollTo({ top: Math.max(0, box.top + win.scrollY - 72) });
+  }
   function setPanel(name: string, focus = false) {
     if (!panels.some((panel) => panel.dataset.studioPanel === name)) name = 'content';
+    activePanel = name;
     for (const panel of panels) {
       const active = panel.dataset.studioPanel === name;
       panel.hidden = !active; panel.inert = !active;
     }
-    for (const tab of tabs) {
-      const active = tab.dataset.studioTab === name;
-      tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
-    }
-    document.querySelector('.editor-studio')?.setAttribute('data-active-panel', name);
-    if (focus) tabs.find((tab) => tab.dataset.studioTab === name)?.focus();
+    markCurrent();
+    studio?.setAttribute('data-active-panel', name);
+    if (focus) panels.find((panel) => panel.dataset.studioPanel === name)?.querySelector<HTMLElement>('[data-panel-heading]')?.focus();
     if (window.location.hash !== `#${name}`) window.history.replaceState(null, '', `#${name}`);
+    if (name !== 'content') revealPart(name);
   }
-  const tabbar = document.querySelector<HTMLElement>('.studio-tabs');
-  if (tabbar) tabbar.hidden = false;
-  for (const tab of tabs) {
-    tab.addEventListener('click', () => setPanel(tab.dataset.studioTab!, true));
-    tab.addEventListener('keydown', (event) => {
-      let index = tabs.indexOf(tab);
-      if (event.key === 'ArrowRight') index = (index + 1) % tabs.length;
-      else if (event.key === 'ArrowLeft') index = (index + tabs.length - 1) % tabs.length;
-      else if (event.key === 'Home') index = 0;
-      else if (event.key === 'End') index = tabs.length - 1;
-      else return;
-      event.preventDefault(); setPanel(tabs[index].dataset.studioTab!, true);
-    });
-  }
-  for (const control of document.querySelectorAll<HTMLElement>('[data-open-panel]')) control.addEventListener('click', () => setPanel(control.dataset.openPanel!, true));
+  for (const tab of tabs) tab.addEventListener('click', () => { setPanel(tab.dataset.studioTab!, true); if (tab.dataset.studioTab === 'content') revealPart('module'); });
+  // "Add to the story" opens the module library (module stories only).
+  document.getElementById('outline-add')?.addEventListener('click', () => {
+    if (!editable || !modular) return;
+    setPanel('content'); library.open = true;
+    (document.getElementById('module-library-search') as HTMLElement | null)?.focus();
+    library.scrollIntoView({ block: 'start' });
+  });
+  for (const control of document.querySelectorAll<HTMLElement>('[data-open-panel]')) control.addEventListener('click', (event) => {
+    const hash = control instanceof HTMLAnchorElement ? control.getAttribute('href') : null;
+    if (hash?.startsWith('#')) event.preventDefault();
+    control.closest('details')?.removeAttribute('open');
+    setPanel(control.dataset.openPanel!, !hash);
+    if (control.dataset.openDetails) { const details = document.getElementById(control.dataset.openDetails); if (details instanceof HTMLDetailsElement) details.open = true; }
+    const target = hash && hash.length > 1 ? document.querySelector<HTMLElement>(hash) : null;
+    if (!target) return;
+    const focusable = target.matches('input,select,textarea,button,summary') ? target : target.querySelector<HTMLElement>(target instanceof HTMLDetailsElement ? 'textarea,input,summary' : 'input,select,textarea,button');
+    const heading = target.closest('[data-studio-panel]')?.querySelector<HTMLElement>('[data-panel-heading]');
+    (focusable ?? heading)?.focus();
+    target.scrollIntoView({ block: 'center' });
+  });
   const saveStatus = document.getElementById('save-status');
   const mobileSaveStatus = document.querySelector('[data-mobile-save-status]');
   if (saveStatus && mobileSaveStatus) {
@@ -736,18 +770,40 @@ if (form && blocksField) {
     reflectStatus();
     new MutationObserver(reflectStatus).observe(saveStatus, { childList: true, subtree: true, characterData: true });
   }
+  const narrow = window.matchMedia('(max-width: 767px)');
   for (const control of document.querySelectorAll('[data-studio-preview]')) control.addEventListener('click', () => {
-    setPanel('content');
-    document.getElementById('split')!.dataset.view = 'preview';
-    for (const tab of document.querySelectorAll('.ed-tabs [data-view]')) tab.setAttribute('aria-pressed', String((tab as HTMLElement).dataset.view === 'preview'));
+    // Three and two columns keep the preview beside the editor; on phones it opens as its own view.
+    if (narrow.matches && previewCard) previewCard.dataset.open = 'true';
+    previewCard?.scrollIntoView({ block: 'start' });
     previewFrame.focus();
   });
+  for (const close of document.querySelectorAll('[data-preview-close]')) close.addEventListener('click', () => { delete previewCard?.dataset.open; (document.querySelector('[data-studio-preview]') as HTMLElement | null)?.focus(); });
   form.addEventListener('input', () => {
     const storyTitle = (form.elements.namedItem('title') as HTMLInputElement)?.value.trim() || 'Untitled story';
     const author = (form.elements.namedItem('author') as HTMLInputElement)?.value.trim() || 'Add an author in Story settings';
     const heading = document.querySelector('.studio-title-line h1'); if (heading) heading.textContent = storyTitle;
     const reviewTitle = document.querySelector('[data-review-title]'); if (reviewTitle) reviewTitle.textContent = storyTitle;
     const reviewAuthor = document.querySelector('[data-review-author]'); if (reviewAuthor) reviewAuthor.textContent = author;
+    // Keep the outline's meta lines, dots and the status strip in step with what is typed.
+    const value = (name: string) => ((form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '').trim();
+    const sectionSelect = form.elements.namedItem('section') as HTMLSelectElement | null, areaSelect = form.elements.namedItem('area') as HTMLSelectElement | null;
+    const area = areaSelect?.value && !areaSelect.selectedOptions[0]?.hidden ? areaSelect.selectedOptions[0]?.textContent ?? '' : '';
+    const eyebrow = sectionSelect?.value ? [sectionSelect.selectedOptions[0]?.textContent, area].filter(Boolean).join(' · ') : 'Draft';
+    for (const el of document.querySelectorAll('[data-editor-eyebrow]')) el.textContent = eyebrow;
+    const detailsMeta = document.querySelector('[data-meta="settings"]'); if (detailsMeta) detailsMeta.textContent = sectionSelect?.value ? eyebrow : 'Headline · summary · section';
+    const words = body.value.trim() ? body.value.trim().split(/\s+/).length : 0;
+    const bodyMeta = document.querySelector('[data-meta="body"]'); if (bodyMeta) bodyMeta.textContent = `${words} ${words === 1 ? 'word' : 'words'}`;
+    const missing: Record<string, boolean> = { title: !value('title'), author: !value('author'), section: !value('section'), date: !value('date'), body: !body.value.trim() && blocksField.value === '[]' };
+    for (const li of document.querySelectorAll<HTMLElement>('[data-problem]')) li.hidden = !missing[li.dataset.problem!];
+    const list = document.querySelector<HTMLElement>('.ed-problems'), ok = document.querySelector<HTMLElement>('.ed-ok');
+    if (list && ok) { const any = Array.from(list.children).some((li) => !(li as HTMLElement).hidden); list.hidden = !any; ok.hidden = any; }
+    const setDot = (key: string, attention: boolean) => {
+      const dot = document.querySelector<HTMLElement>(`[data-dot="${key}"]`), text = document.querySelector<HTMLElement>(`[data-dot-text="${key}"]`);
+      if (!dot || !editable) return;
+      dot.className = `ed-dot ${attention ? 'warn' : 'ok'}`; if (text) text.textContent = attention ? 'Needs attention' : 'Done';
+    };
+    setDot('settings', missing.title || missing.author || missing.section || missing.date);
+    setDot('body', missing.body);
   });
   const notice = new URLSearchParams(location.search).get('n');
   setPanel(location.hash.slice(1) || (['photos', 'uploaded', 'photo_moved', 'photos_markers', 'photo_replaced', 'photo_unchanged'].includes(notice ?? '') ? 'photos' : notice === 'published' ? 'review' : 'content'));

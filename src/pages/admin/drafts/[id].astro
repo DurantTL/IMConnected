@@ -1,18 +1,20 @@
 ---
 import { countStoryBlocks } from '../../../lib/story-blocks';
+import { isMediaMarkerLine, parsePhotoMarker, galleryMarker } from '../../../lib/story-media';
 import Admin from '../../../layouts/Admin.astro';
 import { photoFocusStyle, photoFrameAttrs } from '../../../lib/story-blocks';
 import { SECTIONS } from '../../../lib/site';
 import { LIMITS } from '../../../lib/limits';
 import { PHOTO_LAYOUTS } from '../../../lib/photo-layouts';
 import { SOURCE_LABEL, STATUS_LABEL, getDraft, isEditable, listPhotos } from '../../../lib/drafts';
-import { noticeText, fmtTime, looksLikeEmail } from '../../../lib/admin-ui';
+import { noticeText, fmtTime, looksLikeEmail, sectionLabel } from '../../../lib/admin-ui';
 import { errorText } from '../../../lib/messages';
 import { siteUrl } from '../../../lib/draft-http';
 import { listIssues } from '../../../lib/newsletter-issues';
 import { driveConfig } from '../../../lib/db/gdrive.mjs';
 import { fmtChicago, msToChicagoInput, errorTextFor, MAX_FAILURES, STOP_AT_ONCE } from '../../../lib/scheduled-publish';
 import '../../../styles/story-builder.css';
+import '../../../styles/admin-editor.css';
 export const prerender = false;
 
 const id = /^\d{1,12}$/.test(Astro.params.id ?? '') ? Number(Astro.params.id) : null;
@@ -49,8 +51,53 @@ const suggestionUsable = suggestionAt !== null && suggestionAt > Date.now();
 const studioBlocked = !!draft && draft.studioOverwroteAt !== null;
 const scheduleStopped = !!draft && draft.publishFailCount >= MAX_FAILURES;
 const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
+const wordCount = draft ? (draft.body.trim() ? draft.body.trim().split(/\s+/).length : 0) : 0;
+const sectionKnown = !!draft && SECTIONS.some((s) => s.key === draft.section);
+const eyebrow = draft && sectionKnown ? sectionLabel(draft.section, draft.area) : 'Draft';
+const hasBody = !!draft && (!!draft.body.trim() || !!draft.storyBlocks?.length);
+const isModular = !!draft?.storyBlocks?.length;
+// Problems the editor already knows about (the rules publishing enforces, plus photo descriptions and inline photo markers), shown as links to the part that fixes them.
+const problems: { text: string; panel: string; href: string; key?: string }[] = [];
+if (draft && editable) {
+  if (!draft.title.trim()) problems.push({ text: 'Headline is missing', panel: 'settings', href: '#f-title', key: 'title' });
+  if (!draft.author.trim()) problems.push({ text: 'Author is missing', panel: 'settings', href: '#f-author', key: 'author' });
+  if (!sectionKnown) problems.push({ text: 'Choose a section', panel: 'settings', href: '#f-section', key: 'section' });
+  if (!draft.date) problems.push({ text: 'Date is missing', panel: 'settings', href: '#f-date', key: 'date' });
+  if (!hasBody) problems.push({ text: 'Story text is missing', panel: 'content', href: '#story-builder', key: 'body' });
+  const noAlt = photos.filter((p) => !p.alt.trim()).length;
+  if (noAlt) problems.push({ text: `${noAlt} ${noAlt === 1 ? 'photo has' : 'photos have'} no description`, panel: 'photos', href: '#photos' });
+  const badMarkers = isModular ? 0 : draft.body.split('\n').filter((line) => isMediaMarkerLine(line) && !parsePhotoMarker(line, photos.length) && !galleryMarker(line, photos.length)).length;
+  if (badMarkers) problems.push({ text: `${badMarkers} photo ${badMarkers === 1 ? 'marker does' : 'markers do'} not match a photo`, panel: 'content', href: '#story-builder' });
+}
+const detailsAttention = problems.some((p) => p.panel === 'settings');
+const photosAttention = problems.some((p) => p.panel === 'photos');
+const layoutLabel = PHOTO_LAYOUTS.find((l) => l.value === draft?.photoLayout)?.label ?? '';
+const issueMeta = draft?.newsletterIssue ? `Issue #${draft.newsletterIssue.number}${draft.newsletterIssue.position ? ` · position ${draft.newsletterIssue.position}` : ''}` : 'Not in an issue';
+const hasNotes = !!draft && (isAgent || !!draft.agentNote || hasSubmitter);
+const ICONS: Record<string, string> = {
+  details: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/>',
+  photos: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-9 9"/>',
+  body: '<path d="M4 6h16M4 11h16M4 16h10"/>',
+  issue: '<path d="M4 19V5a2 2 0 012-2h13v16H6a2 2 0 00-2 2z"/><path d="M4 19a2 2 0 002 2h13"/>',
+  notes: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  review: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  history: '<path d="M3 12a9 9 0 103-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
+};
+type OutlineItem = { panel: string; icon: string; title: string; meta: string; dot: '' | 'ok' | 'warn'; metaAttr?: string };
+const outlineItems: OutlineItem[] = draft ? [
+  { panel: 'settings', icon: 'details', title: 'Story details', meta: sectionKnown ? eyebrow : 'Headline · summary · section', dot: !editable ? '' : detailsAttention ? 'warn' : 'ok' },
+  { panel: 'photos', icon: 'photos', title: 'Photos', meta: `${photos.length} ${photos.length === 1 ? 'photo' : 'photos'} · ${layoutLabel}`, dot: !editable ? '' : photosAttention ? 'warn' : photos.length ? 'ok' : '' },
+] : [];
+const publishingItems: OutlineItem[] = draft ? [
+  { panel: 'issue', icon: 'issue', title: 'Newsletter issue', meta: issueMeta, dot: draft.newsletterIssue ? 'ok' : '' },
+  ...(hasNotes ? [{ panel: 'notes', icon: 'notes', title: 'Submitter & notes', meta: isAgent ? 'AI agent · editors only' : 'Private · editors only', dot: '' as const }] : []),
+  ...(editable ? [
+    { panel: 'review', icon: 'review', title: 'Schedule & publish', meta: scheduledAt !== null ? `Scheduled ${fmtChicago(scheduledAt)}` : 'Review and go live', dot: (scheduledAt !== null && !draft.publishError ? 'ok' : '') as '' | 'ok' },
+    { panel: 'history', icon: 'history', title: 'History', meta: 'Saved versions', dot: '' as const, metaAttr: 'history' },
+  ] : []),
+] : [];
 ---
-<Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current={draft?.announcement?.kind === 'event' ? 'events' : draft?.announcement ? 'announcements' : 'drafts'} wide>
+<Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current={draft?.announcement?.kind === 'event' ? 'events' : draft?.announcement ? 'announcements' : 'drafts'} wide compact>
   {!draft ? (
     <>
       <h1>Draft not found</h1>
@@ -59,26 +106,47 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
   ) : (
     <div class="ed editor-studio" data-draft={draft.id}>
       <header class="studio-head">
-        <div class="studio-titlebar">
-          <div class="studio-identity">
-            <a class="studio-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
-            <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1><span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span>{isAgent && <span class="cms-badge">From AI agent</span>}{scheduledAt !== null && <span class={`cms-badge ${draft.publishError ? 'bad' : 'ok'}`}>{draft.publishError ? 'Scheduled publish failed' : `Scheduled for ${fmtChicago(scheduledAt)}`}</span>}</div>
+        <div class="ed-topbar">
+          <a class="studio-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
+          <div class="ed-topbar-tools">
             <span class="ed-status" id="save-status" role="status" aria-live="polite">
               {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
             </span>
+            <span class="ed-undo" role="group" aria-label="Module history">
+              <button class="cms-btn secondary" type="button" id="blocks-undo" disabled>Undo module change</button>
+              <button class="cms-btn secondary" type="button" id="blocks-redo" disabled>Redo module change</button>
+            </span>
+          </div>
+        </div>
+        <div class="ed-pagehead">
+          <div class="studio-identity">
+            <p class="ed-eyebrow" data-editor-eyebrow>{eyebrow}</p>
+            <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1>{isAgent && <span class="cms-badge">From AI agent</span>}{scheduledAt !== null && <span class={`cms-badge ${draft.publishError ? 'bad' : 'ok'}`}>{draft.publishError ? 'Scheduled publish failed' : `Scheduled for ${fmtChicago(scheduledAt)}`}</span>}</div>
+            <p class="ed-meta">{isAgent ? 'From AI agent' : draft.source === 'form' ? 'Sent with the submit form' : SOURCE_LABEL[draft.source]}{draft.church ? ` · ${draft.church}` : ''}</p>
           </div>
           <div class="studio-primary-actions">
             <button type="button" class="cms-btn secondary" data-studio-preview>Preview</button>
-            <button type="submit" form="draft-form" class="cms-btn" id="save-btn" disabled={!editable}>Save changes</button>
-            {editable && <button type="button" class="cms-btn studio-review-action" data-open-panel="review">Review &amp; publish <span aria-hidden="true">→</span></button>}
+            <button type="submit" form="draft-form" class="cms-btn secondary" id="save-btn" disabled={!editable}>Save changes</button>
+            {editable && (
+              <div class="ed-publish-group">
+                <a class="cms-btn studio-review-action ed-publish" href="#publish-form" data-open-panel="review">Publish</a>
+                <details class="ed-menu">
+                  <summary class="cms-btn studio-review-action" aria-label="More publishing actions"><span aria-hidden="true">▾</span></summary>
+                  <div class="ed-menu-list">
+                    <a href="#schedule-form" data-open-panel="review">Schedule…</a>
+                    <a href="#reject-details" data-open-panel="review" data-open-details="reject-details">Reject…</a>
+                  </div>
+                </details>
+              </div>
+            )}
           </div>
         </div>
-        <nav class="studio-tabs" role="tablist" aria-label="Story workspace" hidden>
-          <button type="button" role="tab" id="studio-tab-content" aria-controls="story-builder" aria-selected="true" data-studio-tab="content">Content <span>Build the story</span></button>
-          <button type="button" role="tab" id="studio-tab-settings" aria-controls="studio-panel-settings" aria-selected="false" tabindex="-1" data-studio-tab="settings">Story settings <span>Title, author &amp; category</span></button>
-          <button type="button" role="tab" id="studio-tab-photos" aria-controls="photos" aria-selected="false" tabindex="-1" data-studio-tab="photos">Photos <span>{photos.length} of {LIMITS.maxPhotos} images</span></button>
-          {editable && <button type="button" role="tab" id="studio-tab-review" aria-controls="studio-panel-review" aria-selected="false" tabindex="-1" data-studio-tab="review">Review &amp; publish <span>Check before going live</span></button>}
-        </nav>
+        <div class="ed-strip" aria-label="Draft status">
+          <span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span>
+          {editable && <ul class="ed-problems" aria-label="Things to fix before publishing" hidden={problems.length === 0}>{problems.map((p) => <li data-problem={p.key}><a href={p.href} data-open-panel={p.panel}>{p.text}</a></li>)}</ul>}
+          {editable && <span class="ed-ok" hidden={problems.length > 0}>No problems found</span>}
+          <span class="ed-live">{draft.live ? 'Live' : 'Not live · draft only'}</span>
+        </div>
       </header>
       <div class="studio-mobile-actions" role="group" aria-label="Story actions">
         <button type="submit" form="draft-form" class="cms-btn" id="mobile-save-btn" aria-describedby="save-status" disabled={!editable}>Save changes</button>
@@ -129,14 +197,52 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
 
 
 
+      <div class="ed-workspace">
+      <nav class="ed-outline-card" id="ed-outline" aria-label="Story outline" hidden>
+        <div class="ed-outline-head"><h2>Story outline</h2></div>
+        <p class="ed-outline-help">Choose a part to edit.</p>
+        <ul class="ed-outline-list">
+          {outlineItems.map((it) => (
+            <li><button type="button" class="ed-outline-item" data-studio-tab={it.panel} aria-controls={`studio-panel-${it.panel}`}>
+              <svg class="ed-oi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={ICONS[it.icon]}></svg>
+              <span class="ed-oi-text"><span class="ed-oi-title">{it.title}</span><span class="ed-oi-meta" data-meta={it.panel}>{it.meta}</span></span>
+              <span class={`ed-dot ${it.dot}`} data-dot={it.panel} aria-hidden="true"></span><span class="sr-only" data-dot-text={it.panel}>{it.dot === 'warn' ? 'Needs attention' : it.dot === 'ok' ? 'Done' : ''}</span>
+            </button></li>
+          ))}
+        </ul>
+        <p class="ed-group-label">Body <span id="module-count" class="sb-count"></span></p>
+        <ul class="ed-outline-list" id="outline-body-text" hidden={isModular}>
+          <li><button type="button" class="ed-outline-item" data-studio-tab="content" data-body-text aria-controls="story-builder">
+            <svg class="ed-oi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={ICONS.body}></svg>
+            <span class="ed-oi-text"><span class="ed-oi-title">Body text</span><span class="ed-oi-meta" data-meta="body">{wordCount} {wordCount === 1 ? 'word' : 'words'}</span></span>
+            <span class={`ed-dot ${!editable ? '' : hasBody && !problems.some((p) => p.panel === 'content') ? 'ok' : 'warn'}`} data-dot="body" aria-hidden="true"></span>
+          </button></li>
+        </ul>
+        <div id="outline-body-modules" hidden={!isModular}>
+          <p class="sb-drag-help">Drag a module to reorder. Move buttons also work with a keyboard.</p>
+          <ol id="module-outline" aria-label="Story modules"></ol>
+          <button type="button" class="ed-add" id="outline-add" disabled={!editable}><span aria-hidden="true">+</span> Add to the story</button>
+        </div>
+        <p class="ed-group-label">Publishing</p>
+        <ul class="ed-outline-list">
+          {publishingItems.map((it) => (
+            <li><button type="button" class="ed-outline-item" data-studio-tab={it.panel} aria-controls={`studio-panel-${it.panel}`}>
+              <svg class="ed-oi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={ICONS[it.icon]}></svg>
+              <span class="ed-oi-text"><span class="ed-oi-title">{it.title}</span><span class="ed-oi-meta" data-meta={it.metaAttr ?? it.panel}>{it.meta}</span></span>
+              <span class={`ed-dot ${it.dot}`} aria-hidden="true"></span>
+            </button></li>
+          ))}
+        </ul>
+      </nav>
+      <div class="ed-editcol">
       <form id="draft-form" method="post" action={`/api/admin/drafts/${draft.id}/save`} data-save={`/api/admin/drafts/${draft.id}/save`} data-preview={`/api/admin/drafts/${draft.id}/preview`} data-revisions={`/api/admin/drafts/${draft.id}/revisions`}>
         <input type="hidden" name="version" value={draft.updatedAt} />
         <fieldset disabled={!editable} class="ed">
-          <section class="ed-card studio-settings" id="studio-panel-settings" data-studio-panel="settings" role="tabpanel" aria-labelledby="studio-tab-settings">
-            <div class="studio-panel-heading"><div><span class="sb-eyebrow">Story settings</span><h2>The details behind your story</h2><p class="admin-note">Give readers a clear headline, byline and place to find it.</p></div><span class="studio-source">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span></div>
+          <section class="ed-card ed-panel studio-settings" id="studio-panel-settings" data-studio-panel="settings" aria-labelledby="studio-heading-settings">
+            <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-settings" tabindex="-1" data-panel-heading>Story details</h2><p class="admin-note">Give readers a clear headline, byline and place to find it.</p></div><span class="studio-source">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span></div>
             <div class="ed-grid">
               <label class="full">Title <span class="hint">up to {LIMITS.title} characters</span>
-                <input type="text" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
+                <input type="text" id="f-title" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
               </label>
               <label class="full">Summary (dek) <span class="hint">one or two sentences, up to {LIMITS.dek} characters</span>
                 <input type="text" name="dek" value={draft.dek} maxlength={LIMITS.dek} autocomplete="off" />
@@ -165,7 +271,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                 </select>
               </label>
               <label>Author
-                <input type="text" name="author" value={draft.author} maxlength="120" autocomplete="off" />
+                <input type="text" id="f-author" name="author" value={draft.author} maxlength="120" autocomplete="off" />
               </label>
               <label>Author title
                 <input type="text" name="authorTitle" value={draft.authorTitle} maxlength="120" autocomplete="off" />
@@ -174,17 +280,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                 <input type="text" name="church" value={draft.church} maxlength="160" autocomplete="off" />
               </label>
               <label>Date
-                <input type="date" name="date" value={draft.date} />
-              </label>
-              <label>Newsletter issue <span class="hint">where this story first appeared</span>
-                <input type="hidden" name="newsletterIssuePresent" value="1" />
-                <select name="newsletterIssue" id="f-newsletter-issue">
-                  <option value="" selected={!draft.newsletterIssue}>None</option>
-                  {issues.map((i) => <option value={i.number} selected={draft.newsletterIssue?.number === i.number}>Issue #{i.number} · {i.date}{i.title ? ` · ${i.title}` : ''}</option>)}
-                </select>
-              </label>
-              <label>Position in the issue <span class="hint">1 to 999, optional</span>
-                <input type="number" name="newsletterPosition" min="1" max="999" step="1" inputmode="numeric" value={draft.newsletterIssue?.position ?? ''} />
+                <input type="date" id="f-date" name="date" value={draft.date} />
               </label>
               <label>Photo credit
                 <input type="text" name="photoCredit" value={draft.photoCredit} maxlength="120" autocomplete="off" />
@@ -200,65 +296,39 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               </fieldset>
               <label class="ed-check"><input type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
             </div>
-            <div class="studio-submitter-notes">      {isAgent && (
-        <section class="ed-card ed-sub">
-          <h2>Submitter</h2>
-          <dl>
-            <dt>Name</dt><dd>AI agent</dd>
-            {draft.agentNote && <><dt>Agent's note</dt><dd style="white-space:pre-wrap">{draft.agentNote}</dd></>}
-            {originalPost && <><dt>Original post</dt><dd><a href={originalPost} rel="noopener noreferrer" target="_blank">View original post</a></dd></>}
-          </dl>
-          <p class="admin-note">An AI agent submitted this story or proposed updates. Check the facts, names and photos, and get permission where needed, before you publish.</p>
-        </section>
-      )}
-
-      {!isAgent && draft.agentNote && (
-        <section class="ed-card ed-sub">
-          <h2>AI agent update</h2>
-          <p class="admin-note">Review the proposed changes and photos before publishing.</p>
-          <p style="white-space:pre-wrap">{draft.agentNote}</p>
-        </section>
-      )}
-
-      {hasSubmitter && (
-        <section class="ed-card ed-sub">
-          <h2>Submitter</h2>
-          <dl>
-            <dt>Name</dt><dd>{draft.submitterName || '—'}</dd>
-            <dt>Email</dt>
-            <dd>
-              {draft.submitterEmail ? (looksLikeEmail(draft.submitterEmail) ? <a href={`mailto:${draft.submitterEmail}`}>{draft.submitterEmail}</a> : draft.submitterEmail) : '—'}
-              {draft.submitterEmail && (draft.emailVerified ? <span class="cms-badge ok"> Verified</span> : <span class="cms-badge warn"> Not verified</span>)}
-            </dd>
-            <dt>Phone</dt><dd>{draft.submitterPhone || '—'}</dd>
-            <dt>Church</dt><dd>{draft.submitterChurch || '—'}</dd>
-          </dl>
-          <p class="admin-note">Contact details are for editors only and are never published.</p>
-        </section>
-      )}</div>
           </section>
 
-          <section class="ed-card story-builder" id="story-builder" data-studio-panel="content" role="tabpanel" aria-labelledby="studio-tab-content">
-            <div class="sb-heading"><div><span class="sb-eyebrow">Content canvas</span><h2>Build your story</h2></div><span class="sb-private"><span aria-hidden="true">●</span> Private preview</span></div>
+          <section class="ed-card ed-panel" id="studio-panel-issue" data-studio-panel="issue" aria-labelledby="studio-heading-issue">
+            <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-issue" tabindex="-1" data-panel-heading>Newsletter issue</h2><p class="admin-note">Where this story first appeared in the newsletter.</p></div></div>
+            <div class="ed-grid">
+              <label>Newsletter issue <span class="hint">where this story first appeared</span>
+                <input type="hidden" name="newsletterIssuePresent" value="1" />
+                <select name="newsletterIssue" id="f-newsletter-issue">
+                  <option value="" selected={!draft.newsletterIssue}>None</option>
+                  {issues.map((i) => <option value={i.number} selected={draft.newsletterIssue?.number === i.number}>Issue #{i.number} · {i.date}{i.title ? ` · ${i.title}` : ''}</option>)}
+                </select>
+              </label>
+              <label>Position in the issue <span class="hint">1 to 999, optional</span>
+                <input type="number" name="newsletterPosition" min="1" max="999" step="1" inputmode="numeric" value={draft.newsletterIssue?.position ?? ''} />
+              </label>
+            </div>
+          </section>
+
+          <section class="ed-card ed-panel story-builder" id="story-builder" data-studio-panel="content" aria-labelledby="studio-heading-content">
+            <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-content" tabindex="-1" data-panel-heading>{isModular ? 'Story modules' : 'Body text'}</h2></div><span class="sb-private"><span aria-hidden="true">●</span> Private preview</span></div>
             {draft.body.includes('<') && (
               <p class="admin-error" role="alert">This text contains “&lt;”, so it may hold raw HTML. Raw HTML is not kept: after you publish, it is shown to readers as plain text. Rewrite it in Markdown if you need the formatting.</p>
             )}
-            <p class="sb-workspace-intro">Compose in the canvas. Select a module to edit its content and settings.</p>
             <input type="hidden" name="storyBlocks" id="story-blocks" value={JSON.stringify(draft.storyBlocks ?? [])} />
             <div class="sb-controls" role="group" aria-label="Editor mode">
-              <button class="cms-btn secondary" type="button" id="use-modules">Use modules</button>
+              <button class="cms-btn secondary" type="button" id="use-modules" title="Split the Markdown text into one paragraph module per block of text. You can undo this.">Split into modules</button>
               <button class="cms-btn secondary" type="button" id="use-markdown">Use Markdown</button>
-              <button class="cms-btn secondary" type="button" id="blocks-undo" disabled>Undo module change</button>
-              <button class="cms-btn secondary" type="button" id="blocks-redo" disabled>Redo module change</button>
             </div>
-            <div class="ed-tabs" role="group" aria-label="Show">
-              <button type="button" data-view="write" aria-pressed="true">Write</button>
-              <button type="button" data-view="preview" aria-pressed="false">Preview</button>
-            </div>
-            <div class="ed-split" id="split" data-view="write">
+            <div class="ed-split" id="split" data-mode={isModular ? 'modules' : 'markdown'}>
+              <div class="sb-properties" id="module-inspector" aria-label="Selected module settings" hidden><div class="sb-pane-heading"><div><h3 id="module-title">Module settings</h3><p>Make it your own</p></div></div><div id="module-fields"></div></div>
               <div class="ed-write">
                 <div id="module-workspace" class="sb-modules" hidden>
-                  <aside class="sb-outline" aria-label="Story modules"><details class="sb-library-disclosure" open><summary>Module library &amp; starter layouts</summary>
+                  <details class="sb-library-disclosure" open><summary>Add to the story: module library &amp; starter layouts</summary>
                     <p class="sb-insert-help">Insert after the selected module. Existing content stays in place.</p>
                     <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
                     <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">11 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
@@ -282,10 +352,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                     <label>Saved layout<select id="saved-layout-choice" aria-label="Saved layout" data-editor-local><option value="">Loading layouts…</option></select></label>
                     <div class="sb-controls"><button type="button" id="insert-story-layout">Insert saved layout</button><button type="button" id="delete-story-layout">Delete saved layout</button></div>
                     <p id="saved-layout-status" role="status" class="admin-note"></p>
-                    </details><div class="sb-pane-heading"><span class="sb-step">01</span><div><h3>Story outline</h3><p>Arrange your content</p></div><span id="module-count" class="sb-count"></span></div>
-                    <p class="sb-drag-help">Drag a module to reorder. Move buttons also work with a keyboard.</p>
-                    <ol id="module-outline"></ol>
-                  </aside>
+                    </details>
                 </div>
                 <div id="markdown-workspace">
                 <div class="ed-toolbar" role="toolbar" aria-label="Formatting">
@@ -311,16 +378,11 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                 </div>
                 <p id="module-status" class="admin-note" role="status" aria-live="polite"></p>
               </div>
-              <div class="ed-preview">
-                <div class="sb-preview-tools"><div class="sb-pane-heading"><span class="sb-step">02</span><div><strong>Story canvas</strong><p>Private preview · select a module to edit</p></div></div><div role="group" aria-label="Preview width"><button type="button" data-preview-width="desktop" aria-pressed="true">Desktop</button><button type="button" data-preview-width="phone" aria-pressed="false">Phone</button></div></div>
-                <iframe id="preview" title="Story preview" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
-              </div>
-              <div class="sb-properties" id="module-inspector" aria-label="Selected module settings" hidden><div class="sb-pane-heading"><span class="sb-step">03</span><div><h3 id="module-title">Module settings</h3><p>Make it your own</p></div></div><div id="module-fields"></div></div>
             </div>
           </section>
 
-          <section class="ed-card studio-photos" id="photos" data-studio-panel="photos" role="tabpanel" aria-labelledby="studio-tab-photos">
-            <div class="studio-panel-heading"><div><span class="sb-eyebrow">Photo studio</span><h2>Bring the story into focus</h2><p class="admin-note">Choose your lead image, arrange the gallery and keep the subject in frame.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>See reader preview</button></div>
+          <section class="ed-card ed-panel studio-photos" id="photos" data-studio-panel="photos" aria-labelledby="studio-heading-photos">
+            <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-photos" tabindex="-1" data-panel-heading>Photos</h2><p class="admin-note">Choose your lead image, arrange the gallery and keep the subject in frame.</p></div></div>
             <p class="admin-note">The first photo leads the story. JPG, PNG, WebP or AVIF, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
             {photos.length > 0 && (
               <p class="admin-note" id="photo-reorder-help">Reorder: use Up and Down on any device or keyboard. With a mouse or touch, drag a photo by its Drag handle onto a new place. Inline photo markers follow their photos.</p>
@@ -415,16 +477,52 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
         <input type="hidden" name="version" value={draft.updatedAt} />
       </form>
 
+      {hasNotes && (
+        <section class="ed-card ed-panel studio-submitter-notes" id="studio-panel-notes" data-studio-panel="notes" aria-labelledby="studio-heading-notes">
+          <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-notes" tabindex="-1" data-panel-heading>Submitter &amp; notes</h2><p class="admin-note">Private. Editors only; never published.</p></div></div>
+      {isAgent && (
+        <section class="ed-card ed-sub">
+          <h3>Submitter</h3>
+          <dl>
+            <dt>Name</dt><dd>AI agent</dd>
+            {draft.agentNote && <><dt>Agent's note</dt><dd style="white-space:pre-wrap">{draft.agentNote}</dd></>}
+            {originalPost && <><dt>Original post</dt><dd><a href={originalPost} rel="noopener noreferrer" target="_blank">View original post</a></dd></>}
+          </dl>
+          <p class="admin-note">An AI agent submitted this story or proposed updates. Check the facts, names and photos, and get permission where needed, before you publish.</p>
+        </section>
+      )}
+
+      {!isAgent && draft.agentNote && (
+        <section class="ed-card ed-sub">
+          <h3>AI agent update</h3>
+          <p class="admin-note">Review the proposed changes and photos before publishing.</p>
+          <p style="white-space:pre-wrap">{draft.agentNote}</p>
+        </section>
+      )}
+
+      {hasSubmitter && (
+        <section class="ed-card ed-sub">
+          <h3>Submitter</h3>
+          <dl>
+            <dt>Name</dt><dd>{draft.submitterName || '—'}</dd>
+            <dt>Email</dt>
+            <dd>
+              {draft.submitterEmail ? (looksLikeEmail(draft.submitterEmail) ? <a href={`mailto:${draft.submitterEmail}`}>{draft.submitterEmail}</a> : draft.submitterEmail) : '—'}
+              {draft.submitterEmail && (draft.emailVerified ? <span class="cms-badge ok"> Verified</span> : <span class="cms-badge warn"> Not verified</span>)}
+            </dd>
+            <dt>Phone</dt><dd>{draft.submitterPhone || '—'}</dd>
+            <dt>Church</dt><dd>{draft.submitterChurch || '—'}</dd>
+          </dl>
+          <p class="admin-note">Contact details are for editors only and are never published.</p>
+        </section>
+      )}
+        </section>
+      )}
+
       {editable && (
-        <section class="ed-card studio-review" id="studio-panel-review" data-studio-panel="review" role="tabpanel" aria-labelledby="studio-tab-review">
-          <div class="studio-panel-heading"><div><span class="sb-eyebrow">Ready for readers?</span><h2>Review before publishing</h2><p class="admin-note">This is the last stop before your story appears on the public website.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>Open private preview</button></div>
+        <section class="ed-card ed-panel studio-review" id="studio-panel-review" data-studio-panel="review" aria-labelledby="studio-heading-review">
+          <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-review" tabindex="-1" data-panel-heading>Schedule &amp; publish</h2><p class="admin-note">This is the last stop before your story appears on the public website.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>Open private preview</button></div>
           <div class="studio-review-summary"><div><span>Story</span><strong data-review-title>{draft.title || 'Untitled story'}</strong></div><div><span>Author</span><strong data-review-author>{draft.author || 'Add an author in Story settings'}</strong></div><div><span>Content</span><strong data-review-content>{draft.storyBlocks?.length ? `${countStoryBlocks(draft.storyBlocks)} modules` : 'Markdown story'}</strong></div><div><span>Photos</span><strong>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</strong></div></div>
-          <details class="ed-card"><summary>Saved revision history</summary>
-            <p class="admin-note">The latest 20 previous saved states are available. Restoring saves your current edits first and changes only this draft.</p>
-            <label>Saved revision<select id="draft-revision-choice" data-editor-local aria-label="Saved revision"><option value="">Loading history…</option></select></label>
-            <button type="button" class="cms-btn secondary" id="restore-draft-revision" disabled>Restore selected revision</button>
-            <p id="draft-revision-status" role="status" class="admin-note"></p>
-          </details>
           <ul class="studio-review-checklist"><li>Check the headline, names and facts.</li><li>Confirm permission to use the story and photos.</li><li>Read the phone preview and describe your images with alt text.</li></ul>
           {backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
           <p class="admin-note">
@@ -467,7 +565,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               <p><button type="submit" class="cms-btn secondary">{scheduledAt !== null ? 'Change time' : 'Schedule'}</button></p>
             </form>}
           </section>
-          <details style="margin-top:12px">
+          <details style="margin-top:12px" id="reject-details">
             <summary>Reject this draft</summary>
             <form id="reject-form" method="post" action={`/api/admin/drafts/${draft.id}/reject`}>
               <input type="hidden" name="version" value={draft.updatedAt} />
@@ -479,6 +577,25 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
           </details>
         </section>
       )}
+
+      {editable && (
+        <section class="ed-card ed-panel" id="studio-panel-history" data-studio-panel="history" aria-labelledby="studio-heading-history">
+          <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-history" tabindex="-1" data-panel-heading>History</h2></div></div>
+          <details class="ed-card" open><summary>Saved revision history</summary>
+            <p class="admin-note">The latest 20 previous saved states are available. Restoring saves your current edits first and changes only this draft.</p>
+            <label>Saved revision<select id="draft-revision-choice" data-editor-local aria-label="Saved revision"><option value="">Loading history…</option></select></label>
+            <button type="button" class="cms-btn secondary" id="restore-draft-revision" disabled>Restore selected revision</button>
+            <p id="draft-revision-status" role="status" class="admin-note"></p>
+          </details>
+        </section>
+      )}
+      </div>
+      <aside class="ed-preview ed-preview-card" id="ed-preview-card" aria-labelledby="ed-preview-heading" hidden>
+        <div class="ed-card-head"><h2 id="ed-preview-heading">Draft preview</h2><span class="ed-pill">{draft.live ? 'Live' : 'Not live'}</span></div>
+        <div class="sb-preview-tools"><div role="group" aria-label="Preview width"><button type="button" data-preview-width="desktop" aria-pressed="true">Desktop</button><button type="button" data-preview-width="phone" aria-pressed="false">Phone</button></div><button type="button" class="ed-preview-close" data-preview-close>Close preview</button></div>
+        <iframe id="preview" title="Story preview" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+      </aside>
+    </div>
     </div>
   )}
 </Admin>

@@ -22,6 +22,7 @@ const PUBLISH_TOKEN = process.env.PUBLISH_TOKEN || '';
 const SHOTS = process.env.SHOTS ? path.resolve(process.env.SHOTS) : '';
 const SERVER_LOG = process.env.SERVER_LOG ? path.resolve(process.env.SERVER_LOG) : '';
 
+const openContent = (pg) => pg.locator('[data-studio-tab=content]:visible, #module-outline [data-select-module]:visible').first().click();
 let fails = 0;
 const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  ' + extra}`);
@@ -926,7 +927,7 @@ if (browser) {
     const small = await page.evaluate(() => [...document.querySelectorAll('button, input[type=file], select, .ed-check')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.height < 43 || r.width < 43) && !e.closest('[hidden]'); }).map((e) => e.outerHTML.slice(0, 60)));
     check('390px: buttons and fields are at least 44px tall (touch targets)', small.length === 0, small.slice(0, 3).join(' | '));
     await shot('editor-390.png');
-    await page.locator('[data-studio-tab=content]').click();
+    await openContent(page);
     await page.fill('#f-body', 'Hello world');
     await page.evaluate(() => { const t = document.getElementById('f-body'); t.setSelectionRange(0, 5); });
     await page.click('[data-md=bold]');
