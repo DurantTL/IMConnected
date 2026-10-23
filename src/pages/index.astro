@@ -3,10 +3,11 @@ import Base from '../layouts/Base.astro';
 import StoryCard from '../components/StoryCard.astro';
 import EventSpotlight from '../components/EventSpotlight.astro';
 import { upcomingEvents, conferenceDay } from '../lib/event-spotlight';
-import { SECTIONS, SITE, getSection } from '../lib/site';
+import { SECTIONS, SITE, getSection, formatDate } from '../lib/site';
 import { asUnavailable, getPublicStories, homepageStories, HOMEPAGE_RECENT_DAYS } from '../lib/public-stories';
 import { archiveRail, ARCHIVE_LINK, ARCHIVE_LINK_LABEL } from '../lib/archive-rail';
 import { bySection } from '../lib/stories';
+import { latestIssue, issueHref, PREVIEW_COUNT } from '../lib/issue-pages';
 
 // Rendered on the server from the stories table; the middleware caches the result.
 export const prerender = false;
@@ -36,6 +37,9 @@ const youth = fresh(bySection(stories, 'youth')).slice(0, 3);
 const kids = bySection(stories, 'kids').slice(0, 3);
 const newsAreas = news.areas!.map((a) => ({ area: a, items: bySection(stories, 'news', a.key).slice(0, 3) }));
 // "From the archive" (issue #100): older stories, never one already shown above.
+// "Latest issue" (issue #115): from the same live stories as /issues/, no extra query.
+const latest = latestIssue(allStories);
+const sentOn = latest ? formatDate(new Date(`${latest.date}T00:00:00.000Z`)) : '';
 const spotlight = upcomingEvents(allStories);
 const shownAbove = [...spotlight, lead, ...side, ...features, ...newsAreas.flatMap((a) => a.items), ...columns, ...youth, ...kids].filter(Boolean).map((s) => s!.id);
 const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HOMEPAGE_RECENT_DAYS, exclude: shownAbove });
@@ -48,6 +52,7 @@ const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HO
         <h1 id="home-title">A connected community.<br /><em>A living faith.</em></h1>
       </div>
       <p class="home-intro-note">{SITE.tagline}.<br /><a class="intro-link" href="/news/">Discover what’s happening <span aria-hidden="true">→</span></a></p>
+      {latest && <p class="latest-issue-line"><a href={issueHref(latest.number)}>Latest issue: No. {latest.number} · <time datetime={latest.date}>{sentOn}</time></a></p>}
     </section>
   </div>
   <EventSpotlight events={spotlight} />
@@ -64,6 +69,20 @@ const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HO
       </section>
     ) : (
       <p class="empty-state">No stories yet — check back soon.</p>
+    )}
+
+    {latest && (
+      <section class="block latest-issue" aria-labelledby="latest-issue-title">
+        <div class="block-head">
+          <div>
+            <p class="eyebrow">Latest issue</p>
+            <h2 id="latest-issue-title"><a href={issueHref(latest.number)}>Issue No. {latest.number}{latest.title && <><span class="sr-only">: </span><span class="latest-issue-name">{latest.title}</span></>}</a></h2>
+            <p>Sent <time datetime={latest.date}>{sentOn}</time> · {latest.stories.length} {latest.stories.length === 1 ? 'story' : 'stories'}</p>
+          </div>
+          <a class="more" href={issueHref(latest.number)}>{latest.stories.length > PREVIEW_COUNT ? `See all ${latest.stories.length} stories` : 'Open this issue'}<span class="sr-only"> in Issue No. {latest.number}</span> <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="grid cols-3">{latest.stories.slice(0, PREVIEW_COUNT).map((s) => <StoryCard story={s} />)}</div>
+      </section>
     )}
 
     <nav class="topic-directory" aria-label="Explore story sections">
