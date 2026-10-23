@@ -1,6 +1,7 @@
 // Behaviour for /admin/drafts/<id>: toolbar, server-side preview, autosave, conflict handling.
 // Everything the server renders works without it except the toolbar, the preview and autosave.
 import './story-builder';
+import './editor-shell';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
 

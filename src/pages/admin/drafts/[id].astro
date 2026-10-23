@@ -52,15 +52,14 @@ const suggestionUsable = suggestionAt !== null && suggestionAt > Date.now();
 const studioBlocked = !!draft && draft.studioOverwroteAt !== null;
 const scheduleStopped = !!draft && draft.publishFailCount >= MAX_FAILURES;
 const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
-const wordCount = draft ? (draft.body.trim() ? draft.body.trim().split(/\s+/).length : 0) : 0;
 const sectionKnown = !!draft && SECTIONS.some((s) => s.key === draft.section);
-const eyebrow = draft && sectionKnown ? sectionLabel(draft.section, draft.area) : 'Draft';
+const eyebrow = draft && sectionKnown ? sectionLabel(draft.section, draft.area) : '';
 const hasBody = !!draft && (!!draft.body.trim() || !!draft.storyBlocks?.length);
 const isModular = !!draft?.storyBlocks?.length;
 // Problems the editor already knows about (the rules publishing enforces, plus photo descriptions and inline photo markers), shown as links to the part that fixes them.
 const problems: { text: string; panel: string; href: string; key?: string }[] = [];
 if (draft && editable) {
-  if (!draft.title.trim()) problems.push({ text: 'Headline is missing', panel: 'settings', href: '#f-title', key: 'title' });
+  if (!draft.title.trim()) problems.push({ text: 'Headline is missing', panel: 'details', href: '#f-title', key: 'title' });
   if (!draft.author.trim()) problems.push({ text: 'Author is missing', panel: 'settings', href: '#f-author', key: 'author' });
   if (!sectionKnown) problems.push({ text: 'Choose a section', panel: 'settings', href: '#f-section', key: 'section' });
   if (!draft.date) problems.push({ text: 'Date is missing', panel: 'settings', href: '#f-date', key: 'date' });
@@ -73,40 +72,16 @@ if (draft && editable) {
 }
 // The five fixed problems are always rendered (hidden while fine), so clearing a field shows its problem again without a reload.
 const KEYED = [
-  { key: 'title', text: 'Headline is missing', panel: 'settings', href: '#f-title' },
+  { key: 'title', text: 'Headline is missing', panel: 'details', href: '#f-title' },
   { key: 'author', text: 'Author is missing', panel: 'settings', href: '#f-author' },
   { key: 'section', text: 'Choose a section', panel: 'settings', href: '#f-section' },
   { key: 'date', text: 'Date is missing', panel: 'settings', href: '#f-date' },
   { key: 'body', text: 'Story text is missing', panel: 'content', href: '#story-builder' },
 ];
-const detailsAttention = problems.some((p) => p.panel === 'settings');
-const photosAttention = problems.some((p) => p.panel === 'photos');
-const layoutLabel = PHOTO_LAYOUTS.find((l) => l.value === draft?.photoLayout)?.label ?? '';
-const issueMeta = draft?.newsletterIssue ? `Issue #${draft.newsletterIssue.number}${draft.newsletterIssue.position ? ` · position ${draft.newsletterIssue.position}` : ''}` : 'Not in an issue';
 const hasNotes = !!draft && (isAgent || !!draft.agentNote || hasSubmitter);
-const ICONS: Record<string, string> = {
-  details: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/>',
-  photos: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-9 9"/>',
-  body: '<path d="M4 6h16M4 11h16M4 16h10"/>',
-  issue: '<path d="M4 19V5a2 2 0 012-2h13v16H6a2 2 0 00-2 2z"/><path d="M4 19a2 2 0 002 2h13"/>',
-  notes: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
-  review: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-  history: '<path d="M3 12a9 9 0 103-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
-};
-const panelId = (panel: string) => (panel === 'photos' ? 'photos' : panel === 'content' ? 'story-builder' : `studio-panel-${panel}`);
-type OutlineItem = { panel: string; icon: string; title: string; meta: string; dot: '' | 'ok' | 'warn'; metaAttr?: string };
-const outlineItems: OutlineItem[] = draft ? [
-  { panel: 'settings', icon: 'details', title: 'Story details', meta: sectionKnown ? eyebrow : 'Headline · summary · section', dot: !editable ? '' : detailsAttention ? 'warn' : 'ok' },
-  { panel: 'photos', icon: 'photos', title: 'Photos', meta: `${photos.length} ${photos.length === 1 ? 'photo' : 'photos'} · ${layoutLabel}`, dot: !editable ? '' : photosAttention ? 'warn' : photos.length ? 'ok' : '' },
-] : [];
-const publishingItems: OutlineItem[] = draft ? [
-  { panel: 'issue', icon: 'issue', title: 'Newsletter issue', meta: issueMeta, dot: draft.newsletterIssue ? 'ok' : '' },
-  ...(hasNotes ? [{ panel: 'notes', icon: 'notes', title: 'Submitter & notes', meta: isAgent ? 'AI agent · editors only' : 'Private · editors only', dot: '' as const }] : []),
-  ...(editable ? [
-    { panel: 'review', icon: 'review', title: 'Schedule & publish', meta: scheduledAt !== null ? `Scheduled ${fmtChicago(scheduledAt)}` : 'Review and go live', dot: (scheduledAt !== null && !draft.publishError ? 'ok' : '') as '' | 'ok' },
-    { panel: 'history', icon: 'history', title: 'History', meta: 'Saved versions', dot: '' as const, metaAttr: 'history' },
-  ] : []),
-] : [];
+// The compact line under the headline (kept in step by the page script as the Story settings change).
+const detailsLine = draft ? ([sectionKnown ? eyebrow : '', draft.author, draft.date, draft.church].filter(Boolean).join(' · ') || 'Section, author and date are set in Story settings.') : '';
+const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draft.status === 'rejected' ? 'Rejected' : scheduledAt !== null ? `Scheduled ${fmtChicago(scheduledAt)}` : draft.status === 'new' ? 'New' : 'In review · saved';
 ---
 <Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current={draft?.announcement?.kind === 'event' ? 'events' : draft?.announcement ? 'announcements' : 'drafts'} wide compact>
   {!draft ? (
@@ -115,50 +90,42 @@ const publishingItems: OutlineItem[] = draft ? [
       <p class="admin-note"><a href="/admin">Back to the drafts</a></p>
     </>
   ) : (
-    <div class="ed editor-studio" data-draft={draft.id}>
-      <header class="studio-head">
-        <div class="ed-topbar">
-          <a class="studio-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
-          <div class="ed-topbar-tools">
-            <span class="ed-status" id="save-status" role="status" aria-live="polite">
-              {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
-            </span>
-            <span class="ed-undo" role="group" aria-label="Module history" hidden={!isModular}>
-              <button class="cms-btn secondary" type="button" id="blocks-undo" disabled>Undo module change</button>
-              <button class="cms-btn secondary" type="button" id="blocks-redo" disabled>Redo module change</button>
-            </span>
-          </div>
-        </div>
-        <div class="ed-pagehead">
-          <div class="studio-identity">
-            <p class="ed-eyebrow" data-editor-eyebrow>{eyebrow}</p>
-            <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1>{isAgent && <span class="cms-badge">From AI agent</span>}{scheduledAt !== null && <span class={`cms-badge ${draft.publishError ? 'bad' : 'ok'}`}>{draft.publishError ? 'Scheduled publish failed' : `Scheduled for ${fmtChicago(scheduledAt)}`}</span>}</div>
-            <p class="ed-meta">{isAgent ? 'From AI agent' : draft.source === 'form' ? 'Sent with the submit form' : SOURCE_LABEL[draft.source]}{draft.church ? ` · ${draft.church}` : ''}</p>
-          </div>
-          <div class="studio-primary-actions">
-            <button type="button" class="cms-btn secondary" data-studio-preview>Preview</button>
-            <button type="submit" form="draft-form" class="cms-btn secondary" id="save-btn" disabled={!editable}>Save changes</button>
-            {editable && (
-              <div class="ed-publish-group">
-                <a class="cms-btn studio-review-action ed-publish" href="#publish-form" data-open-panel="review">Publish</a>
-                <details class="ed-menu">
-                  <summary class="cms-btn studio-review-action" aria-label="More publishing actions"><span aria-hidden="true">▾</span></summary>
-                  <div class="ed-menu-list">
-                    <a href="#studio-schedule" data-open-panel="review">Schedule…</a>
-                    <a href="#reject-details" data-open-panel="review" data-open-details="reject-details">Reject…</a>
-                  </div>
-                </details>
-              </div>
-            )}
-          </div>
-        </div>
-        <div class="ed-strip" role="group" aria-label="Draft status">
-          <span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span>
-          {editable && <ul class="ed-problems" aria-label="Things to fix before publishing" hidden={problems.length === 0}>{KEYED.map((p) => <li data-problem={p.key} hidden={!problems.some((x) => x.key === p.key)}><a href={p.href} data-open-panel={p.panel}>{p.text}</a></li>)}{problems.filter((p) => !p.key).map((p) => <li><a href={p.href} data-open-panel={p.panel}>{p.text}</a></li>)}</ul>}
-          {editable && <span class="ed-ok" hidden={problems.length > 0}>No problems found</span>}
+    <div class="ed editor-studio" data-draft={draft.id} data-side="right">
+      <header class="ed-bar" id="ed-bar">
+        <a class="studio-back ed-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
+        <h1 class="ed-headline">{draft.title || 'Untitled story'}</h1>
+        <nav class="ed-nav" aria-label="Editor sections">
+          <a href="#ed-canvas" aria-current="page" data-editor-nav="editor">Editor</a>
+          <a href="#studio-panel-settings" data-open-panel="settings" data-editor-nav="settings">Story settings</a>
+          {editable && <a href="#studio-panel-review" data-open-panel="review" data-editor-nav="review">Publishing</a>}
+        </nav>
+        <span class="ed-bar-status">
+          <span class={`ed-chip ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : scheduledAt !== null ? 'ok' : 'warn'}`} data-editor-chip>{chipText}</span>
+          {isAgent && <span class="ed-chip">From AI agent</span>}
           <span class="ed-live">{draft.live ? 'Live' : 'Not live · draft only'}</span>
-        </div>
+          <span class="ed-status" id="save-status" role="status" aria-live="polite">
+            {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
+          </span>
+        </span>
+        <span class="ed-bar-actions">
+          <span class="ed-undo" role="group" aria-label="Module history" hidden={!isModular}>
+            <button class="ed-btn" type="button" id="blocks-undo" disabled>Undo module change</button>
+            <button class="ed-btn" type="button" id="blocks-redo" disabled>Redo module change</button>
+          </span>
+          <button type="button" class="ed-btn" data-studio-preview data-js-only>Preview</button>
+          <button type="submit" form="draft-form" class="ed-btn outline" id="save-btn" disabled={!editable}>Save changes</button>
+          {editable && <a class="ed-btn primary ed-publish" href="#publish-form" data-open-panel="review">Publish</a>}
+          <button type="button" class="ed-icon-btn" id="ed-layout-button" aria-label="Layout options" aria-expanded="false" aria-controls="ed-layout-menu" data-js-only><span aria-hidden="true">⋮</span></button>
+        </span>
       </header>
+      <div class="ed-layout-menu" id="ed-layout-menu" role="group" aria-label="Layout options" hidden>
+        <button type="button" class="ed-btn" data-layout-action="toggle">Hide sidebar</button>
+        <button type="button" class="ed-btn" data-layout-action="side">Move sidebar to the left</button>
+        <button type="button" class="ed-btn" data-layout-action="narrower">Sidebar narrower</button>
+        <button type="button" class="ed-btn" data-layout-action="wider">Sidebar wider</button>
+        <button type="button" class="ed-btn" data-layout-action="reset">Reset layout</button>
+        <p class="ed-hint">You can also drag the sidebar's edge, or focus it and use the arrow keys. Your layout is remembered in this browser.</p>
+      </div>
       <div class="studio-mobile-actions" role="group" aria-label="Story actions">
         <button type="submit" form="draft-form" class="cms-btn" id="mobile-save-btn" aria-describedby="save-status" disabled={!editable}>Save changes</button>
         {editable && <button type="button" class="cms-btn studio-review-action" data-open-panel="review">Review &amp; publish</button>}
@@ -205,195 +172,30 @@ const publishingItems: OutlineItem[] = draft ? [
           </form>
         </section>
       )}
-
-
-
-      <div class="ed-workspace">
-      <nav class="ed-outline-card" id="ed-outline" aria-label="Story outline" hidden>
-        <div class="ed-outline-head"><h2>Story outline</h2></div>
-        <p class="ed-outline-help">Choose a part to edit.</p>
-        <ul class="ed-outline-list">
-          {outlineItems.map((it) => (
-            <li><button type="button" class="ed-outline-item" data-studio-tab={it.panel} aria-controls={panelId(it.panel)}>
-              <svg class="ed-oi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={ICONS[it.icon]}></svg>
-              <span class="ed-oi-text"><span class="ed-oi-title">{it.title}</span><span class="ed-oi-meta" data-meta={it.panel}>{it.meta}</span></span>
-              <span class={`ed-dot ${it.dot}`} data-dot={it.panel} aria-hidden="true"></span><span class="sr-only" data-dot-text={it.panel}>{it.dot === 'warn' ? 'Needs attention' : it.dot === 'ok' ? 'Done' : ''}</span>
-            </button></li>
-          ))}
-        </ul>
-        <p class="ed-group-label">Body <span id="module-count" class="sb-count"></span></p>
-        <ul class="ed-outline-list" id="outline-body-text" hidden={isModular}>
-          <li><button type="button" class="ed-outline-item" data-studio-tab="content" data-body-text aria-controls="story-builder">
-            <svg class="ed-oi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={ICONS.body}></svg>
-            <span class="ed-oi-text"><span class="ed-oi-title">Body text</span><span class="ed-oi-meta" data-meta="body">{wordCount} {wordCount === 1 ? 'word' : 'words'}</span></span>
-            <span class={`ed-dot ${!editable ? '' : hasBody && !problems.some((p) => p.panel === 'content') ? 'ok' : 'warn'}`} data-dot="body" aria-hidden="true"></span><span class="sr-only" data-dot-text="body">{!editable ? '' : hasBody && !problems.some((p) => p.panel === 'content') ? 'Done' : 'Needs attention'}</span>
-          </button></li>
-        </ul>
-        <div id="outline-body-modules" hidden={!isModular}>
-          <p class="sb-drag-help">Drag a module to reorder. Move buttons also work with a keyboard.</p>
-          <ol id="module-outline" aria-label="Story modules"></ol>
-          <button type="button" class="ed-add" id="outline-add" disabled={!editable}><span aria-hidden="true">+</span> Add to the story</button>
-        </div>
-        <p class="ed-group-label">Publishing</p>
-        <ul class="ed-outline-list">
-          {publishingItems.map((it) => (
-            <li><button type="button" class="ed-outline-item" data-studio-tab={it.panel} aria-controls={panelId(it.panel)}>
-              <svg class="ed-oi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={ICONS[it.icon]}></svg>
-              <span class="ed-oi-text"><span class="ed-oi-title">{it.title}</span><span class="ed-oi-meta" data-meta={it.metaAttr ?? it.panel}>{it.meta}</span></span>
-              <span class={`ed-dot ${it.dot}`} aria-hidden="true"></span><span class="sr-only">{it.dot === 'warn' ? 'Needs attention' : it.dot === 'ok' ? 'Done' : ''}</span>
-            </button></li>
-          ))}
-        </ul>
-      </nav>
-      <div class="ed-editcol">
-      <form id="draft-form" method="post" action={`/api/admin/drafts/${draft.id}/save`} data-save={`/api/admin/drafts/${draft.id}/save`} data-preview={`/api/admin/drafts/${draft.id}/preview`} data-revisions={`/api/admin/drafts/${draft.id}/revisions`}>
-        <input type="hidden" name="version" value={draft.updatedAt} />
-        <fieldset disabled={!editable} class="ed">
-          <section class="ed-card ed-panel studio-settings" id="studio-panel-settings" data-studio-panel="settings" aria-labelledby="studio-heading-settings">
-            <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-settings" tabindex="-1" data-panel-heading>Story details</h2><p class="admin-note">Give readers a clear headline, byline and place to find it.</p></div><span class="studio-source">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span></div>
-            <div class="ed-grid">
-              <label class="full">Title <span class="hint">up to {LIMITS.title} characters</span>
+      <div class="ed-body" id="ed-body">
+        <div class="ed-canvas" id="ed-canvas" tabindex="-1">
+          <form id="draft-form" method="post" action={`/api/admin/drafts/${draft.id}/save`} data-save={`/api/admin/drafts/${draft.id}/save`} data-preview={`/api/admin/drafts/${draft.id}/preview`} data-revisions={`/api/admin/drafts/${draft.id}/revisions`}>
+            <input type="hidden" name="version" value={draft.updatedAt} />
+            <fieldset disabled={!editable} class="ed ed-canvas-fields">
+              <section class="ed-card ed-step" id="ed-details" aria-labelledby="ed-details-heading">
+                <h2 id="ed-details-heading"><span class="ed-badge" aria-hidden="true">1</span> Story details</h2>
+                <div class="ed-grid">
+              <label class="full ed-big">Title <span class="hint">up to {LIMITS.title} characters</span>
                 <input type="text" id="f-title" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
               </label>
-              <label class="full">Summary (dek) <span class="hint">one or two sentences, up to {LIMITS.dek} characters</span>
+              <label class="full ed-big">Summary (dek) <span class="hint">one or two sentences, up to {LIMITS.dek} characters</span>
                 <input type="text" name="dek" value={draft.dek} maxlength={LIMITS.dek} autocomplete="off" />
               </label>
-              <fieldset class="full ed-key-points"><legend>Key points <span class="hint">optional, up to 3 short lines of plain text (160 characters each); shown in a box above the story</span></legend>
+                </div>
+                <p class="ed-summary-line" data-details-line><span data-details-text>{detailsLine}</span> <a href="#studio-panel-settings" data-open-panel="settings">Edit details</a></p>
+              <fieldset class="ed-key-points"><legend>Key points <span class="hint">optional, up to 3 short lines of plain text (160 characters each); shown in a box above the story</span></legend>
                 <input type="hidden" name="keyPointsPresent" value="1" />
                 {[0, 1, 2].map((i) => <label>Key point {i + 1}<input type="text" name={`keyPoint${i}`} value={draft.keyPoints?.[i] ?? ''} maxlength="160" autocomplete="off" /></label>)}
               </fieldset>
-              <label>Section
-                <select name="section" id="f-section">
-                  {!SECTIONS.some((s) => s.key === draft.section) && <option value="" selected>Choose a section</option>}
-                  {SECTIONS.map((s) => <option value={s.key} selected={s.key === draft.section}>{s.label}</option>)}
-                </select>
-              </label>
-              <fieldset class="full additional-sections"><legend>Additional sections</legend>
-                <input type="hidden" name="additionalSectionsPresent" value="1" />
-                <p class="hint">Keep one primary section above. Add other sections where readers should also find this story; its category belongs to the primary section.</p>
-                <div style="display:flex;flex-wrap:wrap;gap:12px 24px">{SECTIONS.map((s) => <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="additionalSections" value={s.key} checked={s.key === draft.section || draft.additionalSections?.includes(s.key)} disabled={s.key === draft.section} />{s.label}</label>)}</div>
-              </fieldset>
-              <label id="f-area-wrap">Category
-                <select name="area" id="f-area">
-                  <option value="" data-section="" hidden={!!SECTIONS.find((s) => s.key === draft.section)?.areas}>None</option>
-                  {SECTIONS.flatMap((s) => (s.areas ?? []).map((a) => (
-                    <option value={a.key} data-section={s.key} selected={s.key === draft.section && a.key === draft.area} hidden={s.key !== draft.section}>{a.label}</option>
-                  )))}
-                </select>
-              </label>
-              <label>Author
-                <input type="text" id="f-author" name="author" value={draft.author} maxlength="120" autocomplete="off" />
-              </label>
-              <label>Author title
-                <input type="text" name="authorTitle" value={draft.authorTitle} maxlength="120" autocomplete="off" />
-              </label>
-              <label>Church
-                <input type="text" name="church" value={draft.church} maxlength="160" autocomplete="off" />
-              </label>
-              <label>Date
-                <input type="date" id="f-date" name="date" value={draft.date} />
-              </label>
-              <label>Photo credit
-                <input type="text" name="photoCredit" value={draft.photoCredit} maxlength="120" autocomplete="off" />
-              </label>
-              <label>Content type
-                <select name="announcementKind"><option value="story" selected={!draft.announcement}>Story</option><option value="announcement" selected={draft.announcement?.kind === 'announcement'}>Announcement</option><option value="event" selected={draft.announcement?.kind === 'event'}>Event</option></select>
-              </label>
-              <label>Event date <span class="hint">optional</span><input type="date" name="eventDate" value={draft.announcement?.eventDate ?? ''} /></label>
-              <label class="full">Event location <input name="eventLocation" maxlength="200" value={draft.announcement?.location ?? ''} /></label>
-              <label class="full">Announcement video <span class="hint">Paste a YouTube or Vimeo link; readers open it in a video popup.</span><input name="announcementVideo" maxlength="2048" value={draft.announcement?.videoUrl ?? ''} /></label>
-              <fieldset class="full"><legend>Announcement link buttons</legend><p class="admin-note">Choose Announcement or Event above. The first photo is its full-height flyer. Add a text summary so the flyer is also accessible.</p>
-                {[0, 1, 2].map((i) => <div class="ed-grid"><label>Link {i + 1} label<input name={`announcementLink${i}Label`} maxlength="120" value={draft.announcement?.links[i]?.label ?? ''} /></label><label>Link {i + 1} address<input name={`announcementLink${i}Url`} maxlength="2048" value={draft.announcement?.links[i]?.url ?? ''} placeholder="https://" /></label></div>)}
-              </fieldset>
-              <label class="ed-check"><input type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
-            </div>
-          </section>
+              </section>
 
-          <section class="ed-card ed-panel" id="studio-panel-issue" data-studio-panel="issue" aria-labelledby="studio-heading-issue">
-            <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-issue" tabindex="-1" data-panel-heading>Newsletter issue</h2><p class="admin-note">Where this story first appeared in the newsletter.</p></div></div>
-            <div class="ed-grid">
-              <label>Newsletter issue <span class="hint">where this story first appeared</span>
-                <input type="hidden" name="newsletterIssuePresent" value="1" />
-                <select name="newsletterIssue" id="f-newsletter-issue">
-                  <option value="" selected={!draft.newsletterIssue}>None</option>
-                  {issues.map((i) => <option value={i.number} selected={draft.newsletterIssue?.number === i.number}>Issue #{i.number} · {i.date}{i.title ? ` · ${i.title}` : ''}</option>)}
-                </select>
-              </label>
-              <label>Position in the issue <span class="hint">1 to 999, optional</span>
-                <input type="number" name="newsletterPosition" min="1" max="999" step="1" inputmode="numeric" value={draft.newsletterIssue?.position ?? ''} />
-              </label>
-            </div>
-          </section>
-
-          <section class="ed-card ed-panel story-builder" id="story-builder" data-studio-panel="content" aria-labelledby="studio-heading-content">
-            <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-content" tabindex="-1" data-panel-heading>{isModular ? 'Story modules' : 'Body text'}</h2></div><span class="sb-private"><span aria-hidden="true">●</span> Private preview</span></div>
-            {draft.body.includes('<') && (
-              <p class="admin-error" role="alert">This text contains “&lt;”, so it may hold raw HTML. Raw HTML is not kept: after you publish, it is shown to readers as plain text. Rewrite it in Markdown if you need the formatting.</p>
-            )}
-            <input type="hidden" name="storyBlocks" id="story-blocks" value={JSON.stringify(draft.storyBlocks ?? [])} />
-            <div class="sb-controls" role="group" aria-label="Editor mode">
-              <button class="cms-btn secondary" type="button" id="use-modules" title="Split the Markdown text into one paragraph module per block of text. You can undo this.">Split into modules</button>
-              <button class="cms-btn secondary" type="button" id="use-markdown">Use Markdown</button>
-            </div>
-            <div class="ed-split" id="split" data-mode={isModular ? 'modules' : 'markdown'}>
-              <div class="sb-properties" id="module-inspector" aria-label="Selected module settings" hidden><div class="sb-pane-heading"><div><h3 id="module-title">Module settings</h3><p>Make it your own</p></div></div><div id="module-fields"></div></div>
-              <div class="ed-write">
-                <div id="module-workspace" class="sb-modules" hidden>
-                  <details class="sb-library-disclosure" open><summary>Add to the story: module library &amp; starter layouts</summary>
-                    <p class="sb-insert-help">Insert after the selected module. Existing content stays in place.</p>
-                    <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
-                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">11 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
-                    <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
-                    <label class="sb-library-category" for="module-library-category">Browse modules<select id="module-library-category"><option value="all">All modules</option><option value="favorites">My quick access</option><option value="writing">Writing</option><option value="media">Images &amp; video</option><option value="layout">Layout &amp; structure</option><option value="actions">Links &amp; buttons</option></select></label>
-                    <details class="sb-library-preferences"><summary>Customize quick access</summary><p>Choose your go-to modules. Saved in this browser.</p>{libraryModules.map(([type,label]) => <label><input type="checkbox" data-pin-module={type} />{label}</label>)}<p id="module-pin-status" role="status"></p></details>
-                    <div class="sb-library" role="group" aria-label="Add content module">
-                      {libraryModules.map(([type,label,category]) => <button type="button" data-add-module={type} data-library-category={category}>{label}</button>)}
-                    </div>
-                    <h3 class="sb-library-heading">Starter layouts</h3>
-                    <p class="sb-insert-help">Add an empty structure, then write your own story.</p>
-                    <div class="sb-starters" role="group" aria-label="Insert starter layout after selected module">
-                      <button type="button" data-insert-layout="news">News story <small>Paragraph · heading · paragraph · quote</small></button>
-                      <button type="button" data-insert-layout="recap">Event recap <small>Heading · paragraph · list · paragraph</small></button>
-                      <button type="button" data-insert-layout="announcement">Announcement <small>Heading · paragraph · list · divider</small></button>
-                    </div>
-                    <h3 class="sb-library-heading">My saved layouts</h3>
-                    <p class="admin-note">Save the structure and settings. Text, links and photo choices are left out.</p>
-                    <label>Layout name<input id="saved-layout-name" data-editor-local maxlength="80" autocomplete="off" /></label>
-                    <button type="button" id="save-story-layout">Save this structure</button>
-                    <label>Saved layout<select id="saved-layout-choice" aria-label="Saved layout" data-editor-local><option value="">Loading layouts…</option></select></label>
-                    <div class="sb-controls"><button type="button" id="insert-story-layout">Insert saved layout</button><button type="button" id="delete-story-layout">Delete saved layout</button></div>
-                    <p id="saved-layout-status" role="status" class="admin-note"></p>
-                    </details>
-                </div>
-                <div id="markdown-workspace">
-                <div class="ed-toolbar" role="toolbar" aria-label="Formatting">
-                  <button type="button" data-md="bold" aria-label="Bold"><strong>B</strong></button>
-                  <button type="button" data-md="italic" aria-label="Italic"><em>I</em></button>
-                  <button type="button" data-md="heading" aria-label="Heading">H</button>
-                  <button type="button" data-md="quote" aria-label="Quote">“ ”</button>
-                  <button type="button" data-md="link" aria-label="Link">Link</button>
-                  <button type="button" data-md="list" aria-label="List">• List</button>
-                  <label>Story photo<select id="inline-photo-choice" data-editor-local aria-label="Story photo to insert"><option value="">Choose a photo</option>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}{p.alt ? ` — ${p.alt}` : ''}</option>)}</select></label>
-                  <label>Size and alignment<select id="inline-photo-placement" data-editor-local disabled={photos.length === 0} aria-label="Size and alignment of the inserted photo"><option value="">Column width</option><option value="wide">Wide</option><option value="full">Full width</option><option value="left">Left, text wraps</option><option value="right">Right, text wraps</option></select></label>
-                  <button type="button" id="insert-inline-photo" disabled={!photos.length}>Insert photo</button>
-                </div>
-                <div class="ed-toolbar" role="group" aria-label="Insert photo gallery">
-                  <label>From photo<select id="gallery-photo-start" data-editor-local>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}</option>)}</select></label>
-                  <label>To photo<select id="gallery-photo-end" data-editor-local>{photos.map((p, i) => <option value={i + 1} selected={i === photos.length - 1}>Photo {i + 1}</option>)}</select></label>
-                  <label>Gallery columns<select id="gallery-columns" data-editor-local><option value="2">2 columns</option><option value="3">3 columns</option></select></label>
-                  <button type="button" id="insert-inline-gallery" disabled={photos.length < 2}>Insert gallery</button>
-                  <span id="gallery-marker-status" role="status"></span>
-                </div>
-                {draft.storyBlocks?.length ? <noscript><p class="admin-error">This story is built from modules, which need JavaScript to edit. Without it the text below is read-only.</p></noscript> : null}
-                <textarea class="body" name="body" id="f-body" aria-label="Story text" readonly={!!draft.storyBlocks?.length}>{draft.body}</textarea>
-                </div>
-                <p id="module-status" class="admin-note" role="status" aria-live="polite"></p>
-              </div>
-            </div>
-          </section>
-
-          <section class="ed-card ed-panel studio-photos" id="photos" data-studio-panel="photos" aria-labelledby="studio-heading-photos">
-            <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-photos" tabindex="-1" data-panel-heading>Photos</h2><p class="admin-note">Choose your lead image, arrange the gallery and keep the subject in frame.</p></div></div>
+              <section class="ed-card ed-step" id="photos" aria-labelledby="ed-photos-heading">
+                <h2 id="ed-photos-heading"><span class="ed-badge" aria-hidden="true">2</span> Photos</h2>
             <p class="admin-note">The first photo leads the story. JPG, PNG, WebP or AVIF, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
             {photos.length > 0 && (
               <p class="admin-note" id="photo-reorder-help">Reorder: use Up and Down on any device or keyboard. With a mouse or touch, drag a photo by its Drag handle onto a new place. Inline photo markers follow their photos.</p>
@@ -479,18 +281,171 @@ const publishingItems: OutlineItem[] = draft ? [
                 ))}
               </div>
             </fieldset>
+              </section>
+
+              <section class="ed-card ed-step story-builder" id="story-builder" aria-labelledby="ed-story-heading">
+                <h2 id="ed-story-heading"><span class="ed-badge" aria-hidden="true">3</span> Story</h2>
+            {draft.body.includes('<') && (
+              <p class="admin-error" role="alert">This text contains “&lt;”, so it may hold raw HTML. Raw HTML is not kept: after you publish, it is shown to readers as plain text. Rewrite it in Markdown if you need the formatting.</p>
+            )}
+                <input type="hidden" name="storyBlocks" id="story-blocks" value={JSON.stringify(draft.storyBlocks ?? [])} />
+                <div class="ed-split" id="split" data-mode={isModular ? 'modules' : 'markdown'}>
+                  <div id="module-canvas" class="ed-module-canvas" hidden={!isModular}>
+                    <p class="sb-drag-help">Select a module to edit it in the sidebar. Drag to reorder; the Move buttons also work with a keyboard. <span class="sb-count"><span id="module-count"></span> modules</span></p>
+                    <ol id="module-outline" aria-label="Story modules"></ol>
+                  </div>
+                  <div id="markdown-workspace">
+                    <div class="ed-markdown-head"><span class="ed-eyebrow">Body text</span><button type="button" class="ed-btn" data-split-modules data-js-only>Split into modules</button></div>
+                    <div class="ed-toolbar" role="toolbar" aria-label="Formatting">
+                  <button type="button" data-md="bold" aria-label="Bold"><strong>B</strong></button>
+                  <button type="button" data-md="italic" aria-label="Italic"><em>I</em></button>
+                  <button type="button" data-md="heading" aria-label="Heading">H</button>
+                  <button type="button" data-md="quote" aria-label="Quote">“ ”</button>
+                  <button type="button" data-md="link" aria-label="Link">Link</button>
+                  <button type="button" data-md="list" aria-label="List">• List</button>
+                  <label>Story photo<select id="inline-photo-choice" data-editor-local aria-label="Story photo to insert"><option value="">Choose a photo</option>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}{p.alt ? ` — ${p.alt}` : ''}</option>)}</select></label>
+                  <label>Size and alignment<select id="inline-photo-placement" data-editor-local disabled={photos.length === 0} aria-label="Size and alignment of the inserted photo"><option value="">Column width</option><option value="wide">Wide</option><option value="full">Full width</option><option value="left">Left, text wraps</option><option value="right">Right, text wraps</option></select></label>
+                  <button type="button" id="insert-inline-photo" disabled={!photos.length}>Insert photo</button>
+                </div>
+                <div class="ed-toolbar" role="group" aria-label="Insert photo gallery">
+                  <label>From photo<select id="gallery-photo-start" data-editor-local>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}</option>)}</select></label>
+                  <label>To photo<select id="gallery-photo-end" data-editor-local>{photos.map((p, i) => <option value={i + 1} selected={i === photos.length - 1}>Photo {i + 1}</option>)}</select></label>
+                  <label>Gallery columns<select id="gallery-columns" data-editor-local><option value="2">2 columns</option><option value="3">3 columns</option></select></label>
+                  <button type="button" id="insert-inline-gallery" disabled={photos.length < 2}>Insert gallery</button>
+                  <span id="gallery-marker-status" role="status"></span>
+                </div>
+                {draft.storyBlocks?.length ? <noscript><p class="admin-error">This story is built from modules, which need JavaScript to edit. Without it the text below is read-only.</p></noscript> : null}
+                <textarea class="body" name="body" id="f-body" aria-label="Story text" readonly={!!draft.storyBlocks?.length}>{draft.body}</textarea>
+                  </div>
+                  <p id="module-status" class="admin-note" role="status" aria-live="polite"></p>
+                </div>
+              </section>
+            </fieldset>
+          </form>
+          <form id="photo-form" method="post" action={`/api/admin/drafts/${draft.id}/photos`} enctype="multipart/form-data">
+            <input type="hidden" name="version" value={draft.updatedAt} />
+          </form>
+        </div>
+
+        <aside class="ed-sidebar" id="ed-sidebar" aria-label="Story sidebar">
+          <div class="ed-resize" id="ed-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0" hidden></div>
+          <div class="ed-tablist" role="tablist" aria-label="Sidebar" hidden>
+            <button type="button" role="tab" class="ed-tab" id="studio-tab-modules" data-studio-tab="modules" aria-controls="studio-panel-modules" aria-selected="true" hidden={!editable}>Modules</button>
+            <button type="button" role="tab" class="ed-tab" id="studio-tab-module" data-studio-tab="module" aria-controls="studio-panel-module" aria-selected="false" tabindex="-1" hidden={!isModular}>Module settings</button>
+            <button type="button" role="tab" class="ed-tab" id="studio-tab-settings" data-studio-tab="settings" aria-controls="studio-panel-settings" aria-selected="false" tabindex="-1">Story settings</button>
+            {editable && <button type="button" role="tab" class="ed-tab" id="studio-tab-review" data-studio-tab="review" aria-controls="studio-panel-review" aria-selected="false" tabindex="-1">Publishing</button>}
+            {editable && <button type="button" role="tab" class="ed-tab" id="studio-tab-history" data-studio-tab="history" aria-controls="studio-panel-history" aria-selected="false" tabindex="-1">History</button>}
+          </div>
+
+          <section class="ed-tabpanel story-builder" role="tabpanel" id="studio-panel-modules" data-studio-panel="modules" aria-labelledby="studio-tab-modules" data-js-only>
+            <h2 class="ed-panel-title">Modules</h2>
+            <fieldset disabled={!editable} class="ed-flat">
+              <div id="markdown-split" class="ed-split-note" hidden={isModular}>
+                <p class="admin-note">This story is written as Markdown text. Split it into modules to edit it in parts, add images, columns, buttons and more. Your text is kept, and you can undo this change.</p>
+                <button class="ed-btn" type="button" id="use-modules" title="Split the Markdown text into one paragraph module per block of text. You can undo this.">Split into modules</button>
+              </div>
+              <div id="module-workspace" class="sb-modules" hidden={!isModular}>
+                <button class="ed-btn" type="button" id="use-markdown">Use Markdown</button>
+                <div class="sb-library-disclosure"><h3 class="ed-subtitle">Add to the story</h3>
+                    <p class="sb-insert-help">Insert after the selected module. Existing content stays in place.</p>
+                    <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
+                    <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">11 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
+                    <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
+                    <label class="sb-library-category" for="module-library-category">Browse modules<select id="module-library-category"><option value="all">All modules</option><option value="favorites">My quick access</option><option value="writing">Writing</option><option value="media">Images &amp; video</option><option value="layout">Layout &amp; structure</option><option value="actions">Links &amp; buttons</option></select></label>
+                    <details class="sb-library-preferences"><summary>Customize quick access</summary><p>Choose your go-to modules. Saved in this browser.</p>{libraryModules.map(([type,label]) => <label><input type="checkbox" data-pin-module={type} />{label}</label>)}<p id="module-pin-status" role="status"></p></details>
+                    <div class="sb-library" role="group" aria-label="Add content module">
+                      {libraryModules.map(([type,label,category]) => <button type="button" data-add-module={type} data-library-category={category}>{label}</button>)}
+                    </div>
+                    <h3 class="sb-library-heading">Starter layouts</h3>
+                    <p class="sb-insert-help">Add an empty structure, then write your own story.</p>
+                    <div class="sb-starters" role="group" aria-label="Insert starter layout after selected module">
+                      <button type="button" data-insert-layout="news">News story <small>Paragraph · heading · paragraph · quote</small></button>
+                      <button type="button" data-insert-layout="recap">Event recap <small>Heading · paragraph · list · paragraph</small></button>
+                      <button type="button" data-insert-layout="announcement">Announcement <small>Heading · paragraph · list · divider</small></button>
+                    </div>
+                    <h3 class="sb-library-heading">My saved layouts</h3>
+                    <p class="admin-note">Save the structure and settings. Text, links and photo choices are left out.</p>
+                    <label>Layout name<input id="saved-layout-name" data-editor-local maxlength="80" autocomplete="off" /></label>
+                    <button type="button" id="save-story-layout">Save this structure</button>
+                    <label>Saved layout<select id="saved-layout-choice" aria-label="Saved layout" data-editor-local><option value="">Loading layouts…</option></select></label>
+                    <div class="sb-controls"><button type="button" id="insert-story-layout">Insert saved layout</button><button type="button" id="delete-story-layout">Delete saved layout</button></div>
+                    <p id="saved-layout-status" role="status" class="admin-note"></p>
+                    </div>
+              </div>
+            </fieldset>
           </section>
 
+          <section class="ed-tabpanel" role="tabpanel" id="studio-panel-module" data-studio-panel="module" aria-labelledby="studio-tab-module" data-js-only hidden={!isModular}>
+            <fieldset disabled={!editable} class="ed-flat">
+              <div class="sb-properties" id="module-inspector" aria-label="Selected module settings"><div class="sb-pane-heading"><div><h2 id="module-title" class="ed-panel-title">Module settings</h2><p>Make it your own</p></div></div><div id="module-fields"></div></div>
+            </fieldset>
+          </section>
 
-        </fieldset>
-      </form>
-      <form id="photo-form" method="post" action={`/api/admin/drafts/${draft.id}/photos`} enctype="multipart/form-data">
-        <input type="hidden" name="version" value={draft.updatedAt} />
-      </form>
-
-      {hasNotes && (
-        <section class="ed-card ed-panel studio-submitter-notes" id="studio-panel-notes" data-studio-panel="notes" aria-labelledby="studio-heading-notes">
-          <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-notes" tabindex="-1" data-panel-heading>Submitter &amp; notes</h2><p class="admin-note">Private. Editors only; never published.</p></div></div>
+          <section class="ed-tabpanel studio-settings" role="tabpanel" id="studio-panel-settings" data-studio-panel="settings" aria-labelledby="studio-tab-settings">
+            <h2 class="ed-panel-title">Story settings</h2>
+            <p class="admin-note">Where readers find this story, and who wrote it. <span class="studio-source">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span></p>
+            <fieldset disabled={!editable} class="ed-flat">
+              <div class="ed-grid ed-stack">
+              <label>Section
+                <select form="draft-form" name="section" id="f-section">
+                  {!SECTIONS.some((s) => s.key === draft.section) && <option value="" selected>Choose a section</option>}
+                  {SECTIONS.map((s) => <option value={s.key} selected={s.key === draft.section}>{s.label}</option>)}
+                </select>
+              </label>
+              <fieldset class="full additional-sections"><legend>Additional sections</legend>
+                <input form="draft-form" type="hidden" name="additionalSectionsPresent" value="1" />
+                <p class="hint">Keep one primary section above. Add other sections where readers should also find this story; its category belongs to the primary section.</p>
+                <div style="display:flex;flex-wrap:wrap;gap:12px 24px">{SECTIONS.map((s) => <label style="display:flex;align-items:center;gap:8px"><input form="draft-form" type="checkbox" name="additionalSections" value={s.key} checked={s.key === draft.section || draft.additionalSections?.includes(s.key)} disabled={s.key === draft.section} />{s.label}</label>)}</div>
+              </fieldset>
+              <label id="f-area-wrap">Category
+                <select form="draft-form" name="area" id="f-area">
+                  <option value="" data-section="" hidden={!!SECTIONS.find((s) => s.key === draft.section)?.areas}>None</option>
+                  {SECTIONS.flatMap((s) => (s.areas ?? []).map((a) => (
+                    <option value={a.key} data-section={s.key} selected={s.key === draft.section && a.key === draft.area} hidden={s.key !== draft.section}>{a.label}</option>
+                  )))}
+                </select>
+              </label>
+              <label>Author
+                <input form="draft-form" type="text" id="f-author" name="author" value={draft.author} maxlength="120" autocomplete="off" />
+              </label>
+              <label>Author title
+                <input form="draft-form" type="text" name="authorTitle" value={draft.authorTitle} maxlength="120" autocomplete="off" />
+              </label>
+              <label>Church
+                <input form="draft-form" type="text" name="church" value={draft.church} maxlength="160" autocomplete="off" />
+              </label>
+              <label>Date
+                <input form="draft-form" type="date" id="f-date" name="date" value={draft.date} />
+              </label>
+              <label>Photo credit
+                <input form="draft-form" type="text" name="photoCredit" value={draft.photoCredit} maxlength="120" autocomplete="off" />
+              </label>
+              <label>Content type
+                <select form="draft-form" name="announcementKind"><option value="story" selected={!draft.announcement}>Story</option><option value="announcement" selected={draft.announcement?.kind === 'announcement'}>Announcement</option><option value="event" selected={draft.announcement?.kind === 'event'}>Event</option></select>
+              </label>
+              <label>Event date <span class="hint">optional</span><input form="draft-form" type="date" name="eventDate" value={draft.announcement?.eventDate ?? ''} /></label>
+              <label class="full">Event location <input form="draft-form" name="eventLocation" maxlength="200" value={draft.announcement?.location ?? ''} /></label>
+              <label class="full">Announcement video <span class="hint">Paste a YouTube or Vimeo link; readers open it in a video popup.</span><input form="draft-form" name="announcementVideo" maxlength="2048" value={draft.announcement?.videoUrl ?? ''} /></label>
+              <fieldset class="full"><legend>Announcement link buttons</legend><p class="admin-note">Choose Announcement or Event above. The first photo is its full-height flyer. Add a text summary so the flyer is also accessible.</p>
+                {[0, 1, 2].map((i) => <div class="ed-grid"><label>Link {i + 1} label<input form="draft-form" name={`announcementLink${i}Label`} maxlength="120" value={draft.announcement?.links[i]?.label ?? ''} /></label><label>Link {i + 1} address<input form="draft-form" name={`announcementLink${i}Url`} maxlength="2048" value={draft.announcement?.links[i]?.url ?? ''} placeholder="https://" /></label></div>)}
+              </fieldset>
+              <label class="ed-check"><input form="draft-form" type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
+              <label>Newsletter issue <span class="hint">where this story first appeared</span>
+                <input form="draft-form" type="hidden" name="newsletterIssuePresent" value="1" />
+                <select form="draft-form" name="newsletterIssue" id="f-newsletter-issue">
+                  <option value="" selected={!draft.newsletterIssue}>None</option>
+                  {issues.map((i) => <option value={i.number} selected={draft.newsletterIssue?.number === i.number}>Issue #{i.number} · {i.date}{i.title ? ` · ${i.title}` : ''}</option>)}
+                </select>
+              </label>
+              <label>Position in the issue <span class="hint">1 to 999, optional</span>
+                <input form="draft-form" type="number" name="newsletterPosition" min="1" max="999" step="1" inputmode="numeric" value={draft.newsletterIssue?.position ?? ''} />
+              </label>
+              </div>
+            </fieldset>
+            {hasNotes && (
+              <div class="studio-submitter-notes" id="studio-panel-notes">
+                <h3 class="ed-subtitle">Submitter &amp; notes</h3>
+                <p class="admin-note">Private. Editors only; never published.</p>
       {isAgent && (
         <section class="ed-card ed-sub">
           <h3>Submitter</h3>
@@ -527,12 +482,16 @@ const publishingItems: OutlineItem[] = draft ? [
           <p class="admin-note">Contact details are for editors only and are never published.</p>
         </section>
       )}
-        </section>
-      )}
+              </div>
+            )}
+          </section>
 
-      {editable && (
-        <section class="ed-card ed-panel studio-review" id="studio-panel-review" data-studio-panel="review" aria-labelledby="studio-heading-review">
-          <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-review" tabindex="-1" data-panel-heading>Schedule &amp; publish</h2><p class="admin-note">This is the last stop before your story appears on the public website.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>Open private preview</button></div>
+          {editable && (
+            <section class="ed-tabpanel studio-review" role="tabpanel" id="studio-panel-review" data-studio-panel="review" aria-labelledby="studio-tab-review">
+              <h2 class="ed-panel-title">Publishing</h2>
+              <h3 class="ed-subtitle">Check before publishing</h3>
+              <ul class="ed-problems" aria-label="Things to fix before publishing" hidden={problems.length === 0}>{KEYED.map((p) => <li data-problem={p.key} hidden={!problems.some((x) => x.key === p.key)}><a href={p.href} data-open-panel={p.panel}>{p.text}</a></li>)}{problems.filter((p) => !p.key).map((p) => <li><a href={p.href} data-open-panel={p.panel}>{p.text}</a></li>)}</ul>
+              <p class="ed-ok" hidden={problems.length > 0}>No problems found.</p>
           <div class="studio-review-summary"><div><span>Story</span><strong data-review-title>{draft.title || 'Untitled story'}</strong></div><div><span>Author</span><strong data-review-author>{draft.author || 'Add an author in Story settings'}</strong></div><div><span>Content</span><strong data-review-content>{draft.storyBlocks?.length ? `${countStoryBlocks(draft.storyBlocks)} modules` : 'Markdown story'}</strong></div><div><span>Photos</span><strong>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</strong></div></div>
           <ul class="studio-review-checklist"><li>Check the headline, names and facts.</li><li>Confirm permission to use the story and photos.</li><li>Read the phone preview and describe your images with alt text.</li></ul>
           {backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
@@ -586,30 +545,41 @@ const publishingItems: OutlineItem[] = draft ? [
               <p><button type="submit" class="cms-btn danger">Reject draft</button></p>
             </form>
           </details>
-        </section>
-      )}
+            </section>
+          )}
 
-      {editable && (
-        <section class="ed-card ed-panel" id="studio-panel-history" data-studio-panel="history" aria-labelledby="studio-heading-history">
-          <div class="ed-panel-head"><div><span class="ed-eyebrow">Edit section</span><h2 id="studio-heading-history" tabindex="-1" data-panel-heading>History</h2></div></div>
-          <details class="ed-card" open><summary>Saved revision history</summary>
+          {editable && (
+            <section class="ed-tabpanel" role="tabpanel" id="studio-panel-history" data-studio-panel="history" aria-labelledby="studio-tab-history">
+              <h2 class="ed-panel-title">History</h2>
+              <p class="admin-note" data-meta="history">Saved versions</p>
+          <div class="ed-history">
             <p class="admin-note">The latest 20 previous saved states are available. Restoring saves your current edits first and changes only this draft.</p>
             <label>Saved revision<select id="draft-revision-choice" data-editor-local aria-label="Saved revision"><option value="">Loading history…</option></select></label>
             <button type="button" class="cms-btn secondary" id="restore-draft-revision" disabled>Restore selected revision</button>
             <p id="draft-revision-status" role="status" class="admin-note"></p>
-          </details>
-        </section>
-      )}
+          </div>
+            </section>
+          )}
+        </aside>
+        <div class="ed-rail" id="ed-rail" hidden>
+          <button type="button" class="ed-btn" data-layout-action="toggle">Show sidebar</button>
+          {isModular && <button type="button" class="ed-btn" data-rail-add>Add module</button>}
+        </div>
       </div>
-      <aside class="ed-preview ed-preview-card" id="ed-preview-card" aria-labelledby="ed-preview-heading" hidden>
-        <div class="ed-card-head"><h2 id="ed-preview-heading">Draft preview</h2><span class="ed-pill">{draft.live ? 'Live' : 'Not live'}</span></div>
-        <div class="sb-preview-tools"><div role="group" aria-label="Preview width"><button type="button" data-preview-width="desktop" aria-pressed="true">Desktop</button><button type="button" data-preview-width="phone" aria-pressed="false">Phone</button></div><button type="button" class="ed-preview-close" data-preview-close>Close preview</button></div>
+
+      <dialog class="ed-dialog" id="ed-preview-dialog" aria-labelledby="ed-preview-title">
+        <div class="ed-dialog-head">
+          <h2 id="ed-preview-title">Draft preview</h2>
+          <span class="ed-chip">{draft.live ? 'Live' : 'Not live'}</span>
+          <div class="sb-preview-tools" role="group" aria-label="Preview width"><button type="button" data-preview-width="desktop" aria-pressed="true">Desktop</button><button type="button" data-preview-width="phone" aria-pressed="false">Phone</button></div>
+          <button type="button" class="ed-btn" data-preview-close>Close preview</button>
+        </div>
         <iframe id="preview" title="Story preview" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
-      </aside>
-    </div>
+      </dialog>
     </div>
   )}
 </Admin>
+
 <script type="application/json" id="story-builder-data" set:html={JSON.stringify({ emptyStory: !draft?.body.trim() && !(draft?.storyBlocks?.length), photos: photos.map((p) => ({ id: p.id, src: p.path ? `/api/admin/photos/${p.id}` : p.url && safeImg(p.url) ? p.url : '', alt: p.alt, focalX: p.focalX ?? 50, focalY: p.focalY ?? 50, zoom: p.zoom, fit: p.fit, fitFill: p.fitFill })) }).replace(/</g, '\\u003c')}></script>
 <script>import '../../../scripts/draft-editor';
 import '../../../scripts/photo-reorder';</script>
