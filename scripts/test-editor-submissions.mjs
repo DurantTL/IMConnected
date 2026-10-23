@@ -488,6 +488,136 @@ try {
     check('...whereas the in-review draft from before still has its upload', fs.existsSync(path.join(DATA_DIR, 'uploads', relA)));
   }
 
+  // ================= announcements and events from the public form (issue #123) =================
+  {
+    const chicagoDay = (offset = 0) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date(Date.now() + offset * 86400_000));
+    const SHORT = 'Join us for a community potluck this Sabbath afternoon at noon.'; // well over 40, well under 200
+    const EV_TITLE = 'Fall Potluck <script>alert(2)</script>';
+    const EV_LOC = 'Fellowship hall <img src=x onerror=alert(3)>';
+    const evDate = chicagoDay(10);
+    const bodyOf = (n) => 'x'.repeat(n - 1) + '.';
+    const outsideAttrs = (html) => html.replace(/="[^"]*"/g, '=""'); // quoted attribute values are inert text; markup outside them is what must stay clean
+    const draftsByTitle = (t) => q('SELECT * FROM drafts WHERE title = ?', t);
+
+    let r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: EV_TITLE, body: SHORT, eventDate: evDate, location: EV_LOC }), [{ bytes: PNG_A, filename: 'flyer.png' }]);
+    const ev = draftsByTitle(EV_TITLE)[0] ?? {};
+    const evAnn = (() => { try { return JSON.parse(ev.announcement); } catch { return null; } })();
+    check('event with a date: accepted and saved as a form/new draft', r.status === 200 && ev.source === 'form' && ev.status === 'new', r.text.slice(0, 200));
+    check('...as a typed event announcement with the date and location, and no links or video', evAnn?.kind === 'event' && evAnn.eventDate === evDate && evAnn.location === EV_LOC && evAnn.links.length === 0 && !('videoUrl' in evAnn), String(ev.announcement));
+    check('...with the flyer stored as its first photo and the body kept as safe text', q('SELECT COUNT(*) n FROM draft_photos WHERE draft_id = ?', ev.id)[0].n === 1 && ev.body === SHORT);
+    check('...and the submitter details are kept like any form draft', ev.submitter_email === SUBMITTER.email && ev.email_verified === 0);
+    const evTab = await adminGet('/admin/events', E1);
+    check('the editor inbox Events tab lists it, title escaped (no raw <script> element)', evTab.status === 200 && evTab.text.includes('Fall Potluck &lt;script&gt;alert(2)&lt;/script&gt;') && !outsideAttrs(evTab.text).includes('<script>alert(2)'));
+    const storyTab = await adminGet('/admin', E1);
+    check('...and not under Stories', !storyTab.text.includes('Fall Potluck'));
+    const page = await adminGet(`/admin/drafts/${ev.id}`, E1);
+    check('the editor sees the location as inert text (no raw <img> element from the location)', page.status === 200 && page.text.includes('value="Fellowship hall <img src=x') && !outsideAttrs(page.text).includes('<img src=x'));
+    check('editors are told "New event submission: <title>" (the escaped title, no contact details)', await until(() => emails().some((m) => m.subject === `New event submission: ${EV_TITLE}`)) && !emails().filter((m) => m.subject === `New event submission: ${EV_TITLE}`).some((m) => PERSONAL.some((x) => JSON.stringify(m).includes(x))));
+    check('nothing is published: no story row for it', q('SELECT COUNT(*) n FROM stories WHERE title = ?', EV_TITLE)[0].n === 0);
+
+    r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event no date', body: SHORT }));
+    check('event without a date: 400 and no draft', r.status === 400 && /date of your event/.test(r.data.error) && draftsByTitle('Event no date').length === 0, r.text.slice(0, 200));
+    for (const bad of ['next friday', '2026-13-45', '2026-02-30', '11/14/2026', `${evDate}T00:00junk`]) {
+      r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event bad date', body: SHORT, eventDate: bad }));
+      check(`event with a malformed date "${bad}": 400 and no draft`, r.status === 400 && /real date/.test(r.data.error) && draftsByTitle('Event bad date').length === 0, r.text.slice(0, 200));
+    }
+    r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event past', body: SHORT, eventDate: chicagoDay(-2) }));
+    check('event dated before today (America/Chicago): 400', r.status === 400 && /already passed/.test(r.data.error) && draftsByTitle('Event past').length === 0, r.text.slice(0, 200));
+    r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event today', body: SHORT, eventDate: chicagoDay(0) }));
+    check('event dated today (America/Chicago): accepted', r.status === 200 && draftsByTitle('Event today').length === 1, r.text.slice(0, 200));
+    r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event tab place', body: SHORT, eventDate: evDate, location: '  Fellowship\thall\u2028East\u0085 wing\n ' }));
+    check('a pasted tab, line separator or newline in the location becomes a single space (accepted)', r.status === 200 && JSON.parse(draftsByTitle('Event tab place')[0]?.announcement ?? 'null')?.location === 'Fellowship hall East wing', r.text.slice(0, 200));
+    const noJsFd = (over) => { const fd = new FormData(); for (const [k, v] of Object.entries(form(over))) fd.append(k, String(v)); return fd; };
+    const noJs = await fetch(BASE + '/api/submit', { method: 'POST', headers: { Origin: BASE }, body: noJsFd({ kind: 'event', title: 'Event nojs', body: SHORT, eventDate: evDate }), redirect: 'manual' });
+    check('no-JavaScript event submission redirects to /submit/thanks/?type=event', noJs.status === 303 && noJs.headers.get('location') === '/submit/thanks/?type=event', `${noJs.status} ${noJs.headers.get('location')}`);
+    const noJsStory = await fetch(BASE + '/api/submit', { method: 'POST', headers: { Origin: BASE }, body: noJsFd({ title: 'Story nojs' }), redirect: 'manual' });
+    check('no-JavaScript story still redirects to plain /submit/thanks/', noJsStory.status === 303 && noJsStory.headers.get('location') === '/submit/thanks/');
+    const noJsBad = await fetch(BASE + '/api/submit', { method: 'POST', headers: { Origin: BASE }, body: noJsFd({ kind: 'event', title: 'Event nojs bad', body: SHORT }) });
+    check('no-JavaScript error page has a neutral heading', noJsBad.status === 400 && (await noJsBad.text()).includes('We couldn’t send your submission'));
+    run("DELETE FROM drafts WHERE title IN ('Event tab place', 'Event nojs', 'Story nojs')");
+    r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event long place', body: SHORT, eventDate: evDate, location: 'p'.repeat(201) }));
+    check('event with a location over 200 characters: 400', r.status === 400 && draftsByTitle('Event long place').length === 0);
+
+    r = await postForm(BASE, '/api/submit', form({ kind: 'announcement', title: 'Notice 40', body: bodyOf(40), eventDate: 'garbage', location: 'ignored place' }));
+    const n40 = draftsByTitle('Notice 40')[0] ?? {};
+    check('announcement with a 40-character body: accepted as a typed announcement, event fields ignored', r.status === 200 && JSON.parse(n40.announcement ?? 'null')?.kind === 'announcement' && n40.source === 'form' && n40.status === 'new' && !/eventDate|location/.test(n40.announcement), String(n40.announcement) + r.text.slice(0, 100));
+    r = await postForm(BASE, '/api/submit', form({ kind: 'announcement', title: 'Notice 39', body: bodyOf(39) }));
+    check('announcement with a 39-character body: 400 and no draft', r.status === 400 && /at least 40/.test(r.data.error) && draftsByTitle('Notice 39').length === 0, r.text.slice(0, 200));
+    const annTab = await adminGet('/admin/announcements', E1);
+    check('the Announcements tab lists the announcement and not the event', annTab.text.includes('Notice 40') && !annTab.text.includes('Fall Potluck'));
+
+    r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event short body', body: bodyOf(39), eventDate: evDate }));
+    check('event with a 39-character body: 400', r.status === 400 && draftsByTitle('Event short body').length === 0);
+    r = await postForm(BASE, '/api/submit', form({ kind: 'party', title: 'Unknown kind' }));
+    check('an unknown type is refused (400)', r.status === 400 && draftsByTitle('Unknown kind').length === 0);
+
+    // the story path is unchanged: still 200 characters, no announcement, event fields ignored
+    r = await postForm(BASE, '/api/submit', form({ title: 'Story still needs 200', body: bodyOf(60) }));
+    check('story with a 60-character body: still 400 (200 minimum)', r.status === 400 && /at least 200/.test(r.data.error) && draftsByTitle('Story still needs 200').length === 0, r.text.slice(0, 200));
+    r = await postForm(BASE, '/api/submit', form({ kind: 'story', title: 'Story with stray fields', eventDate: evDate, location: 'Nowhere' }));
+    const st = draftsByTitle('Story with stray fields')[0] ?? {};
+    check('story (explicit kind) saves no announcement and ignores event fields', r.status === 200 && st.announcement === null, String(st.announcement));
+    r = await postForm(BASE, '/api/submit', form({ title: 'Story without kind field' }));
+    check('a form that sends no type (older client) is a plain story', r.status === 200 && draftsByTitle('Story without kind field')[0]?.announcement === null);
+    const storiesTab = await adminGet('/admin', E1);
+    check('the plain stories show under Stories', storiesTab.text.includes('Story with stray fields'));
+    check('the submitter confirmation email is sent for the event too', await until(() => mailTo(emails(), SUBMITTER.email).length >= 2));
+    run("DELETE FROM drafts WHERE title IN (?, 'Event today', 'Notice 40', 'Story with stray fields', 'Story without kind field')", EV_TITLE);
+  }
+
+  // ---- the form itself, in Chromium (skipped when Playwright is not installed) ----
+  {
+    const chicagoDay = (offset = 0) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date(Date.now() + offset * 86400_000));
+    let chromium = null;
+    try {
+      const pr = createRequire(process.env.PLAYWRIGHT_ROOT ? path.join(process.env.PLAYWRIGHT_ROOT, 'package.json') : import.meta.url);
+      for (const spec of ['playwright', '/opt/node22/lib/node_modules/playwright']) { try { chromium = pr(spec).chromium; break; } catch { /* next */ } }
+    } catch { /* none */ }
+    if (!chromium) console.log('SKIP  form type chooser in Chromium (Playwright not found)');
+    else {
+      const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--disable-dev-shm-usage', '--disable-gpu', ...(process.env.CHROMIUM_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])] });
+      try {
+        const shots = process.env.SHOTS_DIR;
+        if (shots) fs.mkdirSync(shots, { recursive: true });
+        const html = await (await fetch(BASE + '/submit/')).text();
+        check('without JavaScript the form has the type radios (Story checked) and every event field', /name="kind" value="story" checked/.test(html) && /name="kind" value="announcement"/.test(html) && /name="kind" value="event"/.test(html) && /<legend>What are you sending\?<\/legend>/.test(html) && /name="eventDate"/.test(html) && /name="location"/.test(html));
+        for (const [w, h] of [[390, 844], [1280, 900]]) {
+          const ctx = await browser.newContext({ viewport: { width: w, height: h } });
+          const p = await ctx.newPage();
+          const errs = [];
+          p.on('pageerror', (e) => errs.push(String(e)));
+          await p.goto(BASE + '/submit/');
+          const vis = (sel) => p.locator(sel).isVisible();
+          const hint = () => p.locator('#body-hint').innerText();
+          check(`[${w}px] Story is selected and the event fields are hidden`, await p.locator('input[value="story"]').isChecked() && !(await vis('#eventDate')) && !(await vis('#location')));
+          const storyHint = await hint();
+          if (shots) await p.screenshot({ path: path.join(shots, `form-story-${w}.png`) });
+          await p.locator('.type-choice label', { hasText: 'Event' }).click();
+          check(`[${w}px] choosing Event shows date and location and makes the date required`, (await vis('#eventDate')) && (await vis('#location')) && await p.locator('#eventDate').evaluate((el) => el.required));
+          const evHint = await hint();
+          check(`[${w}px] the body hint and label change for an event (minimum 40, not 200)`, evHint !== storyHint && /40 characters/.test(evHint) && /Event details/.test(await p.locator('#body-label').innerText()) && (await p.locator('#body').evaluate((el) => el.minLength)) === 40);
+          check(`[${w}px] the date label says it is required for events, and min is today (America/Chicago)`, /required for events/.test(await p.locator('label[for="eventDate"]').innerText()) && (await p.locator('#eventDate').getAttribute('min')) === chicagoDay(0));
+          check(`[${w}px] switching to Event announces the added fields in a polite live region`, /added/.test(await p.locator('form > p.sr-only[role="status"]').innerText()) && (await p.locator('form > p.sr-only[role="status"]').getAttribute('aria-live')) === 'polite');
+          check(`[${w}px] the button says "Send my event"`, (await p.locator('#submit-btn').innerText()) === 'Send my event');
+          const overflow = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+          check(`[${w}px] no horizontal scroll with Event chosen`, overflow <= 0, String(overflow));
+          if (shots) {
+            await p.locator('#eventDate').scrollIntoViewIfNeeded();
+            await p.screenshot({ path: path.join(shots, `form-event-${w}.png`) });
+            await p.screenshot({ path: path.join(shots, `form-event-${w}-full.png`), fullPage: true });
+          }
+          await p.locator('.type-choice label', { hasText: 'Announcement' }).click();
+          check(`[${w}px] ...and leaving Event announces them removed`, await (async () => { await p.locator('.type-choice label', { hasText: 'Announcement' }).click(); return /removed/.test(await p.locator('form > p.sr-only[role="status"]').innerText()); })());
+          check(`[${w}px] choosing Announcement hides the date and location again`, !(await vis('#eventDate')) && !(await vis('#location')) && /Say what people need/.test(await hint()));
+          await p.locator('.type-choice label', { hasText: 'Story' }).click();
+          check(`[${w}px] back to Story restores the 200-character minimum`, (await p.locator('#body').evaluate((el) => el.minLength)) === 200 && (await hint()) === storyHint);
+          check(`[${w}px] no page errors`, errs.length === 0, errs.join('|'));
+          await ctx.close();
+        }
+      } finally { await browser.close(); }
+    }
+  }
+
   // ================= the database is unavailable =================
   {
     const mailBefore = emails().length, dcBefore = discord.length;

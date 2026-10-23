@@ -33,16 +33,16 @@ function rateLimited(ip: string): boolean {
   return list.length > MAX_PER_WINDOW;
 }
 
-function respond(request: Request, status: number, payload: { ok: boolean; error?: string }) {
+function respond(request: Request, status: number, payload: { ok: boolean; error?: string }, kind = 'story') {
   const wantsJson = (request.headers.get('accept') || '').includes('application/json');
   if (wantsJson) {
     return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
   }
   // No-JS fallback
-  if (payload.ok) return new Response(null, { status: 303, headers: { Location: '/submit/thanks/' } });
+  if (payload.ok) return new Response(null, { status: 303, headers: { Location: kind === 'announcement' || kind === 'event' ? `/submit/thanks/?type=${kind}` : '/submit/thanks/' } });
   const msg = (payload.error || 'Something went wrong.').replace(/[<>&]/g, '');
   return new Response(
-    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Submission problem</title><body style="font-family:system-ui;max-width:640px;margin:48px auto;padding:0 16px"><h1>We couldn’t send your story</h1><p>${msg}</p><p><a href="javascript:history.back()">Go back and try again</a></p></body>`,
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Submission problem</title><body style="font-family:system-ui;max-width:640px;margin:48px auto;padding:0 16px"><h1>We couldn’t send your submission</h1><p>${msg}</p><p><a href="javascript:history.back()">Go back and try again</a></p></body>`,
     { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
   );
 }
@@ -125,6 +125,7 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
         body: textToMarkdown(sub.body),
         church: sub.church,
         photoCredit: sub.photoCredit,
+        announcement: sub.announcement,
         submitter: { name: sub.name, email: sub.email, phone: sub.phone, church: sub.church },
         photos: photos.map((p, i) => ({ ...p, ...sub.photoTexts[i] })),
       });
@@ -144,11 +145,11 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     else console.warn(`[submit] draft #${draftId}: confirmation email not sent (${mail.reason})`);
     // Editors who opted in, and the Discord channel, hear about it in the background: the visitor's response
     // doesn't wait on them, and nothing here can fail the submission.
-    void notifyEditorsOfSubmission({ id: draftId, title: sub.title, church: sub.church })
+    void notifyEditorsOfSubmission({ id: draftId, title: sub.title, church: sub.church, kind: sub.kind })
       .then((n) => console.log(`[submit] draft #${draftId}: editor notifications sent ${n.sent}, failed ${n.failed}`))
       .catch(() => console.warn(`[submit] draft #${draftId}: editor notifications failed`));
-    void notifyDiscord(`📰 **New IMConnected story submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${siteUrl()}/admin/drafts/${draftId}`).catch(() => {});
-    return respond(request, 200, { ok: true });
+    void notifyDiscord(`📰 **New IMConnected ${sub.kind} submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${siteUrl()}/admin/drafts/${draftId}`).catch(() => {});
+    return respond(request, 200, { ok: true }, sub.kind);
   } catch (err) {
     if (err instanceof ValidationError || err instanceof EmailCheckError) return respond(request, 400, { ok: false, error: err.message });
     console.error('[submit] failed', err);

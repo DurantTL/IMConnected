@@ -149,10 +149,10 @@ export async function sendConfirmationEmail(opts: { to: string; title: string; i
 }
 
 /** The "new story" email to an editor: only the title and church (escaped in the HTML), plus a link. `fromAgent` says the AI agent sent it. */
-export function buildSubmissionNotice(title: string, church: string, link: string, fromAgent = false) {
+export function buildSubmissionNotice(title: string, church: string, link: string, fromAgent = false, kind: 'story' | 'announcement' | 'event' = 'story') {
   const t = oneLine(title);
   const c = oneLine(church);
-  const what = fromAgent ? `A new story from the AI agent was added to ${SITE.name}.` : `A new story was submitted to ${SITE.name}.`;
+  const what = fromAgent ? `A new story from the AI agent was added to ${SITE.name}.` : `A new ${kind} was submitted to ${SITE.name}.`;
   const text = [what, '', `Title: ${t}`, ...(c ? [`Church: ${c}`] : []), '', `Open it in the dashboard: ${link}`, '', 'You get this email because "Email me when a story is submitted" is on in My account.'].join('\n');
   const html = `<!doctype html><html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1d2433;max-width:560px;margin:0 auto;padding:24px;line-height:1.5">
 <p>${escHtml(what)}</p>
@@ -160,7 +160,7 @@ export function buildSubmissionNotice(title: string, church: string, link: strin
 <p style="margin:28px 0"><a href="${escHtml(link)}" style="background:#1f4e79;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;display:inline-block;font-weight:600">Open in the dashboard</a></p>
 <p style="font-size:14px;color:#555">You get this email because &ldquo;Email me when a story is submitted&rdquo; is on in My account.</p>
 </body></html>`;
-  return { subject: fromAgent ? `New story from the AI agent: ${t}` : `New story submission: ${t}`, text, html };
+  return { subject: fromAgent ? `New story from the AI agent: ${t}` : `New ${kind} submission: ${t}`, text, html };
 }
 
 /** One summary email for a bulk submit from the AI agent: only escaped titles and dashboard links, never contacts or story text. */
