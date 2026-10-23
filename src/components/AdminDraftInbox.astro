@@ -1,7 +1,10 @@
 ---
 import Admin from '../layouts/Admin.astro';
+import '../styles/admin-lists.css';
 import { SECTIONS } from '../lib/site';
-import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, listRecentPublished, type StatusFilter } from '../lib/drafts';
+import { DRAFT_SORTS, DRAFT_SOURCES, DRAFT_QUERY_MAX, PER_PAGE_CHOICES, SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, countDraftsByStatus, listDraftsPage, listRecentPublished, normalizeDraftFilter, type ContentKind, type DraftListItem } from '../lib/drafts';
+import { listIssues } from '../lib/newsletter-issues';
+import { KIND_LABEL, listHref, pageWindow, sortLabel, type ListView } from '../lib/draft-list-ui';
 import { fmtTime, sectionLabel } from '../lib/admin-ui';
 import { fmtChicago } from '../lib/scheduled-publish';
 import { siteUrl } from '../lib/draft-http';
@@ -9,41 +12,95 @@ import BulkBar from './BulkBar.astro';
 import { driveConfig } from '../lib/db/gdrive.mjs';
 
 cleanupRejectedPhotos();
-const { fixedKind, basePath = '/admin' } = Astro.props as { fixedKind?: 'announcement' | 'event'; basePath?: string };
+// /admin/announcements and /admin/events are presets of this same page: their content type is fixed by the path.
+const { fixedKind } = Astro.props as { fixedKind?: ContentKind; basePath?: string };
 const q = Astro.url.searchParams;
-const kind = fixedKind ?? (['story', 'announcement', 'event', 'all'].includes(q.get('kind') || '') ? q.get('kind')! : 'story');
+const raw = Object.fromEntries(['q', 'status', 'section', 'source', 'issue', 'from', 'to', 'sort', 'perPage', 'page'].map((k) => [k, q.get(k)]));
+const filter = normalizeDraftFilter({ ...raw, kind: fixedKind ?? q.get('kind') }, 'story');
+const result = listDraftsPage(filter);
+const f = result.filter;
+const view: ListView = { filter: f, sortParam: DRAFT_SORTS.some((o) => o.value === raw.sort) ? (raw.sort as ListView['sortParam']) : '' };
+const href = (over: Parameters<typeof listHref>[1] = {}) => listHref(view, over);
+const kind = f.kind;
 const queueTitle = kind === 'event' ? 'Events' : kind === 'announcement' ? 'Announcements' : kind === 'all' ? 'All drafts' : 'Stories';
 const newKind = kind === 'all' ? 'story' : kind;
-const queueLinks = [['story','Stories','/admin'],['announcement','Announcements','/admin/announcements'],['event','Events','/admin/events'],['all','All drafts','/admin?kind=all']];
-const queueHref = (path: string) => { const u = new URL(path, Astro.url); for (const key of ['status','section','source']) if (q.has(key)) u.searchParams.set(key,q.get(key)!); return u.pathname + u.search; };
-const wanted = q.get('status') ?? 'open';
-const status = (STATUS_FILTERS.some((f) => f.value === wanted) ? wanted : 'open') as StatusFilter;
-const section = SECTIONS.some((s) => s.key === q.get('section')) ? (q.get('section') as string) : '';
-const fromAgent = q.get('source') === 'agent';
-const drafts = listDrafts({ status, section: section || undefined, source: fromAgent ? 'agent' : undefined, ...(kind !== 'all' ? { kind: kind as 'story' | 'announcement' | 'event' } : {}) });
-// The overview is for the plain inbox; a filtered view shows only what was asked for.
-const showHome = basePath === '/admin' && !q.has('status') && !q.has('section') && !q.has('source');
-const newest = showHome ? drafts.slice(0, 5) : [];
+const counts = countDraftsByStatus(kind);
+const issues = listIssues();
+const issueKnown = !f.issue || f.issue === 'none' || issues.some((i) => String(i.number) === f.issue);
+
+// The overview blocks belong to the plain, unfiltered /admin view.
+const showHome = !fixedKind && ![...q.keys()].some((k) => k !== 'kind');
+const newest = showHome ? listDraftsPage({ kind, status: 'open', sort: 'created_desc' }).items.slice(0, 5) : [];
 const recentPublished = showHome ? listRecentPublished(5) : [];
 const base = siteUrl();
 // Administrators are told when nightly backups are not set up (no email is sent for that).
 const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
-const canBulk = drafts.some((d) => d.status === 'new' || d.status === 'in_review');
-const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
+
+const pickable = (d: DraftListItem) => d.status === 'new' || d.status === 'in_review';
+const canBulk = result.items.some(pickable);
+const first = result.total === 0 ? 0 : (result.page - 1) * result.perPage + 1;
+const last = Math.min(result.total, result.page * result.perPage);
+const chips: { label: string; remove: string }[] = [];
+if (f.q) chips.push({ label: `Search: ${f.q}`, remove: href({ q: '' }) });
+if (f.section) chips.push({ label: `Section: ${SECTIONS.find((s) => s.key === f.section)?.label ?? f.section}`, remove: href({ section: '' }) });
+if (f.source) chips.push({ label: `Source: ${SOURCE_LABEL[f.source]}`, remove: href({ source: '' }) });
+if (f.issue) chips.push({ label: f.issue === 'none' ? 'No newsletter issue' : `Issue #${f.issue}`, remove: href({ issue: '' }) });
+if (f.from) chips.push({ label: `From ${f.from}`, remove: href({ from: '' }) });
+if (f.to) chips.push({ label: `To ${f.to}`, remove: href({ to: '' }) });
+const clearHref = href({ q: '', section: '', source: '', issue: '', from: '', to: '' });
+const moreOpen = !!(f.issue || f.from || f.to || f.status === 'published' || f.status === 'all');
+const cards: { key: keyof typeof counts; status: string; label: string; note: string }[] = [
+  { key: 'open', status: 'open', label: 'Needs a person', note: 'New and in review' },
+  { key: 'new', status: 'new', label: 'New', note: 'Just received' },
+  { key: 'in_review', status: 'in_review', label: 'In review', note: 'Being edited' },
+  { key: 'scheduled', status: 'scheduled', label: 'Scheduled', note: 'Waiting for its time' },
+  { key: 'rejected', status: 'rejected', label: 'Rejected', note: 'Photos kept 30 days' },
+];
+type SortCol = { label: string; sort?: ListView['filter']['sort']; asc?: boolean; key: string };
+const sortOf = (c: SortCol) => (c.sort && f.sort === c.sort ? (c.asc ? 'ascending' : 'descending') : c.sort ? 'none' : undefined);
+const cols: SortCol[] = [
+  { key: 'story', label: 'Story', sort: 'title', asc: true },
+  { key: 'status', label: 'Status' },
+  { key: 'section', label: 'Section' },
+  { key: 'source', label: 'Source' },
+  { key: 'issue', label: 'Issue' },
+  { key: 'date', label: 'Story date', sort: 'date_desc' },
+  { key: 'updated', label: 'Updated', sort: 'updated' },
+];
+const iso = (ms: number) => new Date(ms).toISOString();
+const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejected' ? 'rejected' : st === 'new' ? 'new' : 'review');
 ---
 <Admin title={queueTitle} current={kind === 'event' ? 'events' : kind === 'announcement' ? 'announcements' : 'drafts'} wide>
-  <div class="cms-bar admin-page-head">
-    <div><p class="admin-eyebrow">Drafts queue</p><h1>{queueTitle}</h1></div>
-    <form method="post" action="/api/admin/drafts/new"><input type="hidden" name="kind" value={newKind} /><button class="cms-btn" type="submit">New {newKind}</button></form>
+  <div class="admin-page-head">
+    <div>
+      <p class="admin-eyebrow">Stories</p>
+      <h1>{queueTitle}</h1>
+      <p class="admin-note">Search, filter and sort drafts. Nothing goes live until a person publishes it.</p>
+    </div>
+    <div>
+      <form method="post" action="/api/admin/drafts/new"><input type="hidden" name="kind" value={newKind} /><button class="cms-btn" type="submit">New {newKind}</button></form>
+    </div>
   </div>
-
-  <nav class="content-queues" aria-label="Content types">{queueLinks.map(([key,label,path]) => <a href={queueHref(path)} aria-current={kind === key ? 'page' : undefined}>{label}</a>)}</nav>
 
   {showHome && backupsOff && (
     <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Stories, photos and editor accounts live only on this server, and the database is now the only copy of the published stories. <a href="/admin/backups">See how</a>.</p>
   )}
 
-  {showHome && <div class="cms-home">
+  <nav aria-label="Show by status">
+    <ul class="adm-stat-cards">
+      {cards.map((c) => (
+        <li>
+          <a class="adm-stat" href={href({ status: c.status as typeof f.status, sort: '' })} aria-current={f.status === c.status ? 'true' : undefined}>
+            <span class="adm-stat-label">{c.label}</span>
+            <strong>{counts[c.key]}</strong>
+            <span class="adm-stat-note">{c.note}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+
+  {showHome && <div class="adm-home">
     <section class="admin-card" aria-labelledby="home-new">
       <h2 id="home-new">Newest drafts</h2>
       {newest.length === 0 ? <p class="admin-note">Nothing waiting.</p> : (
@@ -52,10 +109,10 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
             <li>
               <a href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
               <span class="cms-meta">
-                <span class={`cms-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
-                {d.source === 'form' && d.emailVerified && <span class="cms-badge ok">Email verified</span>}
-                {d.source === 'agent' && <span class="cms-badge">From AI agent</span>}
-                <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time>
+                <span class={`adm-badge ${homeBadge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
+                {d.source === 'form' && d.emailVerified && <span class="adm-badge live">Email verified</span>}
+                {d.source === 'agent' && <span class="adm-badge opendraft">From AI agent</span>}
+                <time datetime={iso(d.createdAt)} data-local>{fmtTime(d.createdAt)}</time>
               </span>
             </li>
           ))}
@@ -70,7 +127,7 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
             <li>
               <a href={`${base}/stories/${d.slug}/`} rel="noopener">{d.title || d.slug}</a>
               <span class="cms-meta">
-                {d.publishedAt && <time datetime={new Date(d.publishedAt).toISOString()} data-local>{fmtTime(d.publishedAt)}</time>}
+                {d.publishedAt && <time datetime={iso(d.publishedAt)} data-local>{fmtTime(d.publishedAt)}</time>}
                 {d.publishedByName && <span>by {d.publishedByName}</span>}
               </span>
             </li>
@@ -80,63 +137,161 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
     </section>
   </div>}
 
-  <form class="cms-filters" method="get" action={basePath}>
-    {kind === 'all' && <input type="hidden" name="kind" value="all" />}
-    <label>Status
-      <select name="status">
-        {STATUS_FILTERS.map((f) => <option value={f.value} selected={f.value === status}>{f.label}</option>)}
-      </select>
-    </label>
-    <label>Section
-      <select name="section">
-        <option value="">All sections</option>
-        {SECTIONS.map((s) => <option value={s.key} selected={s.key === section}>{s.label}</option>)}
-      </select>
-    </label>
-    <label>Source
-      <select name="source">
-        <option value="">All sources</option>
-        <option value="agent" selected={fromAgent}>Source: AI agent</option>
-      </select>
-    </label>
-    <button class="cms-btn secondary" type="submit">Filter</button>
+  <form class="adm-search" method="get" action="/admin" role="search" aria-label="Search and filter drafts" id="draft-filters">
+    {f.perPage !== 25 && <input type="hidden" name="perPage" value={f.perPage} />}
+    <div class="adm-search-grid">
+      <label class="adm-search-q">Search
+        <input type="search" name="q" value={f.q} maxlength={DRAFT_QUERY_MAX} placeholder="Title, church, author or text" autocomplete="off" />
+      </label>
+      <label>Section
+        <select name="section">
+          <option value="">All sections</option>
+          {SECTIONS.map((s) => <option value={s.key} selected={s.key === f.section}>{s.label}</option>)}
+        </select>
+      </label>
+      <label>Type
+        <select name="kind">
+          <option value="story" selected={kind === 'story'}>Stories</option>
+          <option value="announcement" selected={kind === 'announcement'}>Announcements</option>
+          <option value="event" selected={kind === 'event'}>Events</option>
+          <option value="all" selected={kind === 'all'}>All types</option>
+        </select>
+      </label>
+      <label>Source
+        <select name="source">
+          <option value="">All sources</option>
+          {DRAFT_SOURCES.map((s) => <option value={s} selected={s === f.source}>{SOURCE_LABEL[s]}</option>)}
+        </select>
+      </label>
+      <label>Sort by
+        <select name="sort">
+          {DRAFT_SORTS.map((o) => <option value={o.value} selected={o.value === f.sort}>{o.label}</option>)}
+        </select>
+      </label>
+    </div>
+    <details open={moreOpen}>
+      <summary>More filters</summary>
+      <div class="adm-search-more">
+        <label>Status
+          <select name="status">
+            {STATUS_FILTERS.map((o) => <option value={o.value} selected={o.value === f.status}>{o.label}</option>)}
+          </select>
+        </label>
+        <label>Newsletter issue
+          <select name="issue">
+            <option value="">Any issue</option>
+            <option value="none" selected={f.issue === 'none'}>No issue</option>
+            {!issueKnown && <option value={f.issue} selected>Issue #{f.issue}</option>}
+            {issues.map((i) => <option value={String(i.number)} selected={String(i.number) === f.issue}>Issue #{i.number}</option>)}
+          </select>
+        </label>
+        <label>Story date from
+          <input type="date" name="from" value={f.from} />
+        </label>
+        <label>Story date to
+          <input type="date" name="to" value={f.to} />
+        </label>
+      </div>
+    </details>
+    <div class="adm-search-actions"><button type="submit">Apply</button></div>
   </form>
 
-  {drafts.length === 0 ? (
-    <p class="admin-note">No drafts match. Items of this content type will appear here. Switch to All drafts to review every type together.</p>
+  <div class="adm-summary">
+    <span><strong>{result.total}</strong> {result.total === 1 ? 'draft' : 'drafts'} shown</span>
+    <span class="adm-summary-sep" aria-hidden="true">·</span>
+    <span>{sortLabel(f.sort)}</span>
+    {chips.length > 0 && (
+      <ul class="adm-chips" aria-label="Active filters">
+        {chips.map((c) => <li><a class="adm-chip" href={c.remove}>{c.label}<span class="adm-chip-x" aria-hidden="true">×</span><span class="visually-hidden"> (remove filter)</span></a></li>)}
+      </ul>
+    )}
+    {chips.length > 0 && <a href={clearHref}>Clear filters</a>}
+    <span class="adm-perpage">
+      Show
+      {PER_PAGE_CHOICES.map((n) => <a href={href({ perPage: n })} aria-current={f.perPage === n ? 'true' : undefined}>{n}</a>)}
+      per page
+    </span>
+  </div>
+
+  {result.total === 0 ? (
+    <div class="adm-table-card"><p class="adm-empty">No drafts match. {chips.length > 0 ? <a href={clearHref}>Clear filters</a> : 'Items of this content type will appear here.'}</p></div>
   ) : (
     <>
     {canBulk && <BulkBar action="publish" label="Publish selected" noun="drafts" more={[{ action: "edit", label: "Edit fields" }, { action: "reject", label: "Reject selected", danger: true }]} />}
-    <ul class="cms-list">
-      {drafts.map((d) => {
-        const pickable = d.status === 'new' || d.status === 'in_review';
-        return (
-        <li class="cms-item">
-          <div class="bulk-row">
-          {canBulk && (pickable ? (
-            <label class="bulk-pick">
-              <input class="bulk-item" type="checkbox" name="id" value={d.id} form="bulk-form" aria-label={`${d.title || 'Untitled story'} (received ${new Date(d.createdAt).toISOString().slice(0, 10)})`} />
-              <input type="hidden" name={`v_${d.id}`} value={d.updatedAt} form="bulk-form" />
-            </label>
-          ) : <span class="bulk-pick" aria-hidden="true"></span>)}
-          <div class="bulk-body">
-          <a class="title" href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
-          <div class="cms-meta">
-            <span class={`cms-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
-            <span class="cms-badge">{d.source === 'agent' ? 'From AI agent' : SOURCE_LABEL[d.source]}</span>
-            <span>{sectionLabel(d.section)}</span>
-            {d.church && <span>{d.church}</span>}
-            {d.source !== 'editor' && d.source !== 'agent' && (d.emailVerified ? <span class="cms-badge ok">Email verified</span> : <span class="cms-badge warn">Email not verified</span>)}
-            {d.publishAt !== null && (d.publishError ? <span class="cms-badge bad">Scheduled publish failed</span> : <span class="cms-badge ok">Scheduled for <time datetime={new Date(d.publishAt).toISOString()}>{fmtChicago(d.publishAt)}</time></span>)}
-            <span>{d.photoCount} {d.photoCount === 1 ? 'photo' : 'photos'}</span>
-            <span>Received <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time></span>
-          </div>
-          </div>
-          </div>
-        </li>
-        );
-      })}
-    </ul>
+    <div class="adm-table-card">
+    <table class="adm-table">
+      <thead>
+        <tr>
+          {canBulk && <th scope="col" class="adm-col-pick"><span class="visually-hidden">Select</span></th>}
+          {cols.map((c) => (
+            <th scope="col" aria-sort={sortOf(c)}>{c.sort ? <a href={href({ sort: c.sort })}>{c.label}</a> : c.label}</th>
+          ))}
+          <th scope="col"><span class="visually-hidden">Open</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {result.items.map((d) => {
+          const title = d.title || 'Untitled story';
+          const scheduled = d.publishAt !== null && pickable(d);
+          return (
+          <tr>
+            {canBulk && (
+              <td class="adm-col-pick">
+                {pickable(d) && (
+                  <label class="adm-pick">
+                    <input class="bulk-item" type="checkbox" name="id" value={d.id} form="bulk-form" aria-label={`${title} (received ${new Date(d.createdAt).toISOString().slice(0, 10)})`} />
+                    <input type="hidden" name={`v_${d.id}`} value={d.updatedAt} form="bulk-form" />
+                  </label>
+                )}
+              </td>
+            )}
+            <td class="adm-cell-story">
+              <a class="adm-title" href={`/admin/drafts/${d.id}`}>{title}</a>
+              <span class="adm-sub">{d.church ? `${d.church} · ` : ''}{KIND_LABEL[d.kind]} · {d.photoCount} {d.photoCount === 1 ? 'photo' : 'photos'}</span>
+            </td>
+            <td class="adm-cell-status">
+              <div class="adm-cell-stack">
+                {scheduled ? (
+                  d.publishError
+                    ? <span class="adm-badge rejected">Scheduled publish failed</span>
+                    : <span class="adm-badge scheduled">Scheduled</span>
+                ) : (
+                  <span class={`adm-badge ${homeBadge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
+                )}
+                {scheduled && <span class="adm-when">{d.publishError ? 'Was set for ' : 'Scheduled for '}<time datetime={iso(d.publishAt!)}>{fmtChicago(d.publishAt!)}</time></span>}
+              </div>
+            </td>
+            <td data-label="Section">{sectionLabel(d.section)}</td>
+            <td data-label="Source">
+              <div class="adm-cell-stack">
+                <span>{d.source === 'agent' ? 'From AI agent' : SOURCE_LABEL[d.source]}</span>
+                {d.source === 'form' && (d.emailVerified ? <span class="adm-badge live">Email verified</span> : <span class="adm-badge featured">Email not verified</span>)}
+              </div>
+            </td>
+            <td data-label="Issue">{d.newsletterIssue !== null ? `#${d.newsletterIssue}` : '—'}</td>
+            <td data-label="Story date">{d.date || '—'}</td>
+            <td data-label="Updated"><time datetime={iso(d.updatedAt)} data-local>{fmtTime(d.updatedAt)}</time></td>
+            <td class="adm-cell-open"><a class="adm-open" href={`/admin/drafts/${d.id}`}><span class="adm-open-text">Open </span><span aria-hidden="true">→</span><span class="visually-hidden"> {title}</span></a></td>
+          </tr>
+          );
+        })}
+      </tbody>
+    </table>
+    </div>
+    <div class="adm-pager">
+      <p>Showing {first}–{last} of {result.total}</p>
+      {result.pages > 1 && (
+        <nav aria-label="Pages">
+          <ul>
+            <li>{result.page > 1 ? <a href={href({ page: result.page - 1 })} rel="prev">Previous</a> : <span class="adm-disabled">Previous</span>}</li>
+            {pageWindow(result.page, result.pages).map((p) => (
+              <li>{p === null ? <span aria-hidden="true">…</span> : <a href={href({ page: p })} aria-current={p === result.page ? 'page' : undefined} aria-label={`Page ${p}`}>{p}</a>}</li>
+            ))}
+            <li>{result.page < result.pages ? <a href={href({ page: result.page + 1 })} rel="next">Next</a> : <span class="adm-disabled">Next</span>}</li>
+          </ul>
+        </nav>
+      )}
+    </div>
     </>
   )}
 </Admin>
@@ -145,4 +300,13 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
     var d = new Date(t.getAttribute('datetime'));
     if (!isNaN(d)) t.textContent = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
   });
+  // With JavaScript the selects apply as soon as they change; without it the Apply button does the same.
+  (function () {
+    var form = document.getElementById('draft-filters');
+    if (!form) return;
+    form.addEventListener('change', function (e) {
+      var t = e.target;
+      if (t && t.tagName === 'SELECT') form.requestSubmit ? form.requestSubmit() : form.submit();
+    });
+  })();
 </script>
