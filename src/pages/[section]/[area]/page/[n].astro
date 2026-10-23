@@ -1,0 +1,28 @@
+---
+import SectionList from '../../../../components/SectionList.astro';
+import { getSection } from '../../../../lib/site';
+import { asUnavailable, getPublicStories } from '../../../../lib/public-stories';
+import { bySection } from '../../../../lib/stories';
+import { PAGE_SIZE, pageCount, parsePageNumber } from '../../../../lib/pagination';
+
+// Rendered on the server from the stories table, one page of PAGE_SIZE stories (issue #96); the middleware caches the result.
+export const prerender = false;
+
+const section = getSection(Astro.params.section ?? '');
+const area = section?.areas?.find((a) => a.key === Astro.params.area);
+const n = parsePageNumber(Astro.params.n);
+if (!section || !area || n === null) return new Response(null, { status: 404 });
+const base = `/${section.key}/${area.key}/`;
+if (n === 1) return Astro.redirect(base, 301);
+let all: Awaited<ReturnType<typeof getPublicStories>>;
+try {
+  all = await getPublicStories();
+} catch (err) {
+  return asUnavailable(err);
+}
+const matching = bySection(all, section.key, area.key);
+const pages = pageCount(matching.length);
+if (n > pages) return new Response(null, { status: 404 });
+const stories = matching.slice((n - 1) * PAGE_SIZE, n * PAGE_SIZE);
+---
+<SectionList section={section} area={area} stories={stories} page={n} pages={pages} />

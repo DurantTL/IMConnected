@@ -1,0 +1,18 @@
+---
+import { pageHref, pageWindow } from '../lib/pagination';
+
+interface Props { base: string; page: number; pages: number }
+const { base, page, pages } = Astro.props;
+const items = pageWindow(page, pages);
+---
+{pages > 1 && (
+  <nav class="pager" aria-label="Pages">
+    {page > 1 ? <a class="pager-step" href={pageHref(base, page - 1)} rel="prev">Newer</a> : <span class="pager-step is-off" aria-hidden="true">Newer</span>}
+    <ol class="pager-list">
+      {items.map((n) => n === null
+        ? <li class="pager-gap" aria-hidden="true">…</li>
+        : <li><a class="pager-num" href={pageHref(base, n)} aria-current={n === page ? 'page' : undefined} aria-label={`Page ${n}`}>{n}</a></li>)}
+    </ol>
+    {page < pages ? <a class="pager-step" href={pageHref(base, page + 1)} rel="next">Older</a> : <span class="pager-step is-off" aria-hidden="true">Older</span>}
+  </nav>
+)}

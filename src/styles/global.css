@@ -670,3 +670,13 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
 }
 /* The 210px wordmark, Search with its icon and the menu button need about 375px; drop the icon below 381px for a little margin. */
 @media(max-width:380px) { body:not(.admin) .header-search svg { display:none; } }
+
+/* Pagination on the section and area pages (issue #96) */
+.pager { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:8px 12px; margin:40px 0 8px; }
+.pager-list { display:flex; flex-wrap:wrap; justify-content:center; gap:6px; list-style:none; margin:0; padding:0; }
+.pager-num, .pager-step { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; padding:0 14px; box-sizing:border-box; border:1px solid var(--line); border-radius:999px; background:var(--surface); color:var(--ink-2); font-size:.9rem; font-weight:600; text-decoration:none; }
+.pager-num:hover, .pager-step:hover { color:var(--ink); border-color:var(--ink-3); }
+.pager-num[aria-current='page'] { background:var(--sec, var(--brand-text)); border-color:var(--sec, var(--brand-text)); color:var(--brand-ink); }
+.pager-step.is-off { visibility:hidden; }
+.pager-gap { display:inline-flex; align-items:center; min-height:44px; color:var(--ink-3); }
+@media(max-width:480px) { .pager-step.is-off { display:none; } }

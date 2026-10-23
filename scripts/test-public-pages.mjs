@@ -456,6 +456,101 @@ try {
     await stopServer();
   } else skip('partial adoption');
 
+  // ================= part 6: section and area pages are paged, 20 stories a page (issue #96) =================
+  {
+    const pdir = path.join(SCRATCH, 'data-paging');
+    await startServer(pdir);
+    await get('/');
+    await until(synced, 20000);
+    await stopServer();
+    // Take every adopted story out of the way, then add synthetic ones: 44 in kids + 1 youth story that also belongs to kids; 23 in news/camp.
+    run("UPDATE stories SET status = 'unpublished', rev = rev + 1 WHERE source = 'git'");
+    const now = Date.now();
+    const day = (i) => new Date(Date.UTC(2026, 5, 1) - i * 86400000).toISOString().slice(0, 10);
+    const nn = (i) => String(i).padStart(2, '0');
+    const add = (slug, section, area, date, extra = '[]') => run("INSERT INTO stories (slug, title, section, area, author, date, photos, status, source, published_at, updated_at, additional_sections, body) VALUES (?, ?, ?, ?, 'Synthetic Author', ?, '[]', 'live', 'editor', ?, ?, ?, 'A made-up paragraph.')", slug, 'Synthetic ' + slug, section, area, date, now, now, extra);
+    for (let i = 1; i <= 44; i++) add(`synthetic-paging-${nn(i)}`, 'kids', null, day(i));
+    add('synthetic-paging-extra', 'youth', null, day(22), '["kids"]'); // dated like story 22
+    for (let i = 1; i <= 23; i++) add(`synthetic-camp-${nn(i)}`, 'news', 'camp', day(i));
+    await startServer(pdir);
+    const slugsOn = (t) => [...mainOf(t).matchAll(/href="\/stories\/([^"/]+)\/"/g)].map((m) => m[1]);
+    const pg = async (u) => { const r = await get(u); return { ...r, slugs: slugsOn(r.text) }; };
+    const p1 = await pg('/kids/'), p2 = await pg('/kids/page/2/'), p3 = await pg('/kids/page/3/');
+    check('(paging) 45 stories in one section: pages hold 20, 20 and 5 stories', p1.status === 200 && p2.status === 200 && p3.status === 200 && [p1, p2, p3].map((p) => new Set(p.slugs).size).join() === '20,20,5', [p1, p2, p3].map((p) => p.slugs.length).join());
+    const all = [...p1.slugs, ...p2.slugs, ...p3.slugs];
+    const expected = q("SELECT slug FROM stories WHERE status = 'live' AND (section = 'kids' OR additional_sections LIKE '%\"kids\"%') ORDER BY date DESC, slug ASC").map((r) => r.slug);
+    check('(paging) newest first across the pages, boundaries are exact (20|21 and 40|41), and every story appears exactly once', all.length === 45 && new Set(all).size === 45 && all.join() === expected.join() && p1.slugs[19] === expected[19] && p2.slugs[0] === expected[20] && p3.slugs[0] === expected[40], all.slice(0, 3).join());
+    check('(paging) a story that only has kids as an additional section shows once', all.filter((s) => s === 'synthetic-paging-extra').length === 1);
+    // the canonical and prev/next links use SITE_URL from the build, so only their paths are compared
+    const toPath = (h) => (h ? new URL(h).pathname : null);
+    const linkRel = (t, rel) => toPath(t.match(new RegExp(`<link rel="${rel}" href="([^"]+)"`))?.[1]);
+    const canon = (t) => toPath(t.match(/<link rel="canonical" href="([^"]+)"/)?.[1]);
+    check('(paging) page 1 keeps the plain URL: canonical /kids/, next to page 2, no prev, no title suffix', canon(p1.text) === `/kids/` && linkRel(p1.text, 'next') === `/kids/page/2/` && linkRel(p1.text, 'prev') === null && !/<title>[^<]*page \d/.test(p1.text), [canon(p1.text), linkRel(p1.text, 'next')].join(' '));
+    check('(paging) page 2 has its own canonical, prev (the plain URL) and next, and the title ends with "— page 2"', canon(p2.text) === `/kids/page/2/` && linkRel(p2.text, 'prev') === `/kids/` && linkRel(p2.text, 'next') === `/kids/page/3/` && /<title>[^<]* — page 2 \| IMConnected<\/title>/.test(p2.text), [canon(p2.text), linkRel(p2.text, 'prev'), linkRel(p2.text, 'next'), p2.text.match(/<title>[^<]*/)?.[0]].join(' '));
+    check('(paging) the last page has a prev link to page 2 and no next', linkRel(p3.text, 'prev') === `/kids/page/2/` && linkRel(p3.text, 'next') === null);
+    const nav = p2.text.match(/<nav class="pager" aria-label="Pages">[\s\S]*?<\/nav>/)?.[0] ?? '';
+    check('(paging) a <nav aria-label="Pages"> has Newer, Older, numbered links and aria-current="page" on the current one only', /href="\/kids\/"[^>]*>Newer</.test(nav) && /href="\/kids\/page\/3\/"[^>]*>Older</.test(nav) && /<a class="pager-num" href="\/kids\/page\/2\/" aria-current="page" aria-label="Page 2">2<\/a>/.test(nav) && (nav.match(/aria-current="page"/g) ?? []).length === 1 && /href="\/kids\/"[^>]*aria-label="Page 1"/.test(nav), nav.slice(0, 600));
+    const y = await get('/youth/');
+    check('(paging) a section with one page has no pager and no next link', !y.text.includes('aria-label="Pages"') && !/rel="next"/.test(y.text));
+    const r1 = await get('/kids/page/1/');
+    check('(paging) /page/1/ redirects (301) to the plain URL', r1.status === 301 && new URL(r1.loc, BASE).pathname === '/kids/', `${r1.status} ${r1.loc}`);
+    const bad = [];
+    for (const u of ['/kids/page/4/', '/kids/page/0/', '/kids/page/abc/', '/kids/page/02/', '/kids/page/-1/', '/kids/page/2.5/', '/kids/page/', '/kids/page/9999999/', '/nope/page/2/', '/kids/page/2/extra/', '/news/camp/page/3/', '/youth/page/2/', '/news/nope/page/2/']) {
+      const r = await get(u);
+      if (r.status !== 404 || /public/.test(r.headers.get('cache-control') ?? '') || !r.text.includes('We couldn’t find that page')) bad.push(`${u} ${r.status} ${r.headers.get('cache-control')}`);
+    }
+    check('(paging) beyond the last page, page/0, page/abc and other malformed or unknown pages are a 404 with the 404 page, no-store', bad.length === 0, bad.join(' | '));
+    const a1 = await pg('/news/camp/'), a2 = await pg('/news/camp/page/2/');
+    check('(paging) area pages page too: 23 camp stories are 20 + 3, newest first, only that area', a1.slugs.length === 20 && a2.slugs.length === 3 && [...a1.slugs, ...a2.slugs].every((s, i) => s === `synthetic-camp-${nn(i + 1)}`) && canon(a2.text) === `/news/camp/page/2/` && linkRel(a2.text, 'prev') === `/news/camp/` && linkRel(a1.text, 'next') === `/news/camp/page/2/`, `${a1.slugs.length} ${a2.slugs.length}`);
+    const ar1 = await get('/news/camp/page/1/');
+    check('(paging) /news/camp/page/1/ redirects to /news/camp/', ar1.status === 301 && new URL(ar1.loc, BASE).pathname === '/news/camp/', `${ar1.status} ${ar1.loc}`);
+    const again = await get('/kids/page/3/');
+    check('(paging) a paged page goes through the page cache (miss, then hit) with the public cache header', p3.headers.get('x-page-cache') === 'miss' && again.headers.get('x-page-cache') === 'hit' && again.headers.get('cache-control') === 'public, max-age=60, stale-while-revalidate=300', `${p3.headers.get('x-page-cache')} ${again.headers.get('x-page-cache')}`);
+    // publishing a story moves it to page 1 at once, and pushes the oldest story of page 1 to page 2
+    const pub = await fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${PUBLISH_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ newsletter: { name: 'E2E Issue', issueDate: '2026-12-01' }, stories: [{ ref: 'a', title: 'Synthetic newest paging story', section: 'kids', author: 'Studio Author', body: 'A made-up body.', photos: [] }] }) });
+    const pj = await pub.json().catch(() => ({}));
+    const newest = pj.stories?.[0]?.slug;
+    const n1 = await pg('/kids/'), n2 = await pg('/kids/page/2/'), n3 = await pg('/kids/page/3/');
+    check('(paging) publishing a story puts it first on page 1 at once and every later story shifts by one', pub.status === 200 && !!newest && n1.slugs[0] === newest && n1.slugs.length === 20 && n2.slugs[0] === expected[19] && n3.slugs.length === 6 && (await get('/kids/page/4/')).status === 404, `${pub.status} ${newest} ${n1.slugs[0]} ${n3.slugs.length}`);
+    const feed = JSON.parse((await get('/stories.json')).text);
+    check('(paging) /stories.json and /rss.xml are not paged (each lists more than 20 stories)', feed.stories.length > 20 && (await get('/rss.xml')).text.split('<item>').length - 1 > 20, String(feed.stories.length));
+    const { build } = await import(pathToFileURL(path.join(ROOT, 'node_modules/rolldown/dist/index.mjs')).href);
+    await build({ input: path.join(ROOT, 'src/lib/public-cache.ts'), output: { file: path.join(SCRATCH, 'public-cache2.mjs'), format: 'esm' }, platform: 'node', logLevel: 'silent' });
+    const pc2 = await import(pathToFileURL(path.join(SCRATCH, 'public-cache2.mjs')).href);
+    const keyOk = [['/kids/page/2', '/kids/page/2'], ['/kids/page/2/', '/kids/page/2'], ['/news/camp/page/12/', '/news/camp/page/12']];
+    check('(paging) publicCacheKey keeps one key per page and ignores junk page URLs', keyOk.every(([p, k]) => pc2.publicCacheKey(p) === k) && ['/kids/page', '/kids/page/', '/kids/page/0', '/kids/page/02', '/kids/page/x', '/kids/page/2/3', '/news/page/2/page/3', '/news/page/page/2', '/news/camp/page', '/nope/page/2', '/kids/camp/page/2', '/kids/page/1234567'].every((p) => pc2.publicCacheKey(p) === null), JSON.stringify(['/kids/page', '/kids/page/0', '/news/page/page/2'].map((p) => pc2.publicCacheKey(p))));
+    const siteTs = fs.readFileSync(path.join(ROOT, 'src/lib/site.ts'), 'utf8');
+    check('(paging) no section area is called "page", and site.ts refuses to load with one', !/key:\s*'page'/.test(siteTs) && siteTs.includes('reserved for paging'));
+    if (process.env.PLAYWRIGHT_ROOT) {
+      const req = createRequire(path.join(process.env.PLAYWRIGHT_ROOT, 'package.json'));
+      const { chromium } = req('playwright');
+      const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, args: process.env.CHROMIUM_NO_SANDBOX === '1' ? ['--no-sandbox'] : [] });
+      try {
+        const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+        await context.route('**/*', (r) => (new URL(r.request().url()).origin === BASE ? r.continue() : r.abort()));
+        const page = await context.newPage();
+        const shots = process.env.SHOTS ? (fs.mkdirSync(process.env.SHOTS, { recursive: true }), process.env.SHOTS) : '';
+        for (const u of ['/kids/page/2/', '/news/camp/page/2/']) {
+          await page.setViewportSize({ width: 1280, height: 900 });
+          await page.goto(BASE + u);
+          if (process.env.AXE_JS) { await page.addScriptTag({ path: process.env.AXE_JS }); const result = await page.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })); check(`(paging) ${u} passes axe A/AA`, result.violations.length === 0, JSON.stringify(result.violations.map((v) => v.id))); } else info('axe skipped (no AXE_JS)');
+          if (shots && u === '/kids/page/2/') await page.screenshot({ path: path.join(shots, 'kids-page-2-1280.png'), fullPage: true });
+          const small = [];
+          for (const w of [320, 390]) {
+            await page.setViewportSize({ width: w, height: 800 });
+            await page.goto(BASE + u);
+            if (!(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))) small.push(`${w}px scrolls sideways`);
+            const sizes = await page.evaluate(() => [...document.querySelectorAll('nav.pager a')].map((a) => { const b = a.getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)]; }));
+            if (!sizes.length || sizes.some(([sw, sh]) => sw < 44 || sh < 44)) small.push(`${w}px targets ${JSON.stringify(sizes)}`);
+            if (shots && u === '/kids/page/2/') await page.screenshot({ path: path.join(shots, `kids-page-2-${w}.png`), fullPage: true });
+          }
+          check(`(paging) ${u}: no horizontal scroll at 320px and 390px, and every pager link is at least 44x44`, small.length === 0, small.join(' | '));
+        }
+      } finally { await browser.close(); }
+    } else info('axe and phone-width checks skipped (no PLAYWRIGHT_ROOT)');
+    await stopServer();
+  }
+
   const leaked = serverLog.filter((l) => /[\w.+-]+@[\w-]+\.[a-z]{2,}|password|secret/i.test(l));
   check('no server log line has contact details or secrets', leaked.length === 0, leaked.join(' | '));
 } catch (err) {
