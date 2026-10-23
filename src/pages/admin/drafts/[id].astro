@@ -46,6 +46,7 @@ const hasSubmitter = !!draft && !isAgent && (draft.source !== 'editor' || !!(dra
 const scheduledAt = draft && editable ? draft.publishAt : null;
 const suggestionAt = draft && editable ? draft.suggestedPublishAt : null;
 const suggestionUsable = suggestionAt !== null && suggestionAt > Date.now();
+const studioBlocked = !!draft && draft.studioOverwroteAt !== null;
 const scheduleStopped = !!draft && draft.publishFailCount >= MAX_FAILURES;
 const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
 ---
@@ -451,7 +452,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
             {suggestionAt !== null && (
               <div class="studio-suggestion" id="agent-suggestion">
                 <p class="admin-note"><strong>AI agent suggests publishing at <time datetime={new Date(suggestionAt).toISOString()}>{fmtChicago(suggestionAt)}</time>.</strong> {suggestionUsable ? 'This is only a suggestion; nothing happens until you schedule it.' : 'That time has passed.'}</p>
-                {suggestionUsable && suggestionAt !== scheduledAt && (
+                {suggestionUsable && !studioBlocked && suggestionAt !== scheduledAt && (
                   <form id="suggest-form" method="post" action={`/api/admin/drafts/${draft.id}/schedule`}>
                     <input type="hidden" name="version" value={draft.updatedAt} />
                     <input type="hidden" name="use_suggestion" value="1" />
@@ -460,13 +461,14 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                 )}
               </div>
             )}
-            <form id="schedule-form" method="post" action={`/api/admin/drafts/${draft.id}/schedule`} style="margin-top:8px">
+            {studioBlocked && <p class="admin-error" role="status" id="schedule-studio-blocked">{errorTextFor('schedule_studio_overwrote')}</p>}
+            {!studioBlocked && <form id="schedule-form" method="post" action={`/api/admin/drafts/${draft.id}/schedule`} style="margin-top:8px">
               <input type="hidden" name="version" value={draft.updatedAt} />
               <label class="ed-field">Publish at (Central Time)
                 <input type="datetime-local" name="publish_at" required value={scheduledAt !== null ? msToChicagoInput(scheduledAt) : ''} min={msToChicagoInput(Date.now())} data-editor-local />
               </label>
               <p><button type="submit" class="cms-btn secondary">{scheduledAt !== null ? 'Change time' : 'Schedule'}</button></p>
-            </form>
+            </form>}
           </section>
           <details style="margin-top:12px">
             <summary>Reject this draft</summary>

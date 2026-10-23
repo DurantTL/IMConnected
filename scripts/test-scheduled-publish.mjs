@@ -31,7 +31,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 async function until(fn, ms = 15000) { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await sleep(100); } return false; }
 
 // ---- two servers on the same data ----
-const baseEnv = { ...process.env, DATA_DIR, SCHEDULE_CHECK_MS: '300', SCHEDULE_START_DELAY_MS: '0', AUTH_SECRET: 'synthetic-auth-secret-0123456789abcdef', TRUST_PROXY: 'true', AGENT_API_TOKEN: AGENT_TOKEN, PUBLISH_TOKEN: 'made-up-publish-token-0123456789abcdef' };
+const baseEnv = { ...process.env, DATA_DIR, SCHEDULE_CHECK_MS: '300', SCHEDULE_START_DELAY_MS: '0', AUTH_SECRET: 'synthetic-auth-secret-0123456789abcdef', TRUST_PROXY: 'true', AGENT_API_TOKEN: AGENT_TOKEN, PUBLISH_TOKEN: 'made-up-publish-token-0123456789abcdef', SCHEDULE_TEST_PUBLISH_DELAY_MS: '1500' };
 delete baseEnv.RESEND_API_KEY;
 const servers = [];
 const serverLog = [];
@@ -49,8 +49,10 @@ const ready = async (base) => { for (let i = 0; i < 150; i++) { try { await fetc
 // assert the build neither created it nor a database. (Skipped with SKIP_BUILD_CHECK=1.)
 if (!process.env.SKIP_BUILD_CHECK) {
   const ghost = path.join(path.dirname(DATA_DIR), 'ghost-build-data-' + process.pid);
-  try { execFileSync('npm', ['run', 'build'], { env: { ...process.env, DATA_DIR: ghost }, stdio: 'ignore', timeout: 300000 }); } catch (err) { console.log('build failed', err.message); }
-  check('npm run build with a non-existent DATA_DIR creates neither the folder nor a database (no scheduler or db start at build)', !fs.existsSync(ghost));
+  let built = true;
+  try { execFileSync('npm', ['run', 'build'], { env: { ...process.env, DATA_DIR: ghost }, stdio: 'ignore', timeout: 300000 }); } catch (err) { built = false; console.log('build failed', err.message); }
+  check('npm run build (with a non-existent DATA_DIR) succeeds', built);
+  check('...and created neither the folder nor a database (no scheduler or db start at build)', !fs.existsSync(ghost));
 }
 startServer(PORT);
 await ready(BASE);
@@ -154,6 +156,10 @@ try {
     check('an unreadable time is refused (schedule_bad)', errOf(r) === 'schedule_bad');
     r = await schedule(c1, S, `${nextYear + 3}-01-15T09:00`);
     check('a time more than a year away is refused (schedule_far)', errOf(r) === 'schedule_far');
+    r = await schedule(c1, S, `${nextYear}-02-30T10:00`);
+    check('an impossible calendar day is schedule_bad, not the clock-change message', errOf(r) === 'schedule_bad', String(errOf(r)));
+    r = await schedule(c1, S, `${nextYear}-03-14T25:00`);
+    check('an hour past 23 is schedule_bad', errOf(r) === 'schedule_bad', String(errOf(r)));
     r = await schedule(c1, S, `${nextYear}-03-14T02:30`);
     check('a Central Time that does not exist (spring-forward gap) is refused with its own message', errOf(r) === 'schedule_gap', String(errOf(r)));
     r = await schedule(c1, S, winter, version(S) - 1);
@@ -359,6 +365,8 @@ try {
     check('the draft is flagged as overwritten by Studio', draftRow(SR).studio_overwrote_at !== null);
     r = await schedule(c1, SR, `${nextYear}-04-02T10:00`);
     check('such a draft cannot be scheduled again (schedule_studio_overwrote)', errOf(r) === 'schedule_studio_overwrote' && draftRow(SR).publish_at === null, String(errOf(r)));
+    const srPage = await c1.get(`/admin/drafts/${SR}`);
+    check('the page hides the schedule form and "Schedule for this time" and explains why', !srPage.text.includes('id="schedule-form"') && !srPage.text.includes('Schedule for this time') && srPage.text.includes('published over this story'));
     run('UPDATE drafts SET publish_at = ?, publish_at_by = ? WHERE id = ?', Date.now() - 1000, E1.id, SR);
     check('belt and braces: if a schedule somehow exists, the scheduler refuses at once with schedule_studio_overwrote', await until(() => draftRow(SR).publish_error === 'schedule_studio_overwrote', 10000) && draftRow(SR).publish_fail_count === 3);
     await sleep(1000);
@@ -435,6 +443,62 @@ try {
     check('(setup) an agent draft with a suggestion', draftRow(SG.data.id).suggested_publish_at !== null);
     await c1.form(`/api/admin/drafts/${SG.data.id}/publish`, { version: version(SG.data.id) });
     check('publishing clears suggested_publish_at', draftRow(SG.data.id).status === 'published' && draftRow(SG.data.id).suggested_publish_at === null);
+  }
+
+  // ================= the publish itself is guarded against a Studio publish, an unschedule or a reschedule in flight =================
+  {
+    const reopened = async (title, key) => {
+      const X = await mkDraft(title);
+      await c1.form(`/api/admin/drafts/${X}/publish`, { version: version(X) });
+      const slug = draftRow(X).slug;
+      const rr = await agent('POST', '/api/agent/stories/reopen', { slug, requestId: key, changes: { dek: 'Edit waiting for review.' } });
+      if (rr.status >= 300) throw new Error('setup: reopen failed ' + rr.text.slice(0, 120));
+      await schedule(c1, X, `${nextYear}-05-01T10:00`);
+      return { X, slug };
+    };
+    const dueNow = (id) => run('UPDATE drafts SET publish_at = ? WHERE id = ?', Date.now() + 200, id);
+    const claimed = (id) => until(() => draftRow(id).publish_claimed_at !== null, 15000);
+    const liveDek = (slug) => q('SELECT dek FROM stories WHERE slug = ?', slug)[0].dek;
+    const publishCount = (id) => auditRows('draft.publish', `draft:${id}`).filter((a) => (a.detail || '').includes('scheduled')).length;
+
+    // (a) Studio publishes while the scheduler is between its checks and its publish
+    const A = await reopened('Race Studio Subject One', 'sched-race-a-0001');
+    dueNow(A.X);
+    check('(setup a) the scheduler has claimed the draft and is about to publish', await claimed(A.X));
+    const sp = await fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${baseEnv.PUBLISH_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ newsletter: { name: 'Race Issue', issueDate: draftRow(A.X).date }, stories: [{ ref: 'ra', title: 'Race Studio Subject One', dek: 'Studio dek wins.', section: 'news', area: 'churches', author: 'Studio Author', body: 'Studio text that must stay live.', photos: [] }] }) });
+    check('(a) Studio publishes over the story during the window', sp.status === 200, String(sp.status));
+    await sleep(2500);
+    check('(a) the scheduler did not overwrite Studio: its text is still live and no scheduled publish was recorded', liveDek(A.slug) === 'Studio dek wins.' && publishCount(A.X) === 0, `${liveDek(A.slug)} ${publishCount(A.X)}`);
+    check('(a) the schedule is cleared and the claim released', draftRow(A.X).publish_at === null && draftRow(A.X).publish_claimed_at === null);
+
+    // (b) the narrow race: Studio's flag appears without the schedule or version having moved yet
+    const B = await reopened('Race Studio Subject Two', 'sched-race-b-0001');
+    dueNow(B.X);
+    check('(setup b) claimed', await claimed(B.X));
+    run('UPDATE drafts SET studio_overwrote_at = ? WHERE id = ?', Date.now(), B.X);
+    check('(b) the guarded publish refuses: the draft shows the studio-overwrote failure and stops at once', await until(() => draftRow(B.X).publish_error === 'schedule_studio_overwrote' && draftRow(B.X).publish_fail_count === 3, 15000));
+    check('(b) the live story was not overwritten and nothing was recorded as published', liveDek(B.slug) !== 'Edit waiting for review.' && publishCount(B.X) === 0);
+    check('(b) the draft page shows the failure text', (await c1.get(`/admin/drafts/${B.X}`)).text.includes('Scheduled publish failed'));
+
+    // (c) rescheduled to later while the scheduler is about to publish: never early, not a failure
+    const C = await mkDraft('Race Reschedule Subject');
+    await schedule(c1, C, `${nextYear}-05-02T10:00`);
+    dueNow(C);
+    check('(setup c) claimed', await claimed(C));
+    const later = `${nextYear}-05-03T10:00`;
+    const rs = await schedule(c1, C, later);
+    check('(c) an editor reschedules during the window', noteOf(rs) === 'scheduled');
+    await sleep(2500);
+    check('(c) it was not published early, the new time stands, nothing counted as a failure, claim released', draftRow(C).status !== 'published' && draftRow(C).publish_at === Date.parse(`${nextYear}-05-03T15:00:00Z`) && draftRow(C).publish_fail_count === 0 && draftRow(C).publish_error === null && draftRow(C).publish_claimed_at === null && publishCount(C) === 0, JSON.stringify(draftRow(C)));
+
+    // (d) unscheduled during the window
+    const D = await mkDraft('Race Unschedule Subject');
+    await schedule(c1, D, `${nextYear}-05-04T10:00`);
+    dueNow(D);
+    check('(setup d) claimed', await claimed(D));
+    await c1.form(`/api/admin/drafts/${D}/unschedule`, { version: version(D) });
+    await sleep(2500);
+    check('(d) unscheduled during the window: not published, no failure recorded', draftRow(D).status !== 'published' && draftRow(D).publish_at === null && draftRow(D).publish_fail_count === 0 && draftRow(D).publish_error === null);
   }
 } catch (err) {
   console.error('TEST SCRIPT ERROR', err);

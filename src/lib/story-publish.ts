@@ -186,7 +186,7 @@ export interface DraftPublished {
  * is looking at: if the draft changed since, nothing is published (EditorError 'conflict'). Throws EditorError with a
  * code an editor can act on; anything else is an unexpected failure (the caller shows "could not publish").
  */
-export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: number, userId: number): Promise<DraftPublished> {
+export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: number, userId: number, scheduled?: { now: number }): Promise<DraftPublished> {
   const title = oneLine(draft.title);
   const author = oneLine(draft.author);
   const dek = oneLine(draft.dek);
@@ -268,7 +268,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     try {
       // A new address may have been taken since freshSlug looked (another process); never take another story's.
       if (!draft.slug && (storyExists(slug) || getDraftBySlug(slug))) throw new EditorError('slug_taken');
-      const r = publishDraftRow(draft.id, version, { slug, userId });
+      const r = publishDraftRow(draft.id, version, { slug, userId }, scheduled);
       if (!r.ok) throw new EditorError(r.code);
       firstPublish = r.firstPublish;
       writeStory(story, now, draft.slug ? 'upsert' : 'insert');

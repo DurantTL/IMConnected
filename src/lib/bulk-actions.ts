@@ -19,7 +19,7 @@ export type ItemResult = { ok: true; slug: string; title: string } | { ok: false
  * carries out a person's earlier decision: the same code runs, the actor is the person who scheduled it, and the audit
  * entry says so.
  */
-export async function publishDraftItem(draftId: number, version: number, userId: number, ip: string, opts: { scheduled?: boolean } = {}): Promise<ItemResult> {
+export async function publishDraftItem(draftId: number, version: number, userId: number, ip: string, opts: { scheduled?: { now: number } } = {}): Promise<ItemResult> {
   const draft = getDraft(draftId);
   if (!draft) return { ok: false, code: 'draft_gone' };
   if (!isEditable(draft)) return { ok: false, code: 'not_publishable' };
@@ -28,7 +28,7 @@ export async function publishDraftItem(draftId: number, version: number, userId:
   publishing.add(draft.id);
   try {
     // One transaction: the draft row (version check, slug) and the story, its photos and its search entry.
-    const out = await publishDraft(draft, listPhotos(draft.id), version, userId);
+    const out = await publishDraft(draft, listPhotos(draft.id), version, userId, opts.scheduled);
     // Housekeeping after the story is recorded: a failure here must never read as "not published".
     try {
       audit('draft.publish', { userId, target: `draft:${draft.id}`, detail: opts.scheduled ? { slug: out.slug, scheduled: true } : { slug: out.slug }, ip });

@@ -663,16 +663,25 @@ export const DB_PUBLISH_MARKER = 'db';
  * version forward. Call inside the same transaction that writes the story, so both happen or neither does.
  * Throws only on a database error; a lost race is returned as a Failure.
  */
-export function publishDraftRow(id: number, expected: number, info: { slug: string; userId: number }): { ok: true; updatedAt: number; firstPublish: boolean } | Failure {
+export function publishDraftRow(id: number, expected: number, info: { slug: string; userId: number }, scheduled?: { now: number }): { ok: true; updatedAt: number; firstPublish: boolean } | Failure {
   const now = Date.now();
   const next = Math.max(now, expected + 1);
   try {
     // issue #121: every draft records its first publish here, in the publish transaction, whether or not an email will be sent.
     const firstPublish = (getDb().prepare('SELECT submitter_notified_at FROM drafts WHERE id = ?').get(id) as { submitter_notified_at: number | null } | undefined)?.submitter_notified_at == null;
     const r = getDb()
-      .prepare("UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
-      .run(now, info.slug, DB_PUBLISH_MARKER, now, info.userId, next, info.userId, id, expected);
-    return Number(r.changes) === 1 ? { ok: true, updatedAt: next, firstPublish } : (lockFailure(id) as Failure);
+      .prepare("UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')" + (scheduled ? ' AND publish_at IS NOT NULL AND publish_at <= ? AND studio_overwrote_at IS NULL' : ''))
+      .run(now, info.slug, DB_PUBLISH_MARKER, now, info.userId, next, info.userId, id, expected, ...(scheduled ? [scheduled.now] : []));
+    if (Number(r.changes) === 1) return { ok: true, updatedAt: next, firstPublish };
+    if (scheduled) {
+      // The scheduler's guard (issue #124): said no, so find out why, inside this same transaction.
+      const cur = getDb().prepare('SELECT status, publish_at, studio_overwrote_at FROM drafts WHERE id = ?').get(id) as { status: string; publish_at: number | null; studio_overwrote_at: number | null } | undefined;
+      if (cur && (cur.status === 'new' || cur.status === 'in_review')) {
+        if (cur.studio_overwrote_at !== null) return fail('conflict', 'schedule_studio_overwrote');
+        if (cur.publish_at === null || cur.publish_at > scheduled.now) return fail('conflict', 'schedule_not_due');
+      }
+    }
+    return lockFailure(id) as Failure;
   } catch (err) {
     if (/UNIQUE/i.test(err instanceof Error ? err.message : '')) return fail('conflict', 'slug_taken');
     throw err;
@@ -916,14 +925,14 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
           getDb().prepare('UPDATE drafts SET publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL WHERE id = ?').run(id);
           audit('draft.unschedule', { userId: null, target: `draft:${id}`, detail: { reason: 'studio_publish', was: new Date(cur.publishAt).toISOString() } });
         }
-        getDb().prepare('UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, studio_overwrote_at = ? WHERE id = ?').run(now, commit, now, now, id);
+        getDb().prepare('UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, studio_overwrote_at = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?').run(now, commit, now, now, now, id); // the version moves, so any in-flight version check fails
         overwrote.push(id);
       } else {
         if (cur) {
           id = cur.id;
           getDb()
             .prepare(
-              "UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, story_blocks = '[]', key_points = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
+              "UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, story_blocks = '[]', key_points = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
             )
             .run(now, fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.photoLayout, fields.body, keyPointsJson((getDb().prepare('SELECT key_points FROM stories WHERE slug = ?').get(st.slug) as { key_points: string } | undefined)?.key_points), commit, now, now, id); // mirrors the story row's list ([] when there is no story)
         } else {

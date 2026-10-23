@@ -47,7 +47,15 @@ export function chicagoLocalToMs(value: string): number | null {
 }
 
 /** A well-formed Central Time that does not exist (the hour skipped when the clocks spring forward). */
-export const isChicagoGap = (value: string): boolean => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.trim()) && chicagoLocalToMs(value) === null && !Number.isNaN(Date.parse(value.trim() + 'Z'));
+export function isChicagoGap(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim());
+  if (!m) return false;
+  const [y, mo, d, h, mi] = m.slice(1).map(Number);
+  const day = new Date(Date.UTC(y, mo - 1, d));
+  // A day that is not on the calendar (Feb 30) or an hour/minute out of range is malformed, not a gap.
+  if (day.getUTCFullYear() !== y || day.getUTCMonth() !== mo - 1 || day.getUTCDate() !== d || h > 23 || mi > 59) return false;
+  return chicagoLocalToMs(value) === null;
+}
 
 /** The value for a datetime-local input, in Central Time. */
 export function msToChicagoInput(ms: number): string {
@@ -144,21 +152,26 @@ export async function runDueScheduledPublishes(now = Date.now()): Promise<DueRes
       // An edit after scheduling keeps the schedule, so publish the version that is current at this moment. A save landing
       // between the read and the publish is a version conflict: read again (a few times) rather than count it as a failure.
       for (let attempt = 0; attempt < 3; attempt++) {
+        uncounted = false;
         const draft = getDraft(id);
         if (!draft || !isEditable(draft)) { code = 'not_publishable'; break; }
+        // Unscheduled or rescheduled to later while we were working: never publish early. Not a failure.
+        if (draft.publishAt === null || draft.publishAt > Date.now()) { uncounted = true; break; }
         by = draft.publishAtBy;
         if (draft.studioOverwroteAt !== null) { code = 'schedule_studio_overwrote'; break; } // belt and braces: Studio's live version must never be overwritten
         // A schedule runs only while the person who set it can still sign in.
         const owner = by === null ? undefined : (db.prepare('SELECT status FROM users WHERE id = ?').get(by) as { status: string } | undefined);
         if (!owner || owner.status !== 'active') { code = 'schedule_owner_inactive'; break; }
-        const r = await publishDraftItem(id, draft.updatedAt, by!, 'scheduler', { scheduled: true });
+        if (attempt === 0) await testDelay(); // tests only: widens the window between the checks above and the publish
+        const r = await publishDraftItem(id, draft.updatedAt, by!, 'scheduler', { scheduled: { now: Date.now() } });
         if (r.ok) { ok = true; break; }
         code = r.code;
+        if (r.code === 'schedule_not_due') { uncounted = true; break; }
         if (r.code === 'conflict' || r.code === 'already_publishing') { uncounted = true; if (r.code === 'already_publishing') break; continue; }
-        uncounted = false;
         break;
       }
     } catch (err) {
+      uncounted = false;
       console.error('[schedule] scheduled publish threw', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
     if (ok) out.published++;
@@ -171,6 +184,13 @@ export async function runDueScheduledPublishes(now = Date.now()): Promise<DueRes
     }
   }
   return out;
+}
+
+/** SCHEDULE_TEST_PUBLISH_DELAY_MS: a test-only pause between the scheduler's checks and the publish. Never read in production. */
+async function testDelay(): Promise<void> {
+  if (process.env.NODE_ENV === 'production') return;
+  const n = Number(process.env.SCHEDULE_TEST_PUBLISH_DELAY_MS);
+  if (Number.isFinite(n) && n > 0) await new Promise((r) => setTimeout(r, Math.min(n, 10_000)));
 }
 
 export const errorTextFor = (code: string | null): string => (code && Object.hasOwn(ERRORS, code) ? ERRORS[code as ErrorCode] : ERRORS.publish_failed);
