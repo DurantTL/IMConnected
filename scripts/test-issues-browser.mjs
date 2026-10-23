@@ -153,6 +153,30 @@ try {
   r = await post('/admin/navigation', { version: nv2, action: 'reset' });
   check('Restore default menu brings the Issues link back', r.status === 200 && JSON.parse((await get('/api/navigation')).text).items.some((i) => i.id === 'issues'), String(r.status));
 
+  // ================= newsletter signup link and Print button (issue #116) =================
+  const story0 = await get('/stories/s-pos1/');
+  check('no signup link by default: the story page keeps only the submit call to action', !story0.text.includes('Get IMConnected in your inbox') && !story0.text.includes('newsletter-ask') && story0.text.includes('href="/submit/"') && JSON.parse((await get('/api/navigation')).text).newsletterSignup === '');
+  check('the Print button is rendered hidden (script unhides it) and the print stylesheet ships', /<button type="button" data-print hidden>Print this story<\/button>/.test(story0.text) && story0.text.includes('data-print'), '');
+  const navNow = JSON.parse((await get('/api/navigation')).text);
+  const navForm = (version, signup, extra = {}) => { const f = { version, action: 'save', ...extra }; if (signup !== undefined) f.newsletter_signup = signup; navNow.items.forEach((it, i) => { f[`id.${i}`] = it.id; f[`order.${i}`] = i + 1; f[`label.${i}`] = it.label; f[`href.${i}`] = it.href; if (it.visible) f[`visible.${i}`] = 'on'; }); return f; };
+  for (const bad of ['http://example.invalid/signup', '/signup', '//example.invalid/signup', 'javascript:alert(1)', 'ftp://example.invalid/', 'https://user:pw@example.invalid/']) {
+    const rb = await post('/admin/navigation', navForm(navNow.version, bad));
+    check('non-HTTPS or unsafe signup link refused (field refilled, aria-invalid, inline error): ' + bad, rb.status === 400 && rb.text.includes('aria-invalid="true"') && rb.text.includes('id="newsletter-signup-error"') && rb.text.includes('Use a full HTTPS link for the newsletter signup.') && rb.text.includes('aria-describedby="newsletter-signup-error newsletter-signup-help"') && JSON.parse((await get('/api/navigation')).text).version === navNow.version, String(rb.status));
+  }
+  const SIGNUP = 'https://signup.example.invalid/join?list=synthetic';
+  r = await post('/admin/navigation', navForm(navNow.version, SIGNUP));
+  const withSignup = JSON.parse((await get('/api/navigation')).text);
+  check('an administrator saves the signup link; /api/navigation carries it (additive)', r.status === 200 && withSignup.version === navNow.version + 1 && withSignup.newsletterSignup === SIGNUP && Array.isArray(withSignup.items), `${r.status} ${JSON.stringify(withSignup).slice(0, 200)}`);
+  const story1 = await get('/stories/s-pos1/'), ask = story1.text.match(/<section class="cta cta-pair newsletter-ask"[\s\S]*?<\/section>/)?.[0] ?? '';
+  check('story page (cache cleared by the save) ends with the newsletter button beside the submit call to action', ask.includes('Get IMConnected in your inbox') && ask.includes(`href="${SIGNUP}"`) && !/<a [^>]*href="https:\/\/signup[^>]*target=/.test(ask) && ask.includes('Share what’s happening at your church') && ask.includes('href="/submit/"'), ask.slice(0, 300));
+  check('with a link set, the story page shows no reader counts or numbers in the ask', !/\d/.test(strip(ask)));
+  const audit = (() => { const d = openDatabase(scratch); try { return d.prepare("SELECT detail FROM audit_log WHERE action='site.navigation' ORDER BY id DESC LIMIT 1").get().detail; } finally { d.close(); } })();
+  check('the audit entry names the changed field but not the address', audit.includes('newsletterSignup') && !audit.includes('signup.example'), audit);
+  r = await post('/admin/navigation', { version: withSignup.version, action: 'reset' });
+  check('Restore default menu keeps the signup link', r.status === 200 && JSON.parse((await get('/api/navigation')).text).newsletterSignup === SIGNUP, String(r.status));
+  r = await post('/admin/navigation', navForm(withSignup.version + 1, ''));
+  check('clearing the field removes the button again', r.status === 200 && JSON.parse((await get('/api/navigation')).text).newsletterSignup === '' && !(await get('/stories/s-pos1/')).text.includes('Get IMConnected in your inbox'), String(r.status));
+
   // ================= cache invalidation =================
   await get('/issues/3/'); await get('/issues/');
   const primed = await get('/issues/3/');

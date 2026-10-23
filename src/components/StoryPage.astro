@@ -10,6 +10,7 @@ import type { PublicStory } from '../lib/stories';
 import { photoLayoutOrDefault, planPhotos } from '../lib/photo-layouts';
 import { storyBlockPhotos, photoFocusStyle, photoFrameAttrs } from '../lib/story-blocks';
 import { INLINE_MEDIA_CSS } from '../lib/story-media-render';
+import { readNavigation } from '../lib/navigation-store';
 
 interface Props {
   story: PublicStory;
@@ -43,6 +44,9 @@ const leadPhoto = d.image && !inlinePhotos.has(d.image) && !inlineIndices.has(0)
 const plainGallery = leadPhoto ? allPhotos.slice(1) : allPhotos;
 const leadFocus = d.announcement ? undefined : photoFocusStyle(leadPhoto);
 const issue = d.newsletterIssue ?? null; // issue #98: shown for any story with an issue set (links to /issues/<n>/, issue #99)
+// Issue #116: the optional newsletter signup link (set by an administrator at /admin/navigation); none when unset or unreadable.
+let newsletterSignup = '';
+if (!Astro.isPrerendered) { try { newsletterSignup = readNavigation().newsletterSignup; } catch { /* the story still renders without the ask */ } }
 const announcementDetails = await renderAnnouncementDetails(d.announcement);
 ---
 <Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section}>
@@ -118,6 +122,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
         <a href={`https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`} target="_blank" rel="noopener">Facebook</a>
         <a href={`mailto:?subject=${enc(d.title)}&body=${enc(url)}`}>Email</a>
         <button type="button" data-copy={url}>Copy link</button>
+        <button type="button" data-print hidden>Print this story</button>
       </div>
     </article>
 
@@ -131,6 +136,21 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       </section>
     )}
 
+    {newsletterSignup && (
+      <section class="cta cta-pair newsletter-ask" aria-label="Newsletter and story submissions">
+        <div class="cta-half">
+          <h2>Get IMConnected in your inbox</h2>
+          <p>Stories from churches, schools and clubs across the conference, delivered to you.</p>
+          <a class="btn accent" href={newsletterSignup}>Sign up for the newsletter</a>
+        </div>
+        <div class="cta-half">
+          <h2>Share what’s happening at your church</h2>
+          <p>We’d love to hear what God is doing in your church, school or club.</p>
+          <a class="btn" href="/submit/">Submit a Story</a>
+        </div>
+      </section>
+    )}
+    {!newsletterSignup && (
     <section class="cta" aria-label="Submit a story">
       <div>
         <h2>Have a story to share?</h2>
@@ -138,12 +158,17 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       </div>
       <a class="btn accent" href="/submit/">Submit a Story</a>
     </section>
+    )}
   </div>
 </Base>
 <script>
   import '../scripts/photo-viewer';
   import '../scripts/photo-carousel';
   import '../scripts/story-video';
+
+  document.querySelectorAll<HTMLButtonElement>('[data-print]').forEach((b) => { b.hidden = false; b.addEventListener('click', () => { eagerImages(); window.print(); }); });
+  const eagerImages = () => document.querySelectorAll<HTMLImageElement>('.article img[loading="lazy"]').forEach((i) => { i.loading = 'eager'; });
+  window.addEventListener('beforeprint', eagerImages);
 
   document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((b) =>
     b.addEventListener('click', async () => {
