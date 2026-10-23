@@ -3,7 +3,7 @@ import { getDb } from './db';
 import { mergeAgentAnnouncement, resolveAgentIssue, createDraft, getDraftBySlug, resetDraftFromStory, tx, writeUpload, removeUploadFiles } from './drafts';
 import { loadStory, validSlug } from './story-publish';
 import { getSection, isValidArea } from './site';
-import { AgentError, assertPhotoMarkers, AgentConflict, REQUEST_ID_RE, parseAgentStory, refusalDetails, refusalReason } from './agent';
+import { AgentError, checkSuggestionFuture, assertPhotoMarkers, AgentConflict, REQUEST_ID_RE, parseAgentStory, refusalDetails, refusalReason } from './agent';
 import { LIMITS } from './limits';
 import { audit } from './auth/audit';
 
@@ -58,6 +58,7 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
       }
       const parsed = parseAgentStory({ title: 'Reopened story', body: 'Existing published body is preserved.', section: story.fields.section, area: story.fields.area,
         ...changes, ...(input.photos !== undefined ? { photos: input.photos } : {}), note: input.note });
+      if (parsed.suggestedPublishAt != null) checkSuggestionFuture(parsed.suggestedPublishAt); // after the receipt lookup above: a replay never reaches this
       if (story.photos.length + (parsed.photos?.length ?? 0) > LIMITS.maxPhotos) throw new AgentError('too_many_photos', `The existing and new photos together must not exceed ${LIMITS.maxPhotos}.`);
       const fields = { ...story.fields };
       for (const key of FIELDS) if (Object.hasOwn(changes, key)) {

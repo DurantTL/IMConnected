@@ -8,7 +8,7 @@ import {
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
 import { publishDraftItem, rejectDraftItem } from '../../../../../lib/bulk-actions';
-import { chicagoLocalToMs, scheduleDraft, unscheduleDraft } from '../../../../../lib/scheduled-publish';
+import { chicagoLocalToMs, isChicagoGap, scheduleDraft, unscheduleDraft } from '../../../../../lib/scheduled-publish';
 import { ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
 import { sniffImage } from '../../../../../lib/submission';
@@ -117,7 +117,9 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     if (!isEditable(draft)) return refuse('closed');
     const fromSuggestion = String(form.get('use_suggestion') ?? '') === '1';
     if (fromSuggestion && draft.suggestedPublishAt === null) return refuse('schedule_none');
-    const at = fromSuggestion ? draft.suggestedPublishAt : chicagoLocalToMs(String(form.get('publish_at') ?? ''));
+    const typed = String(form.get('publish_at') ?? '');
+    if (!fromSuggestion && isChicagoGap(typed)) return refuse('schedule_gap');
+    const at = fromSuggestion ? draft.suggestedPublishAt : chicagoLocalToMs(typed);
     return done(scheduleDraft(draft.id, version, user.id, at, ip, fromSuggestion ? 'suggestion' : 'chosen'), 'scheduled');
   }
   if (action === 'unschedule') return done(unscheduleDraft(draft.id, version, user.id, ip), 'unscheduled');

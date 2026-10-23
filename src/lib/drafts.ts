@@ -10,7 +10,7 @@ import { issueExists, normalizeRef, refFromRow, resolveIssueInput, type Newslett
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
-import { AgentError, AgentConflict, assertPhotoMarkers, refusalDetails, refusalReason, type RefusalReason } from './agent';
+import { AgentError, AgentConflict, assertPhotoMarkers, checkSuggestionFuture, refusalDetails, refusalReason, type RefusalReason } from './agent';
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
@@ -670,7 +670,7 @@ export function publishDraftRow(id: number, expected: number, info: { slug: stri
     // issue #121: every draft records its first publish here, in the publish transaction, whether or not an email will be sent.
     const firstPublish = (getDb().prepare('SELECT submitter_notified_at FROM drafts WHERE id = ?').get(id) as { submitter_notified_at: number | null } | undefined)?.submitter_notified_at == null;
     const r = getDb()
-      .prepare("UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
+      .prepare("UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
       .run(now, info.slug, DB_PUBLISH_MARKER, now, info.userId, next, info.userId, id, expected);
     return Number(r.changes) === 1 ? { ok: true, updatedAt: next, firstPublish } : (lockFailure(id) as Failure);
   } catch (err) {
@@ -704,6 +704,11 @@ export function retireUploads(draftId: number, published: Map<number, string>): 
 /** After an unpublish the story's draft goes back to in review, keeping its slug so publishing again restores it. */
 export function markUnpublished(slug: string, userId: number): void {
   const now = Date.now();
+  // A schedule must not republish a story a person just took down (issue #124).
+  for (const r of getDb().prepare('SELECT id, publish_at FROM drafts WHERE slug = ? AND publish_at IS NOT NULL').all(slug) as { id: number; publish_at: number }[]) {
+    getDb().prepare('UPDATE drafts SET publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL WHERE id = ?').run(r.id);
+    audit('draft.unschedule', { userId, target: `draft:${r.id}`, detail: { reason: 'unpublished', was: new Date(r.publish_at).toISOString() } });
+  }
   getDb()
     .prepare("UPDATE drafts SET status = CASE WHEN status = 'published' THEN 'in_review' ELSE status END, unpublished_at = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE slug = ?")
     .run(now, now, userId, slug);
@@ -906,6 +911,11 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
       let id: number;
       if (cur && isEditable(cur)) {
         id = cur.id;
+        // Studio's version is live now: a schedule would later overwrite it with this draft's older text. Clear it (issue #124).
+        if (cur.publishAt !== null) {
+          getDb().prepare('UPDATE drafts SET publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL WHERE id = ?').run(id);
+          audit('draft.unschedule', { userId: null, target: `draft:${id}`, detail: { reason: 'studio_publish', was: new Date(cur.publishAt).toISOString() } });
+        }
         getDb().prepare('UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, studio_overwrote_at = ? WHERE id = ?').run(now, commit, now, now, id);
         overwrote.push(id);
       } else {
@@ -1014,6 +1024,8 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
           return { ok: true, id: Number(receipt.draft_id), status: 'replayed', originalStatus: receipt.result as 'created' | 'updated' };
         }
       }
+      // Issue #124: the "in the future" rule applies only to a new request; an identical retry (a receipt above) is acknowledged even if the time has since passed.
+      if (input.suggestedPublishAt != null) checkSuggestionFuture(input.suggestedPublishAt);
       const existing = input.sourceUrl
         ? (db.prepare("SELECT id, status, updated_by, slug, published_commit, unpublished_at FROM drafts WHERE source = 'agent' AND source_url = ?").get(input.sourceUrl) as ExistingAgentRow | undefined)
         : undefined;

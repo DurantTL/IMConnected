@@ -7,7 +7,7 @@
 // Uses PORT and PORT+1. Run from the repo root.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 
@@ -45,6 +45,13 @@ function startServer(port) {
 const stop = () => { for (const s of servers) { try { s.kill(); } catch { /* gone */ } } };
 process.on('exit', stop);
 const ready = async (base) => { for (let i = 0; i < 150; i++) { try { await fetch(base + '/admin/login'); return; } catch { await sleep(200); } } };
+// The scheduler must never start during `npm run build` (issue #124): build against a data folder that does not exist and
+// assert the build neither created it nor a database. (Skipped with SKIP_BUILD_CHECK=1.)
+if (!process.env.SKIP_BUILD_CHECK) {
+  const ghost = path.join(path.dirname(DATA_DIR), 'ghost-build-data-' + process.pid);
+  try { execFileSync('npm', ['run', 'build'], { env: { ...process.env, DATA_DIR: ghost }, stdio: 'ignore', timeout: 300000 }); } catch (err) { console.log('build failed', err.message); }
+  check('npm run build with a non-existent DATA_DIR creates neither the folder nor a database (no scheduler or db start at build)', !fs.existsSync(ghost));
+}
 startServer(PORT);
 await ready(BASE);
 
@@ -57,6 +64,8 @@ const mkUser = (email, name, role) => {
 };
 const E1 = mkUser('sched-editor@example.test', 'Sched Editor', 'editor');
 const E2 = mkUser('sched-second@example.test', 'Second Editor', 'editor');
+const ADM = mkUser('sched-admin@example.test', 'Sched Admin', 'admin');
+const E3 = mkUser('sched-leaver@example.test', 'Leaving Editor', 'editor');
 
 class Client {
   constructor(user, base = BASE) { this.cookie = user ? `__Host-imc_session=${user.token}` : ''; this.base = base; }
@@ -79,6 +88,8 @@ const c1 = new Client(E1);
 const c2 = new Client(E2);
 const anon = new Client(null);
 const cB = new Client(E1, BASE_B);
+const cAdm = new Client(ADM);
+const c3 = new Client(E3);
 
 const draftRow = (id) => q('SELECT * FROM drafts WHERE id = ?', id)[0];
 const version = (id) => draftRow(id).updated_at;
@@ -133,7 +144,7 @@ try {
     check('a summer time entered in Central Time is stored as 14:00 UTC (daylight saving)', draftRow(S).publish_at === Date.parse(`${nextYear}-07-15T14:00:00Z`), String(draftRow(S).publish_at));
     check('both schedulings are audited (draft.schedule) with no email or phone in the detail', auditRows('draft.schedule', `draft:${S}`).length === 2 && !auditRows('draft.schedule', `draft:${S}`).some((a) => /@|555/.test(a.detail || '')));
     const page = await c1.get(`/admin/drafts/${S}`);
-    check('the draft shows "Scheduled for ... CT" in Central Time and the Publish now / Unschedule buttons', /Scheduled for[^<]*Jul 15, 2027|Scheduled for[^<]*Jul 15/.test(page.text) && page.text.includes('9:00 AM CT') && page.text.includes('>Unschedule<') && page.text.includes('>Publish now<'));
+    check('the draft shows "Scheduled for ... CT" in Central Time and the Publish now / Unschedule buttons', /Scheduled for[^<]*Jul 15, 2027|Scheduled for[^<]*Jul 15/.test(page.text) && /9:00 AM C[SD]T/.test(page.text) && page.text.includes('>Unschedule<') && page.text.includes('>Publish now<'));
     check('the schedule form is a datetime-local field labelled Central Time, prefilled in Central Time', page.text.includes('type="datetime-local"') && page.text.includes(`value="${summer}"`) && page.text.includes('Central Time'));
 
     const before = draftRow(S);
@@ -144,7 +155,7 @@ try {
     r = await schedule(c1, S, `${nextYear + 3}-01-15T09:00`);
     check('a time more than a year away is refused (schedule_far)', errOf(r) === 'schedule_far');
     r = await schedule(c1, S, `${nextYear}-03-14T02:30`);
-    check('a Central Time that does not exist (spring-forward gap) is refused', errOf(r) === 'schedule_bad', String(errOf(r)));
+    check('a Central Time that does not exist (spring-forward gap) is refused with its own message', errOf(r) === 'schedule_gap', String(errOf(r)));
     r = await schedule(c1, S, winter, version(S) - 1);
     check('a stale version is refused (conflict) and the schedule is unchanged', errOf(r) === 'conflict' && draftRow(S).publish_at === before.publish_at);
     r = await c1.form(`/api/admin/drafts/${S}/schedule`, { publish_at: winter });
@@ -314,7 +325,7 @@ try {
     r = await agent('POST', '/api/agent/stories', story({ sourceUrl: 'https://example.test/posts/sched-click', suggestedPublishAt: future }));
     const K = r.data.id;
     const page = await c1.get(`/admin/drafts/${K}`);
-    check('the editor shows "AI agent suggests publishing at ..." in Central Time with a "Schedule for this time" button', page.text.includes('AI agent suggests publishing at') && page.text.includes('>Schedule for this time<') && page.text.includes('CT'));
+    check('the editor shows "AI agent suggests publishing at ..." in Central Time with a "Schedule for this time" button', page.text.includes('AI agent suggests publishing at') && page.text.includes('>Schedule for this time<') && /C[SD]T/.test(page.text));
     check('a person has not scheduled anything yet', draftRow(K).publish_at === null);
     r = await c1.form(`/api/admin/drafts/${K}/schedule`, { version: version(K) - 1, use_suggestion: 1 });
     check('one-click scheduling is version-checked too', errOf(r) === 'conflict' && draftRow(K).publish_at === null);
@@ -327,6 +338,103 @@ try {
     run('UPDATE drafts SET suggested_publish_at = ? WHERE id = ?', Date.now() - 5000, noSuggestion);
     r = await c1.form(`/api/admin/drafts/${noSuggestion}/schedule`, { version: version(noSuggestion), use_suggestion: 1 });
     check('a suggestion whose time has passed is refused like any past time', errOf(r) === 'schedule_past' && draftRow(noSuggestion).publish_at === null, String(errOf(r)));
+  }
+
+  // ================= review fixes: Studio, unpublish, inactive owner, replay, stale suggestion =================
+  {
+    // --- Studio publishes over a scheduled open draft: the schedule is cleared, never run later ---
+    const SR = await mkDraft('Studio Overlap Subject');
+    await c1.form(`/api/admin/drafts/${SR}/publish`, { version: version(SR) });
+    const slugS = draftRow(SR).slug;
+    let r = await agent('POST', '/api/agent/stories/reopen', { slug: slugS, requestId: 'sched-studio-reopen-01', changes: { dek: 'An edit waiting for review.' } });
+    check('(setup) a live story has an open reopened draft', r.status < 300 && draftRow(SR).status === 'in_review', r.text.slice(0, 160));
+    await schedule(c1, SR, `${nextYear}-04-01T10:00`);
+    check('(setup) that open draft is scheduled', draftRow(SR).publish_at !== null);
+    const sp = await fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${baseEnv.PUBLISH_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ newsletter: { name: 'Sched Issue', issueDate: draftRow(SR).date }, stories: [{ ref: 'sr', title: 'Studio Overlap Subject', section: 'news', area: 'churches', author: 'Studio Author', body: 'Studio rewrote this body and it is live.', photos: [] }] }) });
+    const spText = await sp.text();
+    check('Studio /api/publish over the same address succeeds', sp.status === 200 && spText.includes(slugS), spText.slice(0, 200));
+    check('Studio publishing cleared every schedule column', draftRow(SR).publish_at === null && draftRow(SR).publish_at_by === null && draftRow(SR).publish_claimed_at === null && draftRow(SR).publish_error === null && draftRow(SR).publish_fail_count === 0, JSON.stringify(draftRow(SR)));
+    const au = auditRows('draft.unschedule', `draft:${SR}`);
+    check('...and audited draft.unschedule with reason studio_publish', au.length === 1 && JSON.parse(au[0].detail).reason === 'studio_publish', JSON.stringify(au));
+    check('the draft is flagged as overwritten by Studio', draftRow(SR).studio_overwrote_at !== null);
+    r = await schedule(c1, SR, `${nextYear}-04-02T10:00`);
+    check('such a draft cannot be scheduled again (schedule_studio_overwrote)', errOf(r) === 'schedule_studio_overwrote' && draftRow(SR).publish_at === null, String(errOf(r)));
+    run('UPDATE drafts SET publish_at = ?, publish_at_by = ? WHERE id = ?', Date.now() - 1000, E1.id, SR);
+    check('belt and braces: if a schedule somehow exists, the scheduler refuses at once with schedule_studio_overwrote', await until(() => draftRow(SR).publish_error === 'schedule_studio_overwrote', 10000) && draftRow(SR).publish_fail_count === 3);
+    await sleep(1000);
+    check('...and Studio\'s live body is untouched', q('SELECT body FROM stories WHERE slug = ?', slugS)[0].body.includes('Studio rewrote this body') && auditRows('draft.schedule_failed', `draft:${SR}`).length === 1);
+
+    // --- unpublishing clears the schedule (single and bulk), so the timer never republishes ---
+    for (const mode of ['single', 'bulk']) {
+      const U = await mkDraft(`Unpublish ${mode} Subject`);
+      await c1.form(`/api/admin/drafts/${U}/publish`, { version: version(U) });
+      const slugU = draftRow(U).slug;
+      r = await agent('POST', '/api/agent/stories/reopen', { slug: slugU, requestId: `sched-unpub-${mode}-01`, changes: { dek: 'Waiting.' } });
+      await schedule(c1, U, `${nextYear}-04-03T10:00`);
+      check(`(${mode}) the live story's open draft is scheduled`, draftRow(U).publish_at !== null, r.text.slice(0, 160));
+      const ur = mode === 'single' ? await c1.form('/api/admin/stories/unpublish', { slug: slugU }) : await cAdm.form('/admin/bulk', { action: 'unpublish', step: 'run', slug: slugU });
+      check(`(${mode}) the story is unpublished`, q('SELECT status FROM stories WHERE slug = ?', slugU)[0].status !== 'live', `${ur.status}`);
+      const ua = auditRows('draft.unschedule', `draft:${U}`);
+      check(`(${mode}) the schedule columns are cleared and audited with reason unpublished`, draftRow(U).publish_at === null && draftRow(U).publish_at_by === null && ua.length === 1 && JSON.parse(ua[0].detail).reason === 'unpublished', JSON.stringify(ua));
+      run('UPDATE drafts SET publish_at = ? WHERE id = ?', null, U);
+      await sleep(1200);
+      check(`(${mode}) nothing republishes it afterwards`, q('SELECT status FROM stories WHERE slug = ?', slugU)[0].status !== 'live' && draftRow(U).status === 'in_review');
+    }
+
+    // --- the person who scheduled is no longer an active user ---
+    const O = await mkDraft('Owner Left Subject');
+    await schedule(c3, O, `${nextYear}-04-04T10:00`);
+    check('(setup) a second editor scheduled it', draftRow(O).publish_at_by === E3.id);
+    run("UPDATE users SET status = 'disabled' WHERE id = ?", E3.id);
+    run('UPDATE drafts SET publish_at = ? WHERE id = ?', Date.now() + 1200, O);
+    check('a schedule whose owner is no longer active is not run: it fails at once with schedule_owner_inactive', await until(() => draftRow(O).publish_error === 'schedule_owner_inactive', 15000) && draftRow(O).publish_fail_count === 3);
+    await sleep(1500);
+    check('...with a single audited attempt, no retries, and the draft is unpublished', auditRows('draft.schedule_failed', `draft:${O}`).length === 1 && draftRow(O).status !== 'published' && draftRow(O).publish_at !== null);
+    const op = await c1.get(`/admin/drafts/${O}`);
+    check('the draft page shows the plain message and that it was not retried', op.text.includes('Scheduled publish failed') && op.text.includes('can no longer sign in; schedule it again') && op.text.includes('not retried'));
+    await schedule(c1, O, `${nextYear}-04-05T10:00`);
+    run('UPDATE drafts SET publish_at = ? WHERE id = ?', Date.now() + 500, O);
+    check('rescheduling by an active editor then publishes it', await until(() => draftRow(O).status === 'published', 15000));
+
+    // --- an identical agent retry still acknowledges after the suggested time has passed ---
+    const soon = new Date(Date.now() + 2500).toISOString();
+    const body = story({ sourceUrl: 'https://example.test/posts/sched-replay', suggestedPublishAt: soon, requestId: 'sched-replay-0001' });
+    r = await agent('POST', '/api/agent/stories', body);
+    check('(setup) create with a requestId and a suggestion 2.5 seconds away', r.status < 300 && r.data.ok, r.text.slice(0, 160));
+    const rid = r.data.id;
+    await sleep(3200);
+    r = await agent('POST', '/api/agent/stories', body);
+    check('an identical retry after the time has passed is acknowledged as replayed (not 400)', r.status === 200 && r.data.status === 'replayed' && r.data.id === rid, `${r.status} ${r.text.slice(0, 160)}`);
+    r = await agent('POST', '/api/agent/stories', story({ sourceUrl: 'https://example.test/posts/sched-replay-new', suggestedPublishAt: soon }));
+    check('...but a NEW request with a past time is still 400 bad_publish_at', r.status === 400 && r.data.error === 'bad_publish_at');
+    const soonB = new Date(Date.now() + 2500).toISOString();
+    const batch = { requestId: 'sched-replay-batch-1', stories: [story({ sourceUrl: 'https://example.test/posts/sched-replay-b1', suggestedPublishAt: soonB })] };
+    r = await agent('POST', '/api/agent/stories/batch', batch);
+    check('(setup) a batch with a near suggestion is accepted', r.status < 300 && r.data.results?.[0]?.ok, r.text.slice(0, 200));
+    await sleep(3200);
+    r = await agent('POST', '/api/agent/stories/batch', batch);
+    check('an identical batch retry after the time has passed is acknowledged', r.status < 300 && r.data.results?.[0]?.ok && r.data.results[0].status === 'created' || r.data.results?.[0]?.status === 'replayed', `${r.status} ${r.text.slice(0, 200)}`);
+    const soonI = new Date(Date.now() + 2500).toISOString();
+    const itemBody = story({ sourceUrl: 'https://example.test/posts/sched-replay-item', suggestedPublishAt: soonI, requestId: 'sched-replay-item-1' });
+    r = await agent('POST', '/api/agent/stories/batch', { requestId: 'sched-replay-batch-2', stories: [itemBody] });
+    await sleep(3200);
+    r = await agent('POST', '/api/agent/stories/batch', { requestId: 'sched-replay-batch-3', stories: [itemBody] });
+    check('a batch item that repeats an accepted item (own requestId) replays after the time has passed', r.status < 300 && r.data.results?.[0]?.ok && r.data.results[0].status === 'replayed', `${r.status} ${r.text.slice(0, 200)}`);
+    const RO = await mkDraft('Reopen Replay Subject');
+    await c1.form(`/api/admin/drafts/${RO}/publish`, { version: version(RO) });
+    const soonR = new Date(Date.now() + 2500).toISOString();
+    const reopen = { slug: draftRow(RO).slug, requestId: 'sched-replay-reopen-1', changes: { suggestedPublishAt: soonR } };
+    r = await agent('POST', '/api/agent/stories/reopen', reopen);
+    check('(setup) reopen with a near suggestion is accepted', r.status < 300 && draftRow(RO).suggested_publish_at === Date.parse(soonR), r.text.slice(0, 160));
+    await sleep(3200);
+    r = await agent('POST', '/api/agent/stories/reopen', reopen);
+    check('an identical reopen retry after the time has passed is acknowledged as replayed', r.status < 300 && r.data.status === 'replayed', `${r.status} ${r.text.slice(0, 160)}`);
+
+    // --- publishing clears the suggestion ---
+    const SG = await agent('POST', '/api/agent/stories', story({ sourceUrl: 'https://example.test/posts/sched-clear', suggestedPublishAt: isoIn(2 * 24 * 3600_000, 'Z') }));
+    check('(setup) an agent draft with a suggestion', draftRow(SG.data.id).suggested_publish_at !== null);
+    await c1.form(`/api/admin/drafts/${SG.data.id}/publish`, { version: version(SG.data.id) });
+    check('publishing clears suggested_publish_at', draftRow(SG.data.id).status === 'published' && draftRow(SG.data.id).suggested_publish_at === null);
   }
 } catch (err) {
   console.error('TEST SCRIPT ERROR', err);

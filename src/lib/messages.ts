@@ -52,6 +52,9 @@ export const ERRORS = {
   schedule_bad: 'Choose a date and time for publishing.',
   schedule_past: 'That time has already passed. Choose a time in the future (Central Time).',
   schedule_far: 'Choose a time within the next year.',
+  schedule_gap: "That time doesn't exist on the day the clocks change; pick another time.",
+  schedule_owner_inactive: 'The person who scheduled this can no longer sign in; schedule it again.',
+  schedule_studio_overwrote: 'IMConnected Studio published over this story, so this draft was not published automatically and cannot be scheduled. Review it and publish it now, or reject it.',
   schedule_none: 'This draft has no suggested time.',
   section_unknown: 'That story uses a section this editor does not know.',
 } as const;

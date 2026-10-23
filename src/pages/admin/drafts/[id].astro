@@ -11,7 +11,7 @@ import { errorText } from '../../../lib/messages';
 import { siteUrl } from '../../../lib/draft-http';
 import { listIssues } from '../../../lib/newsletter-issues';
 import { driveConfig } from '../../../lib/db/gdrive.mjs';
-import { fmtChicago, msToChicagoInput, errorTextFor, MAX_FAILURES } from '../../../lib/scheduled-publish';
+import { fmtChicago, msToChicagoInput, errorTextFor, MAX_FAILURES, STOP_AT_ONCE } from '../../../lib/scheduled-publish';
 import '../../../styles/story-builder.css';
 export const prerender = false;
 
@@ -441,7 +441,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
             {scheduledAt !== null ? (
               <>
                 <p class="admin-ok" role="status" id="scheduled-for"><strong>Scheduled for <time datetime={new Date(scheduledAt).toISOString()}>{fmtChicago(scheduledAt)}</time>.</strong>{draft.publishAtByName ? ` Scheduled by ${draft.publishAtByName}.` : ''} The server publishes it then, at the version saved at that moment.</p>
-                {draft.publishError && <p class="admin-error" role="alert" id="scheduled-failed"><strong>Scheduled publish failed.</strong> {errorTextFor(draft.publishError)} {scheduleStopped ? `It tried ${MAX_FAILURES} times and has stopped. Fix the problem and schedule it again, or publish it now.` : `Attempt ${draft.publishFailCount} of ${MAX_FAILURES}; it will try again shortly.`}</p>}
+                {draft.publishError && <p class="admin-error" role="alert" id="scheduled-failed"><strong>Scheduled publish failed.</strong> {errorTextFor(draft.publishError)} {STOP_AT_ONCE.has(draft.publishError) ? 'It was not retried. Schedule it again, or publish it now.' : scheduleStopped ? `It tried ${MAX_FAILURES} times and has stopped. Fix the problem and schedule it again, or publish it now.` : `Attempt ${draft.publishFailCount} of ${MAX_FAILURES}; it will try again shortly.`}</p>}
                 <form id="unschedule-form" method="post" action={`/api/admin/drafts/${draft.id}/unschedule`}>
                   <input type="hidden" name="version" value={draft.updatedAt} />
                   <button type="submit" class="cms-btn secondary">Unschedule</button>

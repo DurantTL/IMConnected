@@ -46,6 +46,9 @@ export function chicagoLocalToMs(value: string): number | null {
   return back.y === y && back.mo === mo && back.d === d && back.h === h && back.mi === mi ? guess : null;
 }
 
+/** A well-formed Central Time that does not exist (the hour skipped when the clocks spring forward). */
+export const isChicagoGap = (value: string): boolean => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.trim()) && chicagoLocalToMs(value) === null && !Number.isNaN(Date.parse(value.trim() + 'Z'));
+
 /** The value for a datetime-local input, in Central Time. */
 export function msToChicagoInput(ms: number): string {
   const p = partsOf(ms);
@@ -53,9 +56,9 @@ export function msToChicagoInput(ms: number): string {
   return `${z(p.y, 4)}-${z(p.mo)}-${z(p.d)}T${z(p.h)}:${z(p.mi)}`;
 }
 
-/** "Mon, Nov 2, 2026, 8:30 AM CT" (always Central Time, never the viewer's own zone). */
+/** "Mon, Nov 2, 2026, 8:30 AM CST" (always Central Time, CDT or CST as it applies, never the viewer's own zone). */
 export function fmtChicago(ms: number): string {
-  return new Intl.DateTimeFormat('en-US', { timeZone: SCHEDULE_ZONE, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(ms)) + ' CT';
+  return new Intl.DateTimeFormat('en-US', { timeZone: SCHEDULE_ZONE, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(ms));
 }
 
 // ---------- a person's actions ----------
@@ -78,6 +81,7 @@ export function scheduleDraft(id: number, expected: number, userId: number, publ
     const cur = getDraft(id);
     if (!cur) return fail('invalid', 'draft_gone');
     if (!isEditable(cur)) return fail('locked', 'closed');
+    if (cur.studioOverwroteAt !== null) return fail('invalid', 'schedule_studio_overwrote');
     const v = takeVersion(id, expected, userId);
     if (v === null) return fail('conflict', 'conflict');
     getDb().prepare('UPDATE drafts SET publish_at = ?, publish_at_by = ?, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL WHERE id = ?').run(publishAt, userId, id);
@@ -105,11 +109,14 @@ export function unscheduleDraft(id: number, expected: number, userId: number, ip
 
 const DUE_SQL = `publish_at IS NOT NULL AND publish_at <= ? AND status IN ('new', 'in_review') AND publish_fail_count < ${MAX_FAILURES} AND (publish_claimed_at IS NULL OR publish_claimed_at < ?)`;
 
-/** Three tries, then an editor must look: every failed attempt is counted, whatever the reason. */
+/** Failures that are no use retrying: the scheduler stops at once (the failure count jumps to the limit) until an editor reschedules. */
+export const STOP_AT_ONCE: ReadonlySet<string> = new Set(['schedule_owner_inactive', 'schedule_studio_overwrote']);
+
+/** Three tries, then an editor must look: every failed attempt is counted, whatever the reason (except the stop-at-once codes, which end it immediately). */
 function recordFailure(id: number, userId: number | null, code: ErrorCode, now: number): void {
   try {
     tx(() => {
-      const r = getDb().prepare("UPDATE drafts SET publish_claimed_at = NULL, publish_fail_count = publish_fail_count + 1, publish_error = ?, publish_error_at = ? WHERE id = ? AND publish_at IS NOT NULL AND status IN ('new', 'in_review')").run(code, now, id);
+      const r = getDb().prepare(`UPDATE drafts SET publish_claimed_at = NULL, publish_fail_count = ${STOP_AT_ONCE.has(code) ? MAX_FAILURES : 'publish_fail_count + 1'}, publish_error = ?, publish_error_at = ? WHERE id = ? AND publish_at IS NOT NULL AND status IN ('new', 'in_review')`).run(code, now, id);
       if (Number(r.changes) === 1) audit('draft.schedule_failed', { userId, target: `draft:${id}`, detail: { code }, ip: 'scheduler' });
     });
   } catch (err) {
@@ -126,11 +133,13 @@ export async function runDueScheduledPublishes(now = Date.now()): Promise<DueRes
   const due = db.prepare(`SELECT id FROM drafts WHERE ${DUE_SQL} ORDER BY publish_at, id LIMIT 20`).all(now, now - CLAIM_STALE_MS) as { id: number }[];
   for (const { id } of due) {
     // The claim: only one process changes publish_claimed_at from NULL (or a stale value) for a still-due draft.
-    const claim = db.prepare(`UPDATE drafts SET publish_claimed_at = ? WHERE id = ? AND ${DUE_SQL}`).run(now, id, now, now - CLAIM_STALE_MS);
+    const at = Date.now(); // per draft, not the batch start: a long run must not stamp a stale claim time
+    const claim = db.prepare(`UPDATE drafts SET publish_claimed_at = ? WHERE id = ? AND ${DUE_SQL}`).run(at, id, at, at - CLAIM_STALE_MS);
     if (Number(claim.changes) !== 1) continue;
     let code: ErrorCode = 'publish_failed';
     let by: number | null = null;
     let ok = false;
+    let uncounted = false;
     try {
       // An edit after scheduling keeps the schedule, so publish the version that is current at this moment. A save landing
       // between the read and the publish is a version conflict: read again (a few times) rather than count it as a failure.
@@ -138,17 +147,25 @@ export async function runDueScheduledPublishes(now = Date.now()): Promise<DueRes
         const draft = getDraft(id);
         if (!draft || !isEditable(draft)) { code = 'not_publishable'; break; }
         by = draft.publishAtBy;
-        if (by === null) { code = 'publish_failed'; break; }
-        const r = await publishDraftItem(id, draft.updatedAt, by, 'scheduler', { scheduled: true });
+        if (draft.studioOverwroteAt !== null) { code = 'schedule_studio_overwrote'; break; } // belt and braces: Studio's live version must never be overwritten
+        // A schedule runs only while the person who set it can still sign in.
+        const owner = by === null ? undefined : (db.prepare('SELECT status FROM users WHERE id = ?').get(by) as { status: string } | undefined);
+        if (!owner || owner.status !== 'active') { code = 'schedule_owner_inactive'; break; }
+        const r = await publishDraftItem(id, draft.updatedAt, by!, 'scheduler', { scheduled: true });
         if (r.ok) { ok = true; break; }
         code = r.code;
-        if (r.code !== 'conflict') break;
+        if (r.code === 'conflict' || r.code === 'already_publishing') { uncounted = true; if (r.code === 'already_publishing') break; continue; }
+        uncounted = false;
+        break;
       }
     } catch (err) {
       console.error('[schedule] scheduled publish threw', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
     if (ok) out.published++;
-    else {
+    else if (uncounted) {
+      // Lost a race with an editor's save or another publish: not a failure. Release the claim; the next check tries again.
+      db.prepare('UPDATE drafts SET publish_claimed_at = NULL WHERE id = ? AND publish_at IS NOT NULL').run(id);
+    } else {
       out.failed++;
       recordFailure(id, by, code, Date.now());
     }

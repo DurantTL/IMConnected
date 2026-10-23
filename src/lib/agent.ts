@@ -223,10 +223,10 @@ export function assertPhotoMarkers(body: string, photoCount: number): void {
 }
 
 /**
- * `suggestedPublishAt` (issue #124): an ISO 8601 date-time WITH an offset (Z or +/-hh:mm) that is in the future, or null to clear.
- * Returns ms. Anything else is 400 bad_publish_at. It is a suggestion shown to editors; the agent can never schedule or publish.
+ * `suggestedPublishAt` (issue #124): an ISO 8601 date-time WITH an offset (Z or +/-hh:mm), or null to clear. Format only here; the
+ * future rule is checkSuggestionFuture. Returns ms. Anything else is 400 bad_publish_at. It is a suggestion shown to editors; the agent can never schedule or publish.
  */
-export function parseSuggestedPublishAt(v: unknown, now = Date.now()): number | null {
+export function parseSuggestedPublishAt(v: unknown): number | null {
   if (v === null) return null;
   const bad = (m: string) => new AgentError('bad_publish_at', `suggestedPublishAt ${m}`);
   if (typeof v !== 'string') throw bad('must be an ISO 8601 date-time with an offset like "2026-11-02T08:00:00-06:00", or null.');
@@ -236,9 +236,13 @@ export function parseSuggestedPublishAt(v: unknown, now = Date.now()): number | 
   // Date.parse rolls an impossible day (Feb 30) over instead of refusing it: require the calendar day to survive.
   const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
   if (!Number.isFinite(ms) || day.getUTCMonth() !== Number(m[2]) - 1 || day.getUTCDate() !== Number(m[3]) || Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6] ?? 0) > 59) throw bad('is not a real date and time.');
-  if (ms <= now) throw bad('must be in the future.');
-  if (ms > now + 366 * 24 * 3600_000) throw bad('must be within the next year.');
   return ms;
+}
+
+/** The "future, within a year" rule, applied where a NEW request is written (after any requestId receipt lookup), so an identical retry of an accepted request still acknowledges after the time has passed. */
+export function checkSuggestionFuture(ms: number, now = Date.now()): void {
+  if (ms <= now) throw new AgentError('bad_publish_at', 'suggestedPublishAt must be in the future.');
+  if (ms > now + 366 * 24 * 3600_000) throw new AgentError('bad_publish_at', 'suggestedPublishAt must be within the next year.');
 }
 
 /** `{ number, date, title?, position? }` (issue #98). Throws 400 bad_newsletter_issue; null is returned for null (clear). */
