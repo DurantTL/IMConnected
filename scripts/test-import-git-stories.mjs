@@ -108,7 +108,7 @@ try {
   check('an unknown option is refused', unknown.code === 2);
   // photoLayout (issue #35): a valid one is imported, an unknown one is an error that names the file, a missing one reads "one"
   write('zz-layout-good', md('Layout Good', 'photoLayout: mosaic\n'));
-  write('zz-layout-bad', md('Layout Bad', 'photoLayout: carousel\n'));
+  write('zz-layout-bad', md('Layout Bad', 'photoLayout: filmstrip\n'));
   write('zz-layout-none', md('Layout None'));
   r = imp('--apply');
   check('photoLayout in a story file: a valid value is imported, an unknown value is an error naming the file, a missing one means "one"',

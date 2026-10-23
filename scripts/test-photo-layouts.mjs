@@ -118,7 +118,7 @@ const SHAPES = [[720, 480], [480, 720], [600, 600], [720, 480], [540, 720], [720
 const COLOURS = [[[200, 90, 40], [250, 200, 90]], [[40, 120, 200], [150, 220, 240]], [[60, 140, 80], [200, 240, 150]], [[130, 60, 160], [230, 180, 230]], [[180, 50, 70], [250, 160, 150]], [[70, 80, 100], [180, 190, 210]]];
 const PICS = SHAPES.map(([w, h], i) => png(w, h, COLOURS[i][0], COLOURS[i][1]));
 const dataUrl = (bytes) => `data:image/png;base64,${Buffer.from(bytes).toString('base64')}`;
-const LAYOUTS = ['one', 'twoUp', 'heroGrid', 'mosaic', 'stack'];
+const LAYOUTS = ['one', 'twoUp', 'heroGrid', 'mosaic', 'stack', 'carousel', 'threeUp'];
 const COUNTS = [1, 2, 3, 4, 6];
 
 // ---- http helpers ----
@@ -147,10 +147,12 @@ const EXPECT = {
   heroGrid: { 1: ['', 0], 2: ['hero,wide', 0], 3: ['hero,pair', 0], 4: ['hero,pair', 1], 6: ['hero,pair', 3] },
   mosaic: { 1: ['', 0], 2: ['pair', 0], 3: ['pair,wide', 0], 4: ['pair,pair', 0], 6: ['pair,pair,pair', 0] },
   stack: { 1: ['', 0], 2: ['wide,wide', 0], 3: ['wide,wide,wide', 0], 4: ['wide,wide,wide,wide', 0], 6: ['wide,wide,wide,wide,wide,wide', 0] },
+  carousel: { 1: ['', 0], 2: ['carousel', 0], 3: ['carousel', 0], 4: ['carousel', 0], 6: ['carousel', 0] },
+  threeUp: { 1: ['', 0], 2: ['pair', 0], 3: ['triple', 0], 4: ['triple', 0], 6: ['triple', 0] },
 };
 {
-  check('the layouts are Studio\'s five: one, twoUp, heroGrid, mosaic, stack (default one)', JSON.stringify(PL.PHOTO_LAYOUTS.map((l) => l.value)) === JSON.stringify(LAYOUTS) && PL.DEFAULT_PHOTO_LAYOUT === 'one');
-  check('isPhotoLayout accepts the five and refuses anything else', LAYOUTS.every(PL.isPhotoLayout) && ['', 'ONE', 'carousel', 'one ', 'filmstrip', null, undefined, 5, {}].every((v) => !PL.isPhotoLayout(v)));
+  check('the layouts are one, twoUp, heroGrid, mosaic, stack, carousel, threeUp (default one)', JSON.stringify(PL.PHOTO_LAYOUTS.map((l) => l.value)) === JSON.stringify(LAYOUTS) && PL.DEFAULT_PHOTO_LAYOUT === 'one');
+  check('isPhotoLayout accepts the seven and refuses anything else', LAYOUTS.every(PL.isPhotoLayout) && ['', 'ONE', 'Carousel', 'one ', 'filmstrip', null, undefined, 5, {}].every((v) => !PL.isPhotoLayout(v)));
   check('photoLayoutOrDefault falls back to one', PL.photoLayoutOrDefault('mosaic') === 'mosaic' && PL.photoLayoutOrDefault('x') === 'one' && PL.photoLayoutOrDefault(undefined) === 'one');
   const bad = [];
   for (const L of LAYOUTS) {
@@ -163,6 +165,8 @@ const EXPECT = {
       if (got !== rows || plan.rest.length !== rest || !every) bad.push(`${L}/${n}: ${got} +${plan.rest.length} placed=${placed} rest=${plan.rest}`);
     }
   }
+  const wide = PL.planPhotos('threeUp', 7), strip = PL.planPhotos('carousel', 7);
+  check('threeUp keeps all seven photos in one grid row and carousel keeps all seven in one strip, in order', wide.rows.length === 1 && wide.rows[0].photos.join() === '0,1,2,3,4,5,6' && wide.rest.length === 0 && strip.rows.length === 1 && strip.rows[0].photos.join() === '0,1,2,3,4,5,6' && strip.rest.length === 0);
   check('every layout with 1, 2, 3, 4 and 6 photos plans the expected rows, places each photo exactly once and degrades (one photo = the plain look)', bad.length === 0, bad.join(' | '));
 }
 
@@ -198,7 +202,12 @@ const EXPECT = {
   let invalidZoom = false;
   try { db.prepare('UPDATE story_photos SET zoom = .99').run(); } catch { invalidZoom = true; }
   check('published photo zoom is constrained to 100–300% by the database', invalidZoom && db.prepare('PRAGMA foreign_key_check').all().length === 0);
-  const fitMigration = runMigrations(db, all);
+  const fitMigration = runMigrations(db, all.filter((m) => m.name < '030'));
+  const shape = (t) => JSON.stringify({ cols: db.prepare(`PRAGMA table_info(${t})`).all().filter((c) => c.name === 'photo_layout').map((c) => [c.notnull, c.dflt_value, c.type]), idx: db.prepare(`PRAGMA index_list(${t})`).all().map((i) => [i.name, i.unique, i.partial]).sort() });
+  db.prepare("UPDATE stories SET photo_layout = 'mosaic', rev = rev + 1 WHERE slug = '2026-10-01-old-story'").run();
+  db.prepare("UPDATE drafts SET photo_layout = 'heroGrid'").run();
+  const before = { s: shape('stories'), d: shape('drafts') };
+  const mig030 = runMigrations(db, all);
   check('migration 027 adds fit (cover) and fit_fill (blur) to draft and published photos without touching existing crops', fitMigration.some((n) => n.startsWith('027_')) && ['draft_photos', 'story_photos'].every((table) => {
     const photo = db.prepare(`SELECT focal_x, focal_y, zoom, fit, fit_fill FROM ${table}`).get();
     return photo.focal_x === 17 && photo.focal_y === 83 && photo.zoom === 1 && photo.fit === 'cover' && photo.fit_fill === 'blur';
@@ -208,7 +217,24 @@ const EXPECT = {
     try { db.prepare(`UPDATE ${table} SET ${col} = ?${table === 'story_photos' ? '' : ''}`).run(val); } catch { badFit++; }
   }
   check('the database itself refuses an unknown fit or fit_fill, and zoom keeps its 1–3 constraint', badFit === 4 && db.prepare('PRAGMA foreign_key_check').all().length === 0);
+  check('migration 030 applied on top, and non-default layouts (mosaic on a story, heroGrid on a draft) survive it', mig030.some((n) => n.startsWith('030_')) && db.prepare("SELECT photo_layout p FROM stories WHERE slug = '2026-10-01-old-story'").get().p === 'mosaic' && db.prepare('SELECT photo_layout p FROM drafts').get().p === 'heroGrid');
+  let guardLeft = false;
+  try { db.prepare("UPDATE stories SET title = title").run(); } catch { guardLeft = true; }
+  check('migration 030 keeps the rev guard (a non-bumping UPDATE of stories is still refused), NOT NULL, default one and the index list', guardLeft && db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'stories_guard_old_writers'").get() !== undefined && shape('stories') === before.s && shape('drafts') === before.d && JSON.parse(before.s).cols[0][0] === 1 && JSON.parse(before.s).cols[0][1] === "'one'", `${before.s} / ${shape('stories')}`);
+  let widened = 0;
+  for (const table of ['stories', 'drafts']) {
+    for (const v of ['carousel', 'threeUp']) { try { db.prepare(`UPDATE ${table} SET photo_layout = ?${table === 'stories' ? ', rev = rev + 1' : ''}`).run(v); widened += db.prepare(`SELECT COUNT(*) n FROM ${table} WHERE photo_layout = ?`).get(v).n; } catch { /* counted below */ } }
+  }
+  let stillRefused = 0;
+  for (const table of ['stories', 'drafts']) { try { db.prepare(`UPDATE ${table} SET photo_layout = 'filmstrip'${table === 'stories' ? ', rev = rev + 1' : ''}`).run(); } catch { stillRefused++; } }
+  check('migration 030: the database now accepts carousel and threeUp on stories and drafts, and still refuses an unknown layout', widened === 4 && stillRefused === 2 && db.prepare('PRAGMA foreign_key_check').all().length === 0 && db.prepare('PRAGMA integrity_check').get().integrity_check === 'ok', `${widened} ${stillRefused}`);
   db.close();
+  // a second connection (another process) sees the widened CHECK too
+  const other = openDatabase(dir);
+  let otherOk = true;
+  try { other.prepare("UPDATE drafts SET photo_layout = 'carousel'").run(); } catch { otherOk = false; }
+  check('...and a separate connection to the same file accepts it', otherOk);
+  other.close();
 }
 
 // ================= part 3: the server =================
@@ -231,14 +257,19 @@ try {
     check(`Studio publish of ${batch.length} synthetic stories with photoLayout is accepted`, res.status === 200 && res.data.ok === true && res.data.stories?.length === batch.length, `${res.status} ${res.text.slice(0, 200)}`);
     for (const s of res.data.stories ?? []) published.set(s.ref.replace('-', '/'), s.slug);
   }
+  {
+    const res = await studioPublish(['carousel', 'threeUp'].map((L) => ({ ref: `cap-${L}`, title: `Zz layout cap ${L}`, section: 'news', area: 'churches', author: 'Test Author', body: 'Synthetic captioned story.', photoLayout: L, photos: [0, 1, 2].map((k) => ({ url: dataUrl(PICS[k]), alt: `Synthetic cap ${k + 1}`, ...(k === 1 ? {} : { caption: `Synthetic caption ${k + 1}` }) })) })), '2099-01-04');
+    check('Studio publish of captioned carousel and threeUp stories is accepted', res.status === 200 && res.data.ok === true && res.data.stories?.length === 2, `${res.status} ${res.text.slice(0, 200)}`);
+    for (const st of res.data.stories ?? []) published.set(`cap/${st.ref.replace('cap-', '')}`, st.slug);
+  }
   const dbLayouts = Object.fromEntries(q("SELECT slug, photo_layout FROM stories WHERE slug LIKE '2099-01-02-zz-layout-%'").map((r) => [r.slug, r.photo_layout]));
   check('the layout of each published story is stored as sent', wanted.every(({ L, n }) => dbLayouts[published.get(`${L}/${n}`)] === L), JSON.stringify(dbLayouts).slice(0, 300));
 
   // ---- validation and default ----
   const base = { ref: 'v', title: 'Zz layout validation', section: 'news', area: 'churches', author: 'Test Author', body: 'Synthetic text.', photos: [{ url: dataUrl(PICS[0]), alt: 'x' }] };
-  for (const bad of ['carousel', 'ONE', 'mosaic ', '', 5, ['one'], { a: 1 }, true]) {
+  for (const bad of ['filmstrip', 'ONE', 'mosaic ', '', 5, ['one'], { a: 1 }, true]) {
     const r = await studioPublish([{ ...base, photoLayout: bad }]);
-    check(`Studio publish with photoLayout ${JSON.stringify(bad)} is a 400 that names the choices`, r.status === 400 && r.data.ok === false && /photoLayout must be one of: one, twoUp, heroGrid, mosaic, stack/.test(r.data.error) && r.data.ref === 'v', `${r.status} ${r.text.slice(0, 160)}`);
+    check(`Studio publish with photoLayout ${JSON.stringify(bad)} is a 400 that names the choices`, r.status === 400 && r.data.ok === false && /photoLayout must be one of: one, twoUp, heroGrid, mosaic, stack, carousel, threeUp/.test(r.data.error) && r.data.ref === 'v', `${r.status} ${r.text.slice(0, 160)}`);
   }
   check('...and nothing was written by the refused requests', q("SELECT COUNT(*) AS n FROM stories WHERE slug LIKE '%zz-layout-validation%'")[0].n === 0);
   const noField = await studioPublish([{ ...base, ref: 'nf', title: 'Zz layout default' }]);
@@ -274,7 +305,7 @@ try {
       continue;
     }
     if (!fig || fig[1] !== L) { bad.push(`${label}: no ${L} figure`); continue; }
-    const kinds = [...fig[2].matchAll(/class="photos-row photos-(hero|wide|pair)"/g)].map((m) => m[1]).join(',');
+    const kinds = [...fig[2].matchAll(/class="photos-row photos-(hero|wide|pair|triple|strip)"/g)].map((m) => (m[1] === 'strip' ? 'carousel' : m[1])).join(',');
     const links = [...fig[2].matchAll(/<a href="(\/media\/[^"]+)" data-photo[^>]*>\s*<img ([^>]*)>/g)];
     if (kinds !== rows) bad.push(`${label}: rows ${kinds}, wanted ${rows}`);
     if (links.length + galleryLinks !== n) bad.push(`${label}: ${links.length} laid out + ${galleryLinks} in the row under the text, wanted ${n} in all`);
@@ -317,7 +348,7 @@ try {
   const agentStory = (over = {}) => ({ title: 'Zz agent layout story', body: 'Synthetic text from the agent test.', section: 'news', area: 'churches', author: 'Staff Writer', sourceUrl: 'https://example.test/posts/1', photos: [{ data: dataUrl(PICS[0]), alt: 'A' }, { data: dataUrl(PICS[1]), alt: 'B' }], ...over });
   const a1 = await agentPost(agentStory({ photoLayout: 'stack' }));
   check('the agent API accepts photoLayout and stores it on the new draft', a1.status < 300 && a1.data.ok === true && q("SELECT photo_layout p, source FROM drafts WHERE source = 'agent'")[0]?.p === 'stack', `${a1.status} ${a1.text.slice(0, 200)}`);
-  const a2 = await agentPost(agentStory({ photoLayout: 'carousel', sourceUrl: 'https://example.test/posts/2' }));
+  const a2 = await agentPost(agentStory({ photoLayout: 'filmstrip', sourceUrl: 'https://example.test/posts/2' }));
   check('...an unknown photoLayout is a 400 (bad_photo_layout) and creates no draft', a2.status === 400 && a2.data.error === 'bad_photo_layout' && q("SELECT COUNT(*) AS n FROM drafts WHERE source_url = 'https://example.test/posts/2'")[0].n === 0, `${a2.status} ${a2.text.slice(0, 200)}`);
   const a2b = await agentPost(agentStory({ photoLayout: 7, sourceUrl: 'https://example.test/posts/2' }));
   check('...a non-text photoLayout is a 400 too', a2b.status === 400 && a2b.data.error === 'bad_photo_layout', `${a2b.status}`);
@@ -345,7 +376,7 @@ try {
   const fields = (over = {}) => ({ version: version(), title: 'Zz dashboard layout story', dek: '', section: 'news', area: 'churches', column: '', author: 'Test Author', authorTitle: '', church: '', date: '2099-02-01', photoCredit: 'Test Photographer', body: 'Synthetic dashboard text.\n\nA second paragraph.', ...over });
   const okSave = await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields({ photoLayout: 'mosaic' })) });
   check('saving with a valid layout stores it', okSave.status === 200 && okSave.data.ok === true && q('SELECT photo_layout p FROM drafts WHERE id = ?', draftId)[0].p === 'mosaic', `${okSave.status} ${okSave.text.slice(0, 200)}`);
-  for (const badValue of ['carousel', ' mosaic ', 'MOSAIC', '']) {
+  for (const badValue of ['filmstrip', ' mosaic ', 'MOSAIC', '']) {
     const badSave = await call('POST', `/api/admin/drafts/${draftId}/save`, { headers: ck, body: form(fields({ photoLayout: badValue })) });
     check(`saving a draft with the photo layout ${JSON.stringify(badValue)} is refused (400) and the draft keeps its layout (mosaic)`, badSave.status === 400 && badSave.data.ok === false && /photo layout/i.test(badSave.data.error) && q('SELECT photo_layout p FROM drafts WHERE id = ?', draftId)[0].p === 'mosaic', `${badSave.status} ${badSave.text.slice(0, 200)}`);
   }
@@ -361,9 +392,9 @@ try {
   }
   const editor = await call('GET', `/admin/drafts/${draftId}`, { headers: ck });
   const radios = [...editor.text.matchAll(/<input[^>]*name="photoLayout"[^>]*>/g)].map((m) => m[0]);
-  check('the editor shows a "Photo layout" picker: five radio cards, the draft\'s layout checked', editor.status === 200 && /<legend>Photo layout<\/legend>/.test(editor.text) && radios.length === 5
+  check('the editor shows a "Photo layout" picker: seven radio cards, the draft\'s layout checked', editor.status === 200 && /<legend>Photo layout<\/legend>/.test(editor.text) && radios.length === 7
     && LAYOUTS.every((L) => radios.some((r) => r.includes(`value="${L}"`))) && radios.filter((r) => /\schecked/.test(r)).length === 1 && /value="heroGrid"[^>]*checked|checked[^>]*value="heroGrid"/.test(radios.join('')), `${editor.status} ${radios.join(' ').slice(0, 300)}`);
-  check('...with a small preview and a name for each card', (editor.text.match(/class="lay-mini lay-/g) ?? []).length === 5 && ['One hero', 'Two up', 'Hero + grid', 'Mosaic', 'Stack'].every((l) => editor.text.includes(`>${l}</span>`)));
+  check('...with a small preview and a name for each card', (editor.text.match(/class="lay-mini lay-/g) ?? []).length === 7 && ['One hero', 'Two up', 'Hero + grid', 'Mosaic', 'Stack', 'Carousel', 'Three up'].every((l) => editor.text.includes(`>${l}</span>`)));
   const pub = await call('POST', `/api/admin/drafts/${draftId}/publish`, { headers: ck, body: form({ version: version() }) });
   const slug = q('SELECT slug FROM drafts WHERE id = ?', draftId)[0].slug;
   check('publishing the draft carries the layout to the story', /n=published/.test(pub.loc ?? '') && q('SELECT photo_layout p FROM stories WHERE slug = ?', slug)[0]?.p === 'heroGrid', `${pub.status} ${pub.loc}`);
@@ -425,7 +456,7 @@ try {
     try { browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: process.env.CHROMIUM_NO_SANDBOX === '1' || process.getuid?.() === 0 ? ['--no-sandbox'] : [] }); } catch (err) { browserSkipReason = 'no browser could be launched: ' + String(err.message).split('\n')[0]; }
     if (browser) {
       const overflow = [];
-      const WIDTHS = [390, 768, 1280];
+      const WIDTHS = [320, 390, 768, 1280];
       for (const w of WIDTHS) {
         const ctx = await browser.newContext({ viewport: { width: w, height: 900 }, deviceScaleFactor: 1 });
         const page = await ctx.newPage();
@@ -441,7 +472,7 @@ try {
         }
         await ctx.close();
       }
-      check(`no horizontal scroll for any layout x photo count (25 pages) at ${WIDTHS.join(', ')} px`, overflow.length === 0, overflow.slice(0, 5).join(' | '));
+      check(`no horizontal scroll for any layout x photo count (35 pages) at ${WIDTHS.join(', ')} px`, overflow.length === 0, overflow.slice(0, 5).join(' | '));
       if (SHOTS) info(`screenshots: ${fs.readdirSync(SHOTS).filter((f) => f.endsWith('.png')).length} files in ${SHOTS}`);
 
       // Fit whole photo: the whole tall image is visible inside its frame over the chosen fill, at phone and desktop width
@@ -494,6 +525,107 @@ try {
         const g = await page.evaluate(() => [...document.querySelectorAll('.photos a')].map((a) => { const r = a.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; }));
         check('at 390 px Hero + grid is one wide photo (16:9) over two half-width photos (3:2)', g.length === 3 && g[0].w > g[1].w * 1.9 && Math.abs(g[0].w / g[0].h - 16 / 9) < 0.05 && Math.abs(g[1].w - g[2].w) <= 1 && Math.abs(g[1].w / g[1].h - 1.5) < 0.05, JSON.stringify(g));
         await ctx.close();
+      }
+
+      // threeUp: three equal columns at desktop, two under 650px, one under 400px; captioned and uncaptioned tiles share a top
+      {
+        const cols = {};
+        for (const w of [1280, 640, 500, 390, 320]) {
+          const ctx = await browser.newContext({ viewport: { width: w, height: 900 } });
+          const page = await ctx.newPage();
+          await page.goto(`${BASE}/stories/${published.get('threeUp/6')}/`);
+          cols[w] = await page.evaluate(() => { const xs = [...document.querySelectorAll('.photos-triple a')].map((a) => Math.round(a.getBoundingClientRect().left)); const ws = [...document.querySelectorAll('.photos-triple a')].map((a) => Math.round(a.getBoundingClientRect().width)); return { distinct: new Set(xs).size, n: xs.length, wmin: Math.min(...ws), wmax: Math.max(...ws) }; });
+          await ctx.close();
+        }
+        check('threeUp: 3 columns at 1280, 2 at 640 and 500 (under 650), 1 at 390 and 320 (under 400); all six photos, equal widths', cols[1280].distinct === 3 && cols[640].distinct === 2 && cols[500].distinct === 2 && cols[390].distinct === 1 && cols[320].distinct === 1 && Object.values(cols).every((c) => c.n === 6 && c.wmax - c.wmin <= 1), JSON.stringify(cols));
+      }
+      // carousel: scroll-snap strip, buttons, counter, keyboard, no autoplay, reduced motion, no JavaScript
+      {
+        for (const w of [320, 390, 1280]) {
+          const ctx = await browser.newContext({ viewport: { width: w, height: 900 } });
+          const page = await ctx.newPage();
+          await page.goto(`${BASE}/stories/${published.get('carousel/4')}/`);
+          const region = page.locator('[data-carousel]');
+          const meta = await region.evaluate((el) => ({ role: el.getAttribute('role'), label: el.getAttribute('aria-label'), slides: el.querySelectorAll('[data-carousel-slide]').length, snap: getComputedStyle(el.querySelector('[data-carousel-track]')).scrollSnapType, links: el.querySelectorAll('a[data-photo][href^="/media/"]').length, btns: [...el.querySelectorAll('button')].map((b) => b.getAttribute('aria-label')) }));
+          check(`carousel @${w}: a labelled region of 4 slides with scroll-snap, a link to every full image, and named Previous/Next buttons`, meta.role === 'region' && !!meta.label && meta.slides === 4 && /x mandatory/.test(meta.snap) && meta.links === 4 && meta.btns.join() === 'Previous photo,Next photo', JSON.stringify(meta));
+          const count = page.locator('.photos-carousel-count');
+          check(`carousel @${w}: the counter starts at "1 of 4" and is a polite live region`, (await count.textContent()) === '1 of 4' && (await count.getAttribute('aria-live')) === 'polite' && (await page.getByRole('button', { name: 'Previous photo' }).getAttribute('aria-disabled')) === 'true');
+          await page.getByRole('button', { name: 'Next photo' }).click();
+          await page.waitForTimeout(900);
+          const afterNext = await page.evaluate(() => { const t = document.querySelector('[data-carousel-track]'); return { left: t.scrollLeft, w: t.clientWidth, text: document.querySelector('.photos-carousel-count').textContent }; });
+          check(`carousel @${w}: Next scrolls exactly one photo and the counter reads "2 of 4"`, Math.abs(afterNext.left - afterNext.w - 10) <= 12 && afterNext.text === '2 of 4', JSON.stringify(afterNext));
+          await page.getByRole('button', { name: 'Next photo' }).click();
+          await page.getByRole('button', { name: 'Next photo' }).click();
+          await page.waitForTimeout(900);
+          check(`carousel @${w}: at the last photo Next is aria-disabled but keeps focus (focus is still on Next)`, (await page.getByRole('button', { name: 'Next photo' }).getAttribute('aria-disabled')) === 'true' && await page.evaluate(() => document.activeElement?.closest('.photos-carousel-bar') !== null && document.activeElement?.getAttribute('aria-label') === 'Next photo'));
+          await page.getByRole('button', { name: 'Previous photo' }).click();
+          check(`carousel @${w}: Previous returns to "3 of 4"`, (await count.textContent()) === '3 of 4');
+          // a swipe/scroll by the reader updates the counter
+          await page.waitForTimeout(900);
+          await page.evaluate(() => { document.querySelector('[data-carousel-track]').scrollTo({ left: 0, behavior: 'instant' }); });
+          await page.waitForFunction(() => document.querySelector('.photos-carousel-count').textContent === '1 of 4', null, { timeout: 3000 });
+          check(`carousel @${w}: scrolling the strip by hand updates the counter`, true);
+          // never autoplays
+          const before = await page.evaluate(() => document.querySelector('[data-carousel-track]').scrollLeft);
+          await page.waitForTimeout(1500);
+          check(`carousel @${w}: it never moves by itself`, (await page.evaluate(() => document.querySelector('[data-carousel-track]').scrollLeft)) === before);
+          check(`carousel @${w}: no horizontal page scroll`, await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+          if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `carousel-${w}.png`), fullPage: false });
+          await ctx.close();
+        }
+        // the viewer opens from a carousel photo and lists every photo
+        {
+          const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+          const page = await ctx.newPage();
+          await page.goto(`${BASE}/stories/${published.get('carousel/4')}/`);
+          await page.locator('.photos-slide a[data-photo]').first().click();
+          await page.locator('dialog.viewer').waitFor({ state: 'visible' });
+          check('carousel: clicking a photo opens the viewer at "1 of 4"', /\(1 of 4\)$/.test(await page.locator('.viewer-count').textContent()));
+          await page.keyboard.press('Escape');
+          // keyboard: Tab to the first slide link (a real page has no tabindex on the track); its focus ring is drawn inside the track
+          await page.goto(`${BASE}/stories/${published.get('carousel/4')}/`);
+          for (let i = 0; i < 40 && !(await page.evaluate(() => document.activeElement?.matches('.photos-slide a'))); i++) await page.keyboard.press('Tab');
+          const ring = await page.evaluate(() => { const a = document.activeElement; const t = document.querySelector('[data-carousel-track]'); const r = a.getBoundingClientRect(); const tr = t.getBoundingClientRect(); const cs = getComputedStyle(a); const off = parseFloat(cs.outlineOffset); const w = parseFloat(cs.outlineWidth); return { style: cs.outlineStyle, off, w, inside: r.left >= tr.left - 0.5 && r.right <= tr.right + 0.5 && r.top >= tr.top - 0.5 && r.bottom <= tr.bottom + 0.5 }; });
+          check('carousel: the focused slide link has a visible focus ring drawn inside the track (not clipped)', ring.style !== 'none' && ring.w > 0 && ring.off < 0 && ring.inside, JSON.stringify(ring));
+          await page.keyboard.press('ArrowRight');
+          await page.waitForFunction(() => document.querySelector('.photos-carousel-count').textContent === '2 of 4');
+          await page.waitForTimeout(900);
+          const moved = await page.evaluate(() => { const a = document.activeElement; const t = document.querySelector('[data-carousel-track]'); const r = a.getBoundingClientRect(); const tr = t.getBoundingClientRect(); return { slide: a.closest('.photos-slide')?.getAttribute('aria-label'), visible: r.left >= tr.left - 1 && r.right <= tr.right + 1 }; });
+          check('carousel: the Right arrow key on a slide link moves to the next photo and focus follows it onto the visible link', moved.slide === 'Photo 2 of 4' && moved.visible, JSON.stringify(moved));
+          await ctx.close();
+        }
+        // reduced motion: no smooth scrolling
+        {
+          const ctx = await browser.newContext({ viewport: { width: 390, height: 900 }, reducedMotion: 'reduce' });
+          const page = await ctx.newPage();
+          await page.goto(`${BASE}/stories/${published.get('carousel/4')}/`);
+          const sb = await page.locator('[data-carousel-track]').evaluate((t) => getComputedStyle(t).scrollBehavior);
+          check('carousel: with reduced motion the strip does not scroll smoothly', sb === 'auto', sb);
+          await ctx.close();
+        }
+        // no JavaScript: a horizontally scrollable strip, every photo a link, no dead buttons, scrollbar visible
+        {
+          // Playwright's headless Chromium hides scrollbars by default; a separate launch keeps them, so "visible scrollbar" is real
+          const sbBrowser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, ignoreDefaultArgs: ['--hide-scrollbars'], args: process.env.CHROMIUM_NO_SANDBOX === '1' || process.getuid?.() === 0 ? ['--no-sandbox'] : [] });
+          const ctx = await sbBrowser.newContext({ viewport: { width: 390, height: 900 }, javaScriptEnabled: false });
+          const page = await ctx.newPage();
+          await page.goto(`${BASE}/stories/${published.get('carousel/4')}/`);
+          const m = await page.evaluate(() => { const t = document.querySelector('[data-carousel-track]'); return { scrolls: t.scrollWidth > t.clientWidth + 100, overflowX: getComputedStyle(t).overflowX, buttons: document.querySelectorAll('[data-carousel] button').length, links: t.querySelectorAll('a[data-photo]').length, scrollbarH: t.offsetHeight - t.clientHeight, page: document.documentElement.scrollWidth <= document.documentElement.clientWidth }; });
+          check('carousel without JavaScript: a horizontally scrollable strip of four linked photos, no buttons, no page scroll', m.scrolls && m.scrollbarH > 0 && m.overflowX === 'auto' && m.buttons === 0 && m.links === 4 && m.page, JSON.stringify(m));
+          await ctx.close(); await sbBrowser.close();
+        }
+        // captions: tiles in a carousel and a threeUp grid share a top whether or not they have a caption
+        {
+          const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+          const page = await ctx.newPage();
+          const res = {};
+          for (const key of ['cap/carousel', 'cap/threeUp']) {
+            await page.goto(`${BASE}/stories/${published.get(key)}/`);
+            res[key] = await page.evaluate(() => { const tops = [...document.querySelectorAll('.photos a[data-photo]')].map((a) => Math.round(a.getBoundingClientRect().top)); return { captions: document.querySelectorAll('.photos figcaption.photo-caption').length, links: tops.length, tops: [...new Set(tops)] }; });
+          }
+          check('captions: in threeUp captioned and uncaptioned tiles share one top; the carousel keeps a caption under its photo; no photo lost', res['cap/threeUp'].captions === 2 && res['cap/threeUp'].links === 3 && res['cap/threeUp'].tops.length === 1 && res['cap/carousel'].captions === 2 && res['cap/carousel'].links === 3 && res['cap/carousel'].tops.length === 1, JSON.stringify(res));
+          await ctx.close();
+        }
       }
 
       // the viewer, with a mouse/keyboard and with touch
@@ -638,7 +770,7 @@ try {
         const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
         const page = await ctx.newPage();
         const results = {};
-        for (const [name, key, open] of [['a story with no layout (the reference)', 'one/4', false], ['Fit whole photo, layout one', 'fit/one', false], ['Fit whole photo, heroGrid', 'fit/hero', false], ['Fit whole photo, page-color fill', 'fit/paper', false], ['Hero + grid, viewer closed', 'heroGrid/4', false], ['Mosaic, viewer closed', 'mosaic/6', false], ['Stack, viewer closed', 'stack/3', false], ['Hero + grid, viewer OPEN', 'heroGrid/4', true]]) {
+        for (const [name, key, open] of [['a story with no layout (the reference)', 'one/4', false], ['Fit whole photo, layout one', 'fit/one', false], ['Fit whole photo, heroGrid', 'fit/hero', false], ['Fit whole photo, page-color fill', 'fit/paper', false], ['Hero + grid, viewer closed', 'heroGrid/4', false], ['Mosaic, viewer closed', 'mosaic/6', false], ['Stack, viewer closed', 'stack/3', false], ['Carousel', 'carousel/6', false], ['Three up', 'threeUp/6', false], ['Carousel with captions', 'cap/carousel', false], ['Three up with captions', 'cap/threeUp', false], ['Hero + grid, viewer OPEN', 'heroGrid/4', true]]) {
           await page.goto(`${BASE}/stories/${published.get(key)}/`);
           await page.addScriptTag({ content: axeSrc });
           if (open) { await page.locator('a[data-photo]').nth(1).click(); await page.locator('dialog.viewer').waitFor({ state: 'visible' }); }

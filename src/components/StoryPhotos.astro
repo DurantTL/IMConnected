@@ -6,9 +6,10 @@
 // turns the links into click-to-enlarge. Photos have a fixed aspect ratio (cropped to fit, like the newsletter) so the
 // page does not move while they load. Captions (issue #84): a photo with a caption sits in its own <figure> with a
 // <figcaption class="photo-caption"> directly under its tile, in every layout, so a mosaic or grid stays a grid; a photo
-// without one keeps the bare link. The caption is plain text (Astro escapes it). The credit stays the one line under the group.
+// without one keeps the bare link (PhotoTile.astro). Carousel (issue #85): every photo in one scroll-snap strip that is a plain
+// scrollable strip without JavaScript; src/scripts/photo-carousel.ts adds the arrow buttons and the "3 of 7" counter. The caption is plain text (Astro escapes it). The credit stays the one line under the group.
 import type { PhotoPlan } from '../lib/photo-layouts';
-import { photoFocusStyle, photoFrameAttrs } from '../lib/story-blocks';
+import PhotoTile from './PhotoTile.astro';
 
 interface Props {
   layout: string;
@@ -21,20 +22,21 @@ const { layout, plan, photos, credit } = Astro.props;
 ---
 <figure class={`photos photos-${layout}`} data-photo-layout={layout}>
   {plan.rows.map((row) => (
-    <div class={`photos-row photos-${row.kind}`}>
-      {row.photos.map((i) => photos[i].caption ? (
-        <figure class="photos-tile">
-          <a href={photos[i].src} data-photo {...(photoFrameAttrs(photos[i], photos[i].src) ?? {})}>
-            <img src={photos[i].src} alt={photos[i].alt} loading={i === 0 ? 'eager' : 'lazy'} decoding="async" style={photoFocusStyle(photos[i])} />
-          </a>
-          <figcaption class="photo-caption">{photos[i].caption}</figcaption>
-        </figure>
-      ) : (
-        <a href={photos[i].src} data-photo {...(photoFrameAttrs(photos[i], photos[i].src) ?? {})}>
-          <img src={photos[i].src} alt={photos[i].alt} loading={i === 0 ? 'eager' : 'lazy'} decoding="async" style={photoFocusStyle(photos[i])} />
-        </a>
-      ))}
-    </div>
+    row.kind === 'carousel' ? (
+      <div class="photos-row photos-strip" role="region" aria-roledescription="carousel" aria-label="Story photos" data-carousel>
+        <div class="photos-track" data-carousel-track>
+          {row.photos.map((i, n) => (
+            <div class="photos-slide" data-carousel-slide role="group" aria-roledescription="slide" aria-label={`Photo ${n + 1} of ${row.photos.length}`}>
+              <PhotoTile photo={photos[i]} eager={i === 0} />
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : (
+      <div class={`photos-row photos-${row.kind}`}>
+        {row.photos.map((i) => <PhotoTile photo={photos[i]} eager={i === 0} />)}
+      </div>
+    )
   ))}
   {credit && <figcaption>Photo: {credit}</figcaption>}
 </figure>

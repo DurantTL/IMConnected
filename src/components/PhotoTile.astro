@@ -1,0 +1,24 @@
+---
+// One photo of a laid-out set (see StoryPhotos.astro): a link to the full image around the picture, wrapped in a
+// <figure class="photos-tile"> with its <figcaption class="photo-caption"> only when the photo has a caption (issue #84).
+// The caption is plain text (Astro escapes it).
+import { photoFocusStyle, photoFrameAttrs } from '../lib/story-blocks';
+
+interface Props {
+  photo: { src: string; alt: string; focalX?: number; focalY?: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy'; caption?: string };
+  eager?: boolean;
+}
+const { photo, eager = false } = Astro.props;
+---
+{photo.caption ? (
+  <figure class="photos-tile">
+    <a href={photo.src} data-photo {...(photoFrameAttrs(photo, photo.src) ?? {})}>
+      <img src={photo.src} alt={photo.alt} loading={eager ? 'eager' : 'lazy'} decoding="async" style={photoFocusStyle(photo)} />
+    </a>
+    <figcaption class="photo-caption">{photo.caption}</figcaption>
+  </figure>
+) : (
+  <a href={photo.src} data-photo {...(photoFrameAttrs(photo, photo.src) ?? {})}>
+    <img src={photo.src} alt={photo.alt} loading={eager ? 'eager' : 'lazy'} decoding="async" style={photoFocusStyle(photo)} />
+  </a>
+)}

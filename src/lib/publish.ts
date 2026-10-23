@@ -134,7 +134,7 @@ export function prepareStudioPublish(input: unknown) {
       if (!getSection(section)) throw fail('That section does not exist.');
       if (!isValidArea(section, area)) throw fail('That category is not valid for this section.');
 
-      // Studio sends the story block's layout (one, twoUp, heroGrid, mosaic, stack). Missing means 'one'; anything else is refused.
+      // Studio sends the story block's layout (one, twoUp, heroGrid, mosaic, stack, carousel, threeUp). Missing means 'one'; anything else is refused.
       let photoLayout: PhotoLayout = DEFAULT_PHOTO_LAYOUT;
       if (r.photoLayout !== undefined && r.photoLayout !== null) {
         if (!isPhotoLayout(r.photoLayout)) throw fail(`photoLayout must be one of: ${PHOTO_LAYOUT_VALUES.join(', ')}.`);
