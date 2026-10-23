@@ -55,7 +55,7 @@ checks, `{{photo N}}` marker check, announcement patches, and omission rules (an
 
 | Status | `error` | Meaning |
 | --- | --- | --- |
-| 400 | `too_many_stories` also when the server's hourly ceiling is below the batch size (it could never fit). Others: `invalid_json`, `bad_request_id`, `stories_invalid`, `stories_empty`, `too_many_stories`, `too_large` | Bad JSON or body, a missing or malformed batch `requestId`, `stories` not a list, empty, over 20, or the request over 40 MB |
+| 400 | `invalid_json`, `bad_request_id`, `stories_invalid`, `stories_empty`, `too_many_stories`, `too_large` | Bad JSON or body, a missing or malformed batch `requestId`, `stories` not a list, empty, more than 20 stories (or more than the server's hourly ceiling, so it could never fit), or the request over 40 MB |
 | 401 / 503 | `unauthorized` / `not_configured` | As for every agent route |
 | 409 | `request_id_reused` | This batch `requestId` was already used with a different body |
 | 429 | `rate_limited` | Over 60 calls per hour (shared by all agent routes), or `reason: "batch_stories_per_hour"`: the batch would exceed the story ceiling. `Retry-After` says when. |
@@ -83,8 +83,9 @@ The batch `requestId` is stored only as a SHA-256, with a hash of the batch cont
 
 One summary email per batch that created at least one draft ("13 new drafts from the AI agent"), to the editors who
 opted in under My account. It holds escaped titles and dashboard links only, no contact details. There are no per-item
-emails from the batch. The audit log gets an `agent.story` entry per created or updated item (as the single endpoint
-does) and one `agent.batch` entry with counts (the per-item entries are `agent.story` with `batch: true` in the detail) (`created`, `updated`, `replayed`, `failed`, `items`), no titles.
+emails from the batch. The audit log gets one `agent.story` entry per created or updated item, as the single endpoint
+does, with `batch: true` in its detail, plus one `agent.batch` entry with counts (`created`, `updated`, `replayed`,
+`failed`, `items`) and no titles.
 
 ## Backfill recipe
 
