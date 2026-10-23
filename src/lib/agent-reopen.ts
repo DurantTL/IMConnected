@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { getDb } from './db';
 import { mergeAgentAnnouncement, resolveAgentIssue, createDraft, getDraftBySlug, resetDraftFromStory, tx, writeUpload, removeUploadFiles } from './drafts';
 import { loadStory, validSlug } from './story-publish';
-import { getSection, isValidArea } from './site';
+import { canonicalSectionKey, getSection, isValidArea } from './site';
 import { AgentError, checkSuggestionFuture, assertPhotoMarkers, AgentConflict, REQUEST_ID_RE, parseAgentStory, refusalDetails, refusalReason } from './agent';
 import { LIMITS } from './limits';
 import { audit } from './auth/audit';
@@ -52,6 +52,7 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
       // Validate supplied changes only; omitted editorial values must remain byte-for-byte intact.
       // A section change without an area moves the story to the new section's default area (the first one; none = no area).
       const changes: Record<string, unknown> = { ...input.changes };
+      if (typeof changes.section === 'string') changes.section = canonicalSectionKey(changes.section.trim());
       if (typeof changes.section === 'string' && changes.area === undefined) {
         const target = getSection(changes.section);
         if (target && changes.section !== story.fields.section && !isValidArea(changes.section, story.fields.area)) changes.area = target.areas?.[0]?.key ?? '';

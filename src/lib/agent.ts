@@ -1,4 +1,4 @@
-import { normalizeAdditionalSections } from './site';
+import { canonicalSectionKey, normalizeAdditionalSections } from './site';
 import { validIssueDate, validIssueNumber, validPosition } from './newsletter-issues';
 import { normalizeAnnouncement, type Announcement } from './announcement';
 import { photoMarkerIndex } from './story-media';
@@ -278,7 +278,7 @@ export function parseAgentStory(input: unknown): AgentStory {
   const church = oneLine(optional(o, 'church'));
   const authorTitle = oneLine(optional(o, 'authorTitle'));
   const photoCredit = oneLine(optional(o, 'photoCredit'));
-  const section = optional(o, 'section').trim();
+  const section = canonicalSectionKey(optional(o, 'section').trim());
   const area = optional(o, 'area').trim();
   const date = optional(o, 'date').trim();
   const note = optional(o, 'note').replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();

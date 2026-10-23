@@ -211,8 +211,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   if (!getSection(section)) throw new EditorError('section_required');
   if (!isValidArea(section, area)) throw new EditorError('area_bad');
   if (!validDate(draft.date)) throw new EditorError('date_required');
-  if (section !== 'columns' && draft.column) throw new EditorError('column_only');
-  const column = oneLine(draft.column).slice(0, PUBLISH_LIMITS.name);
+  const column = ''; // issue #136: column names are retired
   const authorTitle = oneLine(draft.authorTitle).slice(0, PUBLISH_LIMITS.author);
   const church = oneLine(draft.church).slice(0, 160);
   const photoCredit = oneLine(draft.photoCredit).slice(0, 120);
@@ -322,7 +321,7 @@ export function editLiveStory(slug: string, compute: (story: Story) => Partial<S
     const next = { ...row, ...patch, contentHash: undefined, editedAt: now };
     writeStory(next, now);
     // The closed draft linked to this story keeps the same metadata, so unpublishing and publishing again cannot revert the edit.
-    syncPublishedDraftFields(slug, row.draftId, { section: next.section, area: next.area ?? '', column: next.column ?? '', additionalSections: next.additionalSections ?? [], featured: next.featured, date: next.date });
+    syncPublishedDraftFields(slug, row.draftId, { section: next.section, area: next.area ?? '', column: '', additionalSections: next.additionalSections ?? [], featured: next.featured, date: next.date });
   });
   const result = out as { title: string; changed: boolean } | null;
   if (result?.changed) invalidateStories();

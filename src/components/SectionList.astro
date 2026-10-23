@@ -41,7 +41,7 @@ const base = area ? `/${section.key}/${area.key}/` : `/${section.key}/`;
 
     {stories.length ? (
       <div class="grid cols-3">
-        {stories.map((s) => <StoryCard story={s} variant={section.key === 'columns' ? 'text' : 'default'} />)}
+        {stories.map((s) => <StoryCard story={s} />)}
       </div>
     ) : (
       <p class="empty-state">No stories here yet. <a href="/submit/">Submit one?</a></p>

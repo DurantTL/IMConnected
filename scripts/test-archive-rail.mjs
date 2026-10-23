@@ -10,7 +10,7 @@ const story = (id, days, section = 'news', image = '') => ({ id, data: { title: 
 const ids = (list) => list.map((s) => s.id);
 const opts = (extra = {}) => ({ today: TODAY, recentDays: WINDOW, ...extra });
 
-const sections = ['news', 'features', 'columns', 'youth', 'kids'];
+const sections = ['news', 'features', 'youth', 'kids'];
 const old = Array.from({ length: 14 }, (_, i) => story(`old-${String(i).padStart(2, '0')}`, 100 + i * 17, sections[i % 5], i % 3 === 0 ? '/media/stories/x/a.png' : ''));
 const recent = [story('recent-1', 1), story('recent-89', 89), story('recent-90', 90)];
 const pool = [...old, ...recent, story('boundary-91', 91)];

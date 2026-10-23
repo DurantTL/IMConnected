@@ -1,4 +1,4 @@
-import { normalizeAdditionalSections } from './site';
+import { canonicalSectionKey, normalizeAdditionalSections } from './site';
 import { normalizeAnnouncement } from './announcement';
 import { storyBlockPhotos } from './story-blocks';
 // Reads the editor form (save and preview) into draft fields, refusing oversized values instead of cutting them.
@@ -24,9 +24,9 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
   const fields: DraftFields = {
     title: line(form, 'title', FIELD_MAX.title, 'The title'),
     dek: line(form, 'dek', FIELD_MAX.dek, 'The summary'),
-    section: line(form, 'section', 40, 'The section'),
+    section: canonicalSectionKey(line(form, 'section', 40, 'The section')),
     area: line(form, 'area', 40, 'The category'),
-    column: line(form, 'column', FIELD_MAX.short, 'The column'),
+    column: '', // issue #136: column names are retired; a column field in an old form is ignored
     author: line(form, 'author', FIELD_MAX.short, 'The author'),
     authorTitle: line(form, 'authorTitle', FIELD_MAX.short, 'The author title'),
     church: line(form, 'church', FIELD_MAX.short, 'The church'),

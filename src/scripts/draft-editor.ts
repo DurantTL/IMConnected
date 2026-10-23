@@ -19,7 +19,6 @@ if (form) {
   const split = document.getElementById('split') as HTMLElement;
   const section = document.getElementById('f-section') as HTMLSelectElement;
   const area = document.getElementById('f-area') as HTMLSelectElement;
-  const columnWrap = document.getElementById('f-column-wrap') as HTMLElement;
   const editable = !form.querySelector('fieldset')?.disabled;
 
   let dirty = false;
@@ -237,7 +236,6 @@ if (form) {
       const first = Array.from(area.options).find((o) => !o.hidden);
       if (first) area.value = first.value;
     }
-    columnWrap.hidden = section.value !== 'columns';
   }
   section.addEventListener('change', syncSection);
   syncSection();

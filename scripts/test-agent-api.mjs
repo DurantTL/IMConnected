@@ -271,7 +271,7 @@ try {
   {
     const r = await call(BASE, 'GET', '/api/agent/sections', { token: AGENT_TOKEN });
     const youth = (r.data.sections || []).find((s) => s.key === 'youth');
-    check('GET /api/agent/sections lists sections and areas', r.status === 200 && r.data.ok && r.data.sections.length === 5 && youth?.areas?.some((a) => a.key === 'pathfinders') && r.data.sections.find((s) => s.key === 'kids').areas === null, r.text.slice(0, 200));
+    check('GET /api/agent/sections lists sections and areas', r.status === 200 && r.data.ok && r.data.sections.length === 4 && !r.data.sections.some((s) => s.key === 'columns') && !r.data.additionalSections.values.includes('columns') && youth?.areas?.some((a) => a.key === 'pathfinders') && r.data.sections.find((s) => s.key === 'kids').areas === null, r.text.slice(0, 200));
   }
 
   // ================= create =================
@@ -633,7 +633,7 @@ try {
     const b = caps.data.photoBudget ?? {};
     check('capabilities list photoLayouts, photoMimeTypes and the photo budget', caps.status === 200 && JSON.stringify(caps.data.photoLayouts) === '["one","twoUp","heroGrid","mosaic","stack","carousel","threeUp"]' && caps.data.photoMimeTypes.includes('image/avif') && caps.data.photoMimeTypes.length === 4 && b.maxPhotos === 6 && b.maxPhotoBytes === 10 * 1024 * 1024 && b.maxRequestBytes === 40 * 1024 * 1024);
     check('...maxImageBytesPerRequest = floor(maxRequestBytes * 3 / 4) - jsonAllowanceBytes (about 30 MB, below 6 x 10 MB)', b.maxImageBytesPerRequest === Math.floor(b.maxRequestBytes * 3 / 4) - b.jsonAllowanceBytes && b.maxImageBytesPerRequest < b.maxPhotos * b.maxPhotoBytes && b.maxImageBytesPerRequest < 30 * 1024 * 1024);
-    check('...the existing fields are still there (additive only)', caps.data.sections.length === 5 && !!caps.data.additionalSections && !!caps.data.announcement && caps.data.reopen.endpoint === '/api/agent/stories/reopen' && Array.isArray(caps.data.photoFormats) && caps.data.limits.photos === 6);
+    check('...the existing fields are still there (additive only)', caps.data.sections.length === 4 && !!caps.data.additionalSections && !!caps.data.announcement && caps.data.reopen.endpoint === '/api/agent/stories/reopen' && Array.isArray(caps.data.photoFormats) && caps.data.limits.photos === 6);
     check('the f server logs hold no token, note or upload path', !logs.f.join('\n').includes(AGENT_TOKEN) && !logs.f.join('\n').includes('Picked because') && !logs.f.join('\n').includes('uploads'));
   }
 
@@ -1119,6 +1119,31 @@ try {
     check('batch items accept keyPoints; an invalid list fails that item alone with bad_key_points', r.status === 200 && res[0]?.ok && JSON.stringify(kpRow(res[0].id)) === JSON.stringify(['Batch point']) && res[1]?.error === 'bad_key_points' && res[2]?.ok && kpRow(res[2].id).length === 0, `${r.status} ${r.text.slice(0, 400)}`);
   }
 
+  // ================= issue #136: the retired Columns section is read as Features =================
+  {
+    const M = `http://localhost:${P.m}`;
+    const MDB = path.join(SCRATCH, 'data-m', 'imconnected.db');
+    const qm = (sql, ...args) => { const db = new DatabaseSync(MDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    const mk = (n, over = {}) => ({ title: `Synthetic Merged Column ${n}`, body: 'Synthetic body for a merged column story.', sourceUrl: `https://www.facebook.com/example-page/posts/136${n}`, ...over });
+    let r = await call(M, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json: mk(1, { section: 'columns', additionalSections: ['columns', 'youth'] }) });
+    const row1 = qm('SELECT section, area, additional_sections FROM drafts WHERE id = ?', r.data.id)[0];
+    check('agent create with section "columns" is accepted and stored as features (the old extra "columns" is dropped)', r.status === 201 && row1?.section === 'features' && !row1.area && row1.additional_sections === '["youth"]', r.text.slice(0, 200) + JSON.stringify(row1));
+    r = await call(M, 'GET', `/api/agent/stories/${r.data.id}`, { token: AGENT_TOKEN });
+    check('...and read-back says features', r.status === 200 && JSON.stringify(r.data).includes('"section":"features"') && !JSON.stringify(r.data).includes('columns'), r.text.slice(0, 200));
+    r = await call(M, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json: mk(1, { section: 'columns', title: 'Synthetic Merged Column 1 updated' }) });
+    check('an update by sourceUrl with section "columns" keeps it features', r.data.ok && qm('SELECT section FROM drafts WHERE id = ?', r.data.id)[0]?.section === 'features', r.text.slice(0, 200));
+    r = await call(M, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: { requestId: 'merge-columns-136', stories: [mk(2, { section: 'columns' }), mk(3, { section: 'features' })] } });
+    check('a batch item with section "columns" is stored as features', r.status === 200 && (r.data.results ?? []).every((x) => x.ok) && qm("SELECT section FROM drafts WHERE title IN ('Synthetic Merged Column 2', 'Synthetic Merged Column 3')").every((x) => x.section === 'features'), r.text.slice(0, 300));
+    r = await call(M, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json: mk(4, { section: 'nonsense' }) });
+    check('an unknown section is still refused', r.status === 400 && r.data.error === 'bad_section', r.text.slice(0, 120));
+    // Studio
+    r = await call(M, 'POST', '/api/publish', { token: PUBLISH_TOKEN, json: { newsletter: { name: 'E2E Issue', issueDate: '2026-10-19' }, stories: [{ ref: 'c', title: 'Studio Column Story Sent As Columns', section: 'columns', author: 'Studio Author', body: 'A made-up body.', additionalSections: ['columns', 'kids'] }] } });
+    const st = qm("SELECT section, area, additional_sections FROM stories WHERE title = 'Studio Column Story Sent As Columns'")[0];
+    check('Studio /api/publish with section "columns" is accepted and stored as features', r.status === 200 && st?.section === 'features' && st.additional_sections === '["kids"]', r.text.slice(0, 200) + JSON.stringify(st));
+    r = await call(M, 'GET', '/api/stories?section=columns', { token: PUBLISH_TOKEN });
+    check('GET /api/stories?section=columns is read as features', r.status === 200 && JSON.stringify(r.data).includes('Studio Column Story Sent As Columns'), r.text.slice(0, 160));
+  }
+
   // ================= rate limit =================
   {
     const D = `http://localhost:${P.d}`;
@@ -1234,7 +1259,7 @@ try {
     check('...a junk limit falls back to the default', r.status === 200 && r.data.stories.length >= 6);
 
     // a draft with a stored date that is not a real day must not take the other drafts down with it
-    run("INSERT INTO drafts (status, source, title, section, author, date, created_at, updated_at) VALUES ('new', 'form', 'Bad Date Draft', 'columns', 'Sample Author', '2026-13-40', ?, ?)", now + 9500, now + 9500);
+    run("INSERT INTO drafts (status, source, title, section, author, date, created_at, updated_at) VALUES ('new', 'form', 'Bad Date Draft', 'features', 'Sample Author', '2026-13-40', ?, ?)", now + 9500, now + 9500);
     r = await S('/api/stories', { token: PUBLISH_TOKEN });
     const bd = (r.data.drafts || []).find((x) => x.title === 'Bad Date Draft');
     check('a stored bad-date draft still lists, with its created date, next to the others', r.status === 200 && r.data.drafts.length === 20 && !!bd && bd.date === new Date(now + 9500).toISOString().slice(0, 10) && r.data.drafts.some((x) => x.title === 'Bulk draft 21'), r.text.slice(0, 200));
@@ -1244,15 +1269,15 @@ try {
     // excerpt
     check('excerpt: every story and draft item has a string excerpt', d.stories.every((s) => typeof s.excerpt === 'string') && d.drafts.every((x) => typeof x.excerpt === 'string'));
     check('...a story published from Studio gets its body as plain text', live && live.excerpt === 'A made-up story body for the list.', JSON.stringify(live && live.excerpt));
-    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Excerpt Draft', 'columns', 'Sample Author', '2026-10-12', ?, ?, ?)", '\n## A heading\n\n**Bold** and *soft* words with a [link text](https://example.test/x) and ![pic](/images/x.jpg) &lt;b&gt; tail &amp; more.\n\nSecond paragraph.', now + 9600, now + 9600);
-    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Long Excerpt Draft', 'columns', 'Sample Author', '2026-10-12', ?, ?, ?)", Array.from({ length: 200 }, (_, i) => 'word' + i).join(' '), now + 9601, now + 9601);
-    r = await S('/api/stories?section=columns', { token: PUBLISH_TOKEN });
+    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Excerpt Draft', 'features', 'Sample Author', '2026-10-12', ?, ?, ?)", '\n## A heading\n\n**Bold** and *soft* words with a [link text](https://example.test/x) and ![pic](/images/x.jpg) &lt;b&gt; tail &amp; more.\n\nSecond paragraph.', now + 9600, now + 9600);
+    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Long Excerpt Draft', 'features', 'Sample Author', '2026-10-12', ?, ?, ?)", Array.from({ length: 200 }, (_, i) => 'word' + i).join(' '), now + 9601, now + 9601);
+    r = await S('/api/stories?section=features', { token: PUBLISH_TOKEN });
     const ex = r.data.drafts.find((x) => x.title === 'Excerpt Draft');
     check('...Markdown is stripped (headings, emphasis, links keep text, images removed, entities decoded)', ex && ex.excerpt === 'Bold and soft words with a link text and b tail & more.', JSON.stringify(ex && ex.excerpt));
     const lx = r.data.drafts.find((x) => x.title === 'Long Excerpt Draft');
     check('...at most 400 characters including the ellipsis, cut at a word boundary', lx && [...lx.excerpt].length <= 400 && lx.excerpt.endsWith('…') && /word\d+…$/.test(lx.excerpt), lx && lx.excerpt.slice(-30));
-    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Escaped Html Draft', 'columns', 'Sample Author', '2026-10-12', ?, ?, ?)", 'Hello &lt;img src=x onerror=alert(1)&gt; and &#60;script&#62; and &#x202E;bidi&#0; &#x7F;end <b>bold</b>', now + 9602, now + 9602);
-    r = await S('/api/stories?section=columns', { token: PUBLISH_TOKEN });
+    run("INSERT INTO drafts (status, source, title, section, author, date, body, created_at, updated_at) VALUES ('new', 'form', 'Escaped Html Draft', 'features', 'Sample Author', '2026-10-12', ?, ?, ?)", 'Hello &lt;img src=x onerror=alert(1)&gt; and &#60;script&#62; and &#x202E;bidi&#0; &#x7F;end <b>bold</b>', now + 9602, now + 9602);
+    r = await S('/api/stories?section=features', { token: PUBLISH_TOKEN });
     const eh = r.data.drafts.find((x) => x.title === 'Escaped Html Draft');
     check('...a decoded &lt;img onerror&gt; never leaves a < or > (and control/bidi characters are dropped)', eh && !/[<>]/.test(eh.excerpt) && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(eh.excerpt) && eh.excerpt.includes('Hello img src=x onerror=alert(1)'), JSON.stringify(eh && eh.excerpt));
     const bareDraft = r.data.drafts.find((x) => x.title === 'Bad Date Draft');

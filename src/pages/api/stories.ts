@@ -3,7 +3,7 @@ import { takeSlot } from '../../lib/rate-window';
 import { clientIp } from '../../lib/request';
 import { studioAuth, studioCors, studioJson } from '../../lib/studio-api';
 import { STUDIO_LIST_MAX, listDraftsForStudio, listPublishedForStudio } from '../../lib/studio-list';
-import { getSection } from '../../lib/site';
+import { canonicalSectionKey, getSection } from '../../lib/site';
 import { siteUrl } from '../../lib/draft-http';
 import { StoriesUnavailable } from '../../lib/public-stories';
 
@@ -33,7 +33,7 @@ export const GET: APIRoute = async ({ request, url, clientAddress }) => {
 
   const rawLimit = url.searchParams.get('limit');
   const limit = rawLimit !== null && /^\d{1,4}$/.test(rawLimit) ? Math.min(Math.max(Number(rawLimit), 1), STUDIO_LIST_MAX) : 50;
-  const section = url.searchParams.get('section') || undefined;
+  const section = canonicalSectionKey(url.searchParams.get('section') || undefined);
   if (section && !getSection(section)) return studioJson(request, 400, { ok: false, error: 'That section does not exist.' });
 
   const site = new URL(siteUrl());

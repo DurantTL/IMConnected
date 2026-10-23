@@ -30,7 +30,6 @@ content:
           values:
             - { value: news, label: News }
             - { value: features, label: Features }
-            - { value: columns, label: Columns }
             - { value: youth, label: "Youth & Pathfinders" }
             - { value: kids, label: Kids }
       - name: area
@@ -45,7 +44,6 @@ content:
             - { value: youth, label: "Youth: Youth" }
             - { value: pathfinders, label: "Youth: Pathfinders" }
             - { value: adventurers, label: "Youth: Adventurers" }
-      - { name: column, label: Column name (Columns only), type: string }
       - { name: author, label: Author, type: string, required: true }
       - { name: authorTitle, label: Author title, type: string }
       - { name: church, label: Church / school / club, type: string }

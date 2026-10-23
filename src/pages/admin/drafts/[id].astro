@@ -164,9 +164,6 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   )))}
                 </select>
               </label>
-              <label id="f-column-wrap" hidden={draft.section !== 'columns'}>Column name
-                <input type="text" name="column" value={draft.column} maxlength="80" autocomplete="off" />
-              </label>
               <label>Author
                 <input type="text" name="author" value={draft.author} maxlength="120" autocomplete="off" />
               </label>

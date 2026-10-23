@@ -18,7 +18,6 @@
 
   --sec-news: #0B3954;
   --sec-features: #0B3954;
-  --sec-columns: #0B3954;
   --sec-youth: #0B3954;
   --sec-kids: #0B3954;
 
@@ -91,7 +90,6 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .kicker .sep { color: var(--ink-3); margin: 0 6px; }
 [data-sec='news'] { --sec: var(--sec-news); }
 [data-sec='features'] { --sec: var(--sec-features); }
-[data-sec='columns'] { --sec: var(--sec-columns); }
 [data-sec='youth'] { --sec: var(--sec-youth); }
 [data-sec='kids'] { --sec: var(--sec-kids); }
 
@@ -432,9 +430,6 @@ body:not(.admin) .area-col.area-empty { border-top-color:var(--line); }
 body:not(.admin) .area-invitation { background:var(--brand-soft); border-radius:4px; padding:18px; }
 body:not(.admin) .area-invitation .empty { font-family:var(--serif); color:var(--ink-2); font-size:1rem; line-height:1.4; }
 body:not(.admin) .area-invitation>a { display:inline-flex; align-items:center; min-height:44px; margin-top:9px; color:var(--brand-text); font-weight:700; font-size:.73rem; text-decoration:none; }
-body:not(.admin) .voices-section { border-top:1px solid var(--line); margin-top:22px; }
-body:not(.admin) .voices-section .card.text { background:var(--surface); padding:26px; border-left:3px solid var(--sec); }
-body:not(.admin) .voices-section .card h3 { font-size:1.45rem; }
 body:not(.admin) .cta { border-radius:4px; background:#E0F5F7; padding:38px 42px; margin-top:52px; }
 body:not(.admin) .cta h2 { font-size:clamp(2rem,3.5vw,3.15rem); line-height:1.05; letter-spacing:-.04em; font-weight:600; }
 body:not(.admin) .cta .eyebrow { margin-bottom:9px; }

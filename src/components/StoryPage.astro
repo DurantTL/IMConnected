@@ -21,7 +21,7 @@ interface Props {
 const { story, related } = Astro.props;
 const d = story.data;
 const section = getSection(d.section)!;
-const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
+const sub = areaLabel(d.section, d.area);
 const subHref = d.area ? `/${d.section}/${d.area}/` : undefined;
 const url = new URL(`/stories/${story.id}/`, Astro.site).href;
 const enc = encodeURIComponent;

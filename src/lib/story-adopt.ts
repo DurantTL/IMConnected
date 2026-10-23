@@ -248,7 +248,7 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
       if (hold) { try { held = holdActive(hold, marker); } catch { held = true; } }
 
       const base = {
-        slug, title: d.title, dek: d.dek, section: d.section, area: d.area, column: d.column, author: d.author, authorTitle: d.authorTitle,
+        slug, title: d.title, dek: d.dek, section: d.section, area: d.area, column: undefined, author: d.author, authorTitle: d.authorTitle,
         church: d.church, date, image: d.image, imageAlt: d.imageAlt, photoCredit: d.photoCredit, photos: d.photos, photoAlts: d.photoAlts,
         featured: d.featured, draft: d.draft, body: entry.body ?? '',
       };

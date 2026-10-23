@@ -110,7 +110,7 @@ function readStory(file) {
   const author = str(fm.author)?.trim();
   if (!title) throw new Error('missing title');
   if (!author) throw new Error('missing author');
-  const section = str(fm.section);
+  const section = site.canonicalSectionKey(str(fm.section));
   if (!site.getSection(section)) throw new Error(`unknown section "${section}"`);
   const area = str(fm.area) || undefined;
   if (!site.isValidArea(section, area)) throw new Error(`area "${area}" does not belong to section "${section}"`);
@@ -140,7 +140,7 @@ function readStory(file) {
   if (bad) throw new Error(`a link or image target is not a web, mail or tel link: ${bad.slice(0, 40)}`);
   if (body.replace(/&lt;/g, '<').length > LIMITS.bodyMax || body.length > 4 * LIMITS.bodyMax) throw new Error(`story text is longer than ${LIMITS.bodyMax} characters`);
   return {
-    slug, title, dek: str(fm.dek) || undefined, section, additionalSections: fm.additionalSections === undefined ? undefined : site.normalizeAdditionalSections(fm.additionalSections, section), area, column: str(fm.column) || undefined, author, authorTitle: str(fm.authorTitle) || undefined,
+    slug, title, dek: str(fm.dek) || undefined, section, additionalSections: fm.additionalSections === undefined ? undefined : site.normalizeAdditionalSections(fm.additionalSections, section), area, column: undefined, author, authorTitle: str(fm.authorTitle) || undefined,
     church: str(fm.church) || undefined, date, image, imageAlt: str(fm.imageAlt) || undefined, photoCredit: str(fm.photoCredit) || undefined,
     announcement: announcementMod.normalizeAnnouncement(fm.announcement), photos, photoAlts, captions, photoLayout, storyBlocks, photoFocus, featured: fm.featured === true, draft: fm.draft === true, body,
   };
@@ -180,7 +180,7 @@ try {
 console.log(`${APPLY ? 'APPLY' : 'DRY RUN (nothing will be changed; add --apply)'}${FORCE ? ' with --force' : ''}\nStories folder: ${DIR}\nData folder:    ${dataDir()}\n`);
 
 const same = (row, s) =>
-  row.title === s.title && (row.dek ?? undefined) === s.dek && row.section === s.section && (row.area ?? undefined) === s.area && (row.story_column ?? undefined) === s.column &&
+  row.title === s.title && (row.dek ?? undefined) === s.dek && row.section === s.section && (row.area ?? undefined) === s.area && (row.story_column || undefined) === s.column &&
   row.author === s.author && (row.author_title ?? undefined) === s.authorTitle && (row.church ?? undefined) === s.church && row.date === s.date &&
   (row.image ?? undefined) === s.image && (row.image_alt ?? undefined) === s.imageAlt && (row.photo_credit ?? undefined) === s.photoCredit &&
   row.photos === JSON.stringify(s.photos) && row.photo_alts === JSON.stringify(s.photoAlts) && row.photo_layout === s.photoLayout && (row.additional_sections ?? '[]') === JSON.stringify(s.additionalSections) && (row.announcement ?? null) === (s.announcement ? JSON.stringify(s.announcement) : null) && (row.story_blocks ?? '[]') === JSON.stringify(s.storyBlocks) && (row.featured === 1) === s.featured &&
@@ -228,7 +228,7 @@ for (const f of files) {
       try {
         const current = db.prepare('SELECT additional_sections FROM stories WHERE slug=?').get(slug);
         s.additionalSections = site.normalizeAdditionalSections(requestedAdditionalSections === undefined ? JSON.parse(current?.additional_sections ?? '[]') : requestedAdditionalSections, s.section);
-        const cols = [s.title, s.dek ?? null, s.section, s.area ?? null, s.column ?? null, s.author, s.authorTitle ?? null, s.church ?? null, s.date, s.image ?? null, s.imageAlt ?? null, s.photoCredit ?? null,
+        const cols = [s.title, s.dek ?? null, s.section, s.area ?? null, '', s.author, s.authorTitle ?? null, s.church ?? null, s.date, s.image ?? null, s.imageAlt ?? null, s.photoCredit ?? null,
           JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, status, 'git', Date.parse(s.date), now, sha256(JSON.stringify([s, rows])), s.photoLayout, JSON.stringify(s.storyBlocks), s.announcement ? JSON.stringify(s.announcement) : null, JSON.stringify(s.additionalSections)];
         let id;
         if (row) {

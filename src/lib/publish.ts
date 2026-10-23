@@ -1,4 +1,4 @@
-import { normalizeAdditionalSections } from './site';
+import { canonicalSectionKey, normalizeAdditionalSections } from './site';
 // Validates a Studio publish request and turns it into stories ready to write to the database (story-publish.ts).
 import { getSection, isValidArea } from './site';
 import { LIMITS } from './limits';
@@ -118,7 +118,7 @@ export function prepareStudioPublish(input: unknown) {
       const storyBody = clean(r.body).trim();
       const quote = clean(r.quote).trim();
       const attribution = clean(r.attribution).trim();
-      const section = typeof r.section === 'string' ? r.section.trim() : '';
+      const section = canonicalSectionKey(typeof r.section === 'string' ? r.section.trim() : '');
       const area = typeof r.area === 'string' && r.area.trim() ? r.area.trim() : undefined;
 
       if (!title) throw fail('Every story needs a title.');

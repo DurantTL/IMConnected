@@ -59,7 +59,7 @@ try {
   // Issue #117: stories that already carry key points, and ones without.
   for (const slug of ['synthetic-kp-keep', 'synthetic-kp-clear', 'synthetic-kp-null']) { seed(slug); exec('UPDATE stories SET key_points=?,rev=rev+1 WHERE slug=?', JSON.stringify(['Synthetic point one.', 'Synthetic point two.']), slug); }
   for (const slug of ['synthetic-kp-set', 'synthetic-kp-bad']) seed(slug);
-  for (const slug of ['synthetic-patch-youth', 'synthetic-patch-features', 'synthetic-patch-areabad', 'synthetic-patch-samesec']) seed(slug);
+  for (const slug of ['synthetic-patch-youth', 'synthetic-patch-features', 'synthetic-patch-areabad', 'synthetic-patch-samesec', 'synthetic-patch-columns']) seed(slug);
   const expandedBody = '\n  ' + '&lt;'.repeat(6000) + '\n';
   exec('UPDATE stories SET body=?,author=?,rev=rev+1 WHERE slug=?', expandedBody, 'A'.repeat(150), 'synthetic-escaped');
   for (const status of ['new', 'in_review', 'rejected']) seed(`synthetic-${status.replace('_', '-')}`, { linked: true, status });
@@ -236,6 +236,8 @@ try {
 
   const youth = await call81(reopenReq('synthetic-patch-youth', { changes: { section: 'youth' } }));
   check('reopen: a section-only change uses the new section\'s default (first) area', youth.status === 201 && draftFor('synthetic-patch-youth').section === 'youth' && draftFor('synthetic-patch-youth').area === 'youth');
+  const oldKey = await call81(reopenReq('synthetic-patch-columns', { changes: { section: 'columns' } }));
+  check('reopen: changes.section "columns" (retired, issue #136) is read as features', oldKey.status === 201 && draftFor('synthetic-patch-columns').section === 'features' && draftFor('synthetic-patch-columns').area === '', JSON.stringify(oldKey.data).slice(0, 200));
   const features = await call81(reopenReq('synthetic-patch-features', { changes: { section: 'features' } }));
   check('reopen: a section-only change to a section without areas gives no area', features.status === 201 && draftFor('synthetic-patch-features').section === 'features' && draftFor('synthetic-patch-features').area === '');
   const badArea = await call81(reopenReq('synthetic-patch-areabad', { changes: { section: 'youth', area: 'conference' } }));

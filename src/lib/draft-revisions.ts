@@ -1,4 +1,4 @@
-import { normalizeAdditionalSections } from './site';
+import { canonicalSectionKey, normalizeAdditionalSections } from './site';
 import { getDb } from './db';
 import type { DraftFields } from './drafts';
 import { normalizeStoryBlocks, photoFit, photoFitFill, type PhotoFit, type PhotoFitFill } from './story-blocks';
@@ -12,7 +12,7 @@ export interface EditorialSnapshot { fields: DraftFields; photos: RevisionPhoto[
  * advice, not editorial state, so restoring a revision never schedules, unschedules or reschedules anything. */
 export function editorialSnapshot(id: number, f: DraftFields): EditorialSnapshot {
   const fields: DraftFields = {
-    title: f.title, dek: f.dek, section: f.section, additionalSections: normalizeAdditionalSections(f.additionalSections, f.section), area: f.area, column: f.column, author: f.author, authorTitle: f.authorTitle,
+    title: f.title, dek: f.dek, section: f.section, additionalSections: normalizeAdditionalSections(f.additionalSections, f.section), area: f.area, column: '', author: f.author, authorTitle: f.authorTitle,
     newsletterIssue: normalizeRef(f.newsletterIssue), // number and position only; an older revision has none (null)
     keyPoints: normalizeKeyPoints(f.keyPoints),
     church: f.church, date: f.date, photoCredit: f.photoCredit, photoLayout: f.photoLayout, featured: f.featured, body: f.body,
@@ -35,6 +35,8 @@ export function readDraftRevision(draftId: number, revisionId: number): Editoria
   const row = getDb().prepare('SELECT payload FROM draft_revisions WHERE draft_id=? AND id=?').get(draftId, revisionId) as { payload: string } | undefined;
   if (!row) return null;
   const snapshot = JSON.parse(row.payload) as EditorialSnapshot;
+  snapshot.fields.section = canonicalSectionKey(snapshot.fields.section) as string; // issue #136: a revision saved while Columns existed restores as Features, and a column name restores as empty (column names are retired)
+  snapshot.fields.column = '';
   snapshot.fields.additionalSections = normalizeAdditionalSections(snapshot.fields.additionalSections, snapshot.fields.section);
   snapshot.fields.newsletterIssue = normalizeRef(snapshot.fields.newsletterIssue);
   snapshot.fields.keyPoints = normalizeKeyPoints(snapshot.fields.keyPoints); // an older revision has none: it restores to []

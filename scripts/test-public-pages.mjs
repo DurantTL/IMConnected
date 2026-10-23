@@ -374,13 +374,22 @@ try {
 
   // ================= part 3: 404s, middleware, old image links =================
   {
-    const bad = ['/stories/no-such-story/', '/stories/..%2fx/', '/nope/', '/news/nope/', '/news/churches/extra/', '/columns/nope/', '/stories/'];
+    const bad = ['/stories/no-such-story/', '/stories/..%2fx/', '/nope/', '/news/nope/', '/news/churches/extra/', '/features/nope/', '/stories/'];
     const out = [];
     for (const p of bad) {
       const r = await get(p);
       if (r.status !== 404 || !r.text.includes('We couldn’t find that page') || /public/.test(r.headers.get('cache-control') ?? '')) out.push(`${p} ${r.status} ${r.headers.get('cache-control')}`);
     }
     check('unknown stories, sections and areas are a real 404 with the 404 page, never cached publicly', out.length === 0, out.join(' | '));
+    // Issue #136: Columns was merged into Features; every /columns/... path moves permanently to the same /features/... path.
+    const moved = [];
+    for (const [from, to] of [['/columns/', '/features/'], ['/columns', '/features/'], ['/columns/page/2/', '/features/page/2/'], ['/columns/page/1/', '/features/page/1/'], ['/columns/nope/', '/features/nope/'], ['/columns/page/3/?x=1', '/features/page/3/?x=1']]) {
+      const r = await get(from);
+      if (r.status !== 301 || new URL(r.headers.get('location') ?? '', BASE).pathname + new URL(r.headers.get('location') ?? '', BASE).search !== to || /public/.test(r.headers.get('cache-control') ?? '')) moved.push(`${from} ${r.status} ${r.headers.get('location')}`);
+    }
+    check('/columns/, /columns/page/<n>/ and any /columns/... path answer 301 to the matching /features/ path (never cached)', moved.length === 0, moved.join(' | '));
+    const featuresPage = await get('/features/');
+    check('...and /features/ itself is a normal page that lists no Columns link', featuresPage.status === 200 && !/href="\/columns\//.test(featuresPage.text));
     const raw = await rawGet('/stories/%2e%2e%2f%2e%2e%2fimconnected.db HTTP/1.1\r\nX-Ignore: 1');
     check('an encoded traversal in a story address is a 404 with no database content', /^HTTP\/1\.1 404/.test(raw) && !raw.includes('SQLite format'));
     const slugs = q("SELECT slug FROM stories WHERE slug LIKE '%<%' OR slug LIKE '%\"%'");

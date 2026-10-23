@@ -371,6 +371,7 @@ try {
     check('(M2) the add and remove lists are separate named groups, and so is the featured choice', ['Sections to add', 'Sections to remove', 'New featured setting'].every((l) => new RegExp(`<legend>${l}</legend>`).test(r2.text)));
     const cc = await c1.form('/admin/bulk', { action: 'editstory', step: 'confirm', slug: [SG], tick_section: '1', e_section: 'columns|' });
     check('(L2) the story confirmation says the change is live at once', text(cc.text).includes('show on the public site at once'));
+    check('(#136) an old bulk-edit form that still sends the retired columns section is read as Features, never refused', cc.status === 200 && /Features/.test(text(cc.text)) && !/Choose a section/.test(text(cc.text)), String(cc.status));
   }
   // --- limits ---
   {

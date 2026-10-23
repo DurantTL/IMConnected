@@ -211,7 +211,8 @@ try {
     if (!r) { identical = false; continue; }
     const f = s.fm;
     const want = {
-      title: f.title, dek: nul(f.dek), section: f.section, area: nul(f.area), story_column: nul(f.column), author: f.author, author_title: nul(f.authorTitle),
+      title: f.title, dek: nul(f.dek), section: f.section === 'columns' ? 'features' : f.section, // issue #136: the frozen archive's old key is adopted as features
+      area: nul(f.area), story_column: '', author: f.author, author_title: nul(f.authorTitle),
       church: nul(f.church), date: dateOf(f.date), image: nul(f.image), image_alt: nul(f.imageAlt), photo_credit: nul(f.photoCredit),
       photos: JSON.stringify(f.photos ?? []), photo_alts: JSON.stringify(f.photoAlts ?? []), featured: f.featured ? 1 : 0, draft: 0,
       body: s.body.trim(), status: 'live', source: 'git',
