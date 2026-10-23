@@ -394,12 +394,18 @@ const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => '\\' + c);
 const PUB_LIVE = 'd.published_commit IS NOT NULL AND d.unpublished_at IS NULL';
 const PUB_AT = `COALESCE(CASE WHEN ${PUB_LIVE} THEN d.published_at END, s.published_at)`;
 const PUB_FROM = 'FROM stories s LEFT JOIN drafts d ON d.slug = s.slug LEFT JOIN users u ON u.id = d.published_by';
+// "Edited" means changed after the story first went live. Publishing writes published_at and edited_at together (and republishing
+// rewrites both), so neither marks the first publish; drafts.submitter_notified_at does (set once, at a draft's first publish, and
+// kept by every later one; migration 034 backfilled it, 0 when unknown). Fall back to the story's own published_at.
+const FIRST_LIVE = 'COALESCE(NULLIF(d.submitter_notified_at, 0), s.published_at)';
+export const EDITED_GRACE_MS = 60_000;
+const EDITED_COND = `s.edited_at IS NOT NULL AND s.edited_at > ${FIRST_LIVE} + ${EDITED_GRACE_MS}`;
 const OPEN_DRAFT = "d.status IN ('new', 'in_review')";
 
 const ORDER: Record<PublishedSort, string> = {
   published_desc: `${PUB_AT} DESC, s.slug ASC`,
   published_asc: `${PUB_AT} ASC, s.slug ASC`,
-  edited_desc: 's.edited_at IS NULL, s.edited_at DESC, s.slug ASC',
+  edited_desc: `CASE WHEN (${EDITED_COND}) THEN s.edited_at END IS NULL, CASE WHEN (${EDITED_COND}) THEN s.edited_at END DESC, s.slug ASC`,
   date_desc: 's.date DESC, s.slug ASC',
   title: 's.title COLLATE NOCASE ASC, s.slug ASC',
   section: "s.section COLLATE NOCASE ASC, COALESCE(s.area, '') COLLATE NOCASE ASC, s.slug ASC",
@@ -422,7 +428,7 @@ function publishedWhere(f: PublishedFilter, now: number): { sql: string; args: (
   if (f.year) { where.push('substr(s.date, 1, 4) = ?'); args.push(f.year); }
   if (f.featured) where.push('s.featured = 1');
   if (f.openDraft) where.push(OPEN_DRAFT);
-  if (f.editedThisMonth) { where.push('s.edited_at >= ?'); args.push(chicagoMonthStart(now).startMs); }
+  if (f.editedThisMonth) { where.push(`(${EDITED_COND}) AND s.edited_at >= ?`); args.push(chicagoMonthStart(now).startMs); }
   return { sql: 'WHERE ' + where.join(' AND '), args };
 }
 
@@ -433,7 +439,7 @@ export function listStoriesPage(f: PublishedFilter, now = Date.now()): { items: 
   const total = Number((db.prepare(`SELECT COUNT(*) AS n ${PUB_FROM} ${sql}`).get(...args) as { n: number }).n);
   const pages = Math.max(1, Math.ceil(total / f.perPage));
   const page = Math.min(f.page, pages);
-  const rows = db.prepare(`SELECT s.slug, s.title, s.section, s.area, s.church, s.author, s.date, s.featured, s.newsletter_issue AS issue, s.edited_at,
+  const rows = db.prepare(`SELECT s.slug, s.title, s.section, s.area, s.church, s.author, s.date, s.featured, s.newsletter_issue AS issue, CASE WHEN (${EDITED_COND}) THEN s.edited_at END AS edited_at,
       ${PUB_AT} AS pub_at, CASE WHEN ${PUB_LIVE} THEN u.name END AS pub_by, CASE WHEN ${OPEN_DRAFT} THEN 1 ELSE 0 END AS open_draft, d.id AS draft_id
     ${PUB_FROM} ${sql} ORDER BY ${ORDER[f.sort]} LIMIT ? OFFSET ?`).all(...args, f.perPage, (page - 1) * f.perPage) as Row[];
   return {
@@ -452,7 +458,7 @@ export interface PublishedCounts { all: number; featured: number; openDraft: num
 export function publishedCounts(now = Date.now()): PublishedCounts {
   const { year, startMs } = chicagoMonthStart(now);
   const r = getDb().prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(s.featured = 1), 0) AS f, COALESCE(SUM(${OPEN_DRAFT}), 0) AS o,
-      COALESCE(SUM(s.edited_at >= ?), 0) AS e, COALESCE(SUM(substr(s.date, 1, 4) = ?), 0) AS y ${PUB_FROM} WHERE s.status = 'live' AND s.draft = 0`).get(startMs, year) as Row;
+      COALESCE(SUM((${EDITED_COND}) AND s.edited_at >= ?), 0) AS e, COALESCE(SUM(substr(s.date, 1, 4) = ?), 0) AS y ${PUB_FROM} WHERE s.status = 'live' AND s.draft = 0`).get(startMs, year) as Row;
   return { all: Number(r.n), featured: Number(r.f), openDraft: Number(r.o), editedThisMonth: Number(r.e), thisYear: Number(r.y), year };
 }
 

@@ -123,12 +123,14 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
         <select name="issue">
           <option value="">All issues</option>
           <option value="none" selected={f.issue === 'none'}>No issue</option>
+          {typeof f.issue === 'number' && !facets.issues.includes(f.issue) && <option value={String(f.issue)} selected>Issue #{f.issue}</option>}
           {facets.issues.map((n) => <option value={String(n)} selected={f.issue === n}>Issue #{n}</option>)}
         </select>
       </label>
       <label>Year
         <select name="year">
           <option value="">All years</option>
+          {f.year && !facets.years.includes(f.year) && <option value={f.year} selected>{f.year}</option>}
           {facets.years.map((y) => <option value={y} selected={f.year === y}>{y}</option>)}
         </select>
       </label>
@@ -199,11 +201,11 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
               <td class="adm-actions" data-label="">
                 <form method="post" action="/api/admin/stories/edit">
                   <input type="hidden" name="slug" value={r.slug} />
-                  <button class="cms-btn" type="submit">Edit</button>
+                  <button class="cms-btn" type="submit">Edit<span class="adm-sr"> {r.title || r.slug}</span></button>
                 </form>
                 <form method="post" action="/api/admin/stories/unpublish" data-confirm={`Unpublish "${r.title || r.slug}"? It will be hidden from the public site.`}>
                   <input type="hidden" name="slug" value={r.slug} />
-                  <button class="cms-btn danger" type="submit">Unpublish</button>
+                  <button class="cms-btn danger" type="submit">Unpublish<span class="adm-sr"> {r.title || r.slug}</span></button>
                 </form>
               </td>
             </tr>
@@ -215,9 +217,9 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
         <span>Showing {from} to {to} of {total}{anyFilter ? ` matching, ${counts.all} live in all` : ''}</span>
         {pages > 1 && (
           <nav aria-label="Pages">
-            {page > 1 ? <a href={href({ page: page - 1 })} rel="prev">Previous</a> : <span class="adm-off">Previous</span>}
+            {page > 1 ? <a href={href({ page: page - 1 })} rel="prev">Previous</a> : <span class="adm-off" aria-disabled="true">Previous</span>}
             {nums.map((n) => n === null ? <span class="adm-gap">…</span> : <a href={href({ page: n })} aria-current={n === page ? 'page' : undefined} aria-label={`Page ${n}`}>{n}</a>)}
-            {page < pages ? <a href={href({ page: page + 1 })} rel="next">Next</a> : <span class="adm-off">Next</span>}
+            {page < pages ? <a href={href({ page: page + 1 })} rel="next">Next</a> : <span class="adm-off" aria-disabled="true">Next</span>}
           </nav>
         )}
       </div>

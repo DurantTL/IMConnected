@@ -50,11 +50,20 @@ try {
     const s = {
       slug: `synth-s${pad(i)}`, title: `Synthetic ${WORDS[i % 6]} Story ${pad(i)}`, sec, area, church: `Synthetic Church ${(i % 4) + 1}`,
       date: i <= 40 ? `2026-${pad(((i - 1) % 9) + 1)}-${pad(((i * 3) % 27) + 1)}` : `2025-${pad(((i - 1) % 12) + 1)}-${pad(((i * 5) % 27) + 1)}`,
-      featured: i % 7 === 0 ? 1 : 0, issue: i <= 30 ? ((i - 1) % 3) + 1 : null, pub: now - i * 3600_000,
-      edited: i % 11 === 0 ? monthStart + i * 60_000 : i % 13 === 0 ? monthStart - 40 * DAY : null,
+      featured: i % 7 === 0 ? 1 : 0, issue: i <= 30 ? ((i - 1) % 3) + 1 : null, pub: i % 13 === 0 ? monthStart - 90 * DAY - i * 3600_000 : now - i * 3600_000,
+      edited: null, first: null,
       body: i === 5 ? 'Plain text with 100% turnout and a snake_case word.' : i === 6 ? 'A back\\slash and 100 percent.' : i === 9 ? 'Findable hidden-needle phrase in the body.' : `Synthetic body ${i}.`,
       extra: i === 2 ? '["youth"]' : '[]',
     };
+    // "Edited" = changed after the story first went live (edited_at more than 60 s after the first publish):
+    //  - every 11th: a real edit (after publishing, this month); every 13th: published long ago, edited 40 days before this month began... still later than its publish;
+    //  - 14: edited_at only 10 s after publishing, which is what a plain first publish writes, so it is NOT edited;
+    //  - 15: republished with changes (published_at and edited_at both just now) but its draft record says it first went live 30 days ago, so it IS edited.
+    if (i % 11 === 0) s.edited = Math.max(monthStart + i * 60_000, s.pub + 120_000);
+    else if (i % 13 === 0) s.edited = monthStart - 40 * DAY;
+    else if (i === 14) s.edited = s.pub + 10_000;
+    else if (i === 15) { s.edited = s.pub; s.first = now - 30 * DAY; }
+    s.isEdited = !!s.edited && s.edited > (s.first ?? s.pub) + 60_000;
     S[i] = s;
     ins.run(s.slug, s.title, s.sec, s.area || null, `Synthetic Author ${(i % 3) + 1}`, s.church, s.date, s.body, 'live', s.pub, s.pub, s.featured, 0, s.extra, s.issue, s.edited);
   }
@@ -68,6 +77,8 @@ try {
   const dIns = db.prepare("INSERT INTO drafts (status, source, slug, title, section, author, church, date, body, published_commit, published_at, published_by, unpublished_at, created_at, updated_at) VALUES (?, 'editor', ?, ?, 'news', 'Synthetic Author', '', '2026-06-01', 'x', ?, ?, ?, ?, ?, ?)");
   dIns.run('published', S[3].slug, S[3].title, 'db', T3, pubUid, null, now, now);
   dIns.run('in_review', S[4].slug, S[4].title, 'db', T3 + 1, pubUid, now, now, now); // unpublished earlier and re-opened: its record is not a live publish
+  dIns.run('published', S[15].slug, S[15].title, 'db', S[15].pub, pubUid, null, now, now);
+  db.prepare('UPDATE drafts SET submitter_notified_at = ? WHERE slug = ?').run(S[15].first, S[15].slug);
   db.prepare('UPDATE stories SET published_at = ?, rev = rev + 1 WHERE slug = ?').run(T3 - 1, S[3].slug);
   db.close(); db = undefined;
 
@@ -103,7 +114,7 @@ try {
 
   // ---------- summary cards ----------
   const featuredN = live((s) => s.featured).length;
-  const editedMonthN = live((s) => s.edited && s.edited >= monthStart).length;
+  const editedMonthN = live((s) => s.isEdited && s.edited >= monthStart).length;
   const yearN = live((s) => s.date.startsWith(String(CY))).length;
   const card = (html, label) => { const m = new RegExp(`<a class="adm-stat" href="([^"]*)"( aria-current="true")?><span class="adm-stat-label">${label}[^<]*</span><strong>(\\d+)</strong>`).exec(html); return m && { href: m[1].replace(/&amp;/g, '&'), active: !!m[2], n: Number(m[3]) }; };
 
@@ -185,7 +196,9 @@ try {
   x = await f('openDraft=yes');
   check('openDraft=yes lists stories with an open In review / new draft', same(x.slugs, [S[4].slug, ...sl(10, 20, 30)]) && /adm-badge opendraft/.test(x.html), x.slugs.join());
   x = await f('edited=month');
-  check('edited=month lists stories edited since the start of the Chicago month', same(x.slugs, live((s) => s.edited && s.edited >= monthStart)), String(x.total));
+  check('edited=month lists stories edited since the start of the Chicago month', same(x.slugs, live((s) => s.isEdited && s.edited >= monthStart)) && !x.slugs.includes(S[14].slug), String(x.total));
+  x = await f('q=' + S[15].slug + '&edited=month');
+  check('a story republished with changes counts as edited even though published_at equals edited_at (first publish comes from the draft record)', S[15].isEdited && S[15].edited >= monthStart ? x.slugs.join() === S[15].slug : true);
   x = await f('section=news&featured=yes&year=2026&issue=1');
   check('filters combine (AND)', same(x.slugs, live((s) => s.sec === 'news' && s.featured && s.date.startsWith('2026') && s.issue === 1)), `${x.total} ${x.slugs}`);
   x = await f('q=synthetic&section=kids&issue=none');
@@ -198,11 +211,11 @@ try {
   let got = await order('published_desc');
   check('sort published_desc: story 3 (record) first, then by published time newest first (story 1, 2, 4...)', got[0] === S[3].slug && got.slice(1, 4).join() === sl(1, 2, 4).join(), got.slice(0, 4).join());
   got = await order('published_asc');
-  check('sort published_asc is the reverse of the stored publish times', got[got.length - 1] === S[3].slug && got[0] === S[66].slug, `${got[0]} ${got[got.length - 1]}`);
+  check('sort published_asc is the reverse of the stored publish times', got[got.length - 1] === S[3].slug && got[0] === S[65].slug, `${got[0]} ${got[got.length - 1]}`);
   got = await order('edited_desc');
-  const editedSorted = mine.filter((s) => s.edited).sort((a, b) => b.edited - a.edited || bySlug(a.slug, b.slug)).map((s) => s.slug);
-  const neverEdited = mine.filter((s) => !s.edited).map((s) => s.slug).sort(bySlug);
-  check('sort edited_desc: edited stories newest edit first, never-edited stories last (slug order)', got.join() === [...editedSorted, ...neverEdited].join(), got.slice(0, 5).join());
+  const editedSorted = mine.filter((s) => s.isEdited).sort((a, b) => b.edited - a.edited || bySlug(a.slug, b.slug)).map((s) => s.slug);
+  const neverEdited = mine.filter((s) => !s.isEdited).map((s) => s.slug).sort(bySlug);
+  check('sort edited_desc: edited stories newest edit first, others (including plain first publishes) last in slug order', got.join() === [...editedSorted, ...neverEdited].join(), got.slice(0, 5).join());
   got = await order('date_desc');
   check('sort date_desc: story date newest first, slug breaks ties', got.join() === [...mine].sort((a, b) => b.date.localeCompare(a.date) || bySlug(a.slug, b.slug)).map((s) => s.slug).join());
   got = await order('title');
@@ -235,6 +248,18 @@ try {
   x = await get('?issue=7');
   check('an issue number nothing uses is an empty list, not an error', x.status === 200 && totalOf(x.html) === 0);
 
+  // ---------- review follow-ups ----------
+  x = await get('?perPage=100');
+  const row14 = rowsOf(x.html).find((t) => t.includes('/stories/synth-s14/'));
+  check('a plain first publish (edited_at 10 s after publishing) shows no Edited date', !!row14 && /data-label="Edited">—</.test(row14), row14?.slice(-500));
+  const row11 = rowsOf(x.html).find((t) => t.includes('/stories/synth-s11/'));
+  check('a really edited story shows an Edited date', /data-label="Edited"><time/.test(row11 || ''));
+  x = await get('?issue=42&year=1999');
+  check('an issue or year missing from the menus stays as a selected option, so Apply keeps it', /<option value="42" selected>Issue #42<\/option>/.test(x.html) && /<option value="1999" selected>1999<\/option>/.test(x.html));
+  x = await get('?sort=title');
+  check('the off Previous link is aria-disabled', /<span class="adm-off" aria-disabled="true">Previous<\/span>/.test(x.html));
+  check('row Edit and Unpublish buttons carry the story title in their accessible names', /<button class="cms-btn" type="submit">Edit<span class="adm-sr"> [^<]+<\/span><\/button>/.test(x.html) && /Unpublish<span class="adm-sr"> [^<]+<\/span>/.test(x.html));
+
   // ---------- chips, form, notices, failure message ----------
   x = await get('?section=news&featured=yes&q=synthetic');
   check('active filters show as removable chips, and the form is a GET form', /adm-chip/.test(x.html) && x.html.includes('Section: News') && x.html.includes('Remove filter Featured') && /<form class="adm-search" method="get"/.test(x.html));
@@ -262,7 +287,16 @@ try {
           await page.goto(`${base}/admin/published${qs}`);
           await page.waitForSelector('.adm-table');
           const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-          check(`${width}px ${name}: no horizontal page scroll`, over <= 0, `scrollWidth overflow ${over}px`);
+          check(`${width}px ${name}: no horizontal page scroll`, over <= 0, `scrollWidth overflow ${over}px: ` + (over > 0 ? await page.evaluate(() => [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > document.documentElement.clientWidth + 1 && !e.closest('.adm-table-wrap')).slice(0, 4).map((e) => e.tagName + '.' + e.className).join(' ')) : ''));
+          const small = await page.evaluate(() => {
+            const sel = ['.adm-search select', '.adm-search input[type=search]', '.adm-apply', '.adm-table .bulk-pick', '.adm-actions .cms-btn', '.adm-pager nav a', '.adm-chip a'];
+            return sel.flatMap((q) => [...document.querySelectorAll(q)].filter((e) => e.offsetParent !== null).map((e) => { const r = e.getBoundingClientRect(); return r.width < 43.5 || r.height < 43.5 ? `${q} ${Math.round(r.width)}x${Math.round(r.height)}` : null; })).filter(Boolean);
+          });
+          check(`${width}px ${name}: controls are at least 44px`, small.length === 0, small.slice(0, 4).join('; '));
+          if (width < 768) {
+            const side = await page.evaluate(() => { const b = [...document.querySelectorAll('.adm-actions')][0].querySelectorAll('.cms-btn'); const a = b[0].getBoundingClientRect(), c = b[1].getBoundingClientRect(); return Math.abs(a.top - c.top) < 2 && c.left - a.right >= 4; });
+            check(`${width}px ${name}: Edit and Unpublish sit side by side with a gap`, side);
+          }
           if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `published-${name}-${width}.png`), fullPage: width < 768 });
         }
         await context.close();
