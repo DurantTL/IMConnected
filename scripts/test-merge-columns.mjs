@@ -33,6 +33,7 @@ try {
   story('news-with-columns', 'news', ['columns', 'youth'], null, 'churches');
   story('news-untouched', 'news', ['youth'], null, 'churches');
   story('feature-with-name', 'features', [], 'A Stray Column Name');
+  story('youth-mixed', 'youth', ['kids', 'columns', 'features'], null, 'youth');
   story('feature-plain', 'features', []);
   story('feature-with-columns', 'features', ['columns']);
   const before = Object.fromEntries(db.prepare('SELECT slug, rev, updated_at, title, body, area FROM stories').all().map((r) => [r.slug, r]));
@@ -46,13 +47,13 @@ try {
   const row = (slug) => db.prepare('SELECT slug, section, story_column, additional_sections, rev, updated_at, title, body, area FROM stories WHERE slug = ?').get(slug);
   check('a columns story becomes features, loses its column name, keeps its other fields, and bumps rev', row('col-plain').section === 'features' && row('col-plain').story_column === '' && row('col-plain').rev === before['col-plain'].rev + 1 && row('col-plain').updated_at === before['col-plain'].updated_at && row('col-plain').body === before['col-plain'].body);
   check('...and drops features from its additional sections (a primary is never an extra)', row('col-with-features').additional_sections === '["youth"]', row('col-with-features').additional_sections);
-  check('"columns" leaves the additional sections of other stories, which bump rev', row('news-with-columns').section === 'news' && row('news-with-columns').additional_sections === '["youth"]' && row('news-with-columns').rev === before['news-with-columns'].rev + 1 && row('news-with-columns').area === 'churches', JSON.stringify(row('news-with-columns')));
+  check('a "columns" extra becomes "features" (central order, de-duplicated, never the primary); such stories bump rev', row('news-with-columns').section === 'news' && row('news-with-columns').additional_sections === '["features","youth"]' && row('youth-mixed').additional_sections === '["features","kids"]' && row('youth-mixed').rev === before['youth-mixed'].rev + 1 && row('news-with-columns').rev === before['news-with-columns'].rev + 1 && row('news-with-columns').area === 'churches', JSON.stringify(row('news-with-columns')));
   check('a features story whose only extra was columns ends with an empty list', row('feature-with-columns').additional_sections === '[]' && row('feature-with-columns').section === 'features');
   check('a column name on any story is emptied (rev bumped)', row('feature-with-name').story_column === '' && row('feature-with-name').rev === before['feature-with-name'].rev + 1 && db.prepare("SELECT count(*) c FROM stories WHERE COALESCE(story_column,'') <> ''").get().c === 0 && db.prepare("SELECT count(*) c FROM drafts WHERE story_column <> ''").get().c === 0);
   check('stories that mentioned no columns are untouched (same rev)', row('news-untouched').rev === before['news-untouched'].rev && row('news-untouched').additional_sections === '["youth"]' && row('feature-plain').rev === before['feature-plain'].rev);
   const d = db.prepare('SELECT id, section, story_column, additional_sections, updated_at, title FROM drafts ORDER BY id').all();
-  check('drafts follow: section, extras and an empty column name, nothing else', d[0].section === 'features' && d[0].story_column === '' && d[0].additional_sections === '[]' && d[1].section === 'news' && d[1].additional_sections === '["kids"]' && d[2].section === 'kids' && d[2].additional_sections === '["youth"]' && d.every((x, i) => x.updated_at === draftBefore[i].updated_at && x.title === draftBefore[i].title), JSON.stringify(d));
-  check('no row says columns any more', db.prepare("SELECT (SELECT count(*) FROM stories WHERE section='columns' OR additional_sections LIKE '%columns%') + (SELECT count(*) FROM drafts WHERE section='columns' OR additional_sections LIKE '%columns%') AS c").get().c === 0);
+  check('drafts follow: section, extras and an empty column name, nothing else', d[0].section === 'features' && d[0].story_column === '' && d[0].additional_sections === '[]' && d[1].section === 'news' && d[1].additional_sections === '["features","kids"]' && d[2].section === 'kids' && d[2].additional_sections === '["youth"]' && d.every((x, i) => x.updated_at === draftBefore[i].updated_at && x.title === draftBefore[i].title), JSON.stringify(d));
+  check('no row says columns any more, and no extra equals its primary', db.prepare("SELECT (SELECT count(*) FROM stories WHERE section='columns' OR additional_sections LIKE '%columns%' OR EXISTS (SELECT 1 FROM json_each(additional_sections) WHERE value = stories.section)) + (SELECT count(*) FROM drafts WHERE section='columns' OR additional_sections LIKE '%columns%' OR EXISTS (SELECT 1 FROM json_each(additional_sections) WHERE value = drafts.section)) AS c").get().c === 0);
   check('...and the foreign key check is clean', db.prepare('PRAGMA foreign_key_check').all().length === 0);
   // A saved website menu from before the merge still has the built-in Columns link.
   db.prepare("INSERT INTO site_navigation(id,version,items,updated_at) VALUES(1,3,?,?)").run(JSON.stringify([
@@ -66,7 +67,7 @@ try {
   const html = await home.text();
   check('the home page answers', home.status === 200);
   check('the home page has no "Voices & perspectives" block, no Columns link and no Columns topic', !/Voices &amp; perspectives|voices-section|All columns/.test(html) && !/href="\/columns\//.test(html) && !/data-sec="columns"/.test(html));
-  check('...and the Features block and topic directory are there, counting the migrated stories', /data-sec="features"/.test(html) && /<a href="\/features\/"[^>]*><span>Features<\/span><span class="topic-count">5 stories/.test(html), (html.match(/<nav class="topic-directory"[\s\S]*?<\/nav>/) ?? [''])[0].slice(0, 600));
+  check('...and the Features block and topic directory are there, counting the migrated stories', /data-sec="features"/.test(html) && /<a href="\/features\/"[^>]*><span>Features<\/span><span class="topic-count">7 stories/.test(html), (html.match(/<nav class="topic-directory"[\s\S]*?<\/nav>/) ?? [''])[0].slice(0, 600));
   const feat = await (await fetch(base + '/features/')).text();
   check('/features/ lists the migrated column stories and shows no column name', ['col-plain', 'col-with-features'].every((s) => feat.includes(`/stories/${s}/`)) && !feat.includes('From the Synthetic Desk') && !feat.includes('Voices Column') && !feat.includes('A Stray Column Name') && !/>Columns</.test(feat));
   check('...and its blurb covers both', feat.includes('Longer stories, testimonies and regular voices from across the conference.'));
@@ -85,6 +86,16 @@ try {
   check('an old search link with section=columns is read as features', (await search('q=synthetic&section=columns')).includes('/col-plain/'));
   const nav = await (await fetch(base + '/api/navigation')).json();
   check('GET /api/navigation skips the old saved Columns item (not rejected)', nav.items.map((i) => i.id).join() === 'home,features,kids', JSON.stringify(nav.items));
+  // a relabelled item that no longer points at /columns/ stays; the old built-in item is skipped even when relabelled
+  const setMenu = (items) => { const d2 = openDatabase(scratch); d2.prepare('UPDATE site_navigation SET items = ?, version = version + 1').run(JSON.stringify(items)); d2.close(); };
+  const navIds = async () => (await (await fetch(base + '/api/navigation')).json()).items.map((i) => i.id).join();
+  setMenu([{ id: 'home', label: 'Latest', href: '/', visible: true }, { id: 'columns', label: 'Voices', href: '/columns/', visible: true }, { id: 'archive', label: 'Archive', href: '/features/', visible: true }]);
+  check('the old Columns item is skipped even when relabelled', await navIds() === 'home,archive');
+  setMenu([{ id: 'home', label: 'Latest', href: '/', visible: true }, { id: 'columns', label: 'Columns', href: '/features/', visible: true }]);
+  check('an item with id columns that was repointed away from /columns/ stays', await navIds() === 'home,columns');
+  setMenu([{ id: 'home', label: 'Latest', href: '/', visible: false }, { id: 'columns', label: 'Columns', href: '/columns/', visible: true }]);
+  const fallback = await navIds();
+  check('when removing the old item leaves no visible link, the default menu links are shown', fallback.startsWith('home,news,features') && !fallback.includes('columns'), fallback);
   const moved = await fetch(base + '/columns/', { redirect: 'manual' });
   check('/columns/ answers 301 to /features/', moved.status === 301 && new URL(moved.headers.get('location'), base).pathname === '/features/');
   console.log(`\nAll ${checks} checks passed`);

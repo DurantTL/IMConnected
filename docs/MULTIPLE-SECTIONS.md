@@ -22,7 +22,7 @@ Dashboard **bulk edit** (`/admin/bulk`, issue #89) changes only the ticked field
 
 ## Agent and Studio contracts
 
-`POST /api/agent/stories` accepts `additionalSections` beside the existing `section`/`area`. Explicit `POST /api/agent/stories/reopen` accepts it inside `changes`. The field is a list of the existing central section keys: `news`, `features`, `columns`, `youth`, `kids`.
+`POST /api/agent/stories` accepts `additionalSections` beside the existing `section`/`area`. Explicit `POST /api/agent/stories/reopen` accepts it inside `changes`. The field is a list of the existing central section keys: `news`, `features`, `youth`, `kids`.
 
 - Omission preserves current extras when updating an existing draft/story through an older client. New stories default to no extras.
 - An explicit `[]` clears extras. `null`, strings, unknown keys and non-string entries are rejected.
@@ -45,4 +45,4 @@ After building, `node scripts/test-additional-sections.mjs` starts an isolated b
 
 ## Columns merged into Features (issue #136)
 
-There is no `columns` section. Features covers longer stories, testimonies and regular voices; column names are retired (migration 036 emptied them and nothing reads or shows one; a `column` input is ignored). Clients that still send `section: "columns"` (or `"columns"` inside `additionalSections`, bulk edit lists, a restored revision or an archive file) are accepted and read as `features`. Migration 036 moved existing rows. `GET /api/agent/sections` no longer lists `columns`. `/columns/...` redirects (301) to `/features/...`.
+There is no `columns` section. Features covers longer stories, testimonies and regular voices; column names are retired (migration 036 emptied them and nothing reads or shows one; a `column` input is ignored). Clients that still send `section: "columns"` (or `"columns"` inside `additionalSections`, bulk edit lists, a restored revision or an archive file) are accepted and read as `features` (a `columns` extra becomes a `features` extra, de-duplicated and never equal to the primary). Migration 036 moved existing rows the same way. `GET /api/agent/sections` no longer lists `columns`. `/columns/...` redirects (301) to `/features/...`.

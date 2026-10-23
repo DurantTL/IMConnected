@@ -2,8 +2,8 @@
 import { SECTIONS } from './site';
 export interface NavigationItem { id: string; label: string; href: string; visible: boolean }
 export interface Navigation { version: number; items: NavigationItem[]; newsletterSignup: string; /** A saved menu still had the built-in Columns link (issue #136); it is dropped from `items`. */ columnsRemoved?: boolean }
-/** Issue #136: the retired built-in Columns menu link (id `columns`); a saved menu that still has it keeps working but never shows it. */
-export const RETIRED_MENU_IDS = ['columns'];
+/** Issue #136: the retired built-in Columns menu link (id `columns` still pointing at `/columns/`); a saved menu that still has it keeps working but never shows it. A relabelled or repointed item stays. */
+export const isRetiredMenuItem = (i: NavigationItem) => i.id === 'columns' && /^\/columns\/?$/.test(i.href);
 export const NAVIGATION_LIMIT = 12;
 export function defaultNavigation(): NavigationItem[] {
   return [{ id: 'home', label: 'Latest', href: '/', visible: true }, ...SECTIONS.map((s) => ({ id: s.key, label: s.label, href: `/${s.key}/`, visible: true })), { id: 'announcements', label: 'Announcements', href: '/announcements/', visible: true }, { id: 'issues', label: 'Issues', href: '/issues/', visible: true }];
