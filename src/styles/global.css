@@ -755,7 +755,7 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
 .cta-pair { grid-template-columns: 1fr 1fr; align-items: start; gap: clamp(20px, 4vw, 44px); }
 .cta-pair .cta-half { display: grid; gap: 10px; align-content: start; }
 .cta-pair .cta-half .btn { justify-self: start; }
-.cta-pair .cta-half h2 { font-size: clamp(1.4rem, 2.4vw, 1.9rem); }
+body:not(.admin) .cta-pair .cta-half h2 { font-size: clamp(1.4rem, 2.4vw, 1.9rem); }
 @media (max-width: 700px) { .cta-pair { grid-template-columns: 1fr; } .cta-pair .cta-half .btn { justify-self: stretch; } }
 .share [data-print][hidden] { display: none; }
 
@@ -770,5 +770,7 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
   .article a { color: #000 !important; text-decoration: underline; }
   .article figure, .gallery-item, .article img { break-inside: avoid; page-break-inside: avoid; }
   .article img { max-width: 100% !important; height: auto; box-shadow: none !important; }
+  .photos-track { display: grid !important; overflow: visible !important; scroll-snap-type: none !important; gap: 10px; }
+  .photos-slide { flex: none !important; }
   .prose { font-size: 11.5pt; line-height: 1.5; orphans: 3; widows: 3; }
 }
