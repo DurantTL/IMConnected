@@ -65,7 +65,7 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       const photo = draftPhotos.find((p) => p.id === photoId);
       if (!photo) return undefined;
       const point = { ...photo, ...focus.get(photoId) };
-      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom };
+      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom, fit: point.fit, fitFill: point.fitFill };
     } });
     else {
       const rendered = await renderMediaMarkdown(fields.body, draftPhotos.map((photo) => ({ ...photo, src: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, ...focus.get(photo.id) })), true, bulletin ? 0 : undefined);

@@ -242,3 +242,18 @@
 .editor-studio .sb-properties :is(input,select) { min-height:44px; }
 
 .sb-library-category{display:grid;gap:6px;font-size:.74rem;font-weight:650;margin:12px 0}.sb-library-category select{min-width:0;width:100%;min-height:44px;padding:8px;font:inherit;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface)}.sb-library-preferences{margin:10px 0 16px;border:1px solid var(--line);padding:10px;border-radius:8px;font-size:.75rem}.sb-library-preferences summary{cursor:pointer;min-height:32px;align-content:center}.sb-library-preferences label{display:flex;align-items:center;gap:8px;min-height:36px;font-weight:500}.sb-library-preferences input{width:18px;height:18px}.sb-library-preferences p{color:var(--ink-2);font-size:.7rem;line-height:1.5}
+/* Fit whole photo (issue #82) */
+.sb-fit { display:grid; gap:6px; margin:0 0 14px; }
+.editor-studio .sb-focus-settings .sb-fit-toggle { display:flex; align-items:center; gap:10px; min-height:44px; font-weight:650; cursor:pointer; }
+.editor-studio .sb-focus-settings .sb-fit-toggle input { width:24px; min-width:24px; height:24px; min-height:24px; margin:0; padding:0; accent-color:var(--brand); flex:none; }
+.sb-fit p { margin:0; }
+.sb-fit-fill { display:grid; gap:2px; margin:6px 0 0; padding:0; border:0; min-width:0; }
+.sb-fit-fill legend { padding:0; font-size:.8rem; font-weight:650; margin-bottom:2px; }
+.editor-studio .sb-focus-settings .sb-fit-fill label { display:flex; align-items:center; gap:10px; min-height:44px; cursor:pointer; }
+.editor-studio .sb-focus-settings .sb-fit-fill input { width:24px; min-width:24px; height:24px; min-height:24px; margin:0; padding:0; accent-color:var(--brand); flex:none; }
+.sb-fit-fill:disabled { opacity:.55; }
+.sb-fit-fill:disabled label { cursor:not-allowed; }
+.sb-pan-crop[data-fit=contain] { cursor:default; }
+.sb-pan-crop[aria-disabled=true], .sb-focal[aria-disabled=true] { cursor:not-allowed; }
+.sb-focal[aria-disabled=true] .sb-focal-marker { display:none; }
+.sb-focus-settings :disabled { cursor:not-allowed; }

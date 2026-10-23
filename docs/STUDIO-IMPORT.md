@@ -54,6 +54,7 @@ API additionally lists waiting drafts and supplies the allowed browser CORS poli
 | `photos[0].caption` | `photoCredit`, as "Photo: …", if present |
 | `photos[1…].url` / `alt` | `photos` / `photoAlts`, in order |
 | `photos[i].focalX`, `focalY`, `zoom` | Aligned `photoFocus[i]`; defaults 50/50/1 |
+| `photos[i].fit`, `fitFill` | Aligned `photoFocus[i].fit` (`cover`/`contain`) and `fitFill` (`blur`/`paper`/`navy`); defaults `cover`/`blur` |
 | `layout` | `photoLayout` |
 
 - Don't copy the story body. The email should send readers to the site.
@@ -70,7 +71,8 @@ API additionally lists waiting drafts and supplies the allowed browser CORS poli
 ## Studio-native publishing
 
 `POST /api/publish` accepts optional `focalX`/`focalY` (finite JSON numbers 0–100)
-and `zoom` (1–3) on each photo. Invalid present values, including null/strings,
+and `zoom` (1–3) on each photo, plus optional `fit` (`cover` or `contain`) and `fitFill`
+(`blur`, `paper` or `navy`; the fill matters only when fit is `contain`). Invalid present values, including null/strings,
 are rejected. The publish transaction re-reads the latest photo rows and inherits
 omitted values only for the same photo identity (content path/hash or normalized
 HTTPS URL). New photos default to 50/50/1. For duplicate identities, matching

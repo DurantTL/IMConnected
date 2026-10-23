@@ -8,7 +8,7 @@ import { getSection, areaLabel, formatDate, SITE } from '../lib/site';
 import StoryPhotos from './StoryPhotos.astro';
 import type { PublicStory } from '../lib/stories';
 import { photoLayoutOrDefault, planPhotos } from '../lib/photo-layouts';
-import { storyBlockPhotos, photoFocusStyle } from '../lib/story-blocks';
+import { storyBlockPhotos, photoFocusStyle, photoFrameAttrs } from '../lib/story-blocks';
 import { INLINE_MEDIA_CSS } from '../lib/story-media-render';
 
 interface Props {
@@ -79,7 +79,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
 
       {leadPhoto && !laid && (
         <figure>
-          {d.announcement ? <a class="story-flyer" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge flyer'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style="width:100%;height:auto;object-fit:contain;" /></a> : (leadPhoto.zoom ?? 1) > 1 ? <a class="story-lead-crop" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge story photo'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={`${leadFocus}aspect-ratio:16/9;object-fit:cover;`} /></a> : <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />}
+          {d.announcement ? <a class="story-flyer" href={leadPhoto.src} data-photo aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge flyer'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style="width:100%;height:auto;object-fit:contain;" /></a> : (leadPhoto.zoom ?? 1) > 1 || leadPhoto.fit === 'contain' ? <a class="story-lead-crop" href={leadPhoto.src} data-photo {...(photoFrameAttrs(leadPhoto, leadPhoto.src, '16/9') ?? {})} aria-label={d.imageAlt?.trim() ? undefined : 'Enlarge story photo'}><img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={`${leadFocus}aspect-ratio:16/9;object-fit:cover;`} /></a> : <img src={leadPhoto.src} alt={d.imageAlt ?? ''} loading="eager" style={leadFocus ? `${leadFocus}aspect-ratio:16/9;object-fit:cover;` : undefined} />}
           {(d.imageAlt || d.photoCredit) && (
             <figcaption>{d.imageAlt}{d.photoCredit && ` Photo: ${d.photoCredit}`}</figcaption>
           )}
@@ -93,13 +93,13 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
 
       {galleryPhotos && galleryPhotos.length > 0 && (
         <section class="gallery" aria-label="More photos">
-          {galleryPhotos.map((p) => <a href={p.src}><img src={p.src} alt={p.alt} loading="lazy" decoding="async" style={photoFocusStyle(p)} /></a>)}
+          {galleryPhotos.map((p) => <a href={p.src} {...(photoFrameAttrs(p, p.src) ?? {})}><img src={p.src} alt={p.alt} loading="lazy" decoding="async" style={photoFocusStyle(p)} /></a>)}
         </section>
       )}
 
       {!laid && plainGallery.length > 0 && (
         <section class="gallery" aria-label="Photos">
-          {plainGallery.map((p) => <a href={p.src}><img src={p.src} alt={p.alt} loading="lazy" style={photoFocusStyle(p)} /></a>)}
+          {plainGallery.map((p) => <a href={p.src} {...(photoFrameAttrs(p, p.src) ?? {})}><img src={p.src} alt={p.alt} loading="lazy" style={photoFocusStyle(p)} /></a>)}
         </section>
       )}
 

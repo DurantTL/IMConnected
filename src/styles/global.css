@@ -255,6 +255,14 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .photos a { display: block; overflow: hidden; border-radius: var(--radius); background: var(--surface-2); cursor: zoom-in; min-width: 0; }
 .photos-hero a, .photos-wide a { aspect-ratio: 16 / 9; }
 .photos-pair a { aspect-ratio: 3 / 2; }
+/* Fit whole photo (issue #82): the frame shows the entire image over a fill. Pan and zoom are ignored. Same rules as INLINE_MEDIA_CSS. */
+[data-fit=contain]{position:relative;isolation:isolate;overflow:hidden}[data-fit=contain][data-fit-fill=paper]{background:var(--bg,#F8F7F5)}
+[data-fit=contain][data-fit-fill=navy]{background:#0B3954}
+[data-fit=contain][data-fit-fill=blur]{background:#0B3954}
+[data-fit=contain][data-fit-fill=blur]::before{content:"";position:absolute;inset:-12%;z-index:-1;background:var(--fit-src) center/cover no-repeat;filter:blur(24px) saturate(1.1);pointer-events:none}
+[data-fit=contain] img{display:block;width:100%!important;height:100%!important;aspect-ratio:auto!important;object-fit:contain!important;object-position:50% 50%!important;scale:none!important;transform:none!important}
+.gallery a[data-fit=contain] { aspect-ratio: 4 / 3; }
+.card .media[data-fit=contain] img { transition: none; }
 .article .photos img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
 .article .photos figcaption { margin-top: -2px; }
 .prose .story-module-action a.btn { color: var(--brand-ink); text-decoration: none; }

@@ -40,7 +40,7 @@ export interface PublicStory {
     photoLayout?: string;
     storyBlocks?: StoryBlock[];
     announcement?: Announcement | null;
-    photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
+    photoFocus?: { focalX: number; focalY: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' }[];
     featured: boolean;
   };
 }

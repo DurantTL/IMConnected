@@ -40,7 +40,7 @@ if (form && blocksField) {
   if (phone.matches) library.open = false;
   phone.addEventListener('change', () => { library.open = !phone.matches; });
   const editable = !form.querySelector('fieldset')?.disabled;
-  type Photo = { id: number; src: string; alt: string; focalX: number; focalY: number; zoom: number };
+  type Photo = { id: number; src: string; alt: string; focalX: number; focalY: number; zoom: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' };
   const builderData = JSON.parse(document.getElementById('story-builder-data')?.textContent || '{"photos":[]}');
   const photos: Photo[] = builderData.photos;
   let blocks: StoryBlock[] = JSON.parse(blocksField.value || '[]');
@@ -556,7 +556,7 @@ if (form && blocksField) {
   });
 
   function updateFocus(id: number, x: number, y: number, notify = true) {
-    if (!editable) return;
+    if (!editable || photos.find((p) => p.id === id)?.fit === 'contain') return; // a whole-photo fit has no pan
     x = Math.round(Math.max(0, Math.min(100, x)) * 100) / 100; y = Math.round(Math.max(0, Math.min(100, y)) * 100) / 100;
     const xInput = form!.elements.namedItem(`photo_${id}_focalX`) as HTMLInputElement;
     const yInput = form!.elements.namedItem(`photo_${id}_focalY`) as HTMLInputElement;
@@ -601,7 +601,7 @@ if (form && blocksField) {
     if (!editable) return;
     const photo = photos.find((p) => p.id === id);
     const input = form!.elements.namedItem(`photo_${id}_zoom`) as HTMLInputElement;
-    if (!photo || !input) return;
+    if (!photo || !input || photo.fit === 'contain') return;
     photo.zoom = Math.round(Math.max(1, Math.min(3, value)) * 100) / 100;
     input.value = String(photo.zoom);
     input.setAttribute('aria-valuetext', `${Math.round(photo.zoom * 100)} percent`);
@@ -620,6 +620,46 @@ if (form && blocksField) {
     const id = Number(reset.dataset.resetCrop);
     updateZoom(id, 1, false); updateFocus(id, 50, 50);
   });
+  // Fit whole photo: show the entire image over a fill; zoom and pan are turned off (native disabled, so older values are kept) and the preview follows live.
+  function applyFit(id: number, notify = true) {
+    const photo = photos.find((p) => p.id === id);
+    const toggle = document.querySelector<HTMLInputElement>(`[data-fit-toggle="${id}"]`);
+    if (!photo || !toggle) return;
+    const whole = toggle.checked;
+    photo.fit = whole ? 'contain' : 'cover';
+    const checkedFill = document.querySelector<HTMLInputElement>(`[data-fit-fill-group="${id}"] input:checked`);
+    photo.fitFill = (checkedFill?.value as Photo['fitFill']) || 'blur';
+    const group = document.querySelector<HTMLFieldSetElement>(`[data-fit-fill-group="${id}"]`);
+    if (group) group.disabled = !whole || !editable;
+    for (const control of document.querySelectorAll<HTMLInputElement | HTMLButtonElement>(`[name="photo_${id}_focalX"],[name="photo_${id}_focalY"],[name="photo_${id}_zoom"],[data-zoom-photo="${id}"],[data-center-focus="${id}"],[data-reset-crop="${id}"]`)) control.disabled = whole || !editable;
+    for (const surface of document.querySelectorAll<HTMLElement>(`[data-pan-photo="${id}"],[data-focal="${id}"]`)) {
+      if (whole) surface.setAttribute('aria-disabled', 'true'); else surface.removeAttribute('aria-disabled');
+      surface.tabIndex = editable && !whole ? 0 : -1;
+    }
+    const frame = document.querySelector<HTMLElement>(`[data-pan-photo="${id}"]`);
+    if (frame) {
+      if (whole) {
+        frame.dataset.fit = 'contain'; frame.dataset.fitFill = photo.fitFill ?? 'blur';
+        if (photo.fitFill === 'blur') frame.style.setProperty('--fit-src', `url(${JSON.stringify(photo.src)})`); else frame.style.removeProperty('--fit-src');
+      } else { delete frame.dataset.fit; delete frame.dataset.fitFill; frame.style.removeProperty('--fit-src'); }
+    }
+    // The crop's inline pan and zoom are dropped while the whole photo is shown and restored from the saved values when it is switched off.
+    for (const img of document.querySelectorAll<HTMLElement>(`[data-focus-preview="${id}"]`)) {
+      if (whole) { img.style.objectPosition = ''; img.style.scale = ''; img.style.transformOrigin = ''; }
+      else { img.style.objectPosition = `${photo.focalX}% ${photo.focalY}%`; img.style.scale = photo.zoom === 1 ? '' : String(photo.zoom); img.style.transformOrigin = `${photo.focalX}% ${photo.focalY}%`; }
+    }
+    const note = document.querySelector(`[data-pan-note="${id}"]`);
+    if (note) note.textContent = whole ? 'The whole photo is shown, so there is nothing to pan.' : 'Drag the crop to move the image. Arrow keys pan; Shift moves faster.';
+    const live = document.querySelector(`[data-focus-output="${id}"]`);
+    if (live && whole) live.textContent = 'Whole photo shown. Zoom and pan are off.';
+    else if (live) live.textContent = `${photo.focalX}% horizontal, ${photo.focalY}% vertical`;
+    if (notify) changed();
+  }
+  for (const toggle of document.querySelectorAll<HTMLInputElement>('[data-fit-toggle]')) {
+    const id = Number(toggle.dataset.fitToggle);
+    toggle.addEventListener('change', () => applyFit(id));
+    for (const radio of document.querySelectorAll<HTMLInputElement>(`[data-fit-fill-group="${id}"] input`)) radio.addEventListener('change', () => applyFit(id));
+  }
   for (const surface of document.querySelectorAll<HTMLElement>('[data-pan-photo]')) {
     const photo = photos.find((p) => p.id === Number(surface.dataset.panPhoto));
     const image = surface.querySelector('img')!;

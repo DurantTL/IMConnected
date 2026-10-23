@@ -1,5 +1,5 @@
 // Shared, import-free marker contract. A marker never carries a URL or HTML.
-export interface InlineStoryPhoto { src: string; alt: string; focalX?: number; focalY?: number; zoom?: number }
+export interface InlineStoryPhoto { src: string; alt: string; focalX?: number; focalY?: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' }
 export function photoMarkerIndex(line: string, photoCount: number): number | null {
   const match = /^\{\{photo\s+([1-9]\d{0,2})\}\}$/.exec(line.trim());
   const index = match ? Number(match[1]) - 1 : -1;

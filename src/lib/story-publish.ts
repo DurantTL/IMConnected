@@ -9,7 +9,7 @@ import { walkStoryBlocks, storyBlockPhotos, mapStoryPhotos } from './story-block
 // interleave with another publish in this process; a second process is stopped by the UNIQUE indexes on
 // stories.slug and drafts.slug.
 import fs from 'node:fs';
-import { checkStoryBlockLength, normalizeStoryBlocks, unescapeStoryBlockPlainText, storyBlocksToMarkdown, type StoryBlock } from './story-blocks';
+import { checkStoryBlockLength, normalizeStoryBlocks, unescapeStoryBlockPlainText, storyBlocksToMarkdown, type PhotoFit, type PhotoFitFill, type StoryBlock } from './story-blocks';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { LIMITS } from './limits';
@@ -243,9 +243,9 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     const index = photos.findIndex((p) => p.id === block.photoId);
     if (index < 0) { removeFiles(stored.created); throw new EditorError('photo_missing'); }
     const photo = photos[index];
-    return { ...block, photoId: undefined, photoIndex: index, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50, zoom: photo.zoom ?? 1 };
+    return { ...block, photoId: undefined, photoIndex: index, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50, zoom: photo.zoom ?? 1, fit: photo.fit ?? 'cover', fitFill: photo.fitFill ?? 'blur' };
   });
-  stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; row.zoom = photos[i].zoom ?? 1; });
+  stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; row.zoom = photos[i].zoom ?? 1; row.fit = photos[i].fit ?? 'cover'; row.fitFill = photos[i].fitFill ?? 'blur'; });
   const now = Date.now();
   const story: StoryInput = {
     slug, title, dek: dek || undefined, section, additionalSections: draft.additionalSections, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
@@ -324,7 +324,7 @@ export function editLiveStory(slug: string, compute: (story: Story) => Partial<S
 
 export interface LoadedStory {
   fields: DraftFields;
-  photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number; zoom?: number }[];
+  photos: { url: string; alt: string; caption: string; focalX?: number; focalY?: number; zoom?: number; fit?: PhotoFit; fitFill?: PhotoFitFill }[];
 }
 
 /** A live story from the database as editor fields and photos. Null when there is no live story with that address. */
@@ -344,7 +344,7 @@ export function loadStory(slug: string): LoadedStory | null {
     },
     photos: sources.map((url, i) => {
       const inline = storyBlockPhotos(storyBlocks ?? []).find((b) => b.url === url);
-      return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50, zoom: s.photoRows.find((p) => p.position === i)?.zoom ?? inline?.zoom ?? 1 };
+      return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50, zoom: s.photoRows.find((p) => p.position === i)?.zoom ?? inline?.zoom ?? 1, fit: s.photoRows.find((p) => p.position === i)?.fit ?? inline?.fit ?? 'cover', fitFill: s.photoRows.find((p) => p.position === i)?.fitFill ?? inline?.fitFill ?? 'blur' };
     }),
   };
 }
@@ -397,6 +397,8 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
           row.focalX = p.photos[i].focalX ?? previous?.focalX ?? 50;
           row.focalY = p.photos[i].focalY ?? previous?.focalY ?? 50;
           row.zoom = p.photos[i].zoom ?? previous?.zoom ?? 1;
+          row.fit = p.photos[i].fit ?? previous?.fit ?? 'cover';
+          row.fitFill = p.photos[i].fitFill ?? previous?.fitFill ?? 'blur';
         });
         writeStory({
           slug: p.slug, title: p.title, dek: p.dek || undefined, section: p.section, additionalSections: p.additionalSections, area: p.area, author: p.author, date: p.date,
@@ -407,7 +409,7 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
       }
       const rec = recordStudioPublish(planned.map(({ p, stored }) => ({
         slug: p.slug, title: p.title, dek: p.dek, section: p.section, additionalSections: getStoryBySlug(p.slug, { includeUnpublished: true })?.additionalSections, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body, announcement: getStoryBySlug(p.slug, { includeUnpublished: true })?.announcement ?? null,
-        photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption, focalX: stored.rows[i].focalX, focalY: stored.rows[i].focalY, zoom: stored.rows[i].zoom })),
+        photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption, focalX: stored.rows[i].focalX, focalY: stored.rows[i].focalY, zoom: stored.rows[i].zoom, fit: stored.rows[i].fit, fitFill: stored.rows[i].fitFill })),
       })));
       ids = rec.ids; overwrote = rec.overwrote; oldUploads = rec.oldUploads;
     });

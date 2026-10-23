@@ -1,7 +1,7 @@
 ---
 import { getSection, areaLabel, formatDate } from '../lib/site';
 import { storyUrl, type PublicStory } from '../lib/stories';
-import { photoFocusStyle } from '../lib/story-blocks';
+import { photoFocusStyle, photoFrameAttrs } from '../lib/story-blocks';
 
 interface Props {
   story: PublicStory;
@@ -17,7 +17,7 @@ const Heading = variant === 'lead' ? 'h2' : 'h3';
 ---
 <a class:list={['card', variant, { 'with-photo': !!d.image, 'without-photo': !d.image }]} href={storyUrl(story)} data-sec={d.section} data-reveal>
   {variant !== 'text' && d.image && (
-    <div class="media">
+    <div class="media" {...(photoFrameAttrs(d.photoFocus?.[0], d.image) ?? {})}>
         <img src={d.image} alt={d.imageAlt ?? ''} loading={variant === 'lead' ? 'eager' : 'lazy'} style={photoFocusStyle(d.photoFocus?.[0])} />
     </div>
   )}

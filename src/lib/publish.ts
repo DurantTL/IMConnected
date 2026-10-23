@@ -57,6 +57,15 @@ function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: st
     if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) throw new PublishError(`Photo ${key} must be a number between ${min} and ${max}.`, ref);
     crop[key] = Math.round(value * 100) / 100;
   }
+  // Fit whole photo: same omission rule (preserve), explicit values validated.
+  if (p.fit !== undefined) {
+    if (p.fit !== 'cover' && p.fit !== 'contain') throw new PublishError('Photo fit must be "cover" or "contain".', ref);
+    crop.fit = p.fit;
+  }
+  if (p.fitFill !== undefined) {
+    if (p.fitFill !== 'blur' && p.fitFill !== 'paper' && p.fitFill !== 'navy') throw new PublishError('Photo fitFill must be "blur", "paper" or "navy".', ref);
+    crop.fitFill = p.fitFill;
+  }
   if (/^data:/i.test(url)) {
     const m = /^data:[^;,]*;base64,([A-Za-z0-9+/=\s]+)$/i.exec(url);
     if (!m) throw new PublishError('A photo data URL must be base64 encoded.', ref);

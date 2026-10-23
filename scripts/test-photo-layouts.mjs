@@ -198,6 +198,16 @@ const EXPECT = {
   let invalidZoom = false;
   try { db.prepare('UPDATE story_photos SET zoom = .99').run(); } catch { invalidZoom = true; }
   check('published photo zoom is constrained to 100–300% by the database', invalidZoom && db.prepare('PRAGMA foreign_key_check').all().length === 0);
+  const fitMigration = runMigrations(db, all);
+  check('migration 027 adds fit (cover) and fit_fill (blur) to draft and published photos without touching existing crops', fitMigration.some((n) => n.startsWith('027_')) && ['draft_photos', 'story_photos'].every((table) => {
+    const photo = db.prepare(`SELECT focal_x, focal_y, zoom, fit, fit_fill FROM ${table}`).get();
+    return photo.focal_x === 17 && photo.focal_y === 83 && photo.zoom === 1 && photo.fit === 'cover' && photo.fit_fill === 'blur';
+  }));
+  let badFit = 0;
+  for (const [table, col, val] of [['draft_photos', 'fit', 'fill'], ['story_photos', 'fit', 'stretch'], ['draft_photos', 'fit_fill', 'red'], ['story_photos', 'fit_fill', 'gold']]) {
+    try { db.prepare(`UPDATE ${table} SET ${col} = ?${table === 'story_photos' ? '' : ''}`).run(val); } catch { badFit++; }
+  }
+  check('the database itself refuses an unknown fit or fit_fill, and zoom keeps its 1–3 constraint', badFit === 4 && db.prepare('PRAGMA foreign_key_check').all().length === 0);
   db.close();
 }
 
@@ -364,6 +374,43 @@ try {
   const editId = Number(/\/admin\/drafts\/(\d+)/.exec(edit.loc ?? '')?.[1]);
   check('"Edit" on a live story loads its layout into the draft', Number.isInteger(editId) && q('SELECT photo_layout p FROM drafts WHERE id = ?', editId)[0]?.p === 'mosaic', `${edit.status} ${edit.loc}`);
 
+  // ---- Fit whole photo (issue #82): a tall photo shown whole over a fill, in layouts one and heroGrid ----
+  const fitStories = await studioPublish([
+    { ref: 'fit-one', title: 'Zz fit whole one', section: 'news', area: 'churches', author: 'Test Author', body: 'Synthetic story whose tall lead photo is shown whole.', photoLayout: 'one', photos: [{ url: dataUrl(PICS[1]), alt: 'Synthetic tall photo', fit: 'contain', fitFill: 'blur' }] },
+    { ref: 'fit-hero', title: 'Zz fit whole hero', section: 'news', area: 'churches', author: 'Test Author', body: 'Synthetic story with a hero grid.', photoLayout: 'heroGrid', photos: [
+      { url: dataUrl(PICS[4]), alt: 'Synthetic tall lead', fit: 'contain', fitFill: 'blur' },
+      { url: dataUrl(PICS[1]), alt: 'Synthetic second', fit: 'contain', fitFill: 'navy' },
+      { url: dataUrl(PICS[2]), alt: 'Synthetic cropped third' }] },
+    { ref: 'fit-paper', title: 'Zz fit whole paper', section: 'news', area: 'churches', author: 'Test Author', body: 'Synthetic story with a page-color fill.', photoLayout: 'one', photos: [{ url: dataUrl(PICS[4]), alt: 'Synthetic paper fill', fit: 'contain', fitFill: 'paper' }] },
+  ], '2099-02-01');
+  check('Studio publish with fit and fitFill is accepted', fitStories.status === 200 && fitStories.data.ok === true, `${fitStories.status} ${fitStories.text.slice(0, 200)}`);
+  const fitSlug = Object.fromEntries((fitStories.data.stories ?? []).map((s) => [s.ref, s.slug]));
+  published.set('fit/one', fitSlug['fit-one']); published.set('fit/hero', fitSlug['fit-hero']); published.set('fit/paper', fitSlug['fit-paper']);
+  check('fit and fit_fill are stored per photo', JSON.stringify(q("SELECT p.position, p.fit, p.fit_fill FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = ? ORDER BY p.position", fitSlug['fit-hero']).map((r) => [r.fit, r.fit_fill])) === JSON.stringify([['contain', 'blur'], ['contain', 'navy'], ['cover', 'blur']]));
+  {
+    const onePage = (await call('GET', `/stories/${fitSlug['fit-one']}/`)).text;
+    const frame = /<a class="story-lead-crop"[^>]*>/.exec(onePage)?.[0] ?? '';
+    check('layout one: the lead photo frame is a whole-photo frame with a decorative blur and the original link', /data-fit="contain"/.test(frame) && /data-fit-fill="blur"/.test(frame) && /--fit-src:url\(/.test(frame) && /href="\/media\/stories\/[^"]+\.png"/.test(frame) && /data-photo/.test(frame), frame.slice(0, 300));
+    const inner = /<a class="story-lead-crop"[^>]*>([\s\S]*?)<\/a>/.exec(onePage)?.[1] ?? '';
+    check('...with exactly one image inside (the blur is a CSS background: no second image, no second link)', (inner.match(/<img /g) ?? []).length === 1 && !/<a /.test(inner), inner.slice(0, 300));
+    const heroPage = (await call('GET', `/stories/${fitSlug['fit-hero']}/`)).text;
+    const heroLinks = [...heroPage.matchAll(/<a href="([^"]+)" data-photo([^>]*)>/g)];
+    check('heroGrid: the contained photos carry their fill and every photo keeps a link to its original', heroLinks.length >= 3 && /data-fit="contain" data-fit-fill="blur"/.test(heroLinks[0][2]) && /data-fit="contain" data-fit-fill="navy"/.test(heroLinks[1][2]) && !/data-fit/.test(heroLinks[2][2]) && heroLinks.every((l) => /^\/media\/stories\//.test(l[1])), JSON.stringify(heroLinks.map((l) => l[2].slice(0, 80))));
+    const feed = await call('GET', '/stories.json');
+    const fs1 = feed.data.stories?.find((s) => s.id === fitSlug['fit-hero']);
+    check('/stories.json carries fit and fitFill in photoFocus and keeps version 1', feed.data.version === 1 && fs1?.photoFocus?.[0]?.fit === 'contain' && fs1.photoFocus[1].fitFill === 'navy' && fs1.photoFocus[2].fit === 'cover', JSON.stringify(fs1?.photoFocus));
+    const cropped = feed.data.stories?.find((s) => s.id === published.get('one/1'));
+    check('...a story without a crop or fit still has no photoFocus', cropped && cropped.photoFocus === undefined);
+    const studioList = await call('GET', '/api/stories', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } });
+    const ls = studioList.data.stories?.find((s) => s.id === fitSlug['fit-hero']);
+    check('GET /api/stories (Studio list) carries fit and fitFill', studioList.status === 200 && ls?.photoFocus?.[0]?.fit === 'contain' && ls.photoFocus[1].fitFill === 'navy', JSON.stringify(ls?.photoFocus));
+    const rss = await call('GET', '/rss.xml');
+    check('/rss.xml still renders with a whole-photo story', rss.status === 200 && rss.text.includes('Zz fit whole one'));
+    const bad = await studioPublish([{ ref: 'bad', title: 'Zz fit bad', section: 'news', area: 'churches', author: 'Test Author', body: 'x', photos: [{ url: dataUrl(PICS[0]), alt: 'x', fit: 'stretch' }] }]);
+    const badFill = await studioPublish([{ ref: 'bad', title: 'Zz fit bad', section: 'news', area: 'churches', author: 'Test Author', body: 'x', photos: [{ url: dataUrl(PICS[0]), alt: 'x', fitFill: 'red' }] }]);
+    check('Studio publish refuses an unknown fit or fitFill (400) and writes nothing', bad.status === 400 && badFill.status === 400 && q("SELECT COUNT(*) AS n FROM stories WHERE slug LIKE '%zz-fit-bad%'")[0].n === 0, `${bad.status} ${badFill.status}`);
+  }
+
   // ---- no secrets or contact details in the log ----
   check('the server log has no token or email address', !serverLog.some((l) => l.includes(PUBLISH_TOKEN) || l.includes(AGENT_TOKEN) || /@example\.test/.test(l)));
 
@@ -395,6 +442,48 @@ try {
       }
       check(`no horizontal scroll for any layout x photo count (25 pages) at ${WIDTHS.join(', ')} px`, overflow.length === 0, overflow.slice(0, 5).join(' | '));
       if (SHOTS) info(`screenshots: ${fs.readdirSync(SHOTS).filter((f) => f.endsWith('.png')).length} files in ${SHOTS}`);
+
+      // Fit whole photo: the whole tall image is visible inside its frame over the chosen fill, at phone and desktop width
+      {
+        const fitProblems = [];
+        for (const w of [390, 1280]) {
+          const ctx = await browser.newContext({ viewport: { width: w, height: 900 }, deviceScaleFactor: 1 });
+          const page = await ctx.newPage();
+          for (const [key, frameSel, fill] of [['fit/one', '.story-lead-crop[data-fit="contain"]', 'blur'], ['fit/hero', '.photos-hero a[data-fit="contain"]', 'blur'], ['fit/hero', '.photos-pair a[data-fit-fill="navy"]', 'navy'], ['fit/paper', '.story-lead-crop[data-fit="contain"]', 'paper']]) {
+            await page.goto(`${BASE}/stories/${published.get(key)}/`, { waitUntil: 'load' });
+            await page.evaluate(async () => { await Promise.all(Array.from(document.images).map((i) => (i.loading === 'lazy' ? (i.loading = 'eager', i.decode().catch(() => {})) : i.decode().catch(() => {})))); });
+            const frame = page.locator(frameSel).first();
+            const m = await frame.evaluate((el) => {
+              const img = el.querySelector('img');
+              const cs = getComputedStyle(img), fcs = getComputedStyle(el), before = getComputedStyle(el, '::before');
+              const box = el.getBoundingClientRect(), ib = img.getBoundingClientRect();
+              // object-fit: contain draws the image inside the box at its natural aspect: the drawn size
+              const scale = Math.min(ib.width / img.naturalWidth, ib.height / img.naturalHeight);
+              return { fit: cs.objectFit, scale: cs.scale, transform: cs.transform, imgFitsFrame: ib.width <= box.width + 1 && ib.height <= box.height + 1, drawnW: img.naturalWidth * scale, drawnH: img.naturalHeight * scale, natural: [img.naturalWidth, img.naturalHeight], frameBg: fcs.backgroundColor, bodyBg: getComputedStyle(document.body).backgroundColor, beforeBg: before.backgroundImage, beforeFilter: before.filter, overflow: fcs.overflow, imgs: el.querySelectorAll('img').length, links: el.querySelectorAll('a').length, tabbable: el.querySelectorAll('[tabindex]:not([tabindex="-1"])').length, hidden: el.querySelector('[aria-hidden="true"]') ? 1 : 0, scrollW: document.documentElement.scrollWidth, clientW: document.documentElement.clientWidth };
+            });
+            const aspectOk = Math.abs(m.drawnW / m.drawnH - m.natural[0] / m.natural[1]) < 0.01;
+            const problems = [];
+            if (m.fit !== 'contain') problems.push(`object-fit ${m.fit}`);
+            if (m.scale !== 'none' || m.transform !== 'none') problems.push(`scale ${m.scale} transform ${m.transform}`);
+            if (!m.imgFitsFrame || !aspectOk) problems.push(`image not shown whole ${JSON.stringify(m)}`);
+            if (m.overflow !== 'hidden') problems.push(`frame overflow ${m.overflow}`);
+            if (fill === 'blur' && !(/url\(/.test(m.beforeBg) && /blur\(/.test(m.beforeFilter))) problems.push(`no blur fill ${m.beforeBg} ${m.beforeFilter}`);
+            if (fill === 'navy' && m.frameBg !== 'rgb(11, 57, 84)') problems.push(`navy fill ${m.frameBg}`);
+            if (fill === 'paper' && m.frameBg !== m.bodyBg) problems.push(`paper fill ${m.frameBg} vs ${m.bodyBg}`);
+            if (m.imgs !== 1 || m.links !== 0 || m.tabbable !== 0) problems.push(`extra content in the frame ${JSON.stringify({ imgs: m.imgs, links: m.links, tabbable: m.tabbable })}`);
+            if (m.scrollW > m.clientW) problems.push('horizontal scroll');
+            const href = await frame.evaluate((el) => (el.tagName === 'A' ? el.getAttribute('href') : ''));
+            if (!/^\/media\/stories\/.+\.png$/.test(href)) problems.push(`link to the original lost: ${href}`);
+            if (problems.length) fitProblems.push(`${key} ${frameSel} @${w}: ${problems.join('; ')}`);
+            if (SHOTS) {
+              const box = await page.locator('.article').boundingBox();
+              await page.screenshot({ path: path.join(SHOTS, `fit-contain-${key.split('/')[1]}-${fill}-${w}.png`), fullPage: true, clip: { x: 0, y: Math.max(0, box.y), width: w, height: Math.min(1400, box.height + 40) } });
+            }
+          }
+          await ctx.close();
+        }
+        check('fit whole photo: a tall photo is drawn whole (object-fit contain, natural aspect, no zoom) over its blur, navy or page-color fill, with the original link, at 390 and 1280 px', fitProblems.length === 0, fitProblems.join(' | '));
+      }
 
       // layout geometry: the pair is two equal columns, the hero is wider than the pair photos, nothing is taller than it should be
       {
@@ -548,7 +637,7 @@ try {
         const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
         const page = await ctx.newPage();
         const results = {};
-        for (const [name, key, open] of [['a story with no layout (the reference)', 'one/4', false], ['Hero + grid, viewer closed', 'heroGrid/4', false], ['Mosaic, viewer closed', 'mosaic/6', false], ['Stack, viewer closed', 'stack/3', false], ['Hero + grid, viewer OPEN', 'heroGrid/4', true]]) {
+        for (const [name, key, open] of [['a story with no layout (the reference)', 'one/4', false], ['Fit whole photo, layout one', 'fit/one', false], ['Fit whole photo, heroGrid', 'fit/hero', false], ['Fit whole photo, page-color fill', 'fit/paper', false], ['Hero + grid, viewer closed', 'heroGrid/4', false], ['Mosaic, viewer closed', 'mosaic/6', false], ['Stack, viewer closed', 'stack/3', false], ['Hero + grid, viewer OPEN', 'heroGrid/4', true]]) {
           await page.goto(`${BASE}/stories/${published.get(key)}/`);
           await page.addScriptTag({ content: axeSrc });
           if (open) { await page.locator('a[data-photo]').nth(1).click(); await page.locator('dialog.viewer').waitFor({ state: 'visible' }); }
