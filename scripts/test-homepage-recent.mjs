@@ -74,7 +74,7 @@ try {
   check('old upcoming and undated events are in the spotlight above, never in the archive rail', on('event-old-upcoming') && on('event-old-undated') && !railSlugs.some((x) => x.startsWith('event-')));
   check('an old announcement is not in the archive rail', !railSlugs.includes('announcement-old'));
   check('each archive card shows its original date', (rail.match(/class="meta">[^<]*· [A-Z][a-z]+ \d+, \d{4}</g) || []).length === 4);
-  check('the archive rail links to the archive (News for now)', rail.includes('href="/news/"'));
+  check('the archive rail links to the issues browser', rail.includes('href="/issues/"'));
   check('the same day gives the same archive rail', railOf(await (await fetch(base + '/')).text()) === rail);
   check('the archive rail sits after the last story block and before the submit call to action', html.indexOf('class="block archive-rail"') > html.indexOf('data-sec="kids"') && html.indexOf('class="block archive-rail"') < html.indexOf('aria-label="Submit a story"'));
 

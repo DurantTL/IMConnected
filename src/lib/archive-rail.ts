@@ -3,7 +3,7 @@ import type { PublicStory } from './stories';
 /**
  * Homepage "From the archive" rail (issue #100).
  *
- * Where the rail's "all of the archive" link points. Issue #99 (the issues browser) switches this to '/issues/'.
+ * Where the rail's "all of the archive" link points: the issues browser (issue #99).
  */
 export const ARCHIVE_LINK = '/issues/';
 export const ARCHIVE_LINK_LABEL = 'Browse past issues';
