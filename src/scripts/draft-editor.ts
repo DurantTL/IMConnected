@@ -69,7 +69,7 @@ if (form) {
       const response = await fetch(form!.dataset.revisions!, { method: 'POST', credentials: 'same-origin', body: data }), result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || 'Could not restore this revision.');
       dirty = false; setVersion(result.updatedAt);
-      window.location.assign(`${window.location.pathname}?revision_restored=1${result.warnings?.length ? '&missing_media=1' : ''}#review`);
+      window.location.assign(`${window.location.pathname}?revision_restored=1${result.warnings?.length ? '&missing_media=1' : ''}${result.replacedKept ? '&photo_replaced_kept=1' : ''}#review`);
       navigating = true;
     } catch (error) { if (revisionStatus) revisionStatus.textContent = error instanceof Error ? error.message : 'Could not restore this revision.'; }
     finally {

@@ -195,9 +195,37 @@ try {
   const newKey = photos(rid)[1].media_key, rFiles = uploadFiles(rid);
   const restored = await post(`/api/admin/drafts/${rid}/revisions`, formOf({ version: draft(rid).updated_at, revisionId: withKeys }));
   const rj = await restored.json();
-  check('restoring a revision taken before a Replace succeeds and says the newer file was kept', restored.status === 200 && rj.ok && rj.warnings.some((w) => /replaced/.test(w)), JSON.stringify(rj));
+  check('restoring a revision taken before a Replace succeeds, reports replacedKept and NO missing-media warning', restored.status === 200 && rj.ok && rj.replacedKept === true && rj.warnings.length === 0, JSON.stringify(rj));
   check('the slot keeps its place, id, new file and key; markers and metadata survive; no file is resurrected', photos(rid).map((p) => p.id).join() === [r1.id, r2.id, r3.id].join() && photos(rid)[1].media_key === newKey && draft(rid).body.includes('{{photo 2}}') && !draft(rid).body.includes('missing') && photos(rid)[1].alt === 'Alt R2' && photos(rid)[1].zoom === 2 && JSON.stringify(uploadFiles(rid)) === JSON.stringify(rFiles));
   void restoreTo;
+  // two replaces of the same slot: a revision from before both still finds the slot
+  const beforeBoth = db.prepare('SELECT MAX(id) m FROM draft_revisions WHERE draft_id=?').get(rid).m;
+  for (const col of [COLORS[0], COLORS[2]]) {
+    const again = formOf({ version: draft(rid).updated_at, op: `replace:${r1.id}` }); again.set(`replacement_${r1.id}`, new Blob([png(col)], { type: 'image/png' }), 'again.png');
+    await post(`/api/admin/drafts/${rid}/photos`, again);
+  }
+  const lineage = db.prepare('SELECT old_key, new_key FROM draft_photo_key_aliases WHERE draft_id=?').all(rid);
+  const slot1Key = photos(rid)[0].media_key;
+  check('two replaces of one slot leave every older key pointing at the newest key', lineage.filter((l) => l.new_key === slot1Key).length === 2, JSON.stringify(lineage));
+  const twice = await (await post(`/api/admin/drafts/${rid}/revisions`, formOf({ version: draft(rid).updated_at, revisionId: beforeBoth + 1 }))).json();
+  check('restoring across two replaces keeps the slot, its place and the newest file', twice.ok && photos(rid)[0].id === r1.id && photos(rid)[0].media_key === slot1Key && photos(rid).length === 3 && twice.replacedKept === true && twice.warnings.length === 0, JSON.stringify(twice));
+  // restore after the replaced photo was deleted: genuinely missing, nothing resurrected, no "newer file" claim
+  const did = await newDraft();
+  const dup = new FormData(); dup.set('version', String(draft(did).updated_at)); dup.set('op', 'upload');
+  COLORS.slice(0, 2).forEach((col, i) => dup.append('photos', new Blob([png(col)], { type: 'image/png' }), `d${i}.png`));
+  await post(`/api/admin/drafts/${did}/photos`, dup);
+  const [d1, d2] = photos(did);
+  await post(`/api/admin/drafts/${did}/save`, formOf({ version: draft(did).updated_at, title: 'Synthetic deleted slot', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: 'Top.\n\n{{photo 2}}\n', photoLayout: 'one' }));
+  const drep = formOf({ version: draft(did).updated_at, op: `replace:${d2.id}` }); drep.set(`replacement_${d2.id}`, new Blob([png(COLORS[3])], { type: 'image/png' }), 'd.png');
+  await post(`/api/admin/drafts/${did}/photos`, drep);
+  const withOld = db.prepare('SELECT MAX(id) m FROM draft_revisions WHERE draft_id=?').get(did).m;
+  await photoOp(did, `delete:${d2.id}`);
+  check('deleting a photo drops its lineage rows', db.prepare('SELECT COUNT(*) c FROM draft_photo_key_aliases WHERE draft_id=?').get(did).c === 0);
+  const filesAfterDelete = uploadFiles(did);
+  const afterDelete = await (await post(`/api/admin/drafts/${did}/revisions`, formOf({ version: draft(did).updated_at, revisionId: withOld }))).json();
+  check('restoring after the replaced photo was deleted reports missing media, not a kept file, and resurrects nothing', afterDelete.ok && afterDelete.warnings.length === 1 && afterDelete.replacedKept === false && photos(did).length === 1 && photos(did)[0].id === d1.id && draft(did).body.includes('{{photo missing}}') && JSON.stringify(uploadFiles(did)) === JSON.stringify(filesAfterDelete), JSON.stringify(afterDelete));
+  const html = await (await fetch(`${BASE}/admin/drafts/${id}?n=photo_moved&pos=1&of=3&photo=${a.id}&focus=up`, { headers: { Cookie: `__Host-imc_session=${token}` } })).text();
+  check('without JavaScript the server still renders the move notice as role=status', /<p class="admin-ok"[^>]*role="status"[^>]*>Photo moved to position 1 of 3\./.test(html) || /<p[^>]*role="status"[^>]*class="admin-ok"[^>]*>Photo moved to position 1 of 3\./.test(html), html.match(/<p[^>]*admin-ok[^>]*>[^<]*/)?.[0] ?? 'no notice');
 
   // ---- module story: the image module follows the slot through reorder and replace ----
   const mid = await newDraft();
@@ -222,6 +250,7 @@ try {
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));
+  page.on('dialog', (dialog) => dialog.accept());
   await page.goto(`${BASE}/admin/drafts/${id}`);
   await page.locator('[data-studio-tab="photos"]').click();
   const handles = page.locator('[data-photo-handle]');
@@ -303,11 +332,12 @@ try {
     await page.locator('.ph-replace summary').nth(2).click();
     await page.locator(`input[name="replacement_${idle[2].id}"]`).setInputFiles(decoy);
     // A later listener on the same event sees what the page's own filter left in the form data (Playwright cannot read multipart bodies).
+    await page.evaluate(() => { const f = document.querySelector('#photo-form'); for (const [n, v] of [['op', 'move:999999'], ['to', '1']]) { const i = document.createElement('input'); i.type = 'hidden'; i.name = n; i.value = v; i.dataset.reorder = n; f.append(i); } });
     await page.evaluate(() => { document.querySelector('#photo-form').addEventListener('formdata', (e) => { sessionStorage.setItem('sentKeys', [...e.formData.entries()].map(([k, v]) => k + (v instanceof File ? ':file=' + v.name : '')).join(',')); }); });
     await Promise.all([page.waitForURL(/photo=/), page.getByRole('button', { name: 'Move photo 3 up' }).click()]);
     await page.waitForLoadState('load');
     const sent = [await page.evaluate(() => sessionStorage.getItem('sentKeys') ?? '')];
-    check('a file chosen for another photo is not uploaded with a move', sent[0].includes('op') && !sent[0].includes('decoy-file-name') && !sent[0].includes('replacement_') && !sent[0].includes(':file='), String(sent.length) + ' ' + sent.map((x) => x.slice(0, 400)).join('|'));
+    check('a file chosen for another photo is not uploaded with a move', sent[0].split(',').filter((k) => k === 'op').length === 1 && !sent[0].split(',').includes('to') && !sent[0].includes('decoy-file-name') && !sent[0].includes('replacement_') && !sent[0].includes(':file='), String(sent.length) + ' ' + sent.map((x) => x.slice(0, 400)).join('|'));
   }
 
   // replace through the browser
@@ -321,6 +351,27 @@ try {
   check('the browser Replace keeps the slot and gives it a new media_key', photos(id)[0].id === slot0.id && photos(id)[0].media_key !== key0 && photos(id)[0].alt === slot0.alt);
   await page.waitForFunction(() => /^Photo replaced\./.test(document.querySelector('#photo-reorder-live')?.textContent ?? ''));
   check('the replaced notice is announced through the live region and focus returns to that photo\'s Replace control', await page.evaluate((pid) => document.activeElement?.matches('.ph-replace summary') && !!document.activeElement.closest(`li[data-photo-item="${pid}"]`), String(slot0.id)));
+
+  // restore across a replace through the revision history UI
+  {
+    await page.goto(`${BASE}/admin/drafts/${rid}#review`);
+    await page.getByText('Saved revision history', { exact: true }).click();
+    await page.waitForFunction((rev) => [...document.getElementById('draft-revision-choice').options].some((o) => o.value === String(rev)), withKeys);
+    await page.locator('#draft-revision-choice').selectOption(String(withKeys));
+    await page.locator('#restore-draft-revision').click();
+    await page.waitForURL(/revision_restored=1&photo_replaced_kept=1/);
+    check('restoring across a replace shows the replaced notice (status) and NOT the missing-media alert', await page.locator('#revision-replaced-kept[role=status]').isVisible() && await page.locator('#revision-missing-media').count() === 0 && !/missing_media/.test(page.url()));
+  }
+  await page.goto(`${BASE}/admin/drafts/${id}`);
+  await page.locator('[data-studio-tab="photos"]').click();
+  // focus stays on the control that was used; at an edge it moves to the other direction
+  for (const [name, prefix] of [['Move photo 1 down', 'down:'], ['Move photo 2 down', 'up:']]) {
+    const was = page.url();
+    await page.getByRole('button', { name }).click();
+    await page.waitForURL((u) => u.href !== was);
+    await page.waitForFunction(() => document.activeElement?.matches('button[value^="up:"], button[value^="down:"]'));
+    check(`after "${name}" focus is on the ${prefix === 'down:' ? 'same Down' : 'other (Up), because Down is now disabled'} button`, await page.evaluate((x) => document.activeElement.value.startsWith(x), prefix));
+  }
 
   // accessibility, touch targets, sideways scroll
   await page.locator('[data-studio-tab="photos"]').click();

@@ -6,6 +6,11 @@ const list = document.querySelector<HTMLOListElement>('ol.ed-photos');
 const form = document.querySelector<HTMLFormElement>('#photo-form');
 const live = document.querySelector<HTMLElement>('#photo-reorder-live');
 
+// A button submit (Up, Down, Replace, Upload...) must not carry the hidden op/to fields a failed or cancelled drag left behind.
+form?.addEventListener('submit', (e) => {
+  if ((e as SubmitEvent).submitter) form.querySelectorAll('input[type=hidden][data-reorder]').forEach((x) => x.remove());
+}, true);
+
 // Only the file for the action being taken is sent: choosing a file in another photo's Replace or in Upload must not ride along.
 form?.addEventListener('formdata', (e) => {
   const op = String(e.formData.get('op') ?? '');
@@ -80,12 +85,16 @@ if (list && form) {
   const n = params.get('n') ?? '';
   if (photo && /^\d{1,12}$/.test(photo) && live?.dataset.announce) {
     const message = live.dataset.announce;
+    document.querySelector('.admin-ok[role=status]')?.removeAttribute('role'); // the live region speaks it instead, once the page has settled
     setTimeout(() => {
       document.querySelector<HTMLButtonElement>('[data-studio-tab="photos"]')?.click();
       const item = document.querySelector<HTMLElement>(`li[data-photo-item="${photo}"]`);
+      // Keep focus on the control just used (so Enter again repeats it); if it is now disabled (first or last place), the other direction.
+      const asked = params.get('focus') === 'down' ? 'down' : 'up';
+      const enabled = (dir: string) => item?.querySelector<HTMLElement>(`button[value^="${dir}:"]:not(:disabled)`) ?? null;
       const target = n === 'photo_replaced'
         ? item?.querySelector<HTMLElement>('.ph-replace summary')
-        : item?.querySelector<HTMLElement>('button[value^="up:"]:not(:disabled), button[value^="down:"]:not(:disabled)');
+        : enabled(asked) ?? enabled(asked === 'up' ? 'down' : 'up');
       target?.focus({ preventScroll: false });
       setTimeout(() => { live.textContent = message; }, 250);
     }, 0);

@@ -392,7 +392,7 @@ function saveDraftInTransaction(id: number, expected: number, f: DraftFields, ph
   }
 }
 
-export type RevisionRestoreResult = { ok: true; updatedAt: number; warnings: string[] } | Failure;
+export type RevisionRestoreResult = { ok: true; updatedAt: number; warnings: string[]; replacedKept: boolean } | Failure;
 export function restoreDraftRevision(id: number, expected: number, revisionId: number, userId: number): RevisionRestoreResult {
   return tx((): RevisionRestoreResult => {
     const cur = getDraft(id);
@@ -437,7 +437,7 @@ export function restoreDraftRevision(id: number, expected: number, revisionId: n
     ordered.forEach((p, index) => position.run(index, id, p.id));
     const missing = removedReferences || markers.missing || snapshot.photos.some((p) => !byKey.has(p.key));
     audit('draft.revision_restore', { userId, target: `draft:${id}`, detail: { revisionId, missingMedia: missing } });
-    return { ok: true, updatedAt: saved.updatedAt, warnings: [...(missing ? ['Some older photos are no longer available. Missing module references were removed; review inline markers and the first photo or flyer before publishing.'] : []), ...(usedNewerFile ? ['A photo was replaced after that revision; the newer file was kept in its place.'] : [])] };
+    return { ok: true, updatedAt: saved.updatedAt, warnings: missing ? ['Some older photos are no longer available. Missing module references were removed; review inline markers and the first photo or flyer before publishing.'] : [], replacedKept: usedNewerFile };
   });
 }
 
@@ -531,6 +531,7 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
       order.splice(i, 1);
       removed = photos[i].path;
       getDb().prepare('DELETE FROM draft_photos WHERE id = ?').run(photoId);
+      getDb().prepare('DELETE FROM draft_photo_key_aliases WHERE new_key = ? AND draft_id = ?').run(before.photos[i].key, draftId); // lineage of a deleted photo is never needed again
       const blocks = getDraft(draftId)?.storyBlocks ?? [];
       if (storyBlockPhotos(blocks).some((b) => b.photoId === photoId)) {
         const kept = mapStoryPhotos(blocks, (p) => p.photoId === photoId ? null : p);

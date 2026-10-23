@@ -155,10 +155,11 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     }
     // The audit entry, revision and version bump are written inside the lib transaction; this only builds the redirect.
     const moved = (r: OpResult, fallback: string, notice = 'photo_moved') => {
+      const focus = m[1];
       if (!r.ok) return done(r, fallback);
-      if (r.noop) return redirectTo(page, { n: 'photo_unchanged', photo: String(photoId) });
+      if (r.noop) return redirectTo(page, { n: 'photo_unchanged', photo: String(photoId), focus });
       const now = listPhotos(draft.id);
-      return redirectTo(page, { n: r.warning ? 'photos_markers' : notice, pos: String(now.findIndex((p) => p.id === photoId) + 1), of: String(now.length), photo: String(photoId) });
+      return redirectTo(page, { n: r.warning ? 'photos_markers' : notice, pos: String(now.findIndex((p) => p.id === photoId) + 1), of: String(now.length), photo: String(photoId), focus });
     };
     if (m[1] === 'move') {
       const to = intParam(form.get('to'));
