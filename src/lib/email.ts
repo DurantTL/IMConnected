@@ -163,6 +163,21 @@ export function buildSubmissionNotice(title: string, church: string, link: strin
   return { subject: fromAgent ? `New story from the AI agent: ${t}` : `New story submission: ${t}`, text, html };
 }
 
+/** One summary email for a bulk submit from the AI agent: only escaped titles and dashboard links, never contacts or story text. */
+export function buildBatchNotice(items: { id: number; title: string }[], site: string) {
+  const n = items.length;
+  const shown = items.slice(0, 20);
+  const what = `${n} new draft${n === 1 ? '' : 's'} from the AI agent ${n === 1 ? 'was' : 'were'} added to ${SITE.name}.`;
+  const link = (id: number) => `${site}/admin/drafts/${id}`;
+  const text = [what, '', ...shown.map((i) => `- ${oneLine(i.title)}: ${link(i.id)}`), ...(n > shown.length ? [`...and ${n - shown.length} more.`] : []), '', 'You get this email because "Email me when a story is submitted" is on in My account.'].join('\n');
+  const html = `<!doctype html><html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1d2433;max-width:560px;margin:0 auto;padding:24px;line-height:1.5">
+<p>${escHtml(what)}</p>
+<ul>${shown.map((i) => `<li><a href="${escHtml(link(i.id))}">${escHtml(oneLine(i.title))}</a></li>`).join('')}</ul>${n > shown.length ? `<p>&hellip;and ${n - shown.length} more.</p>` : ''}
+<p style="font-size:14px;color:#555">You get this email because &ldquo;Email me when a story is submitted&rdquo; is on in My account.</p>
+</body></html>`;
+  return { subject: `${n} new draft${n === 1 ? '' : 's'} from the AI agent`, text, html };
+}
+
 /** The invite email to a new editor: only the inviter's name, the site name and the link (all escaped in the HTML). */
 export function buildInviteEmail(inviterName: string, link: string) {
   const who = oneLine(inviterName) || 'An administrator';

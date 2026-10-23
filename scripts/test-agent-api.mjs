@@ -36,7 +36,7 @@ const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 // A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
 const CLIENT_TMP = path.join(SCRATCH, 'client');
 fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
-const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527 };
+const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529, j: 4530 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -58,7 +58,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [] };
+const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [], j: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -158,7 +158,10 @@ start('d', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.d), DA
 start('e', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.e), DATA_DIR: path.join(SCRATCH, 'data-e'), SITE_URL: `http://localhost:${P.e}`, AGENT_API_TOKEN: PUBLISH_TOKEN }); // the agent token reuses the publish token
 start('f', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.f), DATA_DIR: path.join(SCRATCH, 'data-f'), SITE_URL: `http://localhost:${P.f}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 80 checks, its own rate window
 start('g', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.g), DATA_DIR: path.join(SCRATCH, 'data-g'), SITE_URL: `http://localhost:${P.g}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 81 checks, its own rate window
-for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g]) await waitFor(`http://localhost:${port}/`);
+start('h', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.h), DATA_DIR: path.join(SCRATCH, 'data-h'), SITE_URL: `http://localhost:${P.h}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 90 batch checks, its own rate window
+start('i', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.i), DATA_DIR: path.join(SCRATCH, 'data-i'), SITE_URL: `http://localhost:${P.i}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '25' }); // issue 90: hourly story ceiling lowered to 25 (test/ops tuning only)
+start('j', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.j), DATA_DIR: path.join(SCRATCH, 'data-j'), SITE_URL: `http://localhost:${P.j}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '10' }); // issue 90: ceiling below the batch size limit
+for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i, P.j]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -749,6 +752,187 @@ try {
     check('capabilities: authorTitle, photoCredit, featured with limits', c.storyFields.authorTitle.maxLength === 120 && c.storyFields.photoCredit.maxLength === 120 && c.storyFields.featured.type === 'boolean');
     check('capabilities: marker support', c.photoMarkers.syntax === '{{photo N}}' && /bad_photo_marker/.test(c.photoMarkers.rule));
     check('the g server logs hold no token, note or upload path', !logs.g.join('\n').includes(AGENT_TOKEN) && !logs.g.join('\n').includes('uploads'));
+  }
+
+  // ================= issue 90: bulk submit (POST /api/agent/stories/batch) =================
+  {
+    const H = `http://localhost:${P.h}`;
+    const HDB = path.join(SCRATCH, 'data-h', 'imconnected.db');
+    const qh = (sql, ...args) => { const db = new DatabaseSync(HDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    const runh = (sql, ...args) => { const db = new DatabaseSync(HDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).run(...args); } finally { db.close(); } };
+    await fetch(H + '/admin/login');
+    const now0 = Date.now();
+    const editorId = Number(runh("INSERT INTO users (email, name, role, status, created_at, updated_at, notify_submissions) VALUES ('batch-editor@e2e-mail.com', 'Batch Editor', 'editor', 'active', ?, ?, 1)", now0, now0).lastInsertRowid);
+    const hpost = (json, opts = {}) => call(H, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json, ...opts });
+    const bpost = (json, opts = {}) => call(H, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json, ...opts });
+    const batchMails = () => emails().filter((m) => JSON.stringify(m.to).includes('batch-editor@e2e-mail.com') && /new drafts? from the AI agent/.test(m.subject));
+    const SRC = (n) => `https://www.facebook.com/example-page/posts/${9900 + n}`;
+    const item = (n, over = {}) => ({ title: `Batch Story Number ${n}`, dek: 'A synthetic summary.', body: `Synthetic body for batch story ${n}.\n\nSecond paragraph.`, section: 'youth', area: 'pathfinders', author: 'Staff Writer', church: 'Example Hills Church', sourceUrl: SRC(n), ...over });
+    const countFiles = () => { let n = 0; const walk = (d) => { if (!fs.existsSync(d)) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) e.isDirectory() ? walk(path.join(d, e.name)) : n++; }; walk(path.join(SCRATCH, 'data-h', 'uploads')); return n; };
+
+    // two pre-existing drafts through the single endpoint: one stays untouched (to be updated), one gets an editor's hands on it
+    let r = await hpost(item(100, { body: 'Original body that an update must keep.' }));
+    const updId = r.data.id;
+    r = await hpost(item(101));
+    const touchedId = r.data.id;
+    runh('UPDATE drafts SET updated_by = ? WHERE id = ?', editorId, touchedId);
+    await sleep(600);
+    const singleMails = emails().length;
+
+    const items = [];
+    for (let n = 0; n < 12; n++) items.push(item(n, n === 3 ? { photos: [{ data: dataUrl(PNG_A), alt: 'A' }, { data: dataUrl(PNG_B), alt: 'B' }] } : n === 5 ? { requestId: 'item-request-id-0005' } : {}));
+    items.push({ sourceUrl: SRC(100), title: 'Batch Update Of Existing Draft' }); // 12: update, omitted body kept
+    items.push(item(101, { title: 'Trying To Overwrite' })); // 13: editor touched: refused
+    items.push(item(14, { section: 'no-such-section' })); // 14
+    items.push(item(15, { photos: [{ data: 'data:image/png;base64,' + Buffer.from('not an image at all').toString('base64'), alt: 'x' }] })); // 15
+    items.push(item(16, { title: '' })); // 16
+    items.push('not an object'); // 17
+    items.push(item(18, { body: 'Line one.\n\n{{photo 3}}', photos: [{ data: dataUrl(PNG_A), alt: 'A' }] })); // 18: marker beyond photos
+    items.push(item(19, { title: 'Tom & <i>Jerry</i> Fair', body: 'Hello <script>alert(1)</script> world.' })); // 19: escaping
+    const ENV = { requestId: 'batch-0001-first-run', stories: items };
+    const draftsBefore = qh("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c;
+    const uploadsBefore = countFiles();
+    r = await bpost(ENV);
+    const res = r.data.results || [];
+    check('batch of 20 mixed items: 200 with ok:true and 20 results in request order', r.status === 200 && r.data.ok === true && res.length === 20 && res.every((x, i) => x.index === i), `${r.status} ${r.text.slice(0, 300)}`);
+    check('...new items are created with ids', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 19].every((i) => res[i]?.ok && res[i].status === 'created' && Number.isInteger(res[i].id)), JSON.stringify(res.slice(0, 12)));
+    check('...the update of an existing sourceUrl is "updated" with the same id', res[12]?.ok && res[12].status === 'updated' && res[12].id === updId, JSON.stringify(res[12]));
+    check('...the editor-touched draft is refused: already_reviewed, reason editor_editing, its id and a message', res[13]?.ok === false && res[13].error === 'already_reviewed' && res[13].reason === 'editor_editing' && res[13].id === touchedId && !!res[13].message, JSON.stringify(res[13]));
+    check('...invalid items fail with their own codes: bad_section, photo_not_image, title_required, invalid_json, bad_photo_marker', [[14, 'bad_section'], [15, 'photo_not_image'], [16, 'title_required'], [17, 'invalid_json'], [18, 'bad_photo_marker']].every(([i, c]) => res[i]?.ok === false && res[i].error === c && !!res[i].message), JSON.stringify(res.slice(14, 19)));
+    check('...one bad item did not block the others (13 created, 1 updated, 6 failed)', res.filter((x) => x.status === 'created').length === 13 && res.filter((x) => x.status === 'updated').length === 1 && res.filter((x) => !x.ok).length === 6);
+    const draftsAfter = qh("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c;
+    check('database: exactly 13 new agent drafts, none for the failed items', draftsAfter === draftsBefore + 13 && qh('SELECT COUNT(*) c FROM drafts WHERE source_url IN (?, ?, ?, ?)', SRC(14), SRC(15), SRC(16), SRC(18))[0].c === 0);
+    const upd = qh('SELECT title, body FROM drafts WHERE id = ?', updId)[0];
+    check('...the update changed the title and kept the omitted body', upd.title === 'Batch Update Of Existing Draft' && upd.body === 'Original body that an update must keep.', JSON.stringify(upd));
+    check('...the editor-touched draft is unchanged', qh('SELECT title FROM drafts WHERE id = ?', touchedId)[0].title === 'Batch Story Number 101');
+    const esc = qh('SELECT title, body, status FROM drafts WHERE id = ?', res[19].id)[0];
+    check('...the body is escaped like the single endpoint (no raw <script>) and the draft is "new"', !esc.body.includes('<script>') && esc.body.includes('&lt;script') && esc.status === 'new', esc.body);
+    check('...photos: the item with two photos has two rows; the failed photo items left no rows', qh('SELECT COUNT(*) c FROM draft_photos WHERE draft_id = ?', res[3].id)[0].c === 2 && qh('SELECT COUNT(*) c FROM draft_photos WHERE draft_id IN (SELECT id FROM drafts WHERE source_url IN (?, ?))', SRC(15), SRC(18))[0].c === 0);
+    check('...upload files on disk match the photo rows (2 added, nothing left by failed items)', countFiles() === uploadsBefore + 2, `${uploadsBefore} -> ${countFiles()}`);
+    check('...nothing was published: no stories rows, every agent draft is still "new"', qh("SELECT COUNT(*) c FROM stories WHERE source = 'agent'")[0].c === 0 && qh("SELECT COUNT(*) c FROM drafts WHERE source = 'agent' AND status != 'new'")[0].c === 0);
+    check('no CORS headers on the batch response', ![...r.headers.keys()].some((k) => k.startsWith('access-control-')));
+    const opt = await call(H, 'OPTIONS', '/api/agent/stories/batch', { headers: { Origin: EVIL_ORIGIN, 'Access-Control-Request-Method': 'POST' } });
+    check('...nor on a preflight', ![...opt.headers.keys()].some((k) => k.startsWith('access-control-')));
+
+    // one summary email
+    check('a summary email arrives for the batch: "13 new drafts from the AI agent"', await until(() => batchMails().length >= 1));
+    await sleep(800);
+    const bm = batchMails();
+    check('...exactly one (no per-item emails from the batch)', bm.length === 1 && bm[0].subject === '13 new drafts from the AI agent' && emails().length === singleMails + 1, `${bm.length} ${bm[0]?.subject} ${emails().length - singleMails}`);
+    const mtxt = JSON.stringify(bm[0] || {});
+    check('...titles are escaped, links point at the dashboard, no contacts, source links or story text', !(bm[0]?.html || '').includes('<i>Jerry') && (bm[0]?.html || '').includes('Tom &amp; &lt;i&gt;Jerry') && mtxt.includes(`/admin/drafts/${res[19].id}`) && !mtxt.includes('facebook.com') && !mtxt.includes('Synthetic body') && !mtxt.includes('Example Hills'), mtxt.slice(0, 300));
+
+    // audit
+    const aud = qh("SELECT action, target, detail FROM audit_log WHERE action IN ('agent.story', 'agent.batch') ORDER BY id");
+    const batchAudit = aud.filter((x) => x.action === 'agent.batch');
+    check('audit: one agent.story per written item (14 from the batch, plus the 2 single creates) and one agent.batch with counts', aud.filter((x) => x.action === 'agent.story').length === 2 + 14 && batchAudit.length === 1 && JSON.stringify(JSON.parse(batchAudit[0].detail)) === JSON.stringify({ created: 13, updated: 1, replayed: 0, failed: 6, items: 20 }), JSON.stringify(batchAudit));
+    check('...the audit entries hold no titles', !aud.some((x) => /Batch Story|Jerry/.test(x.detail || '')));
+
+    // the receipt holds only ids, statuses and codes
+    const rec = qh('SELECT * FROM agent_batches');
+    check('a receipt is stored hashed, with no story text, contacts, source links or request id', rec.length === 1 && /^[0-9a-f]{64}$/.test(rec[0].request_hash) && !/Batch Story|Synthetic|facebook|Example Hills|batch-0001|Staff Writer|script/.test(JSON.stringify(rec[0])), JSON.stringify(rec).slice(0, 300));
+
+    // replay
+    const auditCount = () => qh('SELECT COUNT(*) c FROM audit_log')[0].c;
+    const a0 = auditCount();
+    const m0 = emails().length;
+    const d0 = qh('SELECT COUNT(*) c FROM drafts')[0].c;
+    const r2 = await bpost(ENV);
+    check('identical retry: 200, replayed:true, the original per-item results (same ids, statuses, codes)', r2.status === 200 && r2.data.replayed === true && r2.data.results.length === 20 && r2.data.results.every((x, i) => x.index === i && x.ok === res[i].ok && x.id === res[i].id && x.status === res[i].status && x.error === res[i].error && x.reason === res[i].reason), r2.text.slice(0, 300));
+    await sleep(600);
+    check('...nothing written, emailed or audited on the replay', qh('SELECT COUNT(*) c FROM drafts')[0].c === d0 && emails().length === m0 && auditCount() === a0 && qh('SELECT COUNT(*) c FROM agent_batches')[0].c === 1);
+    const reordered = await bpost({ stories: items, requestId: ENV.requestId });
+    check('...key order does not matter', reordered.status === 200 && reordered.data.replayed === true);
+    const reuse = await bpost({ requestId: ENV.requestId, stories: [item(300)] });
+    check('same requestId with a different body: 409 request_id_reused, nothing written', reuse.status === 409 && reuse.data.error === 'request_id_reused' && reuse.data.reason === 'request_id_reused' && qh('SELECT COUNT(*) c FROM drafts')[0].c === d0);
+
+    // per-item requestId and sourceUrl idempotency across a second batch
+    const r3 = await bpost({ requestId: 'batch-0002-second-run', stories: [items[5], items[0]] });
+    check('a second batch: an item with its own requestId is "replayed", an item with only a sourceUrl is "updated"', r3.status === 200 && r3.data.results[0].status === 'replayed' && r3.data.results[0].id === res[5].id && r3.data.results[1].status === 'updated' && r3.data.results[1].id === res[0].id, r3.text.slice(0, 300));
+    await sleep(500);
+    check('...no summary email (nothing was created)', batchMails().length === 1);
+
+    // envelope errors: one 400, nothing written
+    const w0 = { drafts: qh('SELECT COUNT(*) c FROM drafts')[0].c, receipts: qh('SELECT COUNT(*) c FROM agent_batches')[0].c, audit: auditCount(), mail: emails().length };
+    const bad = [
+      ['21 items', bpost({ requestId: 'batch-0003-too-many', stories: Array.from({ length: 21 }, (_, n) => item(400 + n)) }), 'too_many_stories'],
+      ['empty list', bpost({ requestId: 'batch-0004-empty', stories: [] }), 'stories_empty'],
+      ['stories not a list', bpost({ requestId: 'batch-0005-notlist', stories: { a: 1 } }), 'stories_invalid'],
+      ['missing requestId', bpost({ stories: [item(410)] }), 'bad_request_id'],
+      ['bad requestId', bpost({ requestId: 'short', stories: [item(411)] }), 'bad_request_id'],
+      ['a list as the body', bpost([item(412)]), 'invalid_json'],
+      ['bad JSON', call(H, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, headers: { 'Content-Type': 'application/json' }, body: '{"requestId": "batch-0006-badjson", "stories": [' }), 'invalid_json'],
+    ];
+    for (const [name, p, code] of bad) {
+      const x = await p;
+      check(`envelope error (${name}): 400 ${code}`, x.status === 400 && x.data.ok === false && x.data.error === code, `${x.status} ${x.text.slice(0, 150)}`);
+    }
+    await sleep(300);
+    check('...none of them wrote a draft, receipt, audit entry or email', qh('SELECT COUNT(*) c FROM drafts')[0].c === w0.drafts && qh('SELECT COUNT(*) c FROM agent_batches')[0].c === w0.receipts && auditCount() === w0.audit && emails().length === w0.mail);
+    let x = await call(H, 'POST', '/api/agent/stories/batch', { json: ENV });
+    check('no token: 401; wrong token: 401', x.status === 401 && (await call(H, 'POST', '/api/agent/stories/batch', { token: 'x'.repeat(AGENT_TOKEN.length), json: ENV })).status === 401);
+    x = await call(H, 'POST', '/api/agent/stories/batch', { token: PUBLISH_TOKEN, json: ENV });
+    check('the Studio PUBLISH_TOKEN is not accepted: 401', x.status === 401);
+
+    // route precedence: static batch.ts wins over stories/[id]
+    x = await call(H, 'GET', '/api/agent/stories/batch', { token: AGENT_TOKEN });
+    check('GET /api/agent/stories/batch is 405 (the static route wins over [id])', x.status === 405 && x.headers.get('allow') === 'POST', `${x.status} ${x.text.slice(0, 100)}`);
+    check('...and GET /api/agent/stories/<id> still reads a draft', (await call(H, 'GET', `/api/agent/stories/${updId}`, { token: AGENT_TOKEN })).data?.draft?.id === updId);
+
+    // sections advertises the limits
+    x = await call(H, 'GET', '/api/agent/sections', { token: AGENT_TOKEN });
+    check('GET /api/agent/sections advertises the batch limits next to photoBudget', x.data.batch?.maxBatchStories === 20 && x.data.batch?.maxStoriesPerHour === 300 && x.data.batch?.endpoint === '/api/agent/stories/batch' && /split/.test(x.data.batch?.note || '') && x.data.photoBudget?.maxImageBytesPerRequest > 0, JSON.stringify(x.data.batch));
+
+    // a refusal with reason "published": the receipt must hold no slug or title text
+    const PUB_SRC = SRC(700);
+    r = await hpost(item(700, { title: 'Receipt Secret Title Xyzzy' }));
+    runh("UPDATE drafts SET status = 'published', slug = 'receipt-secret-slug-xyzzy', published_commit = 'db', updated_by = ? WHERE id = ?", editorId, r.data.id);
+    const pubEnv = { requestId: 'batch-0007-published', stories: [{ sourceUrl: PUB_SRC, title: 'Another Title' }, item(701)] };
+    const p1 = await bpost(pubEnv);
+    check('a batch item for a published draft is refused with reason "published" (the live message may name the slug)', p1.status === 200 && p1.data.results[0].error === 'already_reviewed' && p1.data.results[0].reason === 'published' && p1.data.results[1].status === 'created', p1.text.slice(0, 300));
+    const allRec = JSON.stringify(qh('SELECT * FROM agent_batches'));
+    check('...the receipts contain no slug, title or source text', !/xyzzy|Receipt Secret|Another Title|facebook/i.test(allRec), allRec.slice(0, 200));
+    const p2 = await bpost(pubEnv);
+    check('...a replay returns the same error and reason with the generic per-reason message (no slug)', p2.status === 200 && p2.data.replayed === true && p2.data.results[0].error === 'already_reviewed' && p2.data.results[0].reason === 'published' && !!p2.data.results[0].message && !/xyzzy/i.test(p2.text) && p2.data.results[1].status === 'created', p2.text.slice(0, 300));
+  }
+  {
+    const I = `http://localhost:${P.i}`;
+    const IDB = path.join(SCRATCH, 'data-i', 'imconnected.db');
+    const qi = (sql, ...args) => { const db = new DatabaseSync(IDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    await fetch(I + '/admin/login');
+    const ipost = (json) => call(I, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json });
+    const mk = (n, count) => ({ requestId: `ceil-${String(n).padStart(4, '0')}-ceiling`, stories: Array.from({ length: count }, (_, k) => ({ title: `Ceiling Story ${n}-${k}`, body: 'Synthetic body.', sourceUrl: `https://www.facebook.com/example-page/posts/${n * 100 + k}` })) });
+    const first = mk(1, 20);
+    let x = await ipost(first);
+    check('hourly story ceiling (lowered to 25 for the test): the first 20 stories pass', x.status === 200 && x.data.results.filter((y) => y.status === 'created').length === 20, x.text.slice(0, 200));
+    const n0 = qi("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c;
+    const rc0 = qi('SELECT COUNT(*) c FROM agent_batches')[0].c;
+    x = await ipost(mk(2, 6));
+    check('...a batch of 6 would pass 25: the whole batch is 429 rate_limited with Retry-After', x.status === 429 && x.data.error === 'rate_limited' && x.data.reason === 'batch_stories_per_hour' && Number(x.headers.get('retry-after')) >= 1, `${x.status} ${x.text.slice(0, 200)} ${x.headers.get('retry-after')}`);
+    check('...and nothing was written (no drafts, no receipt)', qi("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c === n0 && qi('SELECT COUNT(*) c FROM agent_batches')[0].c === rc0);
+    x = await ipost(first);
+    check('...an identical replay of the first batch still works (it uses no story budget)', x.status === 200 && x.data.replayed === true);
+    x = await ipost(mk(3, 5));
+    check('...a batch of 5 still fits (exactly 25 used)', x.status === 200 && x.data.results.every((y) => y.status === 'created'), x.text.slice(0, 200));
+    x = await ipost(mk(4, 1));
+    check('...and then one more story is 429', x.status === 429);
+    x = await call(I, 'GET', '/api/agent/sections', { token: AGENT_TOKEN });
+    check('sections reports the tuned ceiling', x.data.batch?.maxStoriesPerHour === 25);
+  }
+  {
+    // a ceiling (10) below the batch size: a batch above it can never fit, so it is a 400, not a 429
+    const J = `http://localhost:${P.j}`;
+    const JDB = path.join(SCRATCH, 'data-j', 'imconnected.db');
+    const qj = (sql, ...args) => { const db = new DatabaseSync(JDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    await fetch(J + '/admin/login');
+    const mkj = (n, count) => ({ requestId: `jceil-${String(n).padStart(4, '0')}-ceiling`, stories: Array.from({ length: count }, (_, k) => ({ title: `Small Ceiling Story ${n}-${k}`, body: 'Synthetic body.', sourceUrl: `https://www.facebook.com/example-page/posts/${n * 100 + k}` })) });
+    let x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(1, 11) });
+    check('ceiling below the batch size (10): a batch of 11 is 400 too_many_stories naming the ceiling, nothing written', x.status === 400 && x.data.error === 'too_many_stories' && /10/.test(x.data.message) && !x.headers.get('retry-after') && qj("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c === 0 && qj('SELECT COUNT(*) c FROM agent_batches')[0].c === 0, `${x.status} ${x.text.slice(0, 200)}`);
+    x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(2, 10) });
+    check('...a batch of exactly 10 passes', x.status === 200 && x.data.results.every((y) => y.status === 'created'), x.text.slice(0, 200));
+    x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(3, 1) });
+    check('...then the next story is a retryable 429', x.status === 429 && !!x.headers.get('retry-after'));
+    // Giving budget back for transient "unavailable" items is not exercised here: it needs a database failure mid-batch, which the end-to-end harness cannot induce.
   }
 
   // ================= rate limit =================

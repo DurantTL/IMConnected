@@ -17,7 +17,7 @@ export class AgentError extends Error {
   }
 }
 
-export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, author: 120, authorTitle: 120, photoCredit: 120, church: 160, alt: 300, note: 1000, url: 2000, perHour: 60 };
+export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, author: 120, authorTitle: 120, photoCredit: 120, church: 160, alt: 300, note: 1000, url: 2000, perHour: 60, batchMaxStories: 20, batchStoriesPerHour: 300 };
 /** Room kept for the JSON around the photos (title, body of up to 20,000 characters, keys, quotes). */
 export const AGENT_JSON_ALLOWANCE_BYTES = 128 * 1024;
 /**
@@ -280,4 +280,35 @@ const hits: number[] = [];
 /** True when this request is over the limit. */
 export function agentRateLimited(now = Date.now()): boolean {
   return !takeSlot(hits, now, AGENT_LIMITS.perHour, WINDOW_MS);
+}
+
+// ---- bulk submit: a separate ceiling on stories per hour (each batch request also counts once against the 60/hour above) ----
+const itemHits: number[] = [];
+/** Stories per hour for batches. AGENT_BATCH_ITEMS_PER_HOUR is test/ops tuning; the default is 300. */
+export function batchStoriesPerHour(env = process.env): number {
+  const n = Number(env.AGENT_BATCH_ITEMS_PER_HOUR);
+  return Number.isInteger(n) && n >= 1 ? n : AGENT_LIMITS.batchStoriesPerHour;
+}
+/**
+ * Reserves `count` stories from the hourly budget. All or nothing: when the batch would not fit, nothing is
+ * recorded and `retryAfter` (seconds) says when enough older stories will have aged out of the window.
+ */
+export function takeBatchStories(count: number, now = Date.now()): { ok: true } | { ok: false; retryAfter: number } | { ok: false; tooLarge: true; max: number } {
+  const max = batchStoriesPerHour();
+  // A batch bigger than the whole ceiling can never fit: say so instead of a 429 that never succeeds.
+  if (count > max) return { ok: false, tooLarge: true, max };
+  let keep = 0;
+  for (const t of itemHits) if (now - t < WINDOW_MS) itemHits[keep++] = t;
+  itemHits.length = keep;
+  if (itemHits.length + count > max) {
+    const need = itemHits.length + count - max; // this many old entries must expire
+    const at = need <= itemHits.length ? itemHits[need - 1] : now;
+    return { ok: false, retryAfter: need > itemHits.length ? 3600 : Math.max(1, Math.ceil((at + WINDOW_MS - now) / 1000)) };
+  }
+  for (let i = 0; i < count; i++) itemHits.push(now);
+  return { ok: true };
+}
+/** Gives back budget taken for stories that failed transiently (database trouble), so retries do not exhaust the hour. */
+export function returnBatchStories(count: number): void {
+  for (let i = 0; i < count && itemHits.length; i++) itemHits.pop();
 }
