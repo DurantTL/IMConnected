@@ -95,7 +95,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
         <a class="studio-back ed-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
         <h1 class="ed-headline">{draft.title || 'Untitled story'}</h1>
         <nav class="ed-nav" aria-label="Editor sections">
-          <a href="#ed-canvas" aria-current="page" data-editor-nav="editor">Editor</a>
+          <a href="#ed-canvas" aria-current="true" data-editor-nav="editor">Editor</a>
           <a href="#studio-panel-settings" data-open-panel="settings" data-editor-nav="settings">Story settings</a>
           {editable && <a href="#studio-panel-review" data-open-panel="review" data-editor-nav="review">Publishing</a>}
         </nav>
@@ -291,7 +291,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                 <input type="hidden" name="storyBlocks" id="story-blocks" value={JSON.stringify(draft.storyBlocks ?? [])} />
                 <div class="ed-split" id="split" data-mode={isModular ? 'modules' : 'markdown'}>
                   <div id="module-canvas" class="ed-module-canvas" hidden={!isModular}>
-                    <p class="sb-drag-help">Select a module to edit it in the sidebar. Drag to reorder; the Move buttons also work with a keyboard. <span class="sb-count"><span id="module-count"></span> modules</span></p>
+                    <p class="sb-drag-help" data-js-only>Select a module to edit it in the sidebar. Drag to reorder; the Move buttons also work with a keyboard. <span class="sb-count"><span id="module-count"></span> modules</span></p>
                     <ol id="module-outline" aria-label="Story modules"></ol>
                   </div>
                   <div id="markdown-workspace">
@@ -328,12 +328,12 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
         </div>
 
         <aside class="ed-sidebar" id="ed-sidebar" aria-label="Story sidebar">
-          <div class="ed-resize" id="ed-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0" hidden></div>
+          <div class="ed-resize" id="ed-resize" role="separator" aria-controls="ed-sidebar" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0" hidden></div>
           <div class="ed-tablist" role="tablist" aria-label="Sidebar" hidden>
             <button type="button" role="tab" class="ed-tab" id="studio-tab-modules" data-studio-tab="modules" aria-controls="studio-panel-modules" aria-selected="true" hidden={!editable}>Modules</button>
-            <button type="button" role="tab" class="ed-tab" id="studio-tab-module" data-studio-tab="module" aria-controls="studio-panel-module" aria-selected="false" tabindex="-1" hidden={!isModular}>Module settings</button>
-            <button type="button" role="tab" class="ed-tab" id="studio-tab-settings" data-studio-tab="settings" aria-controls="studio-panel-settings" aria-selected="false" tabindex="-1">Story settings</button>
-            {editable && <button type="button" role="tab" class="ed-tab" id="studio-tab-review" data-studio-tab="review" aria-controls="studio-panel-review" aria-selected="false" tabindex="-1">Publishing</button>}
+            <button type="button" role="tab" class="ed-tab" id="studio-tab-module" data-studio-tab="module" aria-controls="studio-panel-module" aria-selected="false" tabindex="-1" hidden={!isModular} aria-label="Module settings">Module</button>
+            <button type="button" role="tab" class="ed-tab" id="studio-tab-settings" data-studio-tab="settings" aria-controls="studio-panel-settings" aria-selected="false" tabindex="-1" aria-label="Settings for the story">Settings</button>
+            {editable && <button type="button" role="tab" class="ed-tab" id="studio-tab-review" data-studio-tab="review" aria-controls="studio-panel-review" aria-selected="false" tabindex="-1" aria-label="Publishing">Publish</button>}
             {editable && <button type="button" role="tab" class="ed-tab" id="studio-tab-history" data-studio-tab="history" aria-controls="studio-panel-history" aria-selected="false" tabindex="-1">History</button>}
           </div>
 

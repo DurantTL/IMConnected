@@ -783,6 +783,7 @@ try {
     const snapshot = () => JSON.stringify(db.prepare('SELECT updated_at, status, updated_by, title, body FROM drafts WHERE id=?').get(agentId));
     const before = snapshot();
     const layoutKey = 'imc.storyEditor.layout.v1';
+    const layoutAction = async (name) => { await page.locator('#ed-layout-button').click(); await page.getByRole('button', { name, exact: true }).click(); };
     const storedLayout = () => page.evaluate((key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return 'unreadable'; } }, layoutKey);
     const sidebarBox = () => page.locator('.ed-sidebar').boundingBox();
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -800,9 +801,9 @@ try {
 
     // The top bar: section nav, Publish, and the status chip.
     await page.locator('[data-editor-nav=settings]').click();
-    check('the "Story settings" link opens that sidebar tab and is marked current', await page.locator('[data-studio-tab=settings]').getAttribute('aria-selected') === 'true' && await page.locator('[data-editor-nav=settings]').getAttribute('aria-current') === 'page' && !(await page.locator('[data-editor-nav=editor]').getAttribute('aria-current')));
+    check('the "Story settings" link opens that sidebar tab and is marked current', await page.locator('[data-studio-tab=settings]').getAttribute('aria-selected') === 'true' && await page.locator('[data-editor-nav=settings]').getAttribute('aria-current') === 'true' && !(await page.locator('[data-editor-nav=editor]').getAttribute('aria-current')));
     await page.locator('.ed-publish').click();
-    check('Publish opens the Publishing tab and focuses the existing publish button without publishing', await page.locator('[data-studio-tab=review]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.matches('#publish-form button')) && db.prepare('SELECT status FROM drafts WHERE id=?').get(agentId).status === 'new' && await page.locator('[data-editor-nav=review]').getAttribute('aria-current') === 'page');
+    check('Publish opens the Publishing tab and focuses the existing publish button without publishing', await page.locator('[data-studio-tab=review]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.matches('#publish-form button')) && db.prepare('SELECT status FROM drafts WHERE id=?').get(agentId).status === 'new' && await page.locator('[data-editor-nav=review]').getAttribute('aria-current') === 'true');
     check('the status chip says New for a fresh agent draft', (await page.locator('[data-editor-chip]').innerText()) === 'New');
 
     // The layout menu and the movable sidebar.
@@ -812,36 +813,34 @@ try {
     check('Layout options is a button with aria-expanded that opens a labelled group', await page.locator('#ed-layout-button').getAttribute('aria-expanded') === 'true' && await page.locator('#ed-layout-menu').isVisible() && await page.locator('#ed-layout-menu').getAttribute('role') === 'group');
     await page.keyboard.press('Escape');
     check('Escape closes the layout menu and returns focus to its button', await page.locator('#ed-layout-menu').isHidden() && await page.locator('#ed-layout-button').getAttribute('aria-expanded') === 'false' && await page.evaluate(() => document.activeElement?.id === 'ed-layout-button'));
-    await page.locator('#ed-layout-button').click();
-    await page.getByRole('button', { name: 'Sidebar wider' }).click();
+    await layoutAction('Sidebar wider');
     check('Sidebar wider adds one 40px step', Math.abs((await sidebarBox()).width - 420) < 2 && (await storedLayout()).width === 420);
-    await page.getByRole('button', { name: 'Sidebar narrower' }).click(); await page.getByRole('button', { name: 'Sidebar narrower' }).click();
+    await layoutAction('Sidebar narrower'); await layoutAction('Sidebar narrower');
     check('Sidebar narrower removes steps', Math.abs((await sidebarBox()).width - 340) < 2);
     await page.locator('#ed-resize').focus();
     for (let i = 0; i < 12; i++) await page.keyboard.press('ArrowRight');
-    check('the resize handle stops at the 300px minimum, which disables Sidebar narrower', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '300' && await page.getByRole('button', { name: 'Sidebar narrower' }).isDisabled());
+    check('the resize handle stops at the 300px minimum, which disables Sidebar narrower', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '300' && await page.locator('[data-layout-action=narrower]').isDisabled());
     await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowLeft');
     check('arrow keys on the focused handle resize by 40px (Left widens a right-hand sidebar)', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '380' && Math.abs((await sidebarBox()).width - 380) < 2);
     await page.keyboard.press('End');
     const maxNow = Number(await page.locator('#ed-resize').getAttribute('aria-valuenow'));
     const bodyWidth = (await page.locator('#ed-body').boundingBox()).width;
-    check('the sidebar never takes more than half the body, and Sidebar wider is disabled at that limit', maxNow <= 600 && maxNow <= Math.floor(bodyWidth / 2) + 1 && await page.getByRole('button', { name: 'Sidebar wider' }).isDisabled());
+    check('the sidebar never takes more than half the body, and Sidebar wider is disabled at that limit', maxNow <= 600 && maxNow <= Math.floor(bodyWidth / 2) + 1 && await page.locator('[data-layout-action=wider]').isDisabled());
     await page.locator('#ed-resize').focus(); await page.keyboard.press('Home');
     const handleBox = await page.locator('#ed-resize').boundingBox();
     await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 200); await page.mouse.down(); await page.mouse.move(handleBox.x - 120, handleBox.y + 200, { steps: 5 }); await page.mouse.up();
     { const dragged = (await sidebarBox()).width; check('dragging the edge resizes the sidebar and remembers the width', dragged > 400 && dragged < 480 && Math.abs((await storedLayout()).width - dragged) < 2); }
-    await page.getByRole('button', { name: 'Move sidebar to the left' }).click();
+    await layoutAction('Move sidebar to the left');
     const leftSide = await sidebarBox(), canvasLeft = await page.locator('.ed-canvas').boundingBox();
-    check('Move sidebar to the left puts it before the canvas', leftSide.x < canvasLeft.x && await page.locator('.editor-studio').getAttribute('data-side') === 'left' && (await storedLayout()).side === 'left' && await page.getByRole('button', { name: 'Move sidebar to the right' }).isVisible());
+    check('Move sidebar to the left puts it before the canvas', leftSide.x < canvasLeft.x && await page.locator('.editor-studio').getAttribute('data-side') === 'left' && (await storedLayout()).side === 'left' && (await page.locator('[data-layout-action=side]').textContent()) === 'Move sidebar to the right');
     await page.screenshot({ path: path.join(shots || scratch, 'v4-sidebar-left-1280.png') });
-    await page.getByRole('button', { name: 'Hide sidebar' }).click();
+    await layoutAction('Hide sidebar');
     check('Hide sidebar leaves a slim rail with Show sidebar and the canvas takes the width', await page.locator('.ed-sidebar').isHidden() && await page.locator('#ed-rail').isVisible() && await page.locator('#ed-rail').getByRole('button', { name: 'Show sidebar' }).isVisible() && (await storedLayout()).sidebarVisible === false);
     await page.reload();
     check('the layout (hidden, left) is remembered across a reload', await page.locator('.ed-sidebar').isHidden() && await page.locator('.editor-studio').getAttribute('data-side') === 'left');
     await page.locator('.ed-publish').click();
     check('Publish shows a hidden sidebar and focuses the publish button', await page.locator('.ed-sidebar').isVisible() && await page.evaluate(() => document.activeElement?.matches('#publish-form button')));
-    await page.locator('#ed-layout-button').click();
-    await page.getByRole('button', { name: 'Reset layout' }).click();
+    await layoutAction('Reset layout');
     check('Reset layout restores the defaults and forgets the stored layout', await page.locator('.editor-studio').getAttribute('data-side') === 'right' && Math.abs((await sidebarBox()).width - 380) < 2 && (await storedLayout()) === null);
     for (const bad of ['{not json', '{"sidebarVisible":"yes","side":"up","width":"wide"}', '{"width":99999,"side":"left"}', 'null', '[]']) {
       await page.evaluate(([key, value]) => localStorage.setItem(key, value), [layoutKey, bad]);
@@ -895,6 +894,40 @@ try {
     await page.goto(BASE + `/admin/drafts/${agentId}`);
     await page.waitForTimeout(500);
     check('after all of that the agent draft is still untouched, so an agent update would still land', snapshot() === before);
+  }
+
+  // Split into modules and back: the pressed button disappears, so focus must move on, and sidebar-only fields must save (autosave, and natively without JavaScript).
+  {
+    legacyId = await createLegacy(); await saveLegacy('one');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(BASE + `/admin/drafts/${legacyId}`);
+    await page.locator('[data-split-modules]').click();
+    check('after the canvas Split into modules button, Module settings opens with focus on the first module field', await page.locator('[data-studio-tab=module]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => !!document.activeElement?.closest('#module-fields')));
+    await openTab(page, 'modules');
+    await page.locator('#use-markdown').click();
+    check('after Switch to Markdown, focus moves to the Markdown text field', await page.evaluate(() => document.activeElement?.id === 'f-body'));
+    await page.locator('#blocks-undo').click();
+    await page.locator('#blocks-undo').click().catch(() => {});
+    // Autosave of a field that only exists in the sidebar (Author title), without pressing Save.
+    legacyId = await createLegacy(); await saveLegacy('one');
+    await page.goto(BASE + `/admin/drafts/${legacyId}`);
+    await openTab(page, 'settings');
+    await page.locator('input[name=authorTitle]').fill('Synthetic Director');
+    await page.locator('input[name=newsletterPosition]').fill('3');
+    await page.waitForFunction(() => /Last saved \d/.test(document.getElementById('save-status').textContent), null, { timeout: 30000 }).catch(() => {});
+    for (let i = 0; i < 60 && legacyDraft().author_title !== 'Synthetic Director'; i++) await page.waitForTimeout(500);
+    check('autosave stores a change made only in the sidebar Story settings', legacyDraft().author_title === 'Synthetic Director');
+    // No JavaScript: a sidebar field and a canvas field both submit with the native Save.
+    const plain = await context.browser().newContext({ viewport: { width: 1280, height: 900 }, javaScriptEnabled: false });
+    await plain.addCookies(await context.cookies());
+    const plainPage = await plain.newPage();
+    await plainPage.goto(BASE + `/admin/drafts/${legacyId}`);
+    check('without JavaScript every Story settings, Publishing and History panel is shown and the JavaScript-only parts are not', await plainPage.locator('#studio-panel-settings').isVisible() && await plainPage.locator('#studio-panel-review').isVisible() && await plainPage.locator('#studio-panel-history').isVisible() && await plainPage.locator('#studio-panel-modules').isHidden());
+    await plainPage.locator('input[name=author]').fill('Synthetic Plain Author');
+    await plainPage.locator('input[name=title]').fill('Synthetic plain title');
+    const [plainResponse] = await Promise.all([plainPage.waitForResponse((r) => r.url().includes(`/api/admin/drafts/${legacyId}/save`)), plainPage.locator('#save-btn').click()]);
+    check('without JavaScript a sidebar field (author) and a canvas field (title) both save with the native Save', plainResponse.status() === 200 && legacyDraft().author === 'Synthetic Plain Author' && legacyDraft().title === 'Synthetic plain title');
+    await plain.close();
   }
 
   // Saved history must survive a reload and save unsaved edits before restoring.

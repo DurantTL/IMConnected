@@ -142,7 +142,6 @@ if (form && blocksField) {
       // No aria-label: the visible text ("1. Paragraph ...") is the accessible name (WCAG 2.5.3 label in name).
       const select = button(`${display}. ${labels[block.type]}${column !== undefined ? ` · Column ${column + 1}` : ''}`, () => { selected = block.id; editorBus.showTab('module'); render(); focusSelected(); revealInPreview(); });
       select.dataset.selectModule = block.id;
-      select.disabled = false; // choosing a module only changes what is shown, so a closed draft can still be browsed
       const grip = node('span', '⠿', 'sb-grip'); grip.setAttribute('aria-hidden', 'true'); select.prepend(grip);
       select.setAttribute('aria-pressed', String(selected === block.id));
       if (selected === block.id) select.setAttribute('aria-current', 'true');
@@ -469,6 +468,9 @@ if (form && blocksField) {
     blocks = splitMarkdownIntoModules(body.value).map((text) => ({ id: uid(), type: 'text' as const, text }));
     selected = blocks[0].id;
     render(); changed(); announce('Modules enabled. Your existing Markdown is preserved in the first paragraph module.');
+    // The button that was pressed is gone (the Markdown editor is hidden): continue in the first module's settings.
+    editorBus.showTab('module');
+    (fields.querySelector<HTMLElement>('textarea,input,select') ?? outline.querySelector<HTMLElement>('[data-select-module]'))?.focus();
   });
   useMarkdown.addEventListener('click', () => {
     if (!editable || !modular) return;
@@ -477,6 +479,7 @@ if (form && blocksField) {
     try { projection = storyBlocksToMarkdown(blocks); }
     catch (error) { announce(error instanceof Error ? error.message : 'Check the modules first.'); return; }
     remember(); body.value = projection; modular = false; blocks = []; selected = ''; render(); changed(); announce('Markdown mode enabled.');
+    body.focus();
   });
   for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) add.addEventListener('click', () => {
     if (!editable || !modular) return;

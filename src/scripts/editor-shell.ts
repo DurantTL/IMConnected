@@ -72,13 +72,18 @@ if (root && form && body && sidebar) {
     else if (name === 'wider') setWidth(Math.min(shownWidth() + SIDEBAR_WIDTH_STEP, maxWidth()));
     else if (name === 'reset') { clearEditorLayout(); layout = { ...DEFAULT_EDITOR_LAYOUT }; applyLayout(); }
   }
-  for (const control of root.querySelectorAll<HTMLElement>('[data-layout-action]')) control.addEventListener('click', () => onLayoutAction(control.dataset.layoutAction!));
+  for (const control of root.querySelectorAll<HTMLElement>('[data-layout-action]')) control.addEventListener('click', () => {
+    const fromMenu = menu.contains(control);
+    onLayoutAction(control.dataset.layoutAction!);
+    if (fromMenu) { setMenu(false); menuButton.focus(); }
+  });
   wide.addEventListener('change', applyLayout);
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => applyLayout()).observe(body);
 
   // The layout menu: a button that opens a group; Escape closes it and gives focus back.
   const setMenu = (open: boolean) => { menu.hidden = !open; menuButton.setAttribute('aria-expanded', String(open)); };
   menuButton.addEventListener('click', () => setMenu(menu.hidden));
+  document.addEventListener('click', (event) => { if (!menu.hidden && !menu.contains(event.target as Node) && !menuButton.contains(event.target as Node)) setMenu(false); });
   const escapeMenu = (event: KeyboardEvent) => { if (event.key === 'Escape' && !menu.hidden) { event.stopPropagation(); setMenu(false); menuButton.focus(); } };
   menu.addEventListener('keydown', escapeMenu);
   menuButton.addEventListener('keydown', escapeMenu);
@@ -109,7 +114,7 @@ if (root && form && body && sidebar) {
   let navCurrent: 'editor' | 'settings' | 'review' = 'editor';
   function updateNav() {
     for (const link of bar.querySelectorAll<HTMLElement>('[data-editor-nav]')) {
-      if (link.dataset.editorNav === navCurrent && (navCurrent === 'editor' || sidebarShown())) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
+      if (link.dataset.editorNav === navCurrent && (navCurrent === 'editor' || sidebarShown())) link.setAttribute('aria-current', 'true'); else link.removeAttribute('aria-current');
     }
   }
   const visibleTabs = () => tabs.filter((t) => !t.hidden);
@@ -228,7 +233,7 @@ if (root && form && body && sidebar) {
     const sectionText = sectionSelect?.value ? [sectionSelect.selectedOptions[0]?.textContent, area].filter(Boolean).join(' · ') : '';
     const line = [sectionText, value('author'), value('date'), value('church')].filter(Boolean).join(' · ');
     for (const el of document.querySelectorAll('[data-details-text]')) el.textContent = line || 'Section, author and date are set in Story settings.';
-    const missing: Record<string, boolean> = { title: !value('title'), author: !value('author'), section: !value('section'), date: !value('date'), body: !bodyField.value.trim() && blocksField.value === '[]' };
+    const missing: Record<string, boolean> = { title: !value('title'), author: !value('author'), section: !value('section'), date: !value('date'), body: !bodyField.value.trim() };
     for (const li of document.querySelectorAll<HTMLElement>('[data-problem]')) li.hidden = !missing[li.dataset.problem!];
     const list = document.querySelector<HTMLElement>('.ed-problems'), ok = document.querySelector<HTMLElement>('.ed-ok');
     if (list && ok) { const any = Array.from(list.children).some((li) => !(li as HTMLElement).hidden); list.hidden = !any; ok.hidden = any; }
@@ -245,5 +250,4 @@ if (root && form && body && sidebar) {
   ready = true;
   // After a photo action the page comes back to the photos.
   if (['photos', 'uploaded', 'photo_moved', 'photos_markers', 'photo_replaced', 'photo_unchanged'].includes(notice ?? '') && !location.hash) document.getElementById('photos')?.scrollIntoView({ block: 'start' });
-  void previewFrame;
 }
