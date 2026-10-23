@@ -134,6 +134,16 @@ const nav = [
   /* Bulk publish / unpublish (issue #88) */
   .bulk-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 12px; margin: 0 0 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
   .bulk-bar p { margin: 0; }
+  .bulk-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .bulk-buttons .cms-btn + .cms-btn { margin-left: 0; }
+  .bulk-fields { display: grid; gap: 14px; margin: 0 0 16px; }
+  .bulk-field { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin: 0; min-width: 0; }
+  .bulk-sub { border-style: dashed; margin: 8px 0; }
+  .bulk-field legend { font-weight: 700; padding: 0 6px; }
+  .bulk-field label { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+  .bulk-field input[type=checkbox], .bulk-field input[type=radio] { width: 22px; height: 22px; margin: 0; flex: none; }
+  .bulk-field select, .bulk-field input[type=date], .bulk-field textarea { min-height: 44px; max-width: 100%; font: inherit; }
+  .bulk-changes { margin: 0 0 16px; padding-left: 1.2em; display: grid; gap: 6px; font-weight: 600; }
   .bulk-all { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 600; cursor: pointer; }
   .bulk-all[hidden], .bulk-count[hidden] { display: none; }
   .bulk-all input, .bulk-pick input { width: 22px; height: 22px; margin: 0; flex: none; }

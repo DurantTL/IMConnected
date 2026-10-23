@@ -1,9 +1,9 @@
 import { normalizeAdditionalSections } from './site';
 import { getDb } from './db';
 import type { DraftFields } from './drafts';
-import { normalizeStoryBlocks } from './story-blocks';
+import { normalizeStoryBlocks, photoFit, photoFitFill, type PhotoFit, type PhotoFitFill } from './story-blocks';
 import { normalizeAnnouncement } from './announcement';
-export interface RevisionPhoto { id: number; key: string; alt: string; caption: string; focalX: number; focalY: number; zoom: number }
+export interface RevisionPhoto { id: number; key: string; alt: string; caption: string; focalX: number; focalY: number; zoom: number; fit?: PhotoFit; fitFill?: PhotoFitFill }
 export interface EditorialSnapshot { fields: DraftFields; photos: RevisionPhoto[] }
 /** Explicit editorial whitelist. Never spread Draft: it contains private submission/account data. */
 export function editorialSnapshot(id: number, f: DraftFields): EditorialSnapshot {
@@ -12,8 +12,8 @@ export function editorialSnapshot(id: number, f: DraftFields): EditorialSnapshot
     church: f.church, date: f.date, photoCredit: f.photoCredit, photoLayout: f.photoLayout, featured: f.featured, body: f.body,
     storyBlocks: normalizeStoryBlocks(f.storyBlocks ?? []), announcement: normalizeAnnouncement(f.announcement),
   };
-  const rows = getDb().prepare('SELECT id, media_key, alt, caption, focal_x, focal_y, zoom FROM draft_photos WHERE draft_id=? ORDER BY position').all(id) as Record<string, unknown>[];
-  const photos = rows.map((p) => ({ id: Number(p.id), key: String(p.media_key), alt: String(p.alt), caption: String(p.caption), focalX: Number(p.focal_x), focalY: Number(p.focal_y), zoom: Number(p.zoom) }));
+  const rows = getDb().prepare('SELECT id, media_key, alt, caption, focal_x, focal_y, zoom, fit, fit_fill FROM draft_photos WHERE draft_id=? ORDER BY position').all(id) as Record<string, unknown>[];
+  const photos = rows.map((p) => ({ id: Number(p.id), key: String(p.media_key), alt: String(p.alt), caption: String(p.caption), focalX: Number(p.focal_x), focalY: Number(p.focal_y), zoom: Number(p.zoom), fit: photoFit(p.fit), fitFill: photoFitFill(p.fit_fill) }));
   return { fields, photos };
 }
 export function recordDraftRevision(id: number, userId: number, snapshot: EditorialSnapshot): void {

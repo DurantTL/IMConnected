@@ -37,7 +37,7 @@ export interface FeedItem {
   photoLayout: string;
   storyBlocks?: StoryBlock[];
   announcement?: Announcement | null;
-  photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
+  photoFocus?: { focalX: number; focalY: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' }[];
   featured: boolean;
 }
 
@@ -63,7 +63,7 @@ export interface FeedSource {
     photoLayout?: string;
     storyBlocks?: StoryBlock[];
     announcement?: Announcement | null;
-    photoFocus?: { focalX: number; focalY: number; zoom?: number }[];
+    photoFocus?: { focalX: number; focalY: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' }[];
     featured: boolean;
   };
 }
@@ -93,7 +93,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     photoAlts: d.photos.map((_, i) => d.photoAlts[i] ?? ''),
     photoLayout: photoLayoutOrDefault(d.photoLayout),
     ...(d.storyBlocks?.length ? { storyBlocks: mapStoryPhotos(escapeStoryBlocks(d.storyBlocks), (b) => b.url ? { ...b, url: abs(b.url) } : b) } : {}),
-    ...(d.photoFocus?.some((p) => p.focalX !== 50 || p.focalY !== 50 || (p.zoom ?? 1) !== 1) ? { photoFocus: d.photoFocus } : {}),
+    ...(d.photoFocus?.some((p) => p.focalX !== 50 || p.focalY !== 50 || (p.zoom ?? 1) !== 1 || (p.fit ?? 'cover') !== 'cover') ? { photoFocus: d.photoFocus } : {}),
     ...(d.announcement ? { announcement: d.announcement } : {}),
     featured: d.featured,
   };

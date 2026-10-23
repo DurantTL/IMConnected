@@ -69,5 +69,11 @@ export function restrictPreviewImages(html: string, ownHosts: string[] = []): st
       try { if (own.has(host(new URL(src).hostname))) return ''; } catch { return ''; }
     }
     return tag;
+  }).replace(/--fit-src:url\((?:"|&quot;)(.*?)(?:"|&quot;)\);?/g, (decl, raw: string) => {
+    // The blur fill is a CSS background, so it needs the same allow-list as <img src>.
+    const src = raw.replace(/&amp;/g, '&');
+    if (!PREVIEW_IMG.test(src) || src.split('/').includes('..')) return '';
+    if (src.startsWith('https:')) { try { if (own.has(host(new URL(src).hostname))) return ''; } catch { return ''; } }
+    return decl;
   });
 }

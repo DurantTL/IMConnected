@@ -1,7 +1,7 @@
 ---
 import { countStoryBlocks } from '../../../lib/story-blocks';
 import Admin from '../../../layouts/Admin.astro';
-import { photoFocusStyle } from '../../../lib/story-blocks';
+import { photoFocusStyle, photoFrameAttrs } from '../../../lib/story-blocks';
 import { SECTIONS } from '../../../lib/site';
 import { LIMITS } from '../../../lib/limits';
 import { PHOTO_LAYOUTS } from '../../../lib/photo-layouts';
@@ -301,26 +301,37 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               <ol class="ed-photos">
                 {photos.map((p, i) => (
                   <li class="ed-photo">
-                    <div class="sb-photo-preview"><span class="sb-crop-label">Reader crop preview</span>{(p.path || p.url && safeImg(p.url)) ? <div class="sb-pan-crop" data-pan-photo={p.id} tabindex={editable ? 0 : -1} role="group" aria-label={`Pan crop for photo ${i + 1}. Drag the image or use arrow keys. Shift moves ten percent.`}><img data-focus-preview={p.id} src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt="" draggable="false" style={photoFocusStyle(p)} referrerpolicy="no-referrer" /></div> : <div></div>}<p class="admin-note">Drag the crop to move the image. Arrow keys pan; Shift moves faster.</p></div>
+                    <div class="sb-photo-preview"><span class="sb-crop-label">Reader crop preview</span>{(p.path || p.url && safeImg(p.url)) ? <div class="sb-pan-crop" data-pan-photo={p.id} tabindex={editable && p.fit !== 'contain' ? 0 : -1} aria-disabled={p.fit === 'contain' ? 'true' : undefined} {...(photoFrameAttrs(p, p.path ? `/api/admin/photos/${p.id}` : p.url!) ?? {})} role="group" aria-label={`Pan crop for photo ${i + 1}. Drag the image or use arrow keys. Shift moves ten percent.`}><img data-focus-preview={p.id} src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt="" draggable="false" style={photoFocusStyle({ ...p, fit: 'cover' })} referrerpolicy="no-referrer" /></div> : <div></div>}<p class="admin-note" data-pan-note={p.id}>{p.fit === 'contain' ? 'The whole photo is shown, so there is nothing to pan.' : 'Drag the crop to move the image. Arrow keys pan; Shift moves faster.'}</p></div>
                     <div class="fields">
                       <strong>{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
                       <label>Alt text (describe the photo for readers who can't see it)
                         <input type="text" name={`photo_${p.id}_alt`} value={p.alt} maxlength="300" autocomplete="off" />
                       </label>
                       {(p.path || p.url && safeImg(p.url)) && <details class="sb-focus-settings" open={i === 0}><summary>Adjust image focus</summary>
+                        <div class="sb-fit" data-fit-group={p.id}>
+                          <input type="hidden" name={`photo_${p.id}_fit`} value="cover" />
+                          <label class="sb-fit-toggle"><input type="checkbox" name={`photo_${p.id}_fit`} value="contain" checked={p.fit === 'contain'} data-fit-toggle={p.id} aria-describedby={`fit-help-${p.id}`} /> <span>Fit whole photo</span></label>
+                          <p class="admin-note" id={`fit-help-${p.id}`}>Show the entire photo instead of cropping it. Zoom and pan are turned off while this is on.</p>
+                          <fieldset class="sb-fit-fill" data-fit-fill-group={p.id} disabled={p.fit !== 'contain'}>
+                            <legend>Fill behind the photo</legend>
+                            <label><input type="radio" name={`photo_${p.id}_fitFill`} value="blur" checked={p.fitFill === 'blur'} /> <span>Blurred photo</span></label>
+                            <label><input type="radio" name={`photo_${p.id}_fitFill`} value="paper" checked={p.fitFill === 'paper'} /> <span>Page color</span></label>
+                            <label><input type="radio" name={`photo_${p.id}_fitFill`} value="navy" checked={p.fitFill === 'navy'} /> <span>Navy</span></label>
+                          </fieldset>
+                        </div>
                         <p class="admin-note">Drag the marker to the subject. Arrow keys move it; Shift + arrow moves 10%. The original image stays unchanged.</p>
-                        <div class="sb-focal" tabindex={editable ? 0 : -1} role="group" aria-label={`Focal point for photo ${i + 1}. Use arrow keys to adjust.`} data-focal={p.id}>
+                        <div class="sb-focal" tabindex={editable && p.fit !== 'contain' ? 0 : -1} aria-disabled={p.fit === 'contain' ? 'true' : undefined} role="group" aria-label={`Focal point for photo ${i + 1}. Use arrow keys to adjust.`} data-focal={p.id}>
                           <img src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt={p.alt || `Photo ${i + 1}`} draggable="false" referrerpolicy="no-referrer" />
                           <span class="sb-focal-marker" aria-hidden="true" style={`left:${p.focalX ?? 50}%;top:${p.focalY ?? 50}%`}></span>
                         </div>
                         <div class="sb-focal-values">
-                          <label>Horizontal focus<input type="range" min="0" max="100" step="any" name={`photo_${p.id}_focalX`} value={p.focalX ?? 50} aria-label={`Photo ${i + 1} horizontal focus`} /></label>
-                          <label>Vertical focus<input type="range" min="0" max="100" step="any" name={`photo_${p.id}_focalY`} value={p.focalY ?? 50} aria-label={`Photo ${i + 1} vertical focus`} /></label>
-                          <button type="button" data-center-focus={p.id}>Center focus</button>
+                          <label>Horizontal focus<input type="range" min="0" max="100" step="any" name={`photo_${p.id}_focalX`} value={p.focalX ?? 50} disabled={p.fit === 'contain'} aria-label={`Photo ${i + 1} horizontal focus`} /></label>
+                          <label>Vertical focus<input type="range" min="0" max="100" step="any" name={`photo_${p.id}_focalY`} value={p.focalY ?? 50} disabled={p.fit === 'contain'} aria-label={`Photo ${i + 1} vertical focus`} /></label>
+                          <button type="button" data-center-focus={p.id} disabled={p.fit === 'contain'}>Center focus</button>
                         </div>
                         <div class="sb-zoom-controls">
-                          <label>Zoom <output data-zoom-output={p.id}>{Math.round(p.zoom * 100)}%</output><input type="range" min="1" max="3" step="0.01" name={`photo_${p.id}_zoom`} value={p.zoom} aria-valuetext={`${Math.round(p.zoom * 100)} percent`} aria-label={`Photo ${i + 1} zoom`} /></label>
-                          <div><button type="button" data-zoom-photo={p.id} data-zoom-step="-0.1" aria-label={`Zoom photo ${i + 1} out`}>−</button><button type="button" data-zoom-photo={p.id} data-zoom-step="0.1" aria-label={`Zoom photo ${i + 1} in`}>+</button><button type="button" data-reset-crop={p.id}>Reset crop</button></div>
+                          <label>Zoom <output data-zoom-output={p.id}>{Math.round(p.zoom * 100)}%</output><input type="range" min="1" max="3" step="0.01" name={`photo_${p.id}_zoom`} value={p.zoom} disabled={p.fit === 'contain'} aria-valuetext={`${Math.round(p.zoom * 100)} percent`} aria-label={`Photo ${i + 1} zoom`} /></label>
+                          <div><button type="button" data-zoom-photo={p.id} data-zoom-step="-0.1" disabled={p.fit === 'contain'} aria-label={`Zoom photo ${i + 1} out`}>−</button><button type="button" data-zoom-photo={p.id} data-zoom-step="0.1" disabled={p.fit === 'contain'} aria-label={`Zoom photo ${i + 1} in`}>+</button><button type="button" data-reset-crop={p.id} disabled={p.fit === 'contain'}>Reset crop</button></div>
                         </div>
                         <output data-focus-output={p.id} aria-live="polite">{p.focalX ?? 50}% horizontal, {p.focalY ?? 50}% vertical</output>
                       </details>}
@@ -401,5 +412,5 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
     </div>
   )}
 </Admin>
-<script type="application/json" id="story-builder-data" set:html={JSON.stringify({ emptyStory: !draft?.body.trim() && !(draft?.storyBlocks?.length), photos: photos.map((p) => ({ id: p.id, src: p.path ? `/api/admin/photos/${p.id}` : p.url && safeImg(p.url) ? p.url : '', alt: p.alt, focalX: p.focalX ?? 50, focalY: p.focalY ?? 50, zoom: p.zoom })) }).replace(/</g, '\\u003c')}></script>
+<script type="application/json" id="story-builder-data" set:html={JSON.stringify({ emptyStory: !draft?.body.trim() && !(draft?.storyBlocks?.length), photos: photos.map((p) => ({ id: p.id, src: p.path ? `/api/admin/photos/${p.id}` : p.url && safeImg(p.url) ? p.url : '', alt: p.alt, focalX: p.focalX ?? 50, focalY: p.focalY ?? 50, zoom: p.zoom, fit: p.fit, fitFill: p.fitFill })) }).replace(/</g, '\\u003c')}></script>
 <script>import '../../../scripts/draft-editor';</script>

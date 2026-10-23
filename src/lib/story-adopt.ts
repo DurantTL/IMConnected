@@ -238,7 +238,7 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
       for (let i = 0; i < located.length; i++) photoRows.push(await mirrorPhoto(clientDir, slug, located[i], i, known.find((k) => k.position === i), prevSrc[i], result));
       photoRows.forEach((row, i) => {
         const point = d.photoFocus?.[i];
-        if (point && (point.focalX !== 50 || point.focalY !== 50 || (point.zoom ?? 1) !== 1)) { row.focalX = point.focalX; row.focalY = point.focalY; row.zoom = point.zoom ?? 1; }
+        if (point && (point.focalX !== 50 || point.focalY !== 50 || (point.zoom ?? 1) !== 1 || (point.fit ?? 'cover') !== 'cover' || (point.fitFill ?? 'blur') !== 'blur')) { row.focalX = point.focalX; row.focalY = point.focalY; row.zoom = point.zoom ?? 1; row.fit = point.fit ?? 'cover'; row.fitFill = point.fitFill ?? 'blur'; }
       });
       await testPause(slug);
       const hold = holds.get(slug);

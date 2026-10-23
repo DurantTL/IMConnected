@@ -39,6 +39,8 @@ export function agentDraftView(draft: Draft, editorTouched: boolean) {
       focalX: p.focalX,
       focalY: p.focalY,
       zoom: p.zoom,
+      fit: p.fit,
+      fitFill: p.fitFill,
     })),
   };
 }

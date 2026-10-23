@@ -56,6 +56,8 @@ try {
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-store.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-blocks.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-block-render.ts'))};`,
+          `export { renderInlinePhoto } from ${JSON.stringify(path.join(root, 'src/lib/story-media-render.ts'))};`,
+          `export { restrictPreviewImages } from ${JSON.stringify(path.join(root, 'src/lib/markdown.ts'))};`,
         ].join('\n');
       },
     }],
@@ -370,6 +372,75 @@ try {
   const remappedMarkers = m.restoreMediaMarkers(markerSource, ['gone', 'kept'], ['kept', 'replacement']);
   assert.ok(remappedMarkers.missing); assert.match(remappedMarkers.body, /^\{\{photo missing\}\}$/m); assert.match(remappedMarkers.body, /^\{\{gallery missing\}\}$/m); assert.match(remappedMarkers.body, /`\{\{photo 1\}\}`/); assert.match(remappedMarkers.body, /```text\n\{\{photo 1\}\}\n```/); assert.ok(remappedMarkers.body.endsWith('\\{{photo 1}}'));
   assert.equal(m.restoreMediaMarkers('{{photo 3}}', ['gone'], ['a', 'b', 'new']).body, '{{photo missing}}', 'old invalid index cannot acquire a replacement photo');
+  // Fit whole photo (issue #82): editor form -> draft -> publish -> reopen -> republish, revisions, Studio.
+  {
+    const fid = m.createDraft({ source: 'editor', userId: user, fields: { title: 'Synthetic fit story', author: 'Synthetic Editor', section: 'news', area: 'conference', body: 'Synthetic fit body text.' } });
+    const fp = addPhoto(fid, 'Synthetic tall photo', 99);
+    assert.deepEqual([fp.fit, fp.fitFill], ['cover', 'blur'], 'new photos default to cover and a blur fill');
+    assert.throws(() => db.prepare("UPDATE draft_photos SET fit='stretch' WHERE id=?").run(fp.id), /CHECK constraint/);
+    assert.throws(() => db.prepare("UPDATE draft_photos SET fit_fill='red' WHERE id=?").run(fp.id), /CHECK constraint/);
+    const fitSave = (entries) => {
+      const f = new FormData();
+      for (const [k, v] of entries) f.append(`photo_${fp.id}_${k}`, v);
+      const r = m.readDraftFields(f);
+      return { r, saved: m.saveDraft(fid, m.getDraft(fid).updatedAt, { ...m.getDraft(fid) }, new Map(), user, null, r.photoFocus) };
+    };
+    const hidden = [['fit', 'cover']];
+    const first = fitSave([...hidden, ['fit', 'contain'], ['fitFill', 'navy']]);
+    assert.deepEqual(first.r.photoFocus.get(fp.id), { fit: 'contain', fitFill: 'navy' }, 'the checkbox value after the hidden cover wins');
+    assert.equal(first.saved.ok, true);
+    assert.equal(fitSave([]).r.photoFocus.size, 0, 'an older form without the fields sends nothing');
+    assert.deepEqual([m.listPhotos(fid)[0].fit, m.listPhotos(fid)[0].fitFill], ['contain', 'navy']);
+    assert.equal(m.saveDraft(fid, m.getDraft(fid).updatedAt, { ...m.getDraft(fid) }, new Map(), user).ok, true);
+    assert.deepEqual([m.listPhotos(fid)[0].fit, m.listPhotos(fid)[0].fitFill], ['contain', 'navy'], 'an older save preserves fit and fill');
+    for (const bad of [[['fit', 'sideways']], [['fit', 'cover'], ['fitFill', 'purple']]]) assert.throws(() => fitSave(bad), /fit/i);
+    const pub1 = await m.publishDraft(m.getDraft(fid), m.listPhotos(fid), m.getDraft(fid).updatedAt, user);
+    const live1 = m.getStoryBySlug(pub1.slug);
+    assert.deepEqual([live1.photoRows[0].fit, live1.photoRows[0].fitFill], ['contain', 'navy'], 'publishing copies fit to story_photos');
+    const loadedFit = m.loadStory(pub1.slug);
+    assert.deepEqual([loadedFit.photos[0].fit, loadedFit.photos[0].fitFill], ['contain', 'navy']);
+    m.reloadDraftFromStory(fid, user, loadedFit.fields, loadedFit.photos);
+    assert.deepEqual([m.listPhotos(fid)[0].fit, m.listPhotos(fid)[0].fitFill], ['contain', 'navy'], 'Edit (reopen into a draft) keeps fit');
+    const pub2 = await m.publishDraft(m.getDraft(fid), m.listPhotos(fid), m.getDraft(fid).updatedAt, user);
+    const live2 = m.getStoryBySlug(pub2.slug);
+    assert.deepEqual([live2.photoRows[0].fit, live2.photoRows[0].fitFill], ['contain', 'navy'], 'republishing keeps fit');
+    // Revisions keep fit: switch to cover (records the contain state), then restore it.
+    const again = m.loadStory(pub2.slug);
+    m.reloadDraftFromStory(fid, user, again.fields, again.photos);
+    assert.equal(fitSave([['fit', 'cover'], ['fitFill', 'paper']]).saved.ok, true);
+    assert.deepEqual([m.listPhotos(fid)[0].fit, m.listPhotos(fid)[0].fitFill], ['cover', 'paper']);
+    const fitRevision = m.listDraftRevisions(fid)[0].id;
+    assert.equal(JSON.parse(db.prepare('SELECT payload FROM draft_revisions WHERE id=?').get(fitRevision).payload).photos[0].fit, 'contain', 'the revision whitelist records fit');
+    assert.equal(m.restoreDraftRevision(fid, m.getDraft(fid).updatedAt, fitRevision, user).ok, true);
+    assert.deepEqual([m.listPhotos(fid)[0].fit, m.listPhotos(fid)[0].fitFill], ['contain', 'navy'], 'restoring a revision keeps fit and fill');
+    // A revision from before migration 027 has no fit: restoring it gives the defaults (only the editor form preserves on omission).
+    const oldPayload = JSON.parse(db.prepare('SELECT payload FROM draft_revisions WHERE id=?').get(fitRevision).payload);
+    for (const p of oldPayload.photos) { delete p.fit; delete p.fitFill; }
+    db.prepare('UPDATE draft_revisions SET payload=? WHERE id=?').run(JSON.stringify(oldPayload), fitRevision);
+    assert.equal(m.restoreDraftRevision(fid, m.getDraft(fid).updatedAt, fitRevision, user).ok, true);
+    assert.deepEqual([m.listPhotos(fid)[0].fit, m.listPhotos(fid)[0].fitFill], ['cover', 'blur'], 'restoring a pre-027 revision defaults to cover and blur');
+    // The private preview's blur background obeys the same allow-list as <img src>.
+    const own = m.restrictPreviewImages(m.renderInlinePhoto({ src: 'https://own.invalid/a.png', alt: 'x', fit: 'contain', fitFill: 'blur' }, true), ['own.invalid']);
+    assert.ok(!/--fit-src/.test(own) && !/<img/.test(own), 'a refused preview image leaves no --fit-src');
+    const okPreview = m.restrictPreviewImages(m.renderInlinePhoto({ src: '/api/admin/photos/3', alt: 'x', fit: 'contain', fitFill: 'blur' }, true), ['own.invalid']);
+    assert.ok(/--fit-src:url\(/.test(okPreview) && /<img/.test(okPreview), 'an allowed preview image keeps its blur');
+    const forged = m.restrictPreviewImages('<a data-fit="contain" style="--fit-src:url(&quot;/admin/secret.png&quot;);"><img src="/api/admin/photos/3" alt=""></a>', []);
+    assert.ok(!/--fit-src/.test(forged) && /<img/.test(forged), 'a --fit-src outside the allow-list is dropped');
+    // Studio publish: with and without the fields.
+    const sa = { url: pngData(52), alt: 'Synthetic fit A', caption: '' };
+    const s1 = await sendStudio(studioRequest([sa], 'Synthetic Studio fit'));
+    const sslug = s1.stories[0].slug;
+    const fitOf = () => m.getStoryBySlug(sslug).photoRows.map((p) => [p.fit, p.fitFill]);
+    assert.deepEqual(fitOf(), [['cover', 'blur']], 'Studio without the fields uses the defaults');
+    await sendStudio(studioRequest([{ ...sa, fit: 'contain', fitFill: 'paper' }], 'Synthetic Studio fit'));
+    assert.deepEqual(fitOf(), [['contain', 'paper']], 'Studio sets fit and fill');
+    await sendStudio(studioRequest([sa], 'Synthetic Studio fit'));
+    assert.deepEqual(fitOf(), [['contain', 'paper']], 'omitting the fields preserves the stored fit for the same photo');
+    await sendStudio(studioRequest([{ ...sa, fit: 'cover' }], 'Synthetic Studio fit'));
+    assert.deepEqual(fitOf(), [['cover', 'paper']], 'an explicit cover resets the fit; the fill is preserved');
+    for (const bad of [{ fit: 'zoom' }, { fit: null }, { fitFill: 'red' }, { fitFill: 3 }]) assert.throws(() => m.prepareStudioPublish(studioRequest([{ ...sa, ...bad }], 'Synthetic Studio fit')), /fit/i);
+    console.log('PASS fit whole photo: form parsing, older-form preservation, publish, reopen, republish, revision restore, Studio with and without fields');
+  }
   console.log('PASS persisted revisions: privacy, retention20, unchanged saves, draft scope, conflicts, atomic restore/audit, failure cleanup, ID reuse and inert marker examples');
   console.log('PASS modules and Studio crop compatibility: migration, legacy save, conflicts, publish/reopen, validation, identity/reorder, partial omissions, races, open drafts and rollback');
 } finally {

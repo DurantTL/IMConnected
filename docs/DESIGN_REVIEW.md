@@ -29,6 +29,10 @@ This follow-up starts from the refreshed `main` at `d218010`, including the late
 - Public story search has a new discovery layout, visible labels, automatic section filtering, clear/reset and no-match recovery. Query/section feedback reflects the returned count, including the 20-result cap. URL history and request ordering are covered by browser regressions.
 - Issue **#38** was reproduced with only 50 of 121 stored stories indexed. Initial search now reports temporary unavailability until all live, non-draft rows have current index stamps. Catch-up runs in bounded background batches and retries after locks. Restart, failed-row and steady-state repair behavior are covered by tests.
 
+## Fit whole photo (issue #82)
+
+Migration 027 adds `fit` (`cover`|`contain`) and `fit_fill` (`blur`|`paper`|`navy`) to draft and published photos. The Photos panel's Fit whole photo toggle shows the entire image in its frame over a blurred copy, the page color or navy; zoom and pan are disabled while it is on. The frame carries `data-fit="contain"`, the blur is a CSS background, and the full-image link is unchanged. Older forms that omit the fields preserve stored values.
+
 ## Image zoom and pan follow-up
 
 The Photos panel now has a crop you can drag, keyboard panning, 100–300% Zoom, +/− buttons and Reset crop. The existing focal marker and horizontal/vertical sliders remain available. Saved metadata follows a photo through publish, live-story reopening, imports/adoption, private previews, inline modules, public cards/layouts and the optional version-1 feed fields. Original image bytes and full-image links remain intact. The editor uses a 16:9 crop preview; cards, paired photos and galleries keep their own proportions around the same focal point.

@@ -105,7 +105,7 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
     <p class="admin-note">No drafts match. Items of this content type will appear here. Switch to All drafts to review every type together.</p>
   ) : (
     <>
-    {canBulk && <BulkBar action="publish" label="Publish selected" noun="drafts" />}
+    {canBulk && <BulkBar action="publish" label="Publish selected" noun="drafts" more={[{ action: "edit", label: "Edit fields" }, { action: "reject", label: "Reject selected", danger: true }]} />}
     <ul class="cms-list">
       {drafts.map((d) => {
         const pickable = d.status === 'new' || d.status === 'in_review';

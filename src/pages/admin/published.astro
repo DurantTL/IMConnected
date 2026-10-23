@@ -47,7 +47,7 @@ const base = siteUrl();
     <p class="admin-note">No published stories yet.</p>
   ) : (
     <>
-    {!loadFailed && <BulkBar action="unpublish" label="Unpublish selected" noun="stories" />}
+    {!loadFailed && <BulkBar action="unpublish" label="Unpublish selected" noun="stories" more={[{ action: "editstory", label: "Edit fields" }]} />}
     <ul class="cms-list">
       {list.map((r) => (
         <li class="cms-item">

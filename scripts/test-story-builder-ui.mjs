@@ -295,6 +295,54 @@ try {
   check('private preview loads the authenticated uploaded image', true);
   check('private preview matches the saved zoom and clips the image', await page.frameLocator('#preview').locator('.story-module-image img').evaluate((image) => image.style.scale === '1.8' && getComputedStyle(image.parentElement).overflow === 'hidden'));
   check('preview keeps scripts disabled in its sandbox', !(await page.locator('#preview').getAttribute('sandbox') || '').split(/\s+/).includes('allow-scripts'));
+  // Fit whole photo (issue #82): live preview, disabled zoom and pan, accessible controls, persistence, then back to the crop.
+  {
+    await page.locator('[data-studio-tab=photos]').click();
+    await page.locator('.sb-focus-settings').first().evaluate((details) => { details.open = true; });
+    const fitBox = page.getByRole('checkbox', { name: 'Fit whole photo', exact: true });
+    const fillGroup = page.getByRole('group', { name: 'Fill behind the photo' });
+    const frame = page.locator(`[data-pan-photo="${photo.id}"]`);
+    await fitBox.scrollIntoViewIfNeeded();
+    check('Fit whole photo is an unchecked, labelled checkbox and the fill choice is disabled while it is off', !(await fitBox.isChecked()) && await fillGroup.evaluate((g) => g.disabled) && await frame.getAttribute('data-fit') === null);
+    const zoomValueBefore = await page.locator(`[name="photo_${photo.id}_zoom"]`).inputValue();
+    await fitBox.check();
+    check('turning it on disables zoom, pan and focus controls (kept values are not lost) and enables the fill choice', await page.locator(`[name="photo_${photo.id}_zoom"], [name="photo_${photo.id}_focalX"], [name="photo_${photo.id}_focalY"], [data-zoom-photo="${photo.id}"], [data-center-focus="${photo.id}"], [data-reset-crop="${photo.id}"]`).evaluateAll((els) => els.length >= 7 && els.every((el) => el.disabled)) && !(await fillGroup.evaluate((g) => g.disabled)) && await page.locator(`[name="photo_${photo.id}_zoom"]`).inputValue() === zoomValueBefore && await frame.getAttribute('aria-disabled') === 'true' && await frame.getAttribute('tabindex') === '-1');
+    const preview = async () => frame.evaluate((el) => { const img = el.querySelector('img'); const cs = getComputedStyle(img); return { fit: cs.objectFit, scale: cs.scale, bg: getComputedStyle(el).backgroundColor, before: getComputedStyle(el, '::before').backgroundImage, attr: el.dataset.fitFill }; });
+    let live = await preview();
+    check('the live preview shows the whole photo (object-fit contain, no zoom) over a blurred copy by default', live.fit === 'contain' && live.scale === 'none' && live.attr === 'blur' && /url\(/.test(live.before), JSON.stringify(live));
+    await page.getByRole('radio', { name: 'Navy', exact: true }).check();
+    live = await preview();
+    check('choosing Navy fills the preview with #0B3954', live.attr === 'navy' && live.bg === 'rgb(11, 57, 84)', JSON.stringify(live));
+    await page.getByRole('radio', { name: 'Page color', exact: true }).check();
+    live = await preview();
+    check('choosing Page color fills the preview with the page background', live.attr === 'paper' && live.bg === await page.evaluate(() => { const probe = document.createElement('div'); probe.style.background = 'var(--bg)'; document.body.append(probe); const c = getComputedStyle(probe).backgroundColor; probe.remove(); return c; }), JSON.stringify(live));
+    await page.getByRole('radio', { name: 'Blurred photo', exact: true }).check();
+    const targets = await page.evaluate(() => [...document.querySelectorAll('.sb-fit-toggle, .sb-fit-fill label')].map((el) => Math.round(el.getBoundingClientRect().height)));
+    check('the checkbox row and every fill option are at least 44px tall', targets.length === 4 && targets.every((h) => h >= 44), targets.join(','));
+    await fitBox.focus();
+    await page.keyboard.press('Space');
+    check('the checkbox works from the keyboard', !(await fitBox.isChecked()) && await frame.getAttribute('data-fit') === null && await page.locator(`[name="photo_${photo.id}_zoom"]`).evaluate((el) => !el.disabled));
+    await page.keyboard.press('Space');
+    await page.getByRole('radio', { name: 'Navy', exact: true }).check();
+    const fitSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
+    await page.locator('#save-btn').click();
+    check('saving with Fit whole photo on succeeds', (await fitSave).status() === 200);
+    await page.reload();
+    await page.locator('[data-studio-tab=photos]').click();
+    await page.locator('.sb-focus-settings').first().evaluate((details) => { details.open = true; });
+    const stored = db.prepare('SELECT zoom, fit, fit_fill FROM draft_photos WHERE id=?').get(photo.id);
+    check('fit and fill are stored, the saved zoom is untouched, and the editor reopens with them on', stored.fit === 'contain' && stored.fit_fill === 'navy' && stored.zoom === 1.8 && await fitBox.isChecked() && await page.getByRole('radio', { name: 'Navy', exact: true }).isChecked() && await page.locator(`[name="photo_${photo.id}_zoom"]`).isDisabled() && await frame.getAttribute('data-fit') === 'contain');
+    if (shots) { await page.evaluate(() => scrollTo(0, 0)); await page.screenshot({ path: path.join(shots, 'story-photo-fit-whole.png'), fullPage: true }); }
+    await fitBox.uncheck();
+    check('unticking without a reload brings the crop back: the preview is object-fit cover and the pan and zoom controls are enabled again', await frame.evaluate((el) => getComputedStyle(el.querySelector('img')).objectFit === 'cover' && el.querySelector('img').style.objectFit === '') && await page.locator(`[name="photo_${photo.id}_zoom"], [data-reset-crop="${photo.id}"]`).evaluateAll((els) => els.length === 2 && els.every((el) => !el.disabled)) && await frame.getAttribute('data-fit') === null);
+    const fitOff = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
+    await page.locator('#save-btn').click();
+    check('turning it off and saving restores the crop', (await fitOff).status() === 200 && db.prepare('SELECT zoom, fit FROM draft_photos WHERE id=?').get(photo.id).fit === 'cover');
+    await page.reload();
+    check('the earlier zoom and focus come back after switching the fit off', db.prepare('SELECT zoom, focal_x FROM draft_photos WHERE id=?').get(photo.id).zoom === 1.8 && await page.locator(`[name="photo_${photo.id}_zoom"]`).inputValue() === '1.8');
+    await page.locator('[data-studio-tab=content]').click();
+    await page.locator('#module-workspace').waitFor({ state: 'visible' });
+  }
   const canvasHeading = page.frameLocator('#preview').locator(`[data-module-id="${expected.find((block) => block.type === 'heading').id}"]`);
   await canvasHeading.press('Enter');
   check('Enter on a canvas module selects it, highlights it and focuses its inspector field', await canvasHeading.getAttribute('data-preview-selected') !== null && await canvasHeading.evaluate((module) => module.style.outline.includes('3px')) && await page.locator('[data-module-field="text"]').evaluate((field) => field === document.activeElement) && await page.locator('#module-title').textContent() === 'Heading settings');

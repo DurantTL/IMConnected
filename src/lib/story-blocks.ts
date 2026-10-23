@@ -10,6 +10,8 @@ export interface StoryPhotoRef {
   focalX?: number;
   focalY?: number;
   zoom?: number;
+  fit?: PhotoFit;
+  fitFill?: PhotoFitFill;
 }
 export interface StoryBlock extends StoryPhotoRef {
   id: string;
@@ -25,7 +27,11 @@ export interface StoryBlock extends StoryPhotoRef {
   spacing?: 'compact' | 'normal' | 'relaxed';
 }
 
-export interface PhotoCrop { focalX?: number; focalY?: number; zoom?: number }
+export const PHOTO_FITS = ['cover', 'contain'] as const;
+export const PHOTO_FIT_FILLS = ['blur', 'paper', 'navy'] as const;
+export type PhotoFit = (typeof PHOTO_FITS)[number];
+export type PhotoFitFill = (typeof PHOTO_FIT_FILLS)[number];
+export interface PhotoCrop { focalX?: number; focalY?: number; zoom?: number; fit?: PhotoFit; fitFill?: PhotoFitFill }
 
 
 export const STORY_BLOCK_LIMIT = 60;
@@ -106,6 +112,8 @@ function normalizePhoto(r: Record<string, unknown>): StoryPhotoRef {
   if (r.focalX !== undefined) p.focalX = focalPoint(r.focalX);
   if (r.focalY !== undefined) p.focalY = focalPoint(r.focalY);
   if (r.zoom !== undefined) p.zoom = photoZoom(r.zoom);
+  if (r.fit !== undefined) p.fit = photoFit(r.fit);
+  if (r.fitFill !== undefined) p.fitFill = photoFitFill(r.fitFill);
   return p;
 }
 
@@ -151,8 +159,43 @@ export function photoZoom(value: unknown): number {
   return Math.round(n * 100) / 100;
 }
 
-/** Zoomed images need a clipping parent. Defaults keep existing markup and object-position unchanged. */
+export function photoFit(value: unknown): PhotoFit {
+  if (value === undefined || value === null || value === '') return 'cover';
+  if (typeof value !== 'string' || !(PHOTO_FITS as readonly string[]).includes(value)) return error('Photo fit must be cover or contain.');
+  return value as PhotoFit;
+}
+
+export function photoFitFill(value: unknown): PhotoFitFill {
+  if (value === undefined || value === null || value === '') return 'blur';
+  if (typeof value !== 'string' || !(PHOTO_FIT_FILLS as readonly string[]).includes(value)) return error('Photo fit fill must be blur, paper or navy.');
+  return value as PhotoFitFill;
+}
+
+/** True when the photo is shown whole (object-fit: contain) instead of cropped. */
+export const isFitWhole = (crop?: PhotoCrop | null): boolean => crop?.fit === 'contain';
+
+/** Attributes for the clipping frame (the link or media box around the image) of a whole-photo fit; null for a cropped photo.
+ *  The blur fill is a CSS background of the frame (decorative: no element, no alt, not focusable). */
+export function photoFrameAttrs(crop: PhotoCrop | null | undefined, src: string, aspect?: string): { 'data-fit': 'contain'; 'data-fit-fill': PhotoFitFill; style: string } | null {
+  if (!isFitWhole(crop)) return null;
+  const fill = photoFitFill(crop?.fitFill);
+  let css = '';
+  if (fill === 'blur') {
+    try { css = `--fit-src:url("${src.replace(/[^A-Za-z0-9\-._~:/?#@!$&*+,;=%]/gu, (c) => encodeURIComponent(c))}");`; } catch { css = ''; } // an unencodable address means no blur
+  }
+  return { 'data-fit': 'contain', 'data-fit-fill': fill, style: `${css}${aspect ? `aspect-ratio:${aspect};` : ''}` };
+}
+/** The same attributes as an escaped HTML string, for the string renderers. */
+export function photoFrameHtml(crop: PhotoCrop | null | undefined, src: string, aspect?: string, baseStyle = ''): string {
+  const a = photoFrameAttrs(crop, src, aspect);
+  const style = `${a?.style ?? ''}${baseStyle}`.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return `${a ? ` data-fit="contain" data-fit-fill="${a['data-fit-fill']}"` : ''}${style ? ` style="${style}"` : ''}`;
+}
+
+/** Zoomed images need a clipping parent. Defaults keep existing markup and object-position unchanged.
+ *  A whole-photo fit ignores pan and zoom: the image is contained and centred inside its frame. */
 export function photoFocusStyle(focus?: PhotoCrop | null): string | undefined {
+  if (isFitWhole(focus)) return 'object-fit:contain;object-position:50% 50%;';
   const x = focalPoint(focus?.focalX), y = focalPoint(focus?.focalY);
   const zoom = photoZoom(focus?.zoom);
   return x === 50 && y === 50 && zoom === 1 ? undefined : `object-position:${x}% ${y}%;${zoom === 1 ? '' : `scale:${zoom};transform-origin:${x}% ${y}%;`}`;

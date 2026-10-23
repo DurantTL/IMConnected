@@ -4,7 +4,7 @@ import { storyBlockPhotos } from './story-blocks';
 // Reads the editor form (save and preview) into draft fields, refusing oversized values instead of cutting them.
 import { FIELD_MAX, type DraftFields } from './drafts';
 import { clean } from './storyfile';
-import { OWN_PHOTO_ERROR, checkStoryBlockLength, parseStoryBlocks, storyBlocksToMarkdown, photoZoom, type PhotoCrop } from './story-blocks';
+import { OWN_PHOTO_ERROR, checkStoryBlockLength, parseStoryBlocks, storyBlocksToMarkdown, photoZoom, photoFit, photoFitFill, type PhotoCrop } from './story-blocks';
 import { DEFAULT_PHOTO_LAYOUT } from './photo-layouts';
 
 function text(form: FormData, name: string, max: number, label: string): string {
@@ -73,6 +73,18 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
       if (Number(raw) < 0 || Number(raw) > 100) throw new Error('Photo focus must be between 0 and 100.');
       point[name] = Number(raw);
     }
+    photoFocus.set(id, point);
+  }
+  // Fit whole photo. The editor sends a hidden "cover" before its checkbox (value "contain"), so the LAST value wins and an unchecked
+  // box still means cover; a form that has neither field (an older page) preserves what the draft has.
+  for (const key of form.keys()) {
+    const match = /^photo_(\d{1,12})_(fit|fitFill)$/.exec(key);
+    if (!match) continue;
+    const id = Number(match[1]);
+    const raw = form.getAll(key).at(-1);
+    const point = photoFocus.get(id) ?? {};
+    if (match[2] === 'fit') point.fit = photoFit(raw);
+    else point.fitFill = photoFitFill(raw);
     photoFocus.set(id, point);
   }
   const photoAlts = new Map<number, string>();

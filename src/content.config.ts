@@ -34,7 +34,7 @@ const stories = defineCollection({
     photoLayout: z.enum(['one', 'twoUp', 'heroGrid', 'mosaic', 'stack']).default('one'),
     announcement: z.unknown().optional().transform((value) => normalizeAnnouncement(value)),
     storyBlocks: z.unknown().optional().transform((value) => normalizeStoryBlocks(value)),
-    photoFocus: z.array(z.object({ focalX: z.number().min(0).max(100), focalY: z.number().min(0).max(100), zoom: z.number().min(1).max(3).default(1) })).default([]),
+    photoFocus: z.array(z.object({ focalX: z.number().min(0).max(100), focalY: z.number().min(0).max(100), zoom: z.number().min(1).max(3).default(1), fit: z.enum(['cover', 'contain']).default('cover'), fitFill: z.enum(['blur', 'paper', 'navy']).default('blur') })).default([]),
     featured: z.boolean().default(false),
     draft: z.boolean().default(false),
   }).superRefine((d, ctx) => {
