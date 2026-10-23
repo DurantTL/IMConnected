@@ -6,11 +6,21 @@ export function featuredPanelStory(stories: PublicStory[]): PublicStory | undefi
   return stories.find((s) => s.data.featured && !s.data.announcement);
 }
 
+/**
+ * A comparison key for a church value, or '' when it should not be counted: whitespace collapsed, curly quotes straightened,
+ * case folded, "Seventh-day Adventist" and "SDA" the same token, and anything naming the conference office itself left out.
+ */
+export function churchKey(raw: string | undefined): string {
+  const t = (raw ?? '').replace(/[‘’‛′]/g, "'").replace(/[“”″]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!t || t.includes('conference')) return '';
+  return t.replace(/\bseventh[- ]day adventist\b/g, 'sda').replace(/\s+/g, ' ');
+}
+
 /** Live stories and distinct non-empty church values among them (trimmed, case-insensitive). Never an estimate. */
 export function siteCounts(stories: PublicStory[]): { stories: number; churches: number } {
   const churches = new Set<string>();
   for (const s of stories) {
-    const c = (s.data.church ?? '').trim().toLowerCase();
+    const c = churchKey(s.data.church);
     if (c) churches.add(c);
   }
   return { stories: stories.length, churches: churches.size };
