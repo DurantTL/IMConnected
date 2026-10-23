@@ -158,5 +158,7 @@
   .editor-studio .studio-primary-actions [data-studio-preview] { flex: 1; }
   .ed-strip .ed-live { margin-left: 0; }
   .ed-topbar-tools { width: 100%; }
+  .ed-undo { width: 100%; }
+  .ed-undo .cms-btn { flex: 1; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { .editor-studio * { scroll-behavior: auto !important; } }

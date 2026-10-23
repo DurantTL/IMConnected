@@ -104,7 +104,7 @@ if (form && blocksField) {
     undo.disabled = !editable || !history.length;
     redo.disabled = !editable || !future.length;
     const count = document.getElementById('module-count');
-    if (count) count.textContent = String(countStoryBlocks(blocks));
+    if (count) count.textContent = modular ? String(countStoryBlocks(blocks)) : '';
     const summary = document.querySelector('[data-review-content]');
     if (summary) summary.textContent = modular ? `${countStoryBlocks(blocks)} modules` : 'Markdown story';
     const start = document.getElementById('module-start-writing');

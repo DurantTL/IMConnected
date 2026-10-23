@@ -280,7 +280,7 @@ try {
   await page.waitForLoadState('load');
   await page.waitForFunction(() => document.querySelector('#photo-reorder-live')?.textContent === 'Photo moved to position 3 of 3.');
   check('the position is announced by a live region filled after load (it is not in the page at load)', await page.locator('#photo-reorder-live').getAttribute('data-announce') === 'Photo moved to position 3 of 3.' && await page.locator('.admin-ok[role=status]').count() === 0);
-  check('after the reload the Photos tab is open and focus is on a control of the moved photo', await page.locator('[data-studio-tab="photos"]').getAttribute('aria-selected') === 'true' && await page.evaluate((pid) => !!document.activeElement?.closest(`li[data-photo-item="${pid}"]`) && document.activeElement.matches('button'), String(a.id)));
+  check('after the reload the Photos part is open and focus is on a control of the moved photo', await page.locator('[data-studio-tab="photos"]').getAttribute('aria-current') === 'true' && await page.evaluate((pid) => !!document.activeElement?.closest(`li[data-photo-item="${pid}"]`) && document.activeElement.matches('button'), String(a.id)));
   check('markers followed the dragged photo (A was 1, now 3; B 2 -> 1, C 3 -> 2; the code examples stay literal)', draft(id).body.includes('{{photo 1}}\n\n{{photo 2 wide}}') && draft(id).body.includes('```\n{{photo 1}}\n```') && draft(id).body.includes('`{{photo 3}}`'), draft(id).body);
   check('the drag recorded exactly one revision and one audit entry', revisions(id) === dragRev0 + 1 && audits('draft.photo_move') === dragAudit0 + 1);
   // buttons by click

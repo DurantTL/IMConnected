@@ -374,14 +374,14 @@ try {
     check('enhanced canvas DOM snapshot passes axe WCAG A/AA checks', canvasViolations.length === 0);
 
     const accessibility = [];
-    for (const panel of ['content', 'settings', 'photos', 'review']) {
-      await page.locator(`[data-studio-tab=${panel}]`).click();
+    for (const panel of ['content', 'settings', 'photos', 'issue', 'review', 'history']) {
+      if (panel === 'content') await openContent(page); else await page.locator(`[data-studio-tab=${panel}]`).click();
       const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })).violations.map(({ id, impact, nodes }) => ({ id, impact, nodes: nodes.map(({ target, failureSummary }) => ({ target, failureSummary })) })));
       accessibility.push({ panel, violations });
     }
     if (shots) fs.writeFileSync(path.join(shots, 'editor-axe-results.json'), JSON.stringify(accessibility, null, 2));
     if (accessibility.some((result) => result.violations.length)) console.error(JSON.stringify(accessibility, null, 2));
-    check('all four editor panels pass axe WCAG A/AA checks', accessibility.every((result) => result.violations.length === 0));
+    check('every editor part (body, details, photos, newsletter issue, schedule and history) passes axe WCAG A/AA checks', accessibility.every((result) => result.violations.length === 0));
     await openContent(page);
   } else console.log('SKIP editor axe checks: install axe-core or set AXE_JS');
   if (shots) {
