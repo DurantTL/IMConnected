@@ -790,12 +790,11 @@ export interface SubmissionInput {
   body: string;
   church: string;
   photoCredit: string;
-  caption: string;
   /** Set for a public announcement or event; links and video stay editor-only. */
   announcement?: Announcement | null;
   submitter: { name: string; email: string; phone: string; church: string };
-  /** Validated image bytes with their sniffed extension. */
-  photos: { bytes: Uint8Array; ext: string }[];
+  /** Validated image bytes with their sniffed extension, plus the submitter's optional visible caption and alt text (one line each). */
+  photos: { bytes: Uint8Array; ext: string; caption?: string; alt?: string }[];
 }
 
 /**
@@ -812,11 +811,11 @@ export function createSubmissionDraft(sub: SubmissionInput): number {
         fields: { title: sub.title, dek: sub.dek, section: sub.section, area: sub.area ?? '', author: sub.submitter.name, church: sub.church, photoCredit: sub.photoCredit, body: sub.body, ...(sub.announcement ? { announcement: sub.announcement } : {}) },
         submitter: sub.submitter,
       });
-      const ins = getDb().prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+      const ins = getDb().prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, caption, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
       sub.photos.forEach((p, i) => {
         const rel = writeUpload(id, p.bytes, p.ext);
         written.push(rel);
-        ins.run(id, rel, p.ext, i === 0 ? sub.caption : '', i, Date.now());
+        ins.run(id, rel, p.ext, p.alt ?? '', p.caption ?? '', i, Date.now());
       });
       return id;
     });

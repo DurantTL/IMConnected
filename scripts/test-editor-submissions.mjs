@@ -244,6 +244,56 @@ try {
     check('foreign Origin still refused (403)', foreign.status === 403);
   }
 
+  // ================= per-photo captions and alt text (issue #122) =================
+  {
+    const PNG_C = png(90, 160, 70);
+    const HOSTILE = 'Boxes <script>alert(7)</script> & "friends"';
+    const mk = (title, over = {}) => form({ title, caption: '', ...over });
+    const photosOf = (title) => q('SELECT p.* FROM draft_photos p JOIN drafts d ON d.id = p.draft_id WHERE d.title = ? ORDER BY p.position', title);
+    const T1 = 'Per Photo Text Story';
+    let r = await postForm(BASE, '/api/submit', mk(T1, { caption_0: HOSTILE, alt_0: 'Orange square', caption_1: 'Second caption', alt_1: 'Blue square', caption_2: '', alt_2: 'Green square' }), [{ bytes: PNG_A, filename: 'a.png' }, { bytes: PNG_B, filename: 'b.png' }, { bytes: PNG_C, filename: 'c.png' }]);
+    let ph = photosOf(T1);
+    check('per-photo caption and alt are saved in the order the photos were chosen', r.status === 200 && ph.length === 3 && ph[0].caption === HOSTILE && ph[0].alt === 'Orange square' && ph[1].caption === 'Second caption' && ph[1].alt === 'Blue square' && ph[2].caption === '' && ph[2].alt === 'Green square', JSON.stringify(ph.map((x) => [x.caption, x.alt])));
+    check('the caption with markup is stored raw (never HTML-escaped in the database)', ph[0].caption.includes('<script>'));
+    const draftT1 = q('SELECT id FROM drafts WHERE title = ?', T1)[0].id;
+
+    // no JavaScript: the one caption field captions the FIRST photo and never becomes alt text
+    const T2 = 'No Script Caption Story';
+    r = await postForm(BASE, '/api/submit', mk(T2, { caption: 'Volunteers\nsorting   boxes\u0007' }), [{ bytes: PNG_A, filename: 'a.png' }, { bytes: PNG_B, filename: 'b.png' }]);
+    ph = photosOf(T2);
+    check('without JavaScript the single caption field is the first photo caption, not its alt text', r.status === 200 && ph.length === 2 && ph[0].caption === 'Volunteers sorting boxes' && ph[0].alt === '' && ph[1].caption === '' && ph[1].alt === '', JSON.stringify(ph.map((x) => [x.caption, x.alt])));
+    check('newlines and control characters are flattened to one line', !/[\u0000-\u001f]/.test(ph[0].caption));
+    const T2b = 'Per Photo Beats Single Story';
+    await postForm(BASE, '/api/submit', mk(T2b, { caption: 'Single field', caption_0: 'Per-photo wins' }), [{ bytes: PNG_A, filename: 'a.png' }]);
+    check('a per-photo caption_0 takes precedence over the single field', photosOf(T2b)[0]?.caption === 'Per-photo wins');
+
+    // validation: too long is a clear 400 and nothing is saved
+    const T3 = 'Long Caption Story';
+    r = await postForm(BASE, '/api/submit', mk(T3, { caption_0: 'x'.repeat(301) }), [{ bytes: PNG_A, filename: 'a.png' }]);
+    check('a caption over 300 characters is refused with a clear 400 and no draft', r.status === 400 && /caption for photo 1 is too long/.test(r.data.error) && q('SELECT COUNT(*) n FROM drafts WHERE title = ?', T3)[0].n === 0, r.text.slice(0, 200));
+    r = await postForm(BASE, '/api/submit', mk(T3, { alt_1: 'y'.repeat(301) }), [{ bytes: PNG_A, filename: 'a.png' }, { bytes: PNG_B, filename: 'b.png' }]);
+    check('alt text over 300 characters is refused with a clear 400', r.status === 400 && /description for photo 2 is too long/.test(r.data.error) && q('SELECT COUNT(*) n FROM drafts WHERE title = ?', T3)[0].n === 0, r.text.slice(0, 200));
+    r = await postForm(BASE, '/api/submit', mk(T3, { caption: 'z'.repeat(301) }), [{ bytes: PNG_A, filename: 'a.png' }]);
+    check('the single (no-JavaScript) caption is held to 300 too', r.status === 400 && /caption is too long/.test(r.data.error));
+    r = await postForm(BASE, '/api/submit', mk('Exactly 300 Story', { caption_0: 'c'.repeat(300), alt_0: 'a'.repeat(300) }), [{ bytes: PNG_A, filename: 'a.png' }]);
+    check('exactly 300 characters is accepted', r.status === 200 && photosOf('Exactly 300 Story')[0].caption.length === 300);
+
+    // the editor shows both, escaped
+    const editor = await adminGet(`/admin/drafts/${draftT1}`, E1);
+    check('the editor shows the caption and alt per photo, inside a quoted value attribute with quotes and ampersands escaped (inert text)', editor.status === 200 && editor.text.includes('value="Boxes <script>alert(7)</script> &amp; &quot;friends&quot;"') && !editor.text.replace(/value="[^"]*"/g, '').includes('<script>alert(7)') && editor.text.includes('Orange square') && editor.text.includes('Second caption'), editor.text.slice(editor.text.indexOf('photo_') - 50, editor.text.indexOf('photo_') + 400));
+
+    // published, the story page escapes it too
+    const row = q('SELECT updated_at FROM drafts WHERE id = ?', draftT1)[0];
+    const pub = await fetch(BASE + `/api/admin/drafts/${draftT1}/publish`, { method: 'POST', headers: { Cookie: `__Host-imc_session=${E1.token}`, Origin: BASE, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ version: String(row.updated_at) }), redirect: 'manual' });
+    const slug = q('SELECT slug FROM drafts WHERE id = ?', draftT1)[0].slug;
+    check('the editor can publish it', pub.status === 303 && !!slug && q('SELECT COUNT(*) n FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = ?', slug)[0].n === 3, `${pub.status} ${pub.headers.get('location')}`);
+    const sp = q('SELECT caption, alt FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = ? ORDER BY p.position', slug);
+    check('story_photos keep the caption raw and the alt separate', sp[0].caption === HOSTILE && sp[0].alt === 'Orange square', JSON.stringify(sp));
+    const page = await (await fetch(BASE + `/stories/${slug}/`)).text();
+    check('the story page shows the caption escaped, as text', page.includes('Boxes &lt;script&gt;alert(7)&lt;/script&gt;') && !page.includes('<script>alert(7)') && page.includes('photo-caption'), page.slice(page.indexOf('photo-caption') - 100, page.indexOf('photo-caption') + 300));
+    run('DELETE FROM drafts WHERE title IN (?, ?, ?, ?)', T2, T2b, 'Exactly 300 Story', T3);
+  }
+
   // ================= confirmation =================
   {
     const conf = mailTo(emails(), SUBMITTER.email)[0];
