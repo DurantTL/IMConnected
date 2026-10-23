@@ -8,7 +8,7 @@ import { LIMITS } from './limits';
 import { audit } from './auth/audit';
 
 const hash = (v: string) => createHash('sha256').update(v).digest('hex');
-const FIELDS = ['title', 'dek', 'body', 'section', 'area', 'author', 'church', 'date', 'photoLayout', 'announcement', 'additionalSections', 'authorTitle', 'photoCredit', 'featured', 'newsletterIssue'] as const;
+const FIELDS = ['title', 'dek', 'body', 'section', 'area', 'author', 'church', 'date', 'photoLayout', 'announcement', 'additionalSections', 'authorTitle', 'photoCredit', 'featured', 'newsletterIssue', 'keyPoints'] as const;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 export interface ReopenRequest { slug: string; requestHash: string; payloadHash: string; changes: Record<string, unknown>; photos?: unknown[]; note?: string }
 /** RequestId is opaque; retry the identical JSON body. Receipts retain hashes only. */
@@ -19,7 +19,7 @@ export function parseAgentReopen(value: unknown, raw: string): ReopenRequest {
   if (typeof value.requestId !== 'string' || !REQUEST_ID_RE.test(value.requestId)) throw new AgentError('bad_request_id', 'requestId must contain 8–128 letters, digits, underscores or hyphens.');
   const changes = value.changes === undefined ? {} : value.changes;
   if (!object(changes) || Object.keys(changes).some((k) => !(FIELDS as readonly string[]).includes(k))) throw new AgentError('bad_field', 'changes must contain only supported editorial fields.');
-  for (const [key, v] of Object.entries(changes)) if (key !== 'announcement' && key !== 'additionalSections' && key !== 'featured' && key !== 'newsletterIssue' && typeof v !== 'string') throw new AgentError('bad_field', `"${key}" must be text.`);
+  for (const [key, v] of Object.entries(changes)) if (key !== 'announcement' && key !== 'additionalSections' && key !== 'featured' && key !== 'newsletterIssue' && key !== 'keyPoints' && typeof v !== 'string') throw new AgentError('bad_field', `"${key}" must be text.`);
   if (value.photos !== undefined && !Array.isArray(value.photos)) throw new AgentError('photos_invalid', 'photos must be a list of new images to append.');
   if (value.note !== undefined && typeof value.note !== 'string') throw new AgentError('bad_field', 'note must be text.');
   return { slug: value.slug, requestHash: hash(value.requestId), payloadHash: hash(raw), changes, photos: value.photos as unknown[] | undefined, note: value.note as string | undefined };
@@ -64,6 +64,7 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
         // Each parsed key has the corresponding DraftFields type; assign without widening that union.
         if (key === 'announcement') Object.assign(fields, { announcement: parsed.announcementPatch ? mergeAgentAnnouncement(story.fields.announcement ?? null, parsed.announcementPatch) : parsed.announcement ?? null });
         else if (key === 'newsletterIssue') Object.assign(fields, { newsletterIssue: resolveAgentIssue(parsed.newsletterIssue ?? null) });
+        else if (key === 'keyPoints') Object.assign(fields, { keyPoints: parsed.keyPoints ?? [] });
         else Object.assign(fields, { [key]: key === 'date' ? parsed.date || fields.date : parsed[key] });
       }
       if (Object.hasOwn(changes, 'body')) assertPhotoMarkers(fields.body, story.photos.length + (parsed.photos?.length ?? 0));

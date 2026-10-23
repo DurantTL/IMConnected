@@ -43,6 +43,7 @@ const galleryPhotos = laid ? plan.rest.map((i) => allPhotos[i]) : null;
 const leadPhoto = d.image && !inlinePhotos.has(d.image) && !inlineIndices.has(0) ? allPhotos[0] : undefined;
 const plainGallery = leadPhoto ? allPhotos.slice(1) : allPhotos;
 const leadFocus = d.announcement ? undefined : photoFocusStyle(leadPhoto);
+const keyPoints = (d.keyPoints ?? []).slice(0, 3); // issue #117: plain text, escaped by Astro; the box is omitted when empty
 const issue = d.newsletterIssue ?? null; // issue #98: shown for any story with an issue set (links to /issues/<n>/, issue #99)
 // Issue #116: the optional newsletter signup link (set by an administrator at /admin/navigation); none when unset or unreadable.
 let newsletterSignup = '';
@@ -80,6 +81,13 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       {issue && <p class="article-provenance">Originally published in <a href={`/issues/${issue.number}/`}>IMConnected Issue #{issue.number}</a> · <time datetime={issue.date}>{formatDate(new Date(`${issue.date}T00:00:00.000Z`))}</time></p>}
       <p class="article-reading"><span>{readingMinutes} min read</span><a href="#article-body">Read the story <span aria-hidden="true">↓</span></a></p>
       </header>
+
+      {keyPoints.length > 0 && (
+        <section class="key-points" aria-labelledby="key-points-title">
+          <h2 id="key-points-title">Key points</h2>
+          <ul>{keyPoints.map((point) => <li>{point}</li>)}</ul>
+        </section>
+      )}
 
       {laid && <StoryPhotos layout={layout} plan={plan} photos={allPhotos} credit={d.photoCredit} />}
 

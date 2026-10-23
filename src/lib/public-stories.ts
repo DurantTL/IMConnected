@@ -30,6 +30,7 @@ export function toPublicStory(s: Story): PublicStory {
       dek: s.dek,
       section: s.section,
       additionalSections: s.additionalSections,
+      keyPoints: s.keyPoints ?? [],
       newsletterIssue: s.newsletterIssue?.date === undefined ? undefined : { number: s.newsletterIssue.number, date: s.newsletterIssue.date, title: s.newsletterIssue.title ?? '', position: s.newsletterIssue.position },
       area: s.area,
       column: s.column,

@@ -7,6 +7,7 @@ import { clean } from './storyfile';
 import { OWN_PHOTO_ERROR, checkStoryBlockLength, parseStoryBlocks, storyBlocksToMarkdown, photoZoom, photoFit, photoFitFill, type PhotoCrop } from './story-blocks';
 import { DEFAULT_PHOTO_LAYOUT } from './photo-layouts';
 import { validIssueNumber, validPosition } from './newsletter-issues';
+import { KEY_POINT_LIMITS, validateKeyPoints } from './key-points';
 
 function text(form: FormData, name: string, max: number, label: string): string {
   const v = form.get(name);
@@ -48,6 +49,12 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
       if (position !== null && !validPosition(position)) throw new Error('The position in the issue must be a whole number from 1 to 999.');
       fields.newsletterIssue = { number, position };
     }
+  }
+  // The Settings tab's Key points (issue #117): three optional one-line inputs. A form without the marker keeps what the draft has.
+  if (form.has('keyPointsPresent')) {
+    const raw = [0, 1, 2].map((i) => form.get(`keyPoint${i}`)).map((v) => (typeof v === 'string' ? v : ''));
+    if (raw.some((v) => v.length > KEY_POINT_LIMITS.length * 2)) throw new Error(`A key point is longer than ${KEY_POINT_LIMITS.length} characters.`);
+    try { fields.keyPoints = validateKeyPoints(raw); } catch (e) { throw new Error((e as Error).message); }
   }
   if (form.has('announcementKind')) {
     const kind = line(form, 'announcementKind', 20, 'Content type');

@@ -11,6 +11,7 @@ import { getDb } from './db';
 import { invalidateStories } from './public-cache';
 import { indexStory } from './search-index';
 import { photoLayoutOrDefault, type PhotoLayout } from './photo-layouts';
+import { normalizeKeyPoints } from './key-points';
 
 export type StoryStatus = 'live' | 'unpublished';
 export type StorySource = 'git' | 'form' | 'studio' | 'editor' | 'agent';
@@ -45,6 +46,8 @@ export interface StoryInput {
   additionalSections?: string[];
   /** Newsletter issue (migration 028). undefined keeps the stored one on a rewrite (null on insert); null clears. Reads carry the issue's date and title. */
   newsletterIssue?: NewsletterRef | null;
+  /** Key points (migration 033, issue #117): up to three plain-text lines. undefined keeps the stored list on a rewrite ([] on insert); [] clears. */
+  keyPoints?: string[];
   area?: string;
   column?: string;
   author: string;
@@ -93,6 +96,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
     section: String(r.section),
     additionalSections: parseAdditionalSections(r.additional_sections, String(r.section)),
     newsletterIssue: refFromRow(r.newsletter_issue === null || r.newsletter_issue === undefined ? r : { ...r, ...(getDb().prepare('SELECT date AS issue_date, title AS issue_title FROM newsletter_issues WHERE number = ?').get(Number(r.newsletter_issue)) as Row | undefined) }),
+    keyPoints: normalizeKeyPoints(r.key_points),
     area: opt(r.area),
     column: opt(r.story_column),
     author: String(r.author),
@@ -221,29 +225,31 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   // draft_id and published_by are plain columns (no foreign keys, see migration 011), so check them here.
   if (s.draftId !== undefined && !db.prepare('SELECT 1 FROM drafts WHERE id = ?').get(s.draftId)) throw new Error('writeStory: unknown draft');
   if (s.publishedBy !== undefined && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(s.publishedBy)) throw new Error('writeStory: unknown user');
-  const cur = mode === 'insert' ? undefined : (db.prepare('SELECT id, content_hash, status, source, announcement, additional_sections, newsletter_issue, newsletter_position FROM stories WHERE slug = ?').get(s.slug) as
-    { id: number; content_hash: string | null; status: string; source: string; announcement: string | null; additional_sections: string; newsletter_issue: number | null; newsletter_position: number | null } | undefined);
+  const cur = mode === 'insert' ? undefined : (db.prepare('SELECT id, content_hash, status, source, announcement, additional_sections, newsletter_issue, newsletter_position, key_points FROM stories WHERE slug = ?').get(s.slug) as
+    { key_points: string; id: number; content_hash: string | null; status: string; source: string; announcement: string | null; additional_sections: string; newsletter_issue: number | null; newsletter_position: number | null } | undefined);
   // undefined keeps the stored issue (Studio, adoption and the import script never send one); null clears it.
   const issue = s.newsletterIssue === undefined ? (cur?.newsletter_issue == null ? null : { number: Number(cur.newsletter_issue), position: cur.newsletter_position == null ? null : Number(cur.newsletter_position) }) : s.newsletterIssue;
   if (issue && !db.prepare('SELECT 1 FROM newsletter_issues WHERE number = ?').get(issue.number)) throw new Error('writeStory: unknown newsletter issue');
+  // undefined keeps the stored key points (Studio, bulk edit, adoption and the import script never send them); [] clears.
+  const keyPoints = normalizeKeyPoints(s.keyPoints === undefined ? cur?.key_points : s.keyPoints);
   const additionalSections = normalizeAdditionalSections(s.additionalSections === undefined ? parseAdditionalSections(cur?.additional_sections) : s.additionalSections, s.section);
-  if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source && JSON.stringify(parseAdditionalSections(cur.additional_sections, s.section)) === JSON.stringify(additionalSections) && (cur.newsletter_issue ?? null) === (issue?.number ?? null) && (cur.newsletter_position ?? null) === (issue?.position ?? null)) return { outcome: 'unchanged', id: Number(cur.id) };
+  if (cur && s.contentHash && cur.content_hash === s.contentHash && cur.status === s.status && cur.source === s.source && JSON.stringify(parseAdditionalSections(cur.additional_sections, s.section)) === JSON.stringify(additionalSections) && (cur.newsletter_issue ?? null) === (issue?.number ?? null) && (cur.newsletter_position ?? null) === (issue?.position ?? null) && JSON.stringify(normalizeKeyPoints(cur.key_points)) === JSON.stringify(keyPoints)) return { outcome: 'unchanged', id: Number(cur.id) };
   // Module text follows the body contract (every "<" is &lt;), and an image module may only show this story's own photos.
   const blocks = escapeStoryBlocks(normalizeStoryBlocks(s.storyBlocks ?? []));
   assertOwnStoryImages(blocks, [...(s.image ? [s.image] : []), ...s.photos]);
   const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
     JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
-    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout), JSON.stringify(blocks), s.announcement === undefined ? cur?.announcement ?? null : announcementJson(s.announcement), JSON.stringify(additionalSections), issue?.number ?? null, issue?.position ?? null];
+    s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout), JSON.stringify(blocks), s.announcement === undefined ? cur?.announcement ?? null : announcementJson(s.announcement), JSON.stringify(additionalSections), issue?.number ?? null, issue?.position ?? null, JSON.stringify(keyPoints)];
   const editedAt = s.editedAt === undefined ? null : editStamp(s.editedAt);
   let id: number;
   if (cur) {
     id = Number(cur.id);
     db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, additional_sections=?, newsletter_issue=?, newsletter_position=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, additional_sections=?, newsletter_issue=?, newsletter_position=?, key_points=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
     db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
   } else {
     const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, announcement, additional_sections, newsletter_issue, newsletter_position, edited_at, slug)
+      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, announcement, additional_sections, newsletter_issue, newsletter_position, key_points, edited_at, slug)
       VALUES (${Array(cols.length + 2).fill('?').join(',')})`).run(...cols, editedAt, s.slug);
     id = Number(r.lastInsertRowid);
   }

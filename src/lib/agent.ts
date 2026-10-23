@@ -11,6 +11,7 @@ import { sniffImage } from './submission';
 import { clean, escapeHtmlInMarkdown, validDate } from './storyfile';
 import { takeSlot } from './rate-window';
 import { isPhotoLayout, PHOTO_LAYOUT_VALUES, type PhotoLayout } from './photo-layouts';
+import { validateKeyPoints } from './key-points';
 
 export class AgentError extends Error {
   constructor(public code: string, message: string) {
@@ -127,6 +128,8 @@ export interface AgentStory {
   additionalSections?: string[];
   /** undefined = not sent; null = clear the draft's issue and position; an object = set it (the issue row is created or checked when the draft is written). */
   newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
+  /** Issue #117: undefined = not sent (keeps the stored list); [] = clear (also what null becomes). */
+  keyPoints?: string[];
   area: string;
   author: string;
   church: string;
@@ -308,8 +311,10 @@ export function parseAgentStory(input: unknown): AgentStory {
     } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
   }
   const newsletterIssue = o.newsletterIssue === undefined ? undefined : parseAgentIssue(o.newsletterIssue);
+  let keyPoints: string[] | undefined;
+  if (o.keyPoints !== undefined) { try { keyPoints = validateKeyPoints(o.keyPoints); } catch (e) { throw new AgentError('bad_key_points', (e as Error).message); } }
   const { requestId: _ignored, ...content } = o;
-  return { additionalSections, newsletterIssue, announcement, announcementPatch, authorTitle, photoCredit, featured: o.featured as boolean | undefined, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
+  return { additionalSections, newsletterIssue, keyPoints, announcement, announcementPatch, authorTitle, photoCredit, featured: o.featured as boolean | undefined, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
 }
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----

@@ -56,6 +56,9 @@ try {
   exec("INSERT INTO newsletter_issues(number,date,title,created_at,updated_at) VALUES(5,'2026-08-10','Synthetic Summer',1,1)");
   for (const slug of ['synthetic-issue-keep', 'synthetic-issue-clear', 'synthetic-issue-conflict']) { seed(slug); exec('UPDATE stories SET newsletter_issue=5,newsletter_position=2,rev=rev+1 WHERE slug=?', slug); }
   for (const slug of ['synthetic-issue-set', 'synthetic-issue-bad']) seed(slug);
+  // Issue #117: stories that already carry key points, and ones without.
+  for (const slug of ['synthetic-kp-keep', 'synthetic-kp-clear', 'synthetic-kp-null']) { seed(slug); exec('UPDATE stories SET key_points=?,rev=rev+1 WHERE slug=?', JSON.stringify(['Synthetic point one.', 'Synthetic point two.']), slug); }
+  for (const slug of ['synthetic-kp-set', 'synthetic-kp-bad']) seed(slug);
   for (const slug of ['synthetic-patch-youth', 'synthetic-patch-features', 'synthetic-patch-areabad', 'synthetic-patch-samesec']) seed(slug);
   const expandedBody = '\n  ' + '&lt;'.repeat(6000) + '\n';
   exec('UPDATE stories SET body=?,author=?,rev=rev+1 WHERE slug=?', expandedBody, 'A'.repeat(150), 'synthetic-escaped');
@@ -252,6 +255,19 @@ try {
   check('reopen: read-back shows newsletterIssue {number, date, title, position}', JSON.stringify(readIssue.data.draft.newsletterIssue) === JSON.stringify({ number: 6, date: '2026-08-17', title: 'Synthetic Late Summer', position: 4 }));
   ri = await call81(reopenReq('synthetic-issue-clear', { changes: { newsletterIssue: null } }));
   check('reopen: changes.newsletterIssue null clears issue and position on the draft (the live story keeps them)', ri.status === 201 && JSON.stringify(issueOf('synthetic-issue-clear')) === JSON.stringify({ n: null, p: null }) && row("SELECT newsletter_issue n FROM stories WHERE slug='synthetic-issue-clear'").n === 5);
+  const kpOf = (slug) => JSON.parse(draftFor(slug).key_points);
+  ri = await call81(reopenReq('synthetic-kp-keep', { changes: { dek: 'Synthetic kp summary.' } }));
+  check('reopen: a story key points carry into the draft when changes omit them', ri.status === 201 && JSON.stringify(kpOf('synthetic-kp-keep')) === JSON.stringify(['Synthetic point one.', 'Synthetic point two.']), ri.raw.slice(0, 200));
+  ri = await call81(reopenReq('synthetic-kp-set', { changes: { keyPoints: ['  Set by reopen  ', '', '<b>Plain</b> text'] } }));
+  check('reopen: changes.keyPoints sets the draft (trimmed, empties dropped, raw text)', ri.status === 201 && JSON.stringify(kpOf('synthetic-kp-set')) === JSON.stringify(['Set by reopen', '<b>Plain</b> text']), ri.raw.slice(0, 200));
+  const readKp = await call81({}, { method: 'GET', endpoint: `/api/agent/stories/${draftFor('synthetic-kp-set').id}` });
+  check('reopen: read-back returns keyPoints', JSON.stringify(readKp.data.draft?.keyPoints) === JSON.stringify(['Set by reopen', '<b>Plain</b> text']), readKp.raw.slice(0, 200));
+  for (const [slug, value] of [['synthetic-kp-clear', []], ['synthetic-kp-null', null]]) {
+    ri = await call81(reopenReq(slug, { changes: { keyPoints: value } }));
+    check('reopen: changes.keyPoints ' + JSON.stringify(value) + ' clears the draft (the live story keeps them)', ri.status === 201 && kpOf(slug).length === 0 && JSON.parse(row('SELECT key_points k FROM stories WHERE slug=?', slug).k).length === 2, ri.raw.slice(0, 200));
+  }
+  ri = await call81(reopenReq('synthetic-kp-bad', { changes: { keyPoints: ['a', 'b', 'c', 'd'] } }));
+  check('reopen: four key points is 400 bad_key_points and creates nothing', ri.status === 400 && ri.data.error === 'bad_key_points' && !draftFor('synthetic-kp-bad'), ri.raw.slice(0, 200));
   ri = await call81(reopenReq('synthetic-issue-conflict', { changes: { newsletterIssue: { number: 5, date: '2026-08-11' } } }));
   check('reopen: a conflicting issue date is 400 newsletter_issue_conflict naming the stored date, and no draft is created', ri.status === 400 && ri.data.error === 'newsletter_issue_conflict' && ri.data.message.includes('2026-08-10') && !draftFor('synthetic-issue-conflict') && row('SELECT date FROM newsletter_issues WHERE number=5').date === '2026-08-10');
   ri = await call81(reopenReq('synthetic-issue-bad', { changes: { newsletterIssue: { number: 7, date: '2999-01-01' } } }));

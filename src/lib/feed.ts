@@ -7,6 +7,7 @@ import { getPublicStories } from './public-stories';
 import { getSection, areaLabel, normalizeAdditionalSections } from './site';
 import { photoLayoutOrDefault } from './photo-layouts';
 import { stripMediaMarkers } from './story-media';
+import { normalizeKeyPoints } from './key-points';
 
 /** How many of the newest stories the feeds include. */
 export const FEED_LIMIT = 50;
@@ -20,6 +21,8 @@ export interface FeedItem {
   additionalSections?: string[];
   /** Additive (issue #98): present only for a story with a newsletter issue. */
   newsletterIssue?: { number: number; date: string; title: string; position: number | null };
+  /** Additive (issue #117): up to three plain-text key points; always present, `[]` when none. Escape them like any text. */
+  keyPoints: string[];
   sectionLabel: string;
   area?: string;
   areaLabel?: string;
@@ -56,6 +59,7 @@ export interface FeedSource {
     section: string;
   additionalSections?: string[];
     newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
+    keyPoints?: string[];
     area?: string;
     column?: string;
     author: string;
@@ -87,6 +91,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     section: d.section,
     additionalSections: normalizeAdditionalSections(d.additionalSections, d.section),
     ...(d.newsletterIssue ? { newsletterIssue: d.newsletterIssue } : {}),
+    keyPoints: normalizeKeyPoints(d.keyPoints),
     sectionLabel: getSection(d.section)?.label ?? d.section,
     area: d.area,
     areaLabel: areaLabel(d.section, d.area),
