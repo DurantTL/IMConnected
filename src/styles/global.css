@@ -656,5 +656,5 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
   body:not(.admin) .article .dek { font-size:1.1rem; }
   body:not(.admin) .article .prose { font-size:1.05rem; }
 }
-/* The 210px wordmark, Search with its icon and the menu button need about 375px; drop the icon below that. */
+/* The 210px wordmark, Search with its icon and the menu button need about 375px; drop the icon below 381px for a little margin. */
 @media(max-width:380px) { body:not(.admin) .header-search svg { display:none; } }
