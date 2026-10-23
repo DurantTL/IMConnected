@@ -16,7 +16,7 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   spotlight.dataset.enhanced = 'true'; // the native scrollbar stays visible until the arrows and numbers exist
   status.hidden = false;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  let requested = !reduced.matches, hovered = false, focused = false, visible = false, touching = false, startLeft = 0;
+  let requested = !reduced.matches, hovered = false, focused = false, visible = false, touching = false, userMoved = false, startX = 0, startY = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const interval = 7000;
   const active = () => slides.reduce((best, slide, index) =>
@@ -28,11 +28,12 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
     clear();
     const rotating = canRotate();
     spotlight.dataset.rotating = String(rotating);
-    status.setAttribute('aria-live', rotating ? 'off' : 'polite');
+    // Quiet while rotating on its own, but a move the reader just made is announced even if rotation carries on.
+    status.setAttribute('aria-live', rotating && !userMoved ? 'off' : 'polite');
     toggle.disabled = reduced.matches;
     toggle.textContent = reduced.matches ? 'Automatic advance off' : requested ? 'Pause auto-advance' : 'Resume auto-advance';
     rotation.textContent = reduced.matches ? 'Reduced motion: use the arrows to explore.' : !requested ? 'Automatic advance paused.' : rotating ? 'Next event in 7 seconds.' : 'Paused while you explore.';
-    if (rotating) timer = setTimeout(() => { go((active() + 1) % slides.length); schedule(); }, interval);
+    if (rotating) timer = setTimeout(() => { userMoved = false; go((active() + 1) % slides.length); schedule(); }, interval);
   };
   const update = () => {
     const index = active();
@@ -45,32 +46,37 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   };
   const go = (index: number) => track.scrollTo({ left: slides[index].offsetLeft - slides[0].offsetLeft, behavior: reduced.matches ? 'instant' : 'smooth' });
   // Previous and next wrap, like automatic advance, so neither button ever becomes disabled and drops keyboard focus.
-  const move = (delta: number) => { go((active() + delta + slides.length) % slides.length); schedule(); };
+  const move = (delta: number) => { userMoved = true; go((active() + delta + slides.length) % slides.length); schedule(); };
   previous.addEventListener('click', () => move(-1));
   next.addEventListener('click', () => move(1));
-  choices.forEach((choice, index) => choice.addEventListener('click', () => { go(index); schedule(); }));
+  choices.forEach((choice, index) => choice.addEventListener('click', () => { userMoved = true; go(index); schedule(); }));
   toggle.addEventListener('click', () => { requested = !requested; schedule(); });
   track.addEventListener('keydown', (event) => {
     if (event.target !== track || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); move(event.key === 'ArrowRight' ? 1 : -1); }
   });
   // Devices without hover (phones) can report a sticky mouse pointer after a touch; it must not hold rotation.
-  const canHover = matchMedia('(hover: hover)');
+  const canHover = matchMedia('(any-hover: hover)');
   spotlight.addEventListener('pointerenter', (event) => { if (canHover.matches && (event.pointerType === 'mouse' || event.pointerType === 'pen')) { hovered = true; schedule(); } });
   spotlight.addEventListener('pointerleave', () => { hovered = false; schedule(); });
-  // Only keyboard (focus-visible) focus holds rotation; a tap that merely focuses the scrollable track does not.
-  spotlight.addEventListener('focusin', () => { focused = spotlight.querySelector(':focus-visible') !== null; schedule(); });
+  // Focus on any control holds rotation (a touch or screen-reader activation is not :focus-visible, but the reader is
+  // still using it). Only the scrollable track itself needs :focus-visible, so a plain tap on it does not hold rotation.
+  spotlight.addEventListener('focusin', (event) => { focused = event.target !== track || track.matches(':focus-visible'); schedule(); });
   spotlight.addEventListener('focusout', (event) => { if (!(event.relatedTarget instanceof Node && spotlight.contains(event.relatedTarget))) focused = false; schedule(); });
-  // A finger pauses rotation only while it is down (touch only, so a mouse press released elsewhere cannot stick).
-  // The browser cancels the pointer for any pan, vertical page scrolling included, so a swipe is judged by the track's
-  // horizontal scroll position: moving it counts as the reader choosing events themselves and stops automatic advance
-  // until Resume is pressed. Touch events end the gesture even after the pointer was cancelled.
-  track.addEventListener('pointerdown', (event) => { if (event.pointerType !== 'touch') return; touching = true; startLeft = track.scrollLeft; schedule(); });
-  track.addEventListener('pointerup', (event) => { if (event.pointerType !== 'touch') return; touching = false; schedule(); });
-  const release = () => { if (!touching) return; touching = false; schedule(); };
+  // A finger pauses rotation only while it is down. The browser cancels the pointer for any pan, vertical page scrolling
+  // included, and the track may still be animating a scroll of its own, so a swipe is judged by finger movement: a mostly
+  // horizontal drag counts as the reader choosing events themselves and stops automatic advance until Resume is pressed.
+  track.addEventListener('pointerdown', (event) => { if (event.pointerType !== 'touch') return; touching = true; schedule(); });
+  track.addEventListener('touchstart', (event) => { touching = true; startX = event.touches[0].clientX; startY = event.touches[0].clientY; schedule(); }, { passive: true });
+  track.addEventListener('touchmove', (event) => {
+    if (!requested || event.touches.length !== 1) return;
+    const dx = event.touches[0].clientX - startX, dy = event.touches[0].clientY - startY;
+    if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { requested = false; schedule(); }
+  }, { passive: true });
+  // Touch events end the gesture even after the pointer was cancelled; another finger may still be down.
+  const release = (event: TouchEvent) => { const down = event.touches.length > 0; if (touching === down) return; touching = down; schedule(); };
   track.addEventListener('touchend', release, { passive: true });
   track.addEventListener('touchcancel', release, { passive: true });
-  track.addEventListener('scroll', () => { if (touching && requested && Math.abs(track.scrollLeft - startLeft) > 4) { requested = false; schedule(); } }, { passive: true });
   track.addEventListener('scroll', update, { passive: true });
   new ResizeObserver(update).observe(track);
   document.addEventListener('visibilitychange', schedule);
