@@ -18,6 +18,8 @@ Open **Story settings**, choose the primary Section and Category, and check **Ad
 
 The editor's Section filter matches both primary and extra memberships. Public section listings, section counts, Studio's published/draft Section filter and search's section filter use the same memberships. Area pages require the corresponding primary section, so a Camp category is never mistaken for a Youth subcategory.
 
+Dashboard **bulk edit** (`/admin/bulk`, issue #89) changes only the ticked fields. Changing the primary section there does not turn the old primary into an extra (the editor's selector does); the new primary is dropped from the extras, and adding or removing extras follows the same normalization. A bulk-edited live story also updates its linked closed draft, so a later unpublish and publish keeps the edit.
+
 ## Agent and Studio contracts
 
 `POST /api/agent/stories` accepts `additionalSections` beside the existing `section`/`area`. Explicit `POST /api/agent/stories/reopen` accepts it inside `changes`. The field is a list of the existing central section keys: `news`, `features`, `columns`, `youth`, `kids`.

@@ -1,16 +1,19 @@
 ---
-// The sticky bulk action bar (issue #88). The checkboxes live in the list and point at this form with form="bulk-form",
+// The sticky bulk action bar (issue #88, extended in #89). The checkboxes live in the list and point at this form with form="bulk-form",
 // so without JavaScript the bar is still a normal form that posts to the confirmation step. JavaScript only adds the
-// "select all" checkbox and the "N selected" count.
-interface Props { action: 'publish' | 'unpublish'; label: string; noun: string }
-const { action, label, noun } = Astro.props;
+// "select all" checkbox and the "N selected" count. Each button carries its own action, so one selection can be
+// published, rejected or edited (drafts), or unpublished or edited (live stories).
+interface Props { action: string; label: string; noun: string; more?: { action: string; label: string; danger?: boolean }[] }
+const { action, label, noun, more = [] } = Astro.props;
+const buttons = [{ action, label, danger: action === 'unpublish' }, ...more];
 ---
-<form class="bulk-bar" id="bulk-form" method="post" action="/admin/bulk" aria-label={`Bulk ${action}`}>
-  <input type="hidden" name="action" value={action} />
+<form class="bulk-bar" id="bulk-form" method="post" action="/admin/bulk" aria-label="Bulk actions">
   <label class="bulk-all" id="bulk-all-label" hidden><input type="checkbox" id="bulk-all" /> Select all on this page</label>
   <p class="bulk-count" id="bulk-count" role="status" hidden>0 selected</p>
-  <button class={`cms-btn${action === 'unpublish' ? ' danger' : ''}`} type="submit">{label}</button>
-  <p class="bulk-help" id="bulk-help">Tick the {noun} you want, then choose {action === 'publish' ? 'Publish' : 'Unpublish'}. You will confirm on the next page. Up to 50 at a time.</p>
+  <div class="bulk-buttons">
+    {buttons.map((b) => <button class={`cms-btn${b.danger ? ' danger' : ''}`} type="submit" name="action" value={b.action}>{b.label}</button>)}
+  </div>
+  <p class="bulk-help" id="bulk-help">Tick the {noun} you want, then choose an action. You will confirm on the next page. Up to 50 at a time.</p>
 </form>
 <script is:inline>
   // The list follows this bar in the page, so wait until it exists.
@@ -23,11 +26,11 @@ const { action, label, noun } = Astro.props;
     var MAX = 50;
     document.getElementById('bulk-all-label').hidden = false;
     count.hidden = false;
-    var button = form.querySelector('button[type=submit]');
+    var buttons = Array.prototype.slice.call(form.querySelectorAll('button[type=submit]'));
     function update() {
       var n = items.filter(function (i) { return i.checked; }).length;
       count.textContent = n + ' selected' + (n > MAX ? '. Only ' + MAX + ' can be done at once, untick some.' : '');
-      button.disabled = n === 0 || n > MAX;
+      buttons.forEach(function (b) { b.disabled = n === 0 || n > MAX; });
       var first = items.slice(0, MAX);
       all.checked = first.length > 0 && first.every(function (i) { return i.checked; });
       all.indeterminate = !all.checked && n > 0;
