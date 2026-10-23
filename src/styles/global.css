@@ -551,8 +551,9 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 .spotlight-slide { grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); border-radius:0; background:#0B3954; }
 .spotlight-copy { padding:12px max(var(--gutter),calc((100vw - var(--wrap))/2 + var(--gutter))) clamp(24px,2.4vw,36px); padding-right:clamp(28px,4vw,64px); justify-content:flex-start; }
 .spotlight-number { color:#2DD4BF; margin-bottom:16px; }
-/* The strongest type in the stage, capped at 60px; long titles step down so one slide cannot stretch the rest. */
+/* The strongest type in the stage, capped at 60px; longer titles (over 28 and over 48 characters) step down so one slide cannot stretch the rest. */
 .spotlight-copy h3 { font:700 clamp(2rem,1rem + 2.6vw,3.75rem)/1.04 var(--sans); letter-spacing:-.035em; max-width:18ch; }
+.spotlight-copy h3.mid { font-size:clamp(1.9rem,1rem + 1.9vw,3rem); max-width:22ch; }
 .spotlight-copy h3.long { font-size:clamp(1.75rem,1rem + 1.4vw,2.5rem); max-width:28ch; }
 .spotlight-details { color:#2DD4BF; gap:10px 20px; margin-top:10px; }
 .spotlight-dek { color:#E0F5F7; font-size:1rem; line-height:1.7; margin:12px 0; }
@@ -591,7 +592,7 @@ body.admin .admin-bar .admin-public-link:hover { color:#fff; border-color:#2DD4B
 @media(max-width:920px) {
   body:not(.admin) .site-header .bar { min-height:100px; }
   .site-header .brand-wordmark { width:290px; }
-  .spotlight-copy { padding:12px 28px 28px; }
+  .spotlight-copy { padding:12px var(--gutter) 28px; }
   .spotlight-flyer { padding:24px; }
   .spotlight-symbol svg { width:100px; height:100px; }
   .spotlight-symbol span { font-size:2rem; }
@@ -612,6 +613,7 @@ body.admin .admin-bar .admin-public-link:hover { color:#fff; border-color:#2DD4B
   .spotlight-slide { grid-template-columns:minmax(0,1fr); min-height:0; }
   .spotlight-copy { padding:24px var(--gutter) 28px; }
   .spotlight-copy h3 { font-size:2rem; max-width:17ch; }
+  .spotlight-copy h3.mid { font-size:1.8rem; }
   .spotlight-copy h3.long { font-size:1.6rem; }
   .spotlight-flyer { padding:24px; order:-1; }
   .spotlight-flyer img { max-height:280px; }
