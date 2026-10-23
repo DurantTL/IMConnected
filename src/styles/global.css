@@ -646,9 +646,9 @@ body:not(.admin) .masthead-edition { font-size:.75rem; }
 body:not(.admin) .conference-strip p { font-size:.72rem; }
 body:not(.admin) .article-breadcrumb { font-size:.85rem; }
 body:not(.admin) .article .kicker { font-size:.78rem; }
-body:not(.admin) .article .byline, .article-reading { font-size:.85rem; }
-body:not(.admin) .article h1 { font-size:clamp(2.25rem,3.6vw,3.2rem); line-height:1.08; }
-body:not(.admin) .article .dek { font-size:clamp(1.12rem,1.5vw,1.3rem); }
+body:not(.admin) .article .byline, body:not(.admin) .article-reading { font-size:.85rem; }
+body:not(.admin) .article h1 { font-size:clamp(2.25rem,3.6vw,3.2rem); line-height:1.08; letter-spacing:-.03em; }
+body:not(.admin) .article .dek { font-size:clamp(1.18rem,1rem + .4vw,1.3rem); }
 body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
 @media(max-width:650px) {
   body:not(.admin) .publication-line { font-size:.68rem; }
@@ -656,3 +656,5 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
   body:not(.admin) .article .dek { font-size:1.1rem; }
   body:not(.admin) .article .prose { font-size:1.05rem; }
 }
+/* The 210px wordmark, Search with its icon and the menu button need about 375px; drop the icon below that. */
+@media(max-width:380px) { body:not(.admin) .header-search svg { display:none; } }
