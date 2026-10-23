@@ -87,9 +87,13 @@ try {
     for (const [label, md, keep] of [['[ ... ] link', '[a\n{{photo ]}}\n](https://example.com)', '{{photo ]}}'], ['[ ... ] link with a number', '{{photo 1}}\n\n[a\n{{photo 1]}}\n](https://example.com)', '{{photo 1]}}'], ['![ ... ] image', '![a\n{{photo ]}}\n](https://example.com/x.png)', '{{photo ]}}'], ['definition', '[a\n{{photo ]}}\nb]\n\n[a\n{{photo ]}}\nb]: https://x.y\n\nlast', 'last']]) {
       for (const preview of [false, true]) {
         const r = await renderMediaMarkdown(md, mediaPhotos, preview);
-        check(`swapping a marker-shaped line never changes how its paragraph parses (${label}${preview ? ', preview' : ''}): no placeholder, no lost text`, () => { assert.doesNotMatch(r.html, /IMCMEDIA/); assert.ok(r.html.includes(keep) || r.html.includes('Media marker skipped'), r.html); });
+        check(`swapping a marker-shaped line never changes how its paragraph parses (${label}${preview ? ', preview' : ''}): no placeholder, no lost text`, () => { assert.doesNotMatch(r.html, /IMCMEDIA/); assert.ok(r.html.includes(keep), r.html); if (label !== 'definition') assert.ok(r.html.includes('[a') && r.html.includes('https://example.com'), r.html); });
       }
     }
+    const neighbour = await renderMediaMarkdown('[a\n{{photo ]}}\n{{photo 1}}\n](https://x.y)', mediaPhotos);
+    check('a malformed bracket marker never turns off a correctly written marker in the same paragraph', () => { assert.deepEqual([...neighbour.used], [0]); assert.doesNotMatch(neighbour.html, /IMCMEDIA/); assert.ok(neighbour.html.includes('{{photo ]}}')); });
+    const many = await renderMediaMarkdown(Array.from({ length: 10 }, () => '[a\n{{photo ]}}').join('\n') + '\n](https://x.y)\n\n{{photo 1}}', mediaPhotos);
+    check('many malformed bracket markers never turn off a correctly written marker elsewhere', () => { assert.deepEqual([...many.used], [0]); assert.doesNotMatch(many.html, /IMCMEDIA/); });
     const blankAfter = await renderMediaMarkdown('{{photo 1}}\nabc&#10;def\n\nfoo', mediaPhotos);
     check('decoded line breaks do not move a marker onto another line or join the next paragraph', () => { assert.deepEqual([...blankAfter.used], [0]); assert.match(blankAfter.html, /<p>foo<\/p>/); assert.doesNotMatch(blankAfter.html, /undefined|IMCMEDIA/); });
     const stored = await renderMediaMarkdown('{{photo 1}}\n\nKeep \uE000 this', mediaPhotos);

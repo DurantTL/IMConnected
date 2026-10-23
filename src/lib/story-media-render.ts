@@ -98,13 +98,18 @@ function markLiveMarkers(md: string, authored: string, nonce: string): { source:
   let live = [...paragraphLines(md).keys()].filter((line) => isMediaMarkerLine(written[line] ?? ''));
   // Swapping a line can change how Markdown reads its paragraph (a malformed marker line holding a `]` can stop pairing with a `[`),
   // so the swapped source is parsed again and any placeholder that is no longer a whole paragraph line is put back as written.
-  for (let round = 0; round < 8; round++) {
+  for (let round = 0; round < 16; round++) {
     const lines = [...raw];
     live.forEach((line, k) => { lines[line] = `IMCMEDIA${nonce}N${k}`; });
     const placed = paragraphLines(lines.join('\n'));
-    const kept = live.filter((line, k) => placed.get(line)?.trim() === `IMCMEDIA${nonce}N${k}`);
-    if (kept.length === live.length) return { source: lines.join('\n'), markers: live.map((line) => written[line].trim()) };
-    live = kept;
+    const failed = new Set(live.filter((line, k) => placed.get(line)?.trim() !== `IMCMEDIA${nonce}N${k}`));
+    if (!failed.size) return { source: lines.join('\n'), markers: live.map((line) => written[line].trim()) };
+    // Only a malformed marker line (holding a `]`, `*` and so on) can change a parse; a correctly written one has no Markdown-active
+    // characters. Put those back first, so a correctly written marker is not lost to a neighbour; else put back every failed line.
+    const valid = (line: number) => { const t = written[line].trim(); return parsePhotoMarker(t, Infinity) !== null || galleryMarker(t, Infinity) !== null; };
+    const malformed = [...failed].filter((line) => !valid(line));
+    const revert = new Set(malformed.length ? malformed : failed);
+    live = live.filter((line) => !revert.has(line));
   }
   return { source: md, markers: [] };
 }
