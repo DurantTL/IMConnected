@@ -43,7 +43,7 @@ const rows = Array.from({ length: NAVIGATION_LIMIT }, (_, i) => {
 });
 ---
 <Admin title="Website menu" current="navigation" wide>
-  <div class="cms-bar"><div><p class="sb-eyebrow">Website settings</p><h1>Make it easy to find.</h1><p class="admin-note">Edit the website menu’s labels, links and order. Uncheck a link to hide it; clear its label and address to remove it. Blank rows add new links.</p></div></div>
+  <div class="cms-bar admin-page-head"><div><p class="admin-eyebrow">Website settings</p><h1>Make it easy to find.</h1><p class="admin-note">Edit the website menu’s labels, links and order. Uncheck a link to hide it; clear its label and address to remove it. Blank rows add new links.</p></div></div>
   {error && <p class="admin-error" role="alert">{error}</p>}
   {success && <p class="admin-ok" role="status">{success}</p>}
   {navigation.columnsRemoved && <p class="admin-note" role="status">The Columns link was removed from the menu because Columns is now part of Features. Save the menu to remove it from this saved list for good.</p>}

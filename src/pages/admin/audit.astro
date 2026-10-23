@@ -45,9 +45,9 @@ const link = (p: number) => {
 };
 const targetText = (r: (typeof rows)[number]) => (r.target_name ? `${r.target_name} (${r.target})` : r.target ?? '');
 ---
-<Admin title="Audit log" current="editors" wide>
-  <div class="cms-bar">
-    <h1>Audit log</h1>
+<Admin title="Audit log" current="audit" wide>
+  <div class="cms-bar admin-page-head">
+    <div><p class="admin-eyebrow">Site</p><h1>Audit log</h1></div>
     <a class="cms-btn secondary" href="/admin/editors">Editors</a>
   </div>
   <p class="admin-note">Sign-ins, two-step changes, account changes, publishes and rejections. Entries older than 2 years are deleted. Times are shown in your time zone.</p>

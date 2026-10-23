@@ -32,8 +32,8 @@ const canBulk = drafts.some((d) => d.status === 'new' || d.status === 'in_review
 const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
 ---
 <Admin title={queueTitle} current={kind === 'event' ? 'events' : kind === 'announcement' ? 'announcements' : 'drafts'} wide>
-  <div class="cms-bar">
-    <h1>{queueTitle}</h1>
+  <div class="cms-bar admin-page-head">
+    <div><p class="admin-eyebrow">Drafts queue</p><h1>{queueTitle}</h1></div>
     <form method="post" action="/api/admin/drafts/new"><input type="hidden" name="kind" value={newKind} /><button class="cms-btn" type="submit">New {newKind}</button></form>
   </div>
 
