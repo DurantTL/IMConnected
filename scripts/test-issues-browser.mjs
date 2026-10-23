@@ -45,6 +45,7 @@ issue(9, '2026-08-03', 'Nothing Live Here');     // only an unpublished story
 issue(8, '2026-07-20', '');                      // no stories at all
 issue(7, '2026-07-06', 'Only A Draft');          // only a draft-flagged story
 issue(3, '2026-05-04', '');
+issue(14, '2026-09-28', 'Unpublished Higher Issue'); // higher number, but its only story is unpublished: never "latest"
 // Issue 12: positions 2 and 1, then two without a position (newest first), plus one unpublished story that must never show.
 story('s-pos2', { issue: 12, position: 2, date: '2026-08-30' });
 story('s-pos1', { issue: 12, position: 1, date: '2026-08-25', section: 'kids', area: null });
@@ -56,6 +57,7 @@ story('s-nine', { issue: 9, position: 1, status: 'unpublished' });
 story('s-seven', { issue: 7, position: 1, draft: 1 });
 story('s-three-a', { issue: 3, position: 1, date: '2026-04-20' });
 story('s-three-b', { issue: 3, position: 2, date: '2026-04-21' });
+story('s-fourteen', { issue: 14, position: 1, status: 'unpublished' });
 story('s-plain', { date: '2026-09-20' });
 db.close();
 
@@ -127,6 +129,14 @@ try {
   const nav = (html) => html.match(/<nav class="nav"[\s\S]*?<\/nav>/)?.[0] ?? '';
   const home = await get('/');
   check('the default menu has an "Issues" link to /issues/, and it is the current page on /issues/', /<a [^>]*href="\/issues\/"[^>]*>\s*Issues\s*<\/a>/.test(nav(home.text)) && /<a [^>]*href="\/issues\/"[^>]*aria-current="page"|aria-current="page"[^>]*href="\/issues\/"/.test(nav(list.text)), nav(list.text).slice(0, 400));
+  // ---- home page "Latest issue" line and module (issue #115) ----
+  const lineOf = (h) => strip(h.match(/<p class="latest-issue-line">[\s\S]*?<\/p>/)?.[0] ?? '').trim();
+  const modOf = (h) => h.match(/<section class="block latest-issue"[\s\S]*?<\/section>/)?.[0] ?? '';
+  check('home: highest-numbered issue with a live story wins (12, not the unpublished-only 14), in a dated line linking to /issues/12/', lineOf(home.text) === 'Latest issue: No. 12 · September 14, 2026' && /<p class="latest-issue-line"><a href="\/issues\/12\/">/.test(home.text), lineOf(home.text));
+  const hm = modOf(home.text), hmt = strip(hm);
+  check('home module shows number, title, sent date, story count (4) and a link to the issue', hmt.includes('Issue No. 12') && hmt.includes('Synthetic Autumn Edition') && hmt.includes('Sent September 14, 2026') && hmt.includes('4 stories') && hm.includes('href="/issues/12/"') && hmt.includes('See all 4 stories'), hmt.slice(0, 300));
+  check('home module previews up to 3 stories in newsletter position order', slugsOn(hm).join() === 's-pos1,s-pos2,s-none-new', slugsOn(hm).join());
+  check('home never mentions the skipped issue 14', !home.text.includes('/issues/14/') && !home.text.includes('Unpublished Higher Issue'));
   check('the Issues link is also current on an issue page', /aria-current="page"[^>]*href="\/issues\/"|href="\/issues\/"[^>]*aria-current="page"/.test(nav(p12.text)));
   // A saved menu keeps exactly what the administrator saved: the default Issues link is NOT added to it (documented), and hiding it works.
   const nv = Number(JSON.parse((await get('/api/navigation')).text).version);
@@ -162,6 +172,8 @@ try {
   r = await post('/admin/issues', { number: 12, version: ver(12), action: 'save', date: '2026-09-15', title: 'Corrected Synthetic Title' });
   const e12 = await get('/issues/12/'), eList = await get('/issues/'), eStory = await get('/stories/s-pos1/');
   check('an admin issue edit (date and title) shows at once on the issue page, the list and the story provenance line', r.status === 200 && strip(e12.text).includes('Sent September 15, 2026') && /<h1>Corrected Synthetic Title<\/h1>/.test(e12.text) && strip(eList.text).includes('Corrected Synthetic Title') && strip(eList.text).includes('Sent September 15, 2026') && eStory.text.includes('September 15, 2026') && !eStory.text.includes('>September 14, 2026<'), `${r.status} ${strip(e12.text).slice(0, 200)}`);
+  const eHome = await get('/');
+  check('an admin issue edit also clears the cached home page (new date and title in the line and module)', lineOf(eHome.text) === 'Latest issue: No. 12 · September 15, 2026' && strip(modOf(eHome.text)).includes('Corrected Synthetic Title') && eHome.headers.get('x-page-cache') !== 'hit', lineOf(eHome.text));
   const empty = await post('/admin/issues', { number: 8, version: ver(8), action: 'delete' });
   const emptyList = await get('/issues/');
   check('deleting an unused issue works and leaves the list unchanged', empty.status === 200 && [...emptyList.text.matchAll(/<h2 id="issue-(\d+)"/g)].map((m) => m[1]).join() === '12,10');
@@ -221,6 +233,36 @@ try {
       await ctx.close();
     }
     if (!axePath) console.log('SKIP  axe checks (set AXE_JS)');
+  }
+
+  // ================= home "Latest issue": next issue down, one issue, then none (issue #115) =================
+  const mut = (fn) => { const d = openDatabase(scratch); try { fn(d); } finally { d.close(); } };
+  await get('/'); // prime the cache; the admin unpublish route below must clear it
+  for (const sl of ['s-pos1', 's-pos2', 's-none-old', 's-none-new']) await post('/api/admin/stories/unpublish', { slug: sl });
+  const h10 = await get('/');
+  check('home: when issue 12 has no live story the line and module fall to the next issue (10)', lineOf(h10.text) === 'Latest issue: No. 10 · August 17, 2026' && strip(modOf(h10.text)).includes('1 story') && slugsOn(modOf(h10.text)).join() === 's-ten', lineOf(h10.text));
+  await post('/api/admin/stories/unpublish', { slug: 's-ten' });
+  // An issue older than the 90-day home window: its preview must not repeat in the "From the archive" rail.
+  mut((d) => { d.prepare("UPDATE stories SET status = 'live', rev = rev + 1 WHERE slug = 's-three-a'").run(); });
+  const h3 = await get('/');
+  check('home: an old issue (3) previews its story once, never again in the archive rail', lineOf(h3.text) === 'Latest issue: No. 3 · May 4, 2026' && slugsOn(modOf(h3.text)).join() === 's-three-a' && slugsOn(h3.text).filter((sl) => sl === 's-three-a').length === 1, `${lineOf(h3.text)} ${slugsOn(h3.text).join()}`);
+  await post('/api/admin/stories/unpublish', { slug: 's-three-a' });
+  const h0 = await get('/');
+  check('home: with no issue holding a live story neither the line nor the module renders, and the page still answers 200', h0.status === 200 && !h0.text.includes('latest-issue') && !/Latest issue/.test(strip(homeMainText(h0.text))), `${h0.status}`);
+  function homeMainText(h) { return h.match(/<main[\s\S]*<\/main>/)?.[0] ?? h; }
+  if (chromium) {
+    // reseed one live issue story so the layout can be measured at five widths
+    mut((d) => { d.prepare("UPDATE stories SET status = 'live', rev = rev + 1 WHERE slug IN ('s-pos1','s-pos2','s-none-new')").run(); });
+    await post('/admin/issues', { number: 12, version: (() => { const d = openDatabase(scratch); try { return d.prepare('SELECT updated_at u FROM newsletter_issues WHERE number = 12').get().u; } finally { d.close(); } })(), action: 'save', date: '2026-09-15', title: 'Corrected Synthetic Title' });
+    for (const width of [360, 390, 768, 1024, 1280]) {
+      const ctx = await browser.newContext();
+      const page = await ctx.newPage();
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(BASE + '/', { waitUntil: 'load' });
+      const m = await page.evaluate(() => ({ w: innerWidth, s: document.documentElement.scrollWidth, line: !!document.querySelector('.latest-issue-line a'), mod: !!document.querySelector('.latest-issue .grid .card') }));
+      check(`home at ${width}px: Latest issue line and module show, no horizontal scroll`, m.s <= m.w && m.line && m.mod, JSON.stringify(m));
+      await ctx.close();
+    }
   }
 } catch (err) {
   console.error(err);

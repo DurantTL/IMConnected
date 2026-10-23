@@ -37,6 +37,11 @@ export function groupByIssue(stories: PublicStory[]): IssueGroup[] {
   return [...groups.values()].sort((a, b) => b.number - a.number);
 }
 
+/** The latest issue (home page, issue #115): the highest-numbered issue with at least one live story, or null. */
+export function latestIssue(stories: PublicStory[]): IssueGroup | null {
+  return groupByIssue(stories)[0] ?? null;
+}
+
 /** The neighbours of issue `n` among the listed issues: `older` has the next lower number, `newer` the next higher. */
 export function neighbours(groups: IssueGroup[], n: number): { older: IssueGroup | null; newer: IssueGroup | null } {
   const i = groups.findIndex((g) => g.number === n); // newest first
