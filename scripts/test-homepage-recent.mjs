@@ -53,7 +53,7 @@ try {
   const side = [...(html.match(/class="latest-stories"[\s\S]*?<\/ol>/)?.[0] || '').matchAll(/href="\/stories\/([^"/]+)\//g)].map((x) => x[1]);
   check('the latest rail is newest first and holds only recent stories', side.join() === 'news-today,kids-recent,churches-recent', side.join());
   check('a section with only old stories has no block on the home page (Youth, Features)', !/<h2>Youth &amp; Pathfinders<\/h2>/.test(html) && !/<h2>Features<\/h2>/.test(html));
-  check('a recent section keeps its block (Kids)', /<h2>Kids<\/h2>/.test(html) || side.includes('kids-recent'));
+  check('a recent section keeps its block (Kids)', /<h2>Kids<\/h2>/.test(html));
   const schools = html.match(/<h3 class="area-title"><a href="\/news\/schools\/">[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
   check('a news area with only old stories keeps its invitation', schools.includes('area-invitation') && schools.includes('Your community’s next story belongs here.') && !on('schools-old', schools));
 
