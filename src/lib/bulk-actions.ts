@@ -34,7 +34,7 @@ export async function publishDraftItem(draftId: number, version: number, userId:
     }
     // After the commit, and only for the draft's first publish: the one thank-you email to a confirmed form submitter.
     // Started without waiting, so the response never waits for the email service; it can never block or undo the publish.
-    if (out.firstPublish) void notifySubmitterOfPublication(draft.id, out.slug, out.title, { userId, ip }).catch(() => {});
+    if (out.firstPublish) void notifySubmitterOfPublication(draft.id, out.slug, out.title, { userId, ip }).catch(() => console.error(`[drafts] submitter notice for draft ${draft.id} failed unexpectedly`));
     return { ok: true, slug: out.slug, title: out.title };
   } catch (err) {
     if (err instanceof EditorError) return { ok: false, code: err.code };

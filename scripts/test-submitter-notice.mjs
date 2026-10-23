@@ -89,7 +89,7 @@ try {
   const A = await mkDraft(HOSTILE);
   mails.length = 0;
   let r = await publish(A);
-  await settle();
+  await waitMails(1); await settle(); // the send is not awaited by the publish; settle lets its audit entry land
   const slugA = draftRow(A).slug;
   check('publishing a confirmed form draft succeeds', r.status === 303 && draftRow(A).status === 'published' && !!slugA, `${r.status} ${r.loc}`);
   check('exactly one email was sent, to the submitter only', mails.length === 1 && mails[0].to?.length === 1 && mails[0].to[0] === 'riley.sample@example.test', JSON.stringify(mails.map((m) => m.to)));
