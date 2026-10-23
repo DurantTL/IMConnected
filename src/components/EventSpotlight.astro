@@ -4,8 +4,7 @@ import { formatDate } from '../lib/site';
 const { events } = Astro.props as { events: PublicStory[] };
 ---
 {events.length > 0 && <section class="event-spotlight" aria-labelledby="spotlight-heading" data-event-spotlight>
-  <div class="spotlight-heading"><div><p class="eyebrow">Gather. Connect. Belong.</p><h2 id="spotlight-heading">Coming together.</h2></div><div class="spotlight-controls"><a href="/announcements/">All announcements &amp; events <span aria-hidden="true">↗</span></a><div data-slider-controls hidden><button type="button" class="icon-btn" data-slide-step="-1" aria-label="Previous event">←</button><button type="button" class="icon-btn" data-slide-step="1" aria-label="Next event">→</button></div></div></div>
-  <div class="spotlight-playback" data-slider-playback hidden><button type="button" data-slide-play>Pause auto-advance</button><span data-rotation-state></span></div>
+  <div class="spotlight-heading"><div><p class="eyebrow">Gather. Connect. Belong.</p><h2 id="spotlight-heading">Coming together.</h2></div><div class="spotlight-controls"><a href="/announcements/">All announcements &amp; events <span aria-hidden="true">↗</span></a><div data-slider-controls hidden><button type="button" class="icon-btn spotlight-play" data-slide-play data-state="playing" aria-label="Pause automatic advance"><svg class="icon-pause" aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="2" width="3.5" height="12" rx=".6"/><rect x="9.5" y="2" width="3.5" height="12" rx=".6"/></svg><svg class="icon-play" aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.2v11.6a.5.5 0 0 0 .77.42l9-5.8a.5.5 0 0 0 0-.84l-9-5.8A.5.5 0 0 0 4 2.2z"/></svg></button><button type="button" class="icon-btn" data-slide-step="-1" aria-label="Previous event">←</button><button type="button" class="icon-btn" data-slide-step="1" aria-label="Next event">→</button></div></div></div>
   <ul class="spotlight-track" tabindex="0" aria-label="Upcoming events. Scroll horizontally to explore." data-event-track>{events.map((event, i) => {
     const d = event.data, a = d.announcement!;
     return <li class="spotlight-slide" data-event-slide>
@@ -15,7 +14,7 @@ const { events } = Astro.props as { events: PublicStory[] };
   })}</ul>
   <div class="spotlight-navigation" data-slider-navigation hidden>
     <div class="spotlight-choices" role="group" aria-label="Choose an event">{events.map((event, i) => <button type="button" data-slide-to={i} aria-label={`Event ${String(i + 1).padStart(2, '0')}: ${event.data.title}`}>{String(i + 1).padStart(2, '0')}</button>)}</div>
-    <p class="spotlight-status" data-event-status role="status" aria-live="off" hidden></p>
+    <p class="spotlight-status sr-only" data-event-status role="status" aria-live="off" hidden></p>
   </div>
 </section>}
 <script>

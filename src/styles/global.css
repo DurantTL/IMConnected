@@ -585,8 +585,8 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 
 /* Immersive event stage. Flyers retain their entire image; text always has a solid backdrop. */
 .event-spotlight { margin:0; padding:0; border:0; border-radius:0; background:#0B3954; color:#fff; }
-.spotlight-heading { max-width:var(--wrap); margin:auto; padding:16px var(--gutter); align-items:center; }
-.spotlight-heading .eyebrow { color:#2DD4BF; font-size:.6rem; margin:0 0 6px; }
+.spotlight-heading { max-width:var(--wrap); margin:auto; padding:10px var(--gutter); align-items:center; }
+.spotlight-heading .eyebrow { color:#2DD4BF; font-size:.6rem; margin:0 0 4px; }
 .spotlight-heading h2 { color:#fff; font:700 1.15rem/1.2 var(--sans); letter-spacing:-.02em; margin:0; }
 .spotlight-controls>a { color:#E0F5F7; }
 .spotlight-controls button { border-color:#779cad; color:#fff; }
@@ -596,32 +596,29 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 .event-spotlight[data-enhanced] .spotlight-track::-webkit-scrollbar { display:none; }
 /* Slides size to their content (no minimum height) and their text starts at the top, so no navy gap opens under the controls. */
 .spotlight-slide { grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); border-radius:0; background:#0B3954; }
-.spotlight-copy { padding:12px max(var(--gutter),calc((100vw - var(--wrap))/2 + var(--gutter))) clamp(24px,2.4vw,36px); padding-right:clamp(28px,4vw,64px); justify-content:flex-start; }
-.spotlight-number { color:#2DD4BF; margin-bottom:16px; }
+.spotlight-copy { padding:6px max(var(--gutter),calc((100vw - var(--wrap))/2 + var(--gutter))) clamp(14px,1.6vw,22px); padding-right:clamp(28px,4vw,64px); justify-content:flex-start; }
+.spotlight-number { color:#2DD4BF; margin-bottom:10px; }
 /* The strongest type in the stage, capped at 60px; longer titles (over 28 and over 48 characters) step down so one slide cannot stretch the rest. */
 .spotlight-copy h3 { font:700 clamp(2rem,1rem + 2.6vw,3.75rem)/1.04 var(--sans); letter-spacing:-.035em; max-width:18ch; }
 .spotlight-copy h3.mid { font-size:clamp(1.9rem,1rem + 1.9vw,3rem); max-width:22ch; }
 .spotlight-copy h3.long { font-size:clamp(1.75rem,1rem + 1.4vw,2.5rem); max-width:28ch; }
-.spotlight-details { color:#2DD4BF; gap:10px 20px; margin-top:10px; }
-.spotlight-dek { color:#E0F5F7; font-size:1rem; line-height:1.7; margin:12px 0; }
-.spotlight-read { margin-top:18px; align-self:flex-start; gap:42px; padding:14px 20px; border:1px solid #2DD4BF; color:#0B3954; background:#2DD4BF; text-decoration:none; border-radius:2px; }
-.spotlight-flyer { background:radial-gradient(ellipse at center,#d5f0f2,#96d3db); padding:24px max(var(--gutter),calc((100vw - var(--wrap))/2 + var(--gutter))) 24px 24px; }
-.spotlight-flyer img { width:auto; height:auto; max-width:100%; max-height:320px; object-fit:contain; box-shadow:0 18px 48px #0b395433; }
-.spotlight-symbol { color:#2DD4BF; background:linear-gradient(130deg,#087E8B,#0B3954); }
-.spotlight-symbol svg { width:150px; height:150px; }
-.spotlight-symbol span { font:600 2.7rem/1.1 var(--serif); }
-.spotlight-navigation { max-width:var(--wrap); margin:auto; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px 24px; padding:12px var(--gutter) 16px; }
+.spotlight-details { color:#2DD4BF; gap:8px 20px; margin-top:8px; }
+.spotlight-dek { color:#E0F5F7; font-size:1rem; line-height:1.6; margin:8px 0; }
+.spotlight-read { margin-top:12px; align-self:flex-start; gap:42px; padding:10px 18px; border:1px solid #2DD4BF; color:#0B3954; background:#2DD4BF; text-decoration:none; border-radius:2px; }
+.spotlight-flyer { background:radial-gradient(ellipse at center,#d5f0f2,#96d3db); padding:14px max(var(--gutter),calc((100vw - var(--wrap))/2 + var(--gutter))) 14px 20px; }
+.spotlight-flyer img { width:auto; height:auto; max-width:100%; max-height:270px; object-fit:contain; box-shadow:0 18px 48px #0b395433; }
+.spotlight-symbol { color:#2DD4BF; background:linear-gradient(130deg,#087E8B,#0B3954); padding:16px; gap:10px; }
+.spotlight-symbol svg { width:96px; height:96px; }
+.spotlight-symbol span { font:600 2.1rem/1.1 var(--serif); }
+.spotlight-navigation { max-width:var(--wrap); margin:auto; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:8px 16px; padding:2px var(--gutter) 8px; position:relative; }
 .spotlight-navigation[hidden] { display:none; }
 .spotlight-choices { display:flex; flex-wrap:wrap; gap:8px; }
 .spotlight-choices button { min-width:44px; min-height:44px; border:0; border-bottom:3px solid #799dac; background:transparent; color:#E0F5F7; font:600 .8rem/1 var(--sans); cursor:pointer; }
 .spotlight-choices button[aria-current] { border-color:#2DD4BF; background:#2DD4BF; color:#0B3954; }
 /* The flyer ring sits inside the stage so it is not clipped; navy shows on the pale gradient padding where mint would not. */
 .event-spotlight .spotlight-flyer:focus-visible { outline-color:#0B3954; outline-offset:-6px; }
-.spotlight-playback { max-width:var(--wrap); margin:auto; padding:0 var(--gutter) 10px; display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; }
-.spotlight-playback[hidden] { display:none; }
-.spotlight-playback button { min-height:44px; background:transparent; border:1px solid #779cad; padding:10px 14px; color:#fff; font:600 .75rem/1.4 var(--sans); cursor:pointer; border-radius:2px; }
-.spotlight-playback button:disabled { cursor:default; }
-.spotlight-playback span { font:400 .7rem/1.5 var(--sans); color:#E0F5F7; }
+.spotlight-play .icon-play, .spotlight-play[data-state=paused] .icon-pause { display:none; }
+.spotlight-play[data-state=paused] .icon-play { display:block; }
 .spotlight-status { color:#E0F5F7; margin:0; }
 .event-spotlight :focus-visible { outline-color:#2DD4BF; }
 
@@ -639,10 +636,10 @@ body.admin .admin-bar .admin-public-link:hover { color:#fff; border-color:#2DD4B
 @media(max-width:920px) {
   body:not(.admin) .site-header .bar { min-height:100px; }
   .site-header .brand-wordmark { width:290px; }
-  .spotlight-copy { padding:12px var(--gutter) 28px; }
-  .spotlight-flyer { padding:24px; }
-  .spotlight-symbol svg { width:100px; height:100px; }
-  .spotlight-symbol span { font-size:2rem; }
+  .spotlight-copy { padding:6px var(--gutter) 18px; }
+  .spotlight-flyer { padding:14px; }
+  .spotlight-symbol svg { width:80px; height:80px; }
+  .spotlight-symbol span { font-size:1.7rem; }
   body:not(.admin) .hero { grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); }
 }
 @media(max-width:650px) {
@@ -654,20 +651,20 @@ body.admin .admin-bar .admin-public-link:hover { color:#fff; border-color:#2DD4B
   .home-news-heading { display:block; padding-top:32px; }
   .home-news-heading h2 { font-size:1.9rem; margin:10px 0; }
   body:not(.admin) .hero { grid-template-columns:minmax(0,1fr); }
-  .spotlight-heading { padding-top:20px; padding-bottom:18px; display:flex; gap:12px; align-items:start; }
+  .spotlight-heading { padding-top:12px; padding-bottom:8px; display:flex; gap:12px; align-items:start; }
   .spotlight-controls { margin:0; gap:8px; }
   .spotlight-controls>a { display:none; }
   .spotlight-slide { grid-template-columns:minmax(0,1fr); min-height:0; }
-  .spotlight-copy { padding:24px var(--gutter) 28px; }
+  .spotlight-copy { padding:14px var(--gutter) 16px; }
   .spotlight-copy h3 { font-size:2rem; max-width:17ch; }
   .spotlight-copy h3.mid { font-size:1.8rem; }
   .spotlight-copy h3.long { font-size:1.6rem; }
-  .spotlight-flyer { padding:24px; order:-1; }
-  .spotlight-flyer img { max-height:280px; }
-  .spotlight-number { margin-bottom:12px; }
+  .spotlight-flyer { padding:12px; order:-1; }
+  .spotlight-flyer img { max-height:210px; }
+  .spotlight-number { margin-bottom:8px; }
   .spotlight-symbol { display:none; }
-  .spotlight-read { margin-top:16px; }
-  .spotlight-navigation { gap:14px; padding-top:14px; padding-bottom:18px; }
+  .spotlight-read { margin-top:12px; }
+  .spotlight-navigation { gap:8px 10px; padding-top:0; padding-bottom:8px; }
   .spotlight-status { font-size:.7rem; }
   body:not(.admin) .article-heading { margin-bottom:24px; }
   body:not(.admin) .article h1 { font-size:2.5rem; }
