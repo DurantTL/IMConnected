@@ -80,7 +80,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       </div>
       {issue && <p class="article-provenance">Originally published in <a href={`/issues/${issue.number}/`}>IMConnected Issue #{issue.number}</a> · <time datetime={issue.date}>{formatDate(new Date(`${issue.date}T00:00:00.000Z`))}</time></p>}
       <p class="article-reading"><span>{readingMinutes} min read</span><a href="#article-body">Read the story <span aria-hidden="true">↓</span></a></p>
-      <div class="listen" data-listen role="group" aria-label="Listen to this story" hidden>
+      <div class="listen" data-listen role="group" aria-label="Listen" hidden>
         <button type="button" data-listen-start>Listen to this story</button>
         <button type="button" data-listen-pause hidden>Pause</button>
         <button type="button" data-listen-stop hidden aria-label="Stop listening">Stop</button>

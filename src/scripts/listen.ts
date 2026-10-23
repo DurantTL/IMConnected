@@ -10,7 +10,7 @@ function skipped(el: Element): boolean {
   if (SKIP_TAGS.has(el.tagName.toUpperCase())) return true;
   if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') return true;
   const c = el.classList;
-  return c.contains('photo-caption') || c.contains('photo-credit') || c.contains('photo-credit-inline') || c.contains('share') || c.contains('listen') || c.contains('btn');
+  return c.contains('photo-caption') || c.contains('photo-credit') || c.contains('photo-credit-inline') || c.contains('story-video-player') || c.contains('share') || c.contains('listen') || c.contains('btn');
 }
 
 function inlineText(el: Element): string {
@@ -39,10 +39,10 @@ function collect(el: Element, out: string[]): void {
   flush();
 }
 
-/** The text blocks to read, in order: title, dek, key points (when present), then the article body. */
+/** The text blocks to read, in order: title, dek, key points and event/announcement details (when present), then the article body. */
 export function storyBlocks(root: ParentNode = document): string[] {
   const out: string[] = [];
-  for (const sel of ['.article-heading h1', '.article-heading .dek', '.key-points', '#article-body']) {
+  for (const sel of ['.article-heading h1', '.article-heading .dek', '.key-points', '.announcement-details', '#article-body']) {
     const el = root.querySelector(sel);
     if (!el) continue;
     if (/^H[1-6]$/.test(el.tagName) || el.classList.contains('dek')) { const t = inlineText(el).replace(/\s+/g, ' ').trim(); if (t) out.push(t); } else collect(el, out);
@@ -55,11 +55,11 @@ function splitLong(s: string, max: number): string[] {
   const parts: string[] = [];
   let rest = s;
   while (rest.length > max) {
-    let cut = Math.max(rest.lastIndexOf(', ', max), rest.lastIndexOf('; ', max));
-    if (cut < max / 2) cut = rest.lastIndexOf(' ', max);
-    if (cut <= 0) cut = max;
-    parts.push(rest.slice(0, cut + 1).trim());
-    rest = rest.slice(cut + 1).trim();
+    let end = Math.max(rest.lastIndexOf(', ', max - 1), rest.lastIndexOf('; ', max - 1)) + 1;
+    if (end < max / 2) end = rest.lastIndexOf(' ', max);
+    if (end <= 0) end = max;
+    parts.push(rest.slice(0, end).trim());
+    rest = rest.slice(end).trim();
   }
   if (rest) parts.push(rest);
   return parts;
@@ -70,10 +70,9 @@ export function chunkText(blocks: string[], max = MAX_CHUNK): string[] {
   const chunks: string[] = [];
   for (const raw of blocks) {
     const block = /[.!?…:;]["'”’)\]]*$/.test(raw) ? raw : raw + '.';
-    const sentences = block.match(/[^.!?…]+(?:[.!?…]+["'”’)\]]*|$)\s*/g) ?? [block];
     let cur = '';
     const push = () => { const t = cur.trim(); if (t) chunks.push(t); cur = ''; };
-    for (const sentence of sentences) {
+    for (const sentence of block.split(/(?<=[.!?…]["'”’)\]]*)\s+/)) {
       for (const piece of splitLong(sentence.trim(), max)) {
         if (cur && (cur + ' ' + piece).length > max) push();
         cur = cur ? cur + ' ' + piece : piece;
@@ -96,12 +95,20 @@ function init(): void {
   const base = lang.split('-')[0].toLowerCase();
   let run = 0; // a new number for every start/stop, so a late "end" event from a cancelled chunk is ignored
   let paused = false;
+  let held = false; // a chunk ended while paused: speak the next one on Resume
+  let chunks: string[] = [];
+  let index = 0; // the next chunk to speak
+  let voice: SpeechSynthesisVoice | undefined;
   const keep = new Set<unknown>(); // the current utterance stays referenced or some browsers drop its events
+
+  // Voices load late in some browsers: ask once now and again when the list changes.
+  let voices: SpeechSynthesisVoice[] = [];
+  const loadVoices = () => { try { voices = synth.getVoices() || []; } catch { voices = []; } };
+  loadVoices();
+  try { synth.addEventListener?.('voiceschanged', loadVoices); } catch { /* the default voice is used */ }
 
   const norm = (v: SpeechSynthesisVoice) => v.lang.toLowerCase().replace('_', '-');
   const pickVoice = (): SpeechSynthesisVoice | undefined => {
-    let voices: SpeechSynthesisVoice[] = [];
-    try { voices = synth.getVoices() || []; } catch { /* default voice */ }
     const want = base === 'en' || !voices.some((v) => norm(v).startsWith(base)) ? 'en' : base;
     const match = voices.filter((v) => norm(v).startsWith(want));
     return match.find((v) => norm(v) === lang.toLowerCase() && v.localService) || match.find((v) => norm(v) === lang.toLowerCase()) || match.find((v) => v.default) || match[0];
@@ -114,40 +121,61 @@ function init(): void {
     pause.setAttribute('aria-label', state === 'paused' ? 'Resume listening' : 'Pause listening');
     status.textContent = message;
   };
-  const stop = (message = 'Stopped.') => {
-    run++; paused = false; keep.clear();
+  // Chrome and Safari stay paused after cancel(), so always resume first.
+  const cancelSpeech = () => {
+    try { synth.resume(); } catch { /* ignore */ }
     try { synth.cancel(); } catch { /* nothing to stop */ }
+  };
+  const stop = (message = 'Stopped.') => {
+    run++; paused = false; held = false; keep.clear();
+    cancelSpeech();
+    const hadFocus = box.contains(document.activeElement);
     show('idle', message);
+    if (hadFocus) start.focus();
+  };
+
+  const speak = (text: string, mine: number) => {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = voice?.lang || lang;
+    if (voice) u.voice = voice;
+    keep.clear(); keep.add(u);
+    u.onend = () => { if (mine !== run) return; if (paused) held = true; else next(); };
+    u.onerror = (e: SpeechSynthesisErrorEvent) => { if (mine !== run || e.error === 'canceled' || e.error === 'interrupted') return; stop('Speech stopped.'); };
+    synth.speak(u);
+  };
+  const next = () => {
+    if (index >= chunks.length) { stop('Finished.'); return; }
+    speak(chunks[index++], run);
   };
 
   start.addEventListener('click', () => {
-    const chunks = chunkText(storyBlocks());
+    chunks = chunkText(storyBlocks());
     if (!chunks.length) return;
-    try { synth.cancel(); } catch { /* ignore */ }
-    const mine = ++run;
-    paused = false;
-    const voice = pickVoice();
-    let i = 0;
-    const next = () => {
-      if (mine !== run) return;
-      if (i >= chunks.length) { stop('Finished.'); return; }
-      const u = new SpeechSynthesisUtterance(chunks[i++]);
-      u.lang = voice?.lang || lang;
-      if (voice) u.voice = voice;
-      keep.clear(); keep.add(u);
-      u.onend = () => next();
-      u.onerror = (e: SpeechSynthesisErrorEvent) => { if (mine !== run || e.error === 'canceled' || e.error === 'interrupted') return; stop('Speech stopped.'); };
-      synth.speak(u);
-    };
+    cancelSpeech();
+    run++; paused = false; held = false; index = 0;
+    voice = pickVoice();
     show('playing', 'Reading the story aloud.');
     next();
     pause.focus();
   });
   pause.addEventListener('click', () => {
-    if (paused) { paused = false; synth.resume(); show('playing', 'Resumed.'); } else { paused = true; synth.pause(); show('paused', 'Paused.'); }
+    if (paused) {
+      paused = false;
+      show('playing', 'Resumed.');
+      if (held) { held = false; try { synth.resume(); } catch { /* ignore */ } next(); return; }
+      const mine = run, was = index;
+      try { synth.resume(); } catch { /* ignore */ }
+      // If the browser did not pick the speech back up, say the current chunk again.
+      setTimeout(() => { if (mine === run && !paused && !held && index === was && !synth.speaking && index > 0) { cancelSpeech(); speak(chunks[index - 1], run); } }, 400);
+    } else {
+      paused = true;
+      try { synth.pause(); } catch { /* ignore */ }
+      show('paused', 'Paused.');
+    }
   });
-  stopBtn.addEventListener('click', () => { stop(); start.focus(); });
-  window.addEventListener('pagehide', () => { run++; try { synth.cancel(); } catch { /* ignore */ } });
+  stopBtn.addEventListener('click', () => stop());
+  window.addEventListener('pagehide', () => stop(''));
+  window.addEventListener('pageshow', (e) => { if (e.persisted) show('idle', ''); });
 
   box.hidden = false;
 }
