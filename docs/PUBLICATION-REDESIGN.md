@@ -25,6 +25,10 @@ The full-width event stage gives the flyer and invitation room above the news. A
 
 [Northwest Adventists](https://nwadventists.com/) informed the dominant-media hierarchy, [Adventist Record](https://record.adventistchurch.com/) the lead-story/teaser balance, and [Adventist Review](https://adventistreview.org/articles/a-bogus-doctrine) the article hierarchy and reading column. These are layout references; no reference-site photography, article copy or implementation was copied. The automatic slider is the owner's requested addition, rather than a claim about the reference sites' behavior.
 
+## Homepage recency
+
+The hero, the latest rail, the Features, Voices, Youth and Kids blocks and the Across the Conference areas draw only from stories dated within the last 90 days (`HOMEPAGE_RECENT_DAYS`, one constant in `src/lib/public-stories.ts`, counted by the America/Chicago day) plus any story marked featured regardless of date, so a featured older story can still lead the hero. A block with fewer stories than it has room for shows fewer instead of reaching into the archive, and an empty news area keeps its invitation to share a story. The event spotlight, section pages, search and feeds are unchanged and still cover every published story. The window moves with the calendar rather than with a publish, so the cached home page can keep a story for up to one cache TTL (10 minutes) plus the Cloudflare/browser window (about 6 minutes) past its 90th day; this is accepted. `scripts/test-homepage-recent.mjs` covers the boundary.
+
 ## Event spotlight behavior
 
 Only published upcoming Events appear, at most six, ordered by the conference's America/Chicago calendar day. The lead flyer stays uncropped. Announcements retain their own board and editor queue.

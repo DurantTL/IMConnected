@@ -10,6 +10,7 @@ import { getStoryBySlug, listStories, LIST_MAX, type Story } from './story-store
 import { adoptionDone, adoptionInFlight } from './story-adopt';
 import { getDb } from './db';
 import { cacheGeneration, TTL_MS } from './public-cache';
+import { conferenceDay } from './event-spotlight';
 import { renderStoryBlocksSafe } from './story-block-render';
 import { renderMediaMarkdown } from './story-media-render';
 
@@ -144,4 +145,22 @@ export async function renderStoryContent(story: PublicStory): Promise<{ html: st
   const photos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] ?? '' }))].map((photo, i) => ({ ...photo, ...d.photoFocus?.[i] }));
   const rendered = await renderMediaMarkdown(story.body ?? '', photos, false, d.announcement ? 0 : undefined);
   return { html: rendered.html, used: new Set(), usedPhotoIndices: rendered.used };
+}
+
+/**
+ * How many days back the home page reaches (issue #97). Every home page block (hero, latest rail, section blocks and
+ * the news areas) draws only from stories dated within this many days of today's America/Chicago day, plus any story
+ * marked featured whatever its date. Section pages, search and the feeds are not affected and still list everything.
+ *
+ * Caching: the window moves with the calendar, not with a publish. The home page is held in the in-memory page cache
+ * for at most one TTL (10 minutes, public-cache.ts) and invalidateStories() clears it on every write, so a story may
+ * stay up to one TTL (plus the up to 6 minute Cloudflare/browser window) past its 90th day. That is acceptable.
+ */
+export const HOMEPAGE_RECENT_DAYS = 90;
+
+/** The home page pool: stories dated in the last HOMEPAGE_RECENT_DAYS days (inclusive) or featured. Keeps the input order. */
+export function homepageStories<T extends PublicStory>(stories: T[], today = conferenceDay()): T[] {
+  const [y, m, d] = today.split('-').map(Number);
+  const cutoff = new Date(Date.UTC(y, m - 1, d - HOMEPAGE_RECENT_DAYS)).toISOString().slice(0, 10);
+  return stories.filter((s) => s.data.featured || s.data.date.toISOString().slice(0, 10) >= cutoff);
 }

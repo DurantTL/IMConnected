@@ -4,7 +4,7 @@ import StoryCard from '../components/StoryCard.astro';
 import EventSpotlight from '../components/EventSpotlight.astro';
 import { upcomingEvents } from '../lib/event-spotlight';
 import { SECTIONS, SITE, getSection } from '../lib/site';
-import { asUnavailable, getPublicStories } from '../lib/public-stories';
+import { asUnavailable, getPublicStories, homepageStories } from '../lib/public-stories';
 import { bySection } from '../lib/stories';
 
 // Rendered on the server from the stories table; the middleware caches the result.
@@ -16,6 +16,9 @@ try {
 } catch (err) {
   return asUnavailable(err);
 }
+// Every block below draws from the recent pool only (last 90 days plus featured); section pages still list everything.
+const allStories = stories;
+stories = homepageStories(allStories);
 
 // Hero: featured stories first, then newest
 const featured = stories.filter((s) => s.data.featured);
@@ -41,7 +44,7 @@ const kids = bySection(stories, 'kids').slice(0, 3);
       <p class="home-intro-note">{SITE.tagline}.<br /><a class="intro-link" href="/news/">Discover what’s happening <span aria-hidden="true">→</span></a></p>
     </section>
   </div>
-  <EventSpotlight events={upcomingEvents(stories)} />
+  <EventSpotlight events={upcomingEvents(allStories)} />
   <div class="wrap magazine-home">
     <div class="home-news-heading"><p class="eyebrow">Faith in action. Close to home.</p><h2>Stories worth sharing.</h2><a href="/news/">The latest news <span aria-hidden="true">↗</span></a></div>
     {lead ? (
@@ -59,7 +62,7 @@ const kids = bySection(stories, 'kids').slice(0, 3);
 
     <nav class="topic-directory" aria-label="Explore story sections">
       <span class="topic-directory-label">Find your next story</span>
-      {SECTIONS.map((s) => <a href={`/${s.key}/`} data-sec={s.key}><span>{s.short}</span><span class="topic-count">{bySection(stories, s.key).length} {bySection(stories, s.key).length === 1 ? 'story' : 'stories'} <span aria-hidden="true">↗</span></span></a>)}
+      {SECTIONS.map((s) => <a href={`/${s.key}/`} data-sec={s.key}><span>{s.short}</span><span class="topic-count">{bySection(allStories, s.key).length} {bySection(allStories, s.key).length === 1 ? 'story' : 'stories'} <span aria-hidden="true">↗</span></span></a>)}
     </nav>
 
     {features.length > 0 && (

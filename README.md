@@ -56,6 +56,8 @@ The [publication redesign guide](docs/PUBLICATION-REDESIGN.md) shows the IMConne
 
 Image uploads and flyers accept JPEG, PNG, WebP and AVIF. See [image formats and agent/Studio compatibility](docs/IMAGE-FORMATS.md) for request examples, original-byte handling and email considerations.
 
+The home page shows recent stories only: those dated within the last 90 days (`HOMEPAGE_RECENT_DAYS` in `src/lib/public-stories.ts`, counted by America/Chicago day) plus any story marked featured, whatever its date. Older stories stay on their section pages, in search and in the feeds.
+
 The [community navigation guide](docs/COMMUNITY-NAVIGATION.md) covers the homepage event rail, administrator website-menu settings, separate Stories/Announcements/Events queues and customizable module quick access.
 
 See the [design review and screenshots](docs/DESIGN_REVIEW.md) for the magazine layout and dedicated editor workspace. The editor separates **Content**, **Story settings**, **Photos**, and **Review & publish**; inactive panels leave the keyboard tab order, while their fields remain included in saves. A sticky toolbar keeps Save and private Preview available.
