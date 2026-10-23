@@ -27,6 +27,8 @@ export interface PublicStory {
     additionalSections?: string[];
     /** The newsletter issue this story first appeared in (date = the day it was sent). */
     newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
+    /** Up to three plain-text key points (issue #117); escaped on output. */
+    keyPoints?: string[];
     area?: string;
     column?: string;
     author: string;

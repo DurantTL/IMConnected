@@ -573,6 +573,10 @@ body:not(.admin) .article>figure { margin:0 0 36px; }
 body:not(.admin) .article>figure img { border-radius:0; }
 body:not(.admin) .article .prose { max-width:66ch; line-height:1.85; }
 .article-provenance { margin:10px 0 0; color:var(--ink-3); font:600 .85rem/1.5 var(--sans); }
+.key-points { max-width:66ch; margin:0 0 32px; padding:18px 22px; border:1px solid var(--line); border-left:4px solid var(--brand-text); border-radius:6px; background:var(--paper, transparent); }
+.key-points h2 { margin:0 0 8px; font:700 .8rem/1.4 var(--sans); letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); }
+.key-points ul { margin:0; padding-left:1.2em; }
+.key-points li { margin:0 0 6px; line-height:1.5; }
 .article-reading { display:flex; align-items:center; gap:18px; color:var(--ink-3); font:600 .75rem/1.5 var(--sans); margin-top:16px; }
 .article-reading a { display:inline-flex; align-items:center; min-height:44px; color:var(--brand-text); text-underline-offset:4px; }
 body:not(.admin) .article .share { max-width:66ch; margin-inline:auto; }

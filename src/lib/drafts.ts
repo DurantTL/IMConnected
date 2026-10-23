@@ -15,6 +15,7 @@ import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
 import { validDate } from './storyfile';
+import { keyPointsJson, normalizeKeyPoints } from './key-points';
 import { ERRORS, type ErrorCode } from './messages';
 import { checkStoryBlockLength, parseStoredStoryBlocks, normalizeStoryBlocks, storyBlocksToMarkdown, OWN_PHOTO_ERROR, type PhotoCrop, type PhotoFit, type PhotoFitFill, type StoryBlock } from './story-blocks';
 import { DEFAULT_PHOTO_LAYOUT, isPhotoLayout, photoLayoutOrDefault, type PhotoLayout } from './photo-layouts';
@@ -38,6 +39,8 @@ export interface DraftFields {
   additionalSections?: string[];
   /** The newsletter issue this story first appeared in (issue #98). undefined = not sent (a save keeps the stored one); null = none. */
   newsletterIssue?: NewsletterRef | null;
+  /** Up to three plain-text key points (issue #117). undefined = not sent (a save keeps the stored list); [] = none. */
+  keyPoints?: string[];
   area: string;
   column: string;
   author: string;
@@ -134,6 +137,7 @@ function toDraft(r: Row): Draft {
     section: s(r.section),
     additionalSections: parseAdditionalSections(r.additional_sections, s(r.section)),
     newsletterIssue: refFromRow(r),
+    keyPoints: normalizeKeyPoints(r.key_points),
     area: s(r.area),
     column: s(r.story_column),
     author: s(r.author),
@@ -228,6 +232,7 @@ export function createDraft(opts: NewDraft): number {
   const id = Number(r.lastInsertRowid);
   getDb().prepare('UPDATE drafts SET announcement = ?, additional_sections = ? WHERE id = ?').run(bulletin, JSON.stringify(normalizeAdditionalSections(f.additionalSections, f.section)), id);
   if (f.newsletterIssue) writeDraftIssue(id, f.newsletterIssue);
+  if (f.keyPoints !== undefined) getDb().prepare('UPDATE drafts SET key_points = ? WHERE id = ?').run(keyPointsJson(f.keyPoints), id);
   if (blocks !== undefined) getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(blocks), blocks.length ? storyBlocksToMarkdown(blocks) : f.body, id);
   return id;
 }
@@ -386,6 +391,7 @@ function saveDraftInTransaction(id: number, expected: number, f: DraftFields, ph
     for (const [pid, caption] of photoCaptions) cap.run(caption.slice(0, 300), pid, id);
     getDb().prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(f.additionalSections === undefined ? cur.additionalSections : f.additionalSections, f.section)), id);
     if (f.newsletterIssue !== undefined) writeDraftIssue(id, f.newsletterIssue);
+    if (f.keyPoints !== undefined) getDb().prepare('UPDATE drafts SET key_points = ? WHERE id = ?').run(keyPointsJson(f.keyPoints), id);
     const after = editorialSnapshot(id, getDraft(id)!);
     if (forceRevision || JSON.stringify(before) !== JSON.stringify(after)) recordDraftRevision(id, userId, before);
     return { ok: true, updatedAt: v } as SaveResult;
@@ -428,7 +434,7 @@ export function restoreDraftRevision(id: number, expected: number, revisionId: n
     const markers = snapshot.fields.storyBlocks?.length ? { body: snapshot.fields.body, missing: false } : restoreMediaMarkers(snapshot.fields.body, snapshot.photos.map((p) => p.key), ordered.map((p) => p.key));
     // An older revision has no issue (null); an issue deleted since is dropped rather than failing the restore.
     const snapshotIssue = normalizeRef(snapshot.fields.newsletterIssue);
-    const fields = { ...snapshot.fields, body: markers.body, storyBlocks: blocks, newsletterIssue: snapshotIssue && issueExists(snapshotIssue.number) ? snapshotIssue : null };
+    const fields = { ...snapshot.fields, body: markers.body, storyBlocks: blocks, newsletterIssue: snapshotIssue && issueExists(snapshotIssue.number) ? snapshotIssue : null, keyPoints: normalizeKeyPoints(snapshot.fields.keyPoints) }; // an older revision has no key points: restores to none
     const alts = new Map<number, string>(), focus = new Map<number, PhotoCrop>(), captions = new Map<number, string>();
     for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) { alts.set(match.id, p.alt); captions.set(match.id, p.caption ?? ''); focus.set(match.id, { focalX: p.focalX, focalY: p.focalY, zoom: p.zoom, fit: p.fit ?? 'cover', fitFill: p.fitFill ?? 'blur' }); } } // a pre-027 revision restores the default fit
     const saved = saveDraftInTransaction(id, expected, fields, alts, userId, fields.photoLayout, focus, true, captions);
@@ -727,6 +733,7 @@ export function resetDraftFromStory(id: number, userId: number | null, f: DraftF
       .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
     getDb().prepare('UPDATE drafts SET announcement = ?, additional_sections = ? WHERE id = ?').run(announcementJson(f.announcement), JSON.stringify(normalizeAdditionalSections(f.additionalSections, f.section)), id);
     writeDraftIssue(id, f.newsletterIssue ?? null);
+    getDb().prepare('UPDATE drafts SET key_points = ? WHERE id = ?').run(keyPointsJson(f.keyPoints ?? []), id);
     const old = replacePhotos(id, photos);
     remapStoryBlocks(id, f.storyBlocks);
     return old;
@@ -932,6 +939,8 @@ export interface AgentDraftInput {
   additionalSections?: string[];
   /** undefined = not sent (keeps the stored one); null = clear; an object is resolved against the stored issues inside the write transaction. */
   newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
+  /** undefined = not sent (keeps the stored list); [] = clear. Already validated by parseAgentStory. */
+  keyPoints?: string[];
   area: string;
   author: string;
   church: string;
@@ -1024,6 +1033,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         if (Number(r.changes) !== 1) return refuse(db.prepare('SELECT id, status, updated_by, slug, published_commit, unpublished_at FROM drafts WHERE id = ?').get(id) as ExistingAgentRow);
         db.prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(input.additionalSections === undefined ? current.additionalSections : input.additionalSections, section)), id);
         if (input.newsletterIssue !== undefined) writeDraftIssue(id, resolveAgentIssue(input.newsletterIssue));
+        if (input.keyPoints !== undefined) db.prepare('UPDATE drafts SET key_points = ? WHERE id = ?').run(keyPointsJson(input.keyPoints), id);
         if (input.photos) {
           oldFiles = listPhotos(id).map((p) => p.path).filter((p): p is string => !!p);
           db.prepare('DELETE FROM draft_photos WHERE draft_id = ?').run(id);
@@ -1038,7 +1048,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         id = createDraft({
           source: 'agent',
           status: 'new',
-          fields: { additionalSections: input.additionalSections, announcement, authorTitle: input.authorTitle ?? '', photoCredit: input.photoCredit ?? '', featured: input.featured === true, title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
+          fields: { additionalSections: input.additionalSections, keyPoints: input.keyPoints, announcement, authorTitle: input.authorTitle ?? '', photoCredit: input.photoCredit ?? '', featured: input.featured === true, title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
           sourceUrl: input.sourceUrl,
           agentNote: input.note || null,
         });

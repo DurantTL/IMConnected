@@ -783,6 +783,70 @@ let S;
   check('an unreferenced issue can be deleted, audited (issue.delete)', r.status === 200 && q('SELECT COUNT(*) n FROM newsletter_issues WHERE number = 33')[0].n === 0 && q("SELECT COUNT(*) n FROM audit_log WHERE action = 'issue.delete' AND target = 'issue:33'")[0].n === 1);
 }
 
+// ================= key points (issue #117): editor inputs, revisions, publish, edit-live, story page, feeds, escaping =================
+{
+  const kp = (a = '', b = '', c = '') => ({ keyPointsPresent: 1, keyPoint0: a, keyPoint1: b, keyPoint2: c });
+  const stored = (id) => JSON.parse(draftRow(id).key_points);
+  const K = idOf(await c1.form('/api/admin/drafts/new', {}));
+  const base = () => baseFields({ title: 'Key Points Story', body: 'Plain body for the key points test.', dek: 'Key points dek.' });
+  check('migration 033: drafts.key_points and stories.key_points exist, NOT NULL, default []', ['drafts', 'stories'].every((t) => q(`SELECT "notnull" AS nn, dflt_value AS d FROM pragma_table_info('${t}') WHERE name = 'key_points'`).some((c) => c.nn === 1 && c.d === "'[]'")));
+  let r = await c1.get(`/admin/drafts/${K}`);
+  check('the Settings tab has three optional Key points inputs (160 characters each)', ['keyPoint0', 'keyPoint1', 'keyPoint2'].every((n) => r.text.includes(`name="${n}"`)) && r.text.includes('name="keyPointsPresent"') && (r.text.match(/name="keyPoint\d" value="[^"]*" maxlength="160"/g) ?? []).length === 3);
+  const HOSTILE = '<script>window.__pwned=1</script> **bold** & [x](https://example.invalid)';
+  r = await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...base(), ...kp('  First point  ', '', HOSTILE) });
+  check('saving stores the points trimmed, empty entries dropped, text kept raw', r.data.ok && JSON.stringify(stored(K)) === JSON.stringify(['First point', HOSTILE]), JSON.stringify([r.data, draftRow(K).key_points]));
+  r = await c1.get(`/admin/drafts/${K}`);
+  check('the editor shows saved points escaped in the inputs', r.text.includes('value="First point"') && !r.text.includes('<script>window.__pwned') && r.text.includes('&lt;script&gt;window.__pwned=1'));
+  const before = draftRow(K).key_points;
+  r = await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...base() });
+  check('a form without the key points fields keeps the stored list', r.data.ok && draftRow(K).key_points === before);
+  r = await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...base(), ...kp('x'.repeat(161)) });
+  check('a point over 160 characters is refused (400) and nothing is saved', r.status === 400 && !r.data.ok && draftRow(K).key_points === before, `${r.status} ${r.text.slice(0, 120)}`);
+  const revs = () => q('SELECT id, payload FROM draft_revisions WHERE draft_id = ? ORDER BY id', K);
+  r = await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...base(), ...kp('Second version only') });
+  check('changing the points records a revision holding the previous list and stores the new one', r.data.ok && JSON.stringify(stored(K)) === JSON.stringify(['Second version only']) && revs().some((x) => JSON.parse(x.payload).fields.keyPoints?.[0] === 'First point'));
+  const revFirst = revs().filter((x) => JSON.parse(x.payload).fields.keyPoints?.[0] === 'First point').at(-1);
+  r = await c1.json(`/api/admin/drafts/${K}/revisions`, { version: version(K), revisionId: revFirst.id });
+  check('restoring an earlier revision brings its key points back', r.status === 200 && draftRow(K).key_points === before, `${r.status} ${r.text.slice(0, 120)}`);
+  run("UPDATE draft_revisions SET payload = json_remove(payload, '$.fields.keyPoints') WHERE id = ?", revFirst.id);
+  r = await c1.json(`/api/admin/drafts/${K}/revisions`, { version: version(K), revisionId: revFirst.id });
+  check('a revision from before the field existed restores to no key points ([])', r.status === 200 && draftRow(K).key_points === '[]', `${r.status} ${r.text.slice(0, 120)}`);
+  await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...base(), ...kp('Camp opens June 9.', 'Register by May 31.', HOSTILE) });
+
+  // publish
+  r = await c1.form(`/api/admin/drafts/${K}/publish`, { version: version(K) });
+  const slug = draftRow(K).slug;
+  check('publishing carries the key points to the story row', r.params.get('n') === 'published' && JSON.stringify(JSON.parse(story(slug).key_points)) === JSON.stringify(['Camp opens June 9.', 'Register by May 31.', HOSTILE]), r.loc);
+  const page = (await getPub(`/stories/${slug}/`)).text;
+  const box = /<aside class="key-points"[^>]*>([\s\S]*?)<\/aside>/.exec(page)?.[1] ?? '';
+  check('the story page shows a "Key points" box: a heading and a real <ul> with one <li> per point', /<h2[^>]*>Key points<\/h2>\s*<ul>/.test(box) && (box.match(/<li>/g) ?? []).length === 3 && box.includes('<li>Camp opens June 9.</li>'), box);
+  check('...after the dek and before the body', page.indexOf('Key points dek.') > 0 && page.indexOf('Key points dek.') < page.indexOf('class="key-points"') && page.indexOf('class="key-points"') < page.indexOf('id="article-body"'));
+  check('...hostile text is escaped, never HTML or Markdown', box.includes('&lt;script&gt;window.__pwned=1&lt;/script&gt; **bold** &amp; [x](https://example.invalid)') && !/<script>window\.__pwned/.test(page) && !box.includes('<strong>'), box);
+  const feed = JSON.parse((await getPub('/stories.json')).text);
+  const fi = feed.stories.find((x) => x.id === slug);
+  check('/stories.json carries keyPoints (additive, version unchanged)', JSON.stringify(fi?.keyPoints) === JSON.stringify(['Camp opens June 9.', 'Register by May 31.', HOSTILE]) && feed.version === 1);
+  const rss = (await getPub('/rss.xml')).text;
+  check('RSS is unchanged: key points are not in it', !rss.includes('Camp opens June 9.'));
+  check('search does not index key points', !(await searchHits('Register by May')).includes(slug));
+  if (PUBLISH_TOKEN) {
+    const studio = await (await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } })).json();
+    check('Studio GET /api/stories carries keyPoints', JSON.stringify(studio.stories.find((x) => x.id === slug)?.keyPoints) === JSON.stringify(['Camp opens June 9.', 'Register by May 31.', HOSTILE]));
+  }
+  const otherSlug = q("SELECT slug FROM stories WHERE slug <> ? AND status = 'live' AND key_points = '[]' LIMIT 1", slug)[0]?.slug;
+  check('a story without key points renders no box and its feed entry has []', !!otherSlug && !(await getPub(`/stories/${otherSlug}/`)).text.includes('class="key-points"') && JSON.stringify(feed.stories.find((x) => x.id === otherSlug)?.keyPoints) === '[]');
+
+  // edit the live story: the points load into the draft, survive a republish, and clearing works
+  r = await c1.form('/api/admin/stories/edit', { slug });
+  check('editing the live story loads its key points into the draft', idOf(r) === K && JSON.stringify(stored(K)) === JSON.stringify(['Camp opens June 9.', 'Register by May 31.', HOSTILE]), r.loc);
+  await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...baseFields({ title: 'Key Points Story', body: 'Plain body for the key points test.', dek: 'Updated dek.' }) });
+  await c1.form(`/api/admin/drafts/${K}/publish`, { version: version(K) });
+  check('...and they survive publishing a change that omits the fields', JSON.parse(story(slug).key_points).length === 3 && story(slug).dek === 'Updated dek.');
+  await c1.form('/api/admin/stories/edit', { slug });
+  await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...baseFields({ title: 'Key Points Story', body: 'Plain body for the key points test.', dek: 'Updated dek.' }), ...kp() });
+  await c1.form(`/api/admin/drafts/${K}/publish`, { version: version(K) });
+  check('clearing all three inputs and republishing clears the story; the box disappears', story(slug).key_points === '[]' && !(await getPub(`/stories/${slug}/`)).text.includes('class="key-points"'));
+}
+
 // ================= logs and the built site =================
 {
   if (SERVER_LOG) {

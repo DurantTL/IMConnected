@@ -24,6 +24,7 @@ import { invalidateStories } from './public-cache';
 import { mediaDir, resolveMediaFile } from './media';
 import { getDraftBySlug, markUnpublished, syncPublishedDraftFields, publishDraftRow, recordStudioPublish, tx, uploadFile, removeUploadFiles, type Draft, type DraftFields, type DraftPhoto } from './drafts';
 import { photoLayoutOrDefault } from './photo-layouts';
+import { normalizeKeyPoints } from './key-points';
 import { getStoryBySlug, storyExists, unpublishStory as hideStory, writeStory, type Story, type StoryInput, type StoryPhoto } from './story-store';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,159}$/;
@@ -250,7 +251,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
   stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; row.zoom = photos[i].zoom ?? 1; row.fit = photos[i].fit ?? 'cover'; row.fitFill = photos[i].fitFill ?? 'blur'; row.caption = captionText(photos[i].caption); });
   const now = Date.now();
   const story: StoryInput = {
-    slug, title, dek: dek || undefined, section, additionalSections: draft.additionalSections, newsletterIssue: draft.newsletterIssue ?? null, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
+    slug, title, dek: dek || undefined, section, additionalSections: draft.additionalSections, newsletterIssue: draft.newsletterIssue ?? null, keyPoints: normalizeKeyPoints(draft.keyPoints), area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
     date: draft.date, photoCredit: stored.sources.length && photoCredit ? photoCredit : undefined,
     ...photoFields(stored, alts, title),
     announcement: draft.announcement, photoLayout: draft.photoLayout, featured: draft.featured, draft: false, body: escapeHtmlInMarkdown(body), storyBlocks,
@@ -341,7 +342,7 @@ export function loadStory(slug: string): LoadedStory | null {
   const alts = [s.imageAlt ?? '', ...s.photoAlts];
   return {
     fields: {
-      title: s.title, dek: s.dek ?? '', section: s.section, additionalSections: s.additionalSections, newsletterIssue: s.newsletterIssue ?? null, area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
+      title: s.title, dek: s.dek ?? '', section: s.section, additionalSections: s.additionalSections, newsletterIssue: s.newsletterIssue ?? null, keyPoints: normalizeKeyPoints(s.keyPoints), area: s.area ?? '', column: s.column ?? '', author: s.author, authorTitle: s.authorTitle ?? '',
       church: s.church ?? '', date: s.date, photoCredit: s.photoCredit ?? '', announcement: s.announcement, photoLayout: photoLayoutOrDefault(s.photoLayout), featured: s.featured, body: s.body, storyBlocks,
     },
     photos: sources.map((url, i) => {

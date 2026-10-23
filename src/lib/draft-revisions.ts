@@ -4,6 +4,7 @@ import type { DraftFields } from './drafts';
 import { normalizeStoryBlocks, photoFit, photoFitFill, type PhotoFit, type PhotoFitFill } from './story-blocks';
 import { normalizeAnnouncement } from './announcement';
 import { normalizeRef } from './newsletter-issues';
+import { normalizeKeyPoints } from './key-points';
 export interface RevisionPhoto { id: number; key: string; alt: string; caption: string; focalX: number; focalY: number; zoom: number; fit?: PhotoFit; fitFill?: PhotoFitFill }
 export interface EditorialSnapshot { fields: DraftFields; photos: RevisionPhoto[] }
 /** Explicit editorial whitelist. Never spread Draft: it contains private submission/account data. */
@@ -11,6 +12,7 @@ export function editorialSnapshot(id: number, f: DraftFields): EditorialSnapshot
   const fields: DraftFields = {
     title: f.title, dek: f.dek, section: f.section, additionalSections: normalizeAdditionalSections(f.additionalSections, f.section), area: f.area, column: f.column, author: f.author, authorTitle: f.authorTitle,
     newsletterIssue: normalizeRef(f.newsletterIssue), // number and position only; an older revision has none (null)
+    keyPoints: normalizeKeyPoints(f.keyPoints),
     church: f.church, date: f.date, photoCredit: f.photoCredit, photoLayout: f.photoLayout, featured: f.featured, body: f.body,
     storyBlocks: normalizeStoryBlocks(f.storyBlocks ?? []), announcement: normalizeAnnouncement(f.announcement),
   };
@@ -33,5 +35,6 @@ export function readDraftRevision(draftId: number, revisionId: number): Editoria
   const snapshot = JSON.parse(row.payload) as EditorialSnapshot;
   snapshot.fields.additionalSections = normalizeAdditionalSections(snapshot.fields.additionalSections, snapshot.fields.section);
   snapshot.fields.newsletterIssue = normalizeRef(snapshot.fields.newsletterIssue);
+  snapshot.fields.keyPoints = normalizeKeyPoints(snapshot.fields.keyPoints); // an older revision has none: it restores to []
   return snapshot;
 }

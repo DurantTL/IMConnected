@@ -22,6 +22,7 @@ export function agentDraftView(draft: Draft, editorTouched: boolean) {
     section: draft.section,
     area: draft.area,
     additionalSections: draft.additionalSections ?? [],
+    keyPoints: draft.keyPoints ?? [],
     newsletterIssue: draft.newsletterIssue?.date === undefined ? null : { number: draft.newsletterIssue.number, date: draft.newsletterIssue.date, title: draft.newsletterIssue.title ?? '', position: draft.newsletterIssue.position },
     author: draft.author,
     authorTitle: draft.authorTitle,
