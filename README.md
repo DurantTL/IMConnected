@@ -4,7 +4,7 @@ A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The
 
 - **Astro 7**: the story pages, section pages, home page, `/stories.json` and `/rss.xml` are rendered on the server from the database and kept in a small in-memory cache (see Stories in the database); the other pages are prerendered to static HTML. The other server code is `/api/submit`, `/api/publish`, `/api/confirm`, `/api/stories` and `/api/studio-photo` (for Studio), `/media/*` (photos from the data folder), and the editor dashboard (`/admin*` and `/api/admin/*`).
 - **Stories live in the site's SQLite database** (epic #25). Publishing, editing and unpublishing in `/admin` (and Studio's publish button) write to it directly, so a story is live on the very next request: there is no commit, no build and no deploy. Photos are files in `DATA_DIR/media`. Accounts, sessions, drafts and the audit log live in the same file (see Editor dashboard). That file and the photos are now the only copy, so a nightly backup to Google Drive matters (see Setup, step 7). `src/content/stories/` and `public/images/stories/` are a frozen archive that the site only reads once, to adopt it (see Stories in the database).
-- **Docker image**: on every push to `main` that changes code, an image is built and pushed to `ghcr.io/<owner>/imconnected`. Stories are not part of any commit, so publishing a story never builds an image.
+- **Docker image**: once a day (07:43 UTC, only when `main` has changed since the last image) or when a person runs the workflow by hand, an image is built and pushed to `ghcr.io/<owner>/imconnected`. Stories are not part of any commit, so publishing a story never builds an image.
 - **Search** runs on the server: `GET /api/search` queries a SQLite FTS5 index of the stories table (see Stories in the database). After an upgrade or restart, search checks that every live, non-draft story has its current index row before returning successful results. While the initial index is incomplete, it reports temporary unavailability and fills the index in bounded background batches; a writer lock never makes a partly built index appear complete (issue #38).
 
 ## How a submission flows
@@ -111,7 +111,7 @@ Publishing no longer needs a GitHub token. There is nothing to create here.
 
 ### 3. Image builds
 
-The Action at `.github/workflows/docker.yml` builds the image and pushes it to GHCR. There's nothing to configure. To set the canonical URL, add a repository **variable** `SITE_URL` (Settings → Secrets and variables → Actions → Variables). Otherwise it defaults to `https://stories.imadventist.org`.
+The Action at `.github/workflows/docker.yml` builds the image and pushes it to GHCR once a day (07:43 UTC), and only when `main` has changed since the last image, so a day of merges ships together. To ship right away (for example after the last merge of a batch), open **Actions → Build & publish image → Run workflow** on `main`. There's nothing to configure. (GitHub may delay scheduled runs at busy times, and on a public repository it pauses scheduled workflows after 60 days without any repository activity; a manual run or any push turns it back on.) To set the canonical URL, add a repository **variable** `SITE_URL` (Settings → Secrets and variables → Actions → Variables). Otherwise it defaults to `https://stories.imadventist.org`.
 
 If the GHCR package is private, run `docker login ghcr.io` on the server first, using a token with `read:packages`.
 
@@ -124,13 +124,13 @@ docker compose up -d
 
 The container listens on port **4321**. Put it behind your reverse proxy (Nginx Proxy Manager, Cloudflare Tunnel, Traefik…). Set `TRUST_PROXY` so the rate limiters see real visitor IPs: `cloudflare` when the site is behind Cloudflare's proxy (it trusts `CF-Connecting-IP`), `true` for a single reverse proxy such as xCloud's nginx (it trusts the last `X-Forwarded-For` entry, the one your proxy added). If it is unset behind a proxy, every visitor shares the proxy's IP, so the submit, publish and sign-in rate limits and lockouts are shared by everyone. Never set either value when the app is reachable directly, because visitors could then forge their IP. That includes `cloudflare` mode when your server can also be reached by its own IP address: anyone hitting the server directly can send a fake `CF-Connecting-IP`. Use `cloudflare` only if direct traffic is blocked: firewall the server to Cloudflare's IP ranges, use a Cloudflare Tunnel, or have nginx set the real IP from Cloudflare's ranges (`set_real_ip_from`).
 
-**Updating after a merge:** the server never builds the site; it only pulls the finished image. After each merge to `main`, the Action builds and publishes the image, then moves the **`deploy`** branch to that commit. Point your host's git auto-deploy (xCloud) at the `deploy` branch, not `main`, with this deploy command:
+**Updating after a merge:** the server never builds the site; it only pulls the finished image. Once a day (or when someone runs **Actions → Build & publish image → Run workflow** on `main`), the Action builds and publishes the image, then moves the **`deploy`** branch to that commit. A change merged today goes live after the next daily run, or right away if you run the workflow by hand. Point your host's git auto-deploy (xCloud) at the `deploy` branch, not `main`, with this deploy command:
 
 ```bash
 docker compose pull && docker compose up -d
 ```
 
-Watching `main` instead would start the deploy about two minutes before the new image exists, and the server would pull the previous version. To update by hand, run the same command. If the Action's `deploy` job fails, the server stays on the previous version until the next merge; re-run the newest "Build & publish image" run from the Actions tab (older runs skip publishing on purpose).
+Watching `main` instead would start the deploy about two minutes before the new image exists, and the server would pull the previous version. To update by hand, run the same command. If the Action's `deploy` job fails, the server stays on the previous version until the next daily run (which rebuilds, because `deploy` is still behind `main`); re-run the newest "Build & publish image" run from the Actions tab (older runs skip publishing on purpose).
 
 The site address defaults to `https://stories.imadventist.org`. If you set `SITE_URL` anywhere (the server's `.env` or the repository variable), it overrides that default, so keep both on the current domain.
 
