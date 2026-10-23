@@ -754,6 +754,8 @@ export interface StudioStory {
   dek: string;
   section: string;
   additionalSections?: string[];
+  /** The story row's issue (Studio never sends one): copied onto the draft so both agree. */
+  newsletterIssue?: NewsletterRef | null;
   area?: string;
   author: string;
   date: string;
@@ -818,6 +820,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
         const keepsUploads = cur && cur.source !== 'studio' && cur.status !== 'rejected' && listPhotos(id).some((p) => p.path);
         if (st.additionalSections !== undefined) getDb().prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(st.additionalSections, st.section)), id);
         if (st.announcement !== undefined) getDb().prepare('UPDATE drafts SET announcement = ? WHERE id = ?').run(announcementJson(st.announcement), id);
+        if (st.newsletterIssue !== undefined) writeDraftIssue(id, st.newsletterIssue);
         if (!keepsUploads) oldUploads = oldUploads.concat(replacePhotos(id, st.photos));
       }
       ids.push(id);

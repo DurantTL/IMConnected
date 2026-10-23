@@ -408,7 +408,7 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
         }, now);
       }
       const rec = recordStudioPublish(planned.map(({ p, stored }) => ({
-        slug: p.slug, title: p.title, dek: p.dek, section: p.section, additionalSections: getStoryBySlug(p.slug, { includeUnpublished: true })?.additionalSections, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body, announcement: getStoryBySlug(p.slug, { includeUnpublished: true })?.announcement ?? null,
+        slug: p.slug, title: p.title, dek: p.dek, section: p.section, additionalSections: getStoryBySlug(p.slug, { includeUnpublished: true })?.additionalSections, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body, announcement: getStoryBySlug(p.slug, { includeUnpublished: true })?.announcement ?? null, newsletterIssue: getStoryBySlug(p.slug, { includeUnpublished: true })?.newsletterIssue ?? null,
         photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption, focalX: stored.rows[i].focalX, focalY: stored.rows[i].focalY, zoom: stored.rows[i].zoom, fit: stored.rows[i].fit, fitFill: stored.rows[i].fitFill })),
       })));
       ids = rec.ids; overwrote = rec.overwrote; oldUploads = rec.oldUploads;

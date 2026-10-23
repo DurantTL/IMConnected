@@ -120,6 +120,14 @@ try {
   assert.equal(story.storyBlocks[2].photoId, undefined, 'public modules do not contain private photo ids');
   m.recordStudioPublish([{ slug: published.slug, title: 'Synthetic Studio replacement', dek: '', section: 'news', area: 'conference', author: 'Synthetic Editor', date: m.getDraft(id).date, photoCredit: '', photoLayout: 'one', body: 'Synthetic Studio replacement text.', photos: loadedPhotos(story) }]);
   assert.deepEqual(m.getDraft(id).storyBlocks, [], 'Studio replacement clears modules on a closed linked draft');
+  // Issue #98: a Studio replacement keeps the story's newsletter issue and copies it onto the closed draft.
+  db.prepare("INSERT INTO newsletter_issues(number,date,title,created_at,updated_at) VALUES(41,'2026-08-03','',1,1),(42,'2026-08-10','',1,1)").run();
+  db.prepare('UPDATE stories SET newsletter_issue=41,newsletter_position=2,rev=rev+1 WHERE slug=?').run(published.slug);
+  db.prepare('UPDATE drafts SET newsletter_issue=42,newsletter_position=5 WHERE id=?').run(id);
+  m.recordStudioPublish([{ slug: published.slug, title: 'Synthetic Studio replacement', dek: '', section: 'news', area: 'conference', author: 'Synthetic Editor', date: m.getDraft(id).date, photoCredit: '', photoLayout: 'one', body: 'Synthetic Studio replacement text.', photos: loadedPhotos(m.getStoryBySlug(published.slug)), newsletterIssue: m.getStoryBySlug(published.slug).newsletterIssue }]);
+  assert.deepEqual([m.getDraft(id).newsletterIssue.number, m.getDraft(id).newsletterIssue.position], [41, 2], 'the closed draft carries the story row\'s issue and position after a Studio publish');
+  assert.throws(() => db.prepare('UPDATE drafts SET newsletter_issue=NULL,newsletter_position=3 WHERE id=?').run(id), /CHECK constraint/, 'a position without an issue is refused by the database');
+  assert.throws(() => db.prepare('UPDATE stories SET newsletter_issue=NULL,newsletter_position=3,rev=rev+1 WHERE slug=?').run(published.slug), /CHECK constraint/);
   const sentinel = m.createDraft({ source: 'editor', userId: user });
   addPhoto(sentinel, '', 30);
   const loaded = m.loadStory(published.slug);

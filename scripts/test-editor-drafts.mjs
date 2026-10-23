@@ -724,14 +724,15 @@ let S;
   // admin page
   check('editors cannot open /admin/issues', (await c1.get('/admin/issues')).status === 403);
   r = await adm.get('/admin/issues');
-  check('administrators see the issues with story counts, the hostile title escaped', r.status === 200 && r.text.includes('Issue #31') && r.text.includes('1 story, 1 draft') && /value="Synthetic [^"]*September/.test(r.text) && !/<b>September/.test(r.text.replace(/value="[^"]*"/g, '')), r.text.slice(r.text.indexOf('<ul class="issue-list'), r.text.indexOf('<ul class="issue-list') + 700));
+  check('administrators see the issues with story counts, the hostile title escaped', r.status === 200 && r.text.includes('Issue #31') && r.text.includes('1 published story · 0 open drafts') && /value="Synthetic [^"]*September/.test(r.text) && !/<b>September/.test(r.text.replace(/value="[^"]*"/g, '')), r.text.slice(r.text.indexOf('Issue #31'), r.text.indexOf('Issue #31') + 300));
   check('...the admin navigation links to it for administrators only', r.text.includes('href="/admin/issues"') && !(await c1.get('/admin')).text.includes('href="/admin/issues"'));
   check('...and no contact details are on the page', !/@example\.test|555-0142/.test(r.text.replace(/issues-admin@example\.test/g, '')));
   const ver = (n) => q('SELECT updated_at u FROM newsletter_issues WHERE number = ?', n)[0].u;
+  await getPub(`/stories/${slug}/`); await getPub('/stories.json'); await getPub('/'); // fill the page cache; no publish happens before the edit
   r = await adm.form('/admin/issues', { number: 31, version: ver(31), action: 'save', date: '2026-09-15', title: 'Corrected Synthetic Title' });
   const i31 = q('SELECT * FROM newsletter_issues WHERE number = 31')[0];
   check('an admin edit changes date and title and is audited (issue.update)', r.status === 200 && i31.date === '2026-09-15' && i31.title === 'Corrected Synthetic Title' && q("SELECT COUNT(*) n FROM audit_log WHERE action = 'issue.update' AND target = 'issue:31' AND user_id = ?", ADM.id)[0].n === 1, `${r.status} ${r.text.slice(0, 100)}`);
-  check('...the story page shows the corrected date at once', (await getPub(`/stories/${slug}/`)).text.includes('September 15, 2026'));
+  check('...the story page and /stories.json show the corrected date and title at once (cache invalidated)', (await getPub(`/stories/${slug}/`)).text.includes('September 15, 2026') && JSON.parse((await getPub('/stories.json')).text).stories.find((x) => x.id === slug)?.newsletterIssue?.title === 'Corrected Synthetic Title');
   const stale = await adm.form('/admin/issues', { number: 31, version: T, action: 'save', date: '2026-09-16', title: 'x' });
   check('a stale version is refused (409) and changes nothing', stale.status === 409 && q('SELECT date FROM newsletter_issues WHERE number = 31')[0].date === '2026-09-15');
   r = await adm.form('/admin/issues', { number: 31, version: ver(31), action: 'save', date: '2999-01-01', title: 'x' });

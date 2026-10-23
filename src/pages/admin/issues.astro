@@ -34,12 +34,12 @@ const issues = listIssuesWithCounts();
         <input type="hidden" name="number" value={i.number} />
         <input type="hidden" name="version" value={i.updatedAt} />
         <h2>Issue #{i.number}</h2>
-        <p class="admin-note">{i.stories} {i.stories === 1 ? 'story' : 'stories'}, {i.drafts} {i.drafts === 1 ? 'draft' : 'drafts'}</p>
+        <p class="admin-note">{i.stories} published {i.stories === 1 ? 'story' : 'stories'} · {i.drafts} open {i.drafts === 1 ? 'draft' : 'drafts'}</p>
         <label>Date sent<input type="date" name="date" value={i.date} required /></label>
         <label>Title <span class="hint">optional</span><input type="text" name="title" value={i.title} maxlength="200" autocomplete="off" /></label>
         <div class="issue-actions">
           <button class="cms-btn" type="submit" name="action" value="save">Save issue #{i.number}</button>
-          <button class="cms-btn danger" type="submit" name="action" value="delete" formnovalidate disabled={i.stories + i.drafts > 0} title={i.stories + i.drafts > 0 ? 'Still used by stories or drafts' : undefined}>Delete issue #{i.number}</button>
+          <button class="cms-btn danger" type="submit" name="action" value="delete" formnovalidate title="Refused while any story or draft still uses this issue">Delete issue #{i.number}</button>
         </div>
       </form>
     </li>

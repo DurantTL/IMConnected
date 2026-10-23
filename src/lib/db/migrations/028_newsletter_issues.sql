@@ -9,8 +9,8 @@ CREATE TABLE newsletter_issues (
   updated_at INTEGER NOT NULL
 );
 ALTER TABLE drafts ADD COLUMN newsletter_issue INTEGER CHECK (newsletter_issue IS NULL OR newsletter_issue BETWEEN 1 AND 9999);
-ALTER TABLE drafts ADD COLUMN newsletter_position INTEGER CHECK (newsletter_position IS NULL OR newsletter_position BETWEEN 1 AND 999);
+ALTER TABLE drafts ADD COLUMN newsletter_position INTEGER CHECK (newsletter_position IS NULL OR (newsletter_position BETWEEN 1 AND 999 AND newsletter_issue IS NOT NULL));
 ALTER TABLE stories ADD COLUMN newsletter_issue INTEGER CHECK (newsletter_issue IS NULL OR newsletter_issue BETWEEN 1 AND 9999);
-ALTER TABLE stories ADD COLUMN newsletter_position INTEGER CHECK (newsletter_position IS NULL OR newsletter_position BETWEEN 1 AND 999);
+ALTER TABLE stories ADD COLUMN newsletter_position INTEGER CHECK (newsletter_position IS NULL OR (newsletter_position BETWEEN 1 AND 999 AND newsletter_issue IS NOT NULL));
 CREATE INDEX stories_newsletter_issue ON stories (newsletter_issue) WHERE newsletter_issue IS NOT NULL;
 CREATE INDEX drafts_newsletter_issue ON drafts (newsletter_issue) WHERE newsletter_issue IS NOT NULL;

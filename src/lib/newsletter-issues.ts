@@ -3,7 +3,9 @@
 // optional title) lives once in `newsletter_issues`. No contact details are stored here.
 import { getDb } from './db';
 import { audit } from './auth/audit';
-import { validDate } from './storyfile';
+import { clean, validDate } from './storyfile';
+import { conferenceDay } from './event-spotlight';
+import { invalidateStories } from './public-cache';
 
 export const ISSUE_MAX = 9999;
 export const POSITION_MAX = 999;
@@ -14,8 +16,8 @@ export interface NewsletterRef { number: number; position: number | null; date?:
 export const todayIso = () => new Date().toISOString().slice(0, 10);
 export const validIssueNumber = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= ISSUE_MAX;
 export const validPosition = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= POSITION_MAX;
-/** A real calendar day that is not in the future (compared in UTC, which is never behind the churches' time zones). */
-export const validIssueDate = (v: unknown): v is string => validDate(v) && v <= todayIso();
+/** A real calendar day that is not in the future (the America/Chicago day, like the site's other dates). */
+export const validIssueDate = (v: unknown): v is string => validDate(v) && v <= conferenceDay();
 
 type Row = Record<string, unknown>;
 
@@ -52,11 +54,11 @@ export function listIssues(): NewsletterIssue[] {
   return (getDb().prepare('SELECT * FROM newsletter_issues ORDER BY number DESC').all() as Row[]).map(toIssue);
 }
 
-/** Issues with how many drafts and stories reference each (admin page). */
+/** Issues with how many stories and OPEN (new or in review) drafts reference each (admin page). */
 export function listIssuesWithCounts(): (NewsletterIssue & { stories: number; drafts: number })[] {
   const rows = getDb().prepare(`SELECT i.*,
       (SELECT COUNT(*) FROM stories s WHERE s.newsletter_issue = i.number) AS story_count,
-      (SELECT COUNT(*) FROM drafts d WHERE d.newsletter_issue = i.number) AS draft_count
+      (SELECT COUNT(*) FROM drafts d WHERE d.newsletter_issue = i.number AND d.status IN ('new', 'in_review')) AS draft_count
     FROM newsletter_issues i ORDER BY i.number DESC`).all() as Row[];
   return rows.map((r) => ({ ...toIssue(r), stories: Number(r.story_count), drafts: Number(r.draft_count) }));
 }
@@ -99,10 +101,10 @@ function inIssueTx<T>(fn: () => T): T {
 /** Administrator edit of an issue's date and title, version-checked (`expected` = the updatedAt the form was loaded with) and audited. */
 export function updateIssue(number: number, expected: number, f: { date: string; title: string }, userId: number): IssueEditResult {
   const date = f.date.trim();
-  const title = f.title.replace(/\s+/g, ' ').trim();
+  const title = clean(f.title).replace(/\s+/g, ' ').trim();
   if (!validIssueDate(date)) return { ok: false, reason: 'invalid', message: 'The date must be a real day that is not in the future, like 2026-09-14.' };
   if (title.length > 200) return { ok: false, reason: 'invalid', message: 'The title is longer than 200 characters.' };
-  return inIssueTx((): IssueEditResult => {
+  const result = inIssueTx((): IssueEditResult => {
     const cur = getIssue(number);
     if (!cur) return { ok: false, reason: 'gone', message: 'That issue no longer exists.' };
     if (cur.updatedAt !== expected) return { ok: false, reason: 'conflict', message: 'Someone else changed this issue. Reload and try again.' };
@@ -111,11 +113,13 @@ export function updateIssue(number: number, expected: number, f: { date: string;
     audit('issue.update', { userId, target: `issue:${number}`, detail: { dateChanged: cur.date !== date, titleChanged: cur.title !== title } });
     return { ok: true, updatedAt: next };
   });
+  if (result.ok) invalidateStories(); // pages, listings and /stories.json show the issue's date and title
+  return result;
 }
 
 /** Delete an issue only when no draft and no story references it. Audited. */
 export function deleteIssue(number: number, expected: number, userId: number): IssueEditResult {
-  return inIssueTx((): IssueEditResult => {
+  const result = inIssueTx((): IssueEditResult => {
     const db = getDb();
     const cur = getIssue(number);
     if (!cur) return { ok: false, reason: 'gone', message: 'That issue no longer exists.' };
@@ -126,4 +130,6 @@ export function deleteIssue(number: number, expected: number, userId: number): I
     audit('issue.delete', { userId, target: `issue:${number}` });
     return { ok: true, updatedAt: expected };
   });
+  if (result.ok) invalidateStories();
+  return result;
 }
