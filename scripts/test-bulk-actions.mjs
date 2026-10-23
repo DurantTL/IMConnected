@@ -331,14 +331,15 @@ try {
   }
   // --- featured and date ---
   {
-    const homeHero = async () => { const h = (await anon.get('/')).text; const a = h.indexOf('aria-label="Top stories"'); return h.slice(a, h.indexOf('hero-side', a)); };
-    check('(setup) the Features story is not the home hero before featuring', !(await homeHero()).includes('Bulk Hotel'));
+    // The newest featured story fills the home page's featured panel (issue #119).
+    const homeHero = async () => { const h = (await anon.get('/')).text; const a = h.indexOf('data-featured-panel'); return a < 0 ? '' : h.slice(a, h.indexOf('</section>', a)); };
+    check('(setup) the Features story is not the home featured panel before featuring', !(await homeHero()).includes('Bulk Hotel'));
     const before = stable(SH);
     let r = await c1.form('/admin/bulk', { action: 'editstory', step: 'run', slug: [SH], tick_featured: '1', e_featured: 'on' });
-    check('featured on: the story leads the home page at once', text(r.text).includes('1 of 1 updated') && sRow(SH).featured === 1 && (await homeHero()).includes('Bulk Hotel'), `featured=${sRow(SH).featured} hero=${(await homeHero()).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300)}`);
+    check('featured on: the story fills the home featured panel at once', text(r.text).includes('1 of 1 updated') && sRow(SH).featured === 1 && (await homeHero()).includes('Bulk Hotel'), `featured=${sRow(SH).featured} hero=${(await homeHero()).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300)}`);
     check('featured: only that column changed', stable(SH) === before);
     r = await c1.form('/admin/bulk', { action: 'editstory', step: 'run', slug: [SH], tick_featured: '1', e_featured: 'off' });
-    check('featured off: it leaves the hero again', sRow(SH).featured === 0 && !(await homeHero()).includes('Bulk Hotel'));
+    check('featured off: it leaves the featured panel again', sRow(SH).featured === 0 && !(await homeHero()).includes('Bulk Hotel'));
     const order = async () => { const h = (await anon.get('/youth/')).text; return [SE, SF, SG].map((s) => h.indexOf(`/stories/${s}/`)); };
     const o0 = await order();
     check('(setup) before the date change, E is listed after F and G on the Youth page', o0.every((x) => x > 0) && o0[0] > o0[1] && o0[0] > o0[2], JSON.stringify(o0));

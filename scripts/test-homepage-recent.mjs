@@ -54,9 +54,10 @@ try {
   for (const slug of ['news-91', 'news-400', 'schools-old', 'youth-old', 'features-old']) check(`${slug} (older, not featured) is nowhere on the home page`, !on(slug));
   check('a featured story 400 days old is on the home page', on('news-featured-400'));
   const lead = html.match(/class="hero[^"]*"[\s\S]*?href="\/stories\/([^"/]+)\//)?.[1];
-  check('the old featured story leads the hero (featured first, then newest)', lead === 'news-featured-400', String(lead));
+  const panelHtml = html.match(/<section class="featured-panel"[\s\S]*?<\/section>/)?.[0] ?? '';
+  check('the old featured story fills the featured panel, not the hero (issue #119)', panelHtml.includes('/stories/news-featured-400/') && lead === 'news-today', String(lead));
   const side = [...(html.match(/class="latest-stories"[\s\S]*?<\/ol>/)?.[0] || '').matchAll(/href="\/stories\/([^"/]+)\//g)].map((x) => x[1]);
-  check('the latest rail is newest first and holds only recent stories', side.join() === 'news-today,kids-recent,churches-recent', side.join());
+  check('the latest rail is newest first and holds only recent stories', side.join() === 'kids-recent,churches-recent,news-89', side.join());
   check('a section with only old stories has no block on the home page (Youth, Features)', !/<h2>Youth &amp; Pathfinders<\/h2>/.test(html) && !/<h2>Features<\/h2>/.test(html));
   check('a recent section keeps its block (Kids)', /<h2>Kids<\/h2>/.test(html));
   const schools = html.match(/<h3 class="area-title"><a href="\/news\/schools\/">[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';

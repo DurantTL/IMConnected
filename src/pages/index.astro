@@ -1,12 +1,14 @@
 ---
 import Base from '../layouts/Base.astro';
 import StoryCard from '../components/StoryCard.astro';
+import FeaturedPanel from '../components/FeaturedPanel.astro';
 import EventSpotlight from '../components/EventSpotlight.astro';
 import { upcomingEvents, conferenceDay } from '../lib/event-spotlight';
 import { SECTIONS, SITE, getSection, formatDate } from '../lib/site';
 import { asUnavailable, getPublicStories, homepageStories, HOMEPAGE_RECENT_DAYS } from '../lib/public-stories';
 import { archiveRail, ARCHIVE_LINK, ARCHIVE_LINK_LABEL } from '../lib/archive-rail';
 import { bySection } from '../lib/stories';
+import { featuredPanelStory, statline } from '../lib/home-featured';
 import { latestIssue, issueHref, PREVIEW_COUNT } from '../lib/issue-pages';
 
 // Rendered on the server from the stories table; the middleware caches the result.
@@ -22,12 +24,16 @@ try {
 const allStories = stories;
 stories = homepageStories(allStories);
 
-// Hero: featured stories first, then newest
-const featured = stories.filter((s) => s.data.featured);
-const heroPool = [...featured, ...stories.filter((s) => !s.data.featured)];
+// Featured panel (issue #119): the newest live featured story (not an announcement) gets its own panel, so the hero and the lists skip it.
+const panel = featuredPanelStory(stories);
+const statlineText = statline(allStories);
+// Hero: other featured stories first, then newest
+const heroStories = stories.filter((s) => s !== panel);
+const featured = heroStories.filter((s) => s.data.featured);
+const heroPool = [...featured, ...heroStories.filter((s) => !s.data.featured)];
 const [lead, ...rest] = heroPool;
 const side = rest.slice(0, 3);
-const used = new Set([lead, ...side].filter(Boolean).map((s) => s.id));
+const used = new Set([panel, lead, ...side].filter(Boolean).map((s) => s.id));
 const fresh = (list: typeof stories) => list.filter((s) => !used.has(s.id));
 
 const news = getSection('news')!;
@@ -40,8 +46,14 @@ const newsAreas = news.areas!.map((a) => ({ area: a, items: bySection(stories, '
 const latest = latestIssue(allStories);
 const sentOn = latest ? formatDate(new Date(`${latest.date}T00:00:00.000Z`)) : '';
 const spotlight = upcomingEvents(allStories);
+// The module skips the panel's story unless that would leave it with fewer previews than it has stories to show.
+const issuePreviews = (() => {
+  if (!latest) return [];
+  const without = latest.stories.filter((s) => s !== panel).slice(0, PREVIEW_COUNT);
+  return without.length >= Math.min(PREVIEW_COUNT, latest.stories.length) ? without : latest.stories.slice(0, PREVIEW_COUNT);
+})();
 // "From the archive" (issue #100): older stories, never one already shown above.
-const shownAbove = [...spotlight, ...(latest?.stories.slice(0, PREVIEW_COUNT) ?? []), lead, ...side, ...features, ...newsAreas.flatMap((a) => a.items), ...columns, ...youth, ...kids].filter(Boolean).map((s) => s!.id);
+const shownAbove = [...spotlight, ...issuePreviews, panel, lead, ...side, ...features, ...newsAreas.flatMap((a) => a.items), ...columns, ...youth, ...kids].filter(Boolean).map((s) => s!.id);
 const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HOMEPAGE_RECENT_DAYS, exclude: shownAbove });
 ---
 <Base current="home">
@@ -52,12 +64,14 @@ const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HO
         <h1 id="home-title">A connected community.<br /><em>A living faith.</em></h1>
       </div>
       <p class="home-intro-note">{SITE.tagline}.<br /><a class="intro-link" href="/news/">Discover what’s happening <span aria-hidden="true">→</span></a></p>
+      {statlineText && <p class="home-statline">{statlineText}</p>}
       {latest && <p class="latest-issue-line"><a href={issueHref(latest.number)}>Latest issue: No. {latest.number} · <time datetime={latest.date}>{sentOn}</time></a></p>}
     </section>
   </div>
   <EventSpotlight events={spotlight} />
+  {panel && <div class="wrap magazine-home"><FeaturedPanel story={panel} eager={spotlight.length === 0} /></div>}
   <div class="wrap magazine-home">
-    <div class="home-news-heading"><p class="eyebrow">Faith in action. Close to home.</p><h2>Stories worth sharing.</h2><a href="/news/">The latest news <span aria-hidden="true">↗</span></a></div>
+    {(lead || !panel) && <div class="home-news-heading"><p class="eyebrow">Faith in action. Close to home.</p><h2>Stories worth sharing.</h2><a href="/news/">The latest news <span aria-hidden="true">↗</span></a></div>}
     {lead ? (
       <section class="hero" aria-label="Top stories">
         <StoryCard story={lead} variant="lead" />
@@ -67,7 +81,7 @@ const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HO
           <a class="intro-link" href="/news/">All conference news <span aria-hidden="true">→</span></a>
         </aside>
       </section>
-    ) : (
+    ) : !panel && (
       <p class="empty-state">No stories yet — check back soon.</p>
     )}
 
@@ -81,7 +95,7 @@ const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HO
           </div>
           <a class="more" href={issueHref(latest.number)}>{latest.stories.length > PREVIEW_COUNT ? `See all ${latest.stories.length} stories` : 'Open this issue'}<span class="sr-only"> in Issue No. {latest.number}</span> <span aria-hidden="true">→</span></a>
         </div>
-        <div class="grid cols-3">{latest.stories.slice(0, PREVIEW_COUNT).map((s) => <StoryCard story={s} />)}</div>
+        <div class="grid cols-3">{issuePreviews.map((s) => <StoryCard story={s} />)}</div>
       </section>
     )}
 
