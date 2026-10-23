@@ -7,12 +7,10 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   const previous = controls.querySelector<HTMLButtonElement>('[data-slide-step="-1"]')!;
   const next = controls.querySelector<HTMLButtonElement>('[data-slide-step="1"]')!;
   const toggle = spotlight.querySelector<HTMLButtonElement>('[data-slide-play]')!;
-  const rotation = spotlight.querySelector<HTMLElement>('[data-rotation-state]')!;
   const choices = Array.from(spotlight.querySelectorAll<HTMLButtonElement>('[data-slide-to]'));
   if (slides.length < 2) continue;
   controls.hidden = false;
   spotlight.querySelector<HTMLElement>('[data-slider-navigation]')!.hidden = false;
-  spotlight.querySelector<HTMLElement>('[data-slider-playback]')!.hidden = false;
   spotlight.dataset.enhanced = 'true'; // the native scrollbar stays visible until the arrows and numbers exist
   status.hidden = false;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -31,8 +29,9 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
     // Quiet while rotating on its own, but a move the reader just made is announced even if rotation carries on.
     status.setAttribute('aria-live', rotating && !userMoved ? 'off' : 'polite');
     toggle.disabled = reduced.matches;
-    toggle.textContent = reduced.matches ? 'Automatic advance off' : requested ? 'Pause auto-advance' : 'Resume auto-advance';
-    rotation.textContent = reduced.matches ? 'Reduced motion: use the arrows to explore.' : !requested ? 'Automatic advance paused.' : rotating ? 'Next event in 7 seconds.' : 'Paused while you explore.';
+    // Icon-only: the label carries the state (no aria-pressed), CSS swaps the pause and play icons from data-state.
+    toggle.setAttribute('aria-label', reduced.matches ? 'Automatic advance off' : requested ? 'Pause automatic advance' : 'Resume automatic advance');
+    toggle.dataset.state = requested && !reduced.matches ? 'playing' : 'paused';
     if (rotating) timer = setTimeout(() => { userMoved = false; go((active() + 1) % slides.length); schedule(); }, interval);
   };
   const update = () => {
@@ -59,9 +58,9 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   const canHover = matchMedia('(any-hover: hover)');
   spotlight.addEventListener('pointerenter', (event) => { if (canHover.matches && (event.pointerType === 'mouse' || event.pointerType === 'pen')) { hovered = true; schedule(); } });
   spotlight.addEventListener('pointerleave', () => { hovered = false; schedule(); });
-  // Focus on any control except Pause/Resume holds rotation (a touch or screen-reader activation is not :focus-visible, but the reader is
+  // Focus on any control except the pause/play toggle holds rotation (a touch or screen-reader activation is not :focus-visible, but the reader is
   // still using it). Only the scrollable track itself needs :focus-visible, so a plain tap on it does not hold rotation.
-  // The Pause/Resume button never holds rotation: a reader who just chose Resume (Android focuses a tapped button) expects motion.
+  // The pause/play toggle never holds rotation: a reader who just chose Resume (Android focuses a tapped button) expects motion.
   spotlight.addEventListener('focusin', (event) => { focused = event.target !== toggle && (event.target !== track || track.matches(':focus-visible')); schedule(); });
   spotlight.addEventListener('focusout', (event) => { if (!(event.relatedTarget instanceof Node && spotlight.contains(event.relatedTarget))) focused = false; schedule(); });
   // A finger pauses rotation only while it is down. The browser cancels the pointer for any pan, vertical page scrolling
