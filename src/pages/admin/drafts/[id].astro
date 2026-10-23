@@ -1,6 +1,7 @@
 ---
 import { countStoryBlocks } from '../../../lib/story-blocks';
 import { isMediaMarkerLine, parsePhotoMarker, galleryMarker } from '../../../lib/story-media';
+import { paragraphLines } from '../../../lib/story-media-render';
 import Admin from '../../../layouts/Admin.astro';
 import { photoFocusStyle, photoFrameAttrs } from '../../../lib/story-blocks';
 import { SECTIONS } from '../../../lib/site';
@@ -66,9 +67,18 @@ if (draft && editable) {
   if (!hasBody) problems.push({ text: 'Story text is missing', panel: 'content', href: '#story-builder', key: 'body' });
   const noAlt = photos.filter((p) => !p.alt.trim()).length;
   if (noAlt) problems.push({ text: `${noAlt} ${noAlt === 1 ? 'photo has' : 'photos have'} no description`, panel: 'photos', href: '#photos' });
-  const badMarkers = isModular ? 0 : draft.body.split('\n').filter((line) => isMediaMarkerLine(line) && !parsePhotoMarker(line, photos.length) && !galleryMarker(line, photos.length)).length;
+  // Only a live marker counts: lines in code blocks, escaped examples and the like are left out, exactly as the renderer treats them.
+  const badMarkers = isModular ? 0 : [...paragraphLines(draft.body).values()].filter((line) => isMediaMarkerLine(line) && !parsePhotoMarker(line.trim(), photos.length) && !galleryMarker(line.trim(), photos.length)).length;
   if (badMarkers) problems.push({ text: `${badMarkers} photo ${badMarkers === 1 ? 'marker does' : 'markers do'} not match a photo`, panel: 'content', href: '#story-builder' });
 }
+// The five fixed problems are always rendered (hidden while fine), so clearing a field shows its problem again without a reload.
+const KEYED = [
+  { key: 'title', text: 'Headline is missing', panel: 'settings', href: '#f-title' },
+  { key: 'author', text: 'Author is missing', panel: 'settings', href: '#f-author' },
+  { key: 'section', text: 'Choose a section', panel: 'settings', href: '#f-section' },
+  { key: 'date', text: 'Date is missing', panel: 'settings', href: '#f-date' },
+  { key: 'body', text: 'Story text is missing', panel: 'content', href: '#story-builder' },
+];
 const detailsAttention = problems.some((p) => p.panel === 'settings');
 const photosAttention = problems.some((p) => p.panel === 'photos');
 const layoutLabel = PHOTO_LAYOUTS.find((l) => l.value === draft?.photoLayout)?.label ?? '';
@@ -113,7 +123,7 @@ const publishingItems: OutlineItem[] = draft ? [
             <span class="ed-status" id="save-status" role="status" aria-live="polite">
               {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
             </span>
-            <span class="ed-undo" role="group" aria-label="Module history">
+            <span class="ed-undo" role="group" aria-label="Module history" hidden={!isModular}>
               <button class="cms-btn secondary" type="button" id="blocks-undo" disabled>Undo module change</button>
               <button class="cms-btn secondary" type="button" id="blocks-redo" disabled>Redo module change</button>
             </span>
@@ -134,7 +144,7 @@ const publishingItems: OutlineItem[] = draft ? [
                 <details class="ed-menu">
                   <summary class="cms-btn studio-review-action" aria-label="More publishing actions"><span aria-hidden="true">▾</span></summary>
                   <div class="ed-menu-list">
-                    <a href="#schedule-form" data-open-panel="review">Schedule…</a>
+                    <a href="#studio-schedule" data-open-panel="review">Schedule…</a>
                     <a href="#reject-details" data-open-panel="review" data-open-details="reject-details">Reject…</a>
                   </div>
                 </details>
@@ -142,9 +152,9 @@ const publishingItems: OutlineItem[] = draft ? [
             )}
           </div>
         </div>
-        <div class="ed-strip" aria-label="Draft status">
+        <div class="ed-strip" role="group" aria-label="Draft status">
           <span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span>
-          {editable && <ul class="ed-problems" aria-label="Things to fix before publishing" hidden={problems.length === 0}>{problems.map((p) => <li data-problem={p.key}><a href={p.href} data-open-panel={p.panel}>{p.text}</a></li>)}</ul>}
+          {editable && <ul class="ed-problems" aria-label="Things to fix before publishing" hidden={problems.length === 0}>{KEYED.map((p) => <li data-problem={p.key} hidden={!problems.some((x) => x.key === p.key)}><a href={p.href} data-open-panel={p.panel}>{p.text}</a></li>)}{problems.filter((p) => !p.key).map((p) => <li><a href={p.href} data-open-panel={p.panel}>{p.text}</a></li>)}</ul>}
           {editable && <span class="ed-ok" hidden={problems.length > 0}>No problems found</span>}
           <span class="ed-live">{draft.live ? 'Live' : 'Not live · draft only'}</span>
         </div>
@@ -216,7 +226,7 @@ const publishingItems: OutlineItem[] = draft ? [
           <li><button type="button" class="ed-outline-item" data-studio-tab="content" data-body-text aria-controls="story-builder">
             <svg class="ed-oi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={ICONS.body}></svg>
             <span class="ed-oi-text"><span class="ed-oi-title">Body text</span><span class="ed-oi-meta" data-meta="body">{wordCount} {wordCount === 1 ? 'word' : 'words'}</span></span>
-            <span class={`ed-dot ${!editable ? '' : hasBody && !problems.some((p) => p.panel === 'content') ? 'ok' : 'warn'}`} data-dot="body" aria-hidden="true"></span>
+            <span class={`ed-dot ${!editable ? '' : hasBody && !problems.some((p) => p.panel === 'content') ? 'ok' : 'warn'}`} data-dot="body" aria-hidden="true"></span><span class="sr-only" data-dot-text="body">{!editable ? '' : hasBody && !problems.some((p) => p.panel === 'content') ? 'Done' : 'Needs attention'}</span>
           </button></li>
         </ul>
         <div id="outline-body-modules" hidden={!isModular}>
@@ -230,7 +240,7 @@ const publishingItems: OutlineItem[] = draft ? [
             <li><button type="button" class="ed-outline-item" data-studio-tab={it.panel} aria-controls={panelId(it.panel)}>
               <svg class="ed-oi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={ICONS[it.icon]}></svg>
               <span class="ed-oi-text"><span class="ed-oi-title">{it.title}</span><span class="ed-oi-meta" data-meta={it.metaAttr ?? it.panel}>{it.meta}</span></span>
-              <span class={`ed-dot ${it.dot}`} aria-hidden="true"></span>
+              <span class={`ed-dot ${it.dot}`} aria-hidden="true"></span><span class="sr-only">{it.dot === 'warn' ? 'Needs attention' : it.dot === 'ok' ? 'Done' : ''}</span>
             </button></li>
           ))}
         </ul>

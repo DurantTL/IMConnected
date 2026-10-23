@@ -405,11 +405,15 @@ try {
   await openContent(page);
   await page.waitForTimeout(100);
   check('editor reflows without horizontal overflow at 390px', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
-  check('phone editor shows the edit section and keeps the preview hidden until Preview is pressed', await page.locator('#module-inspector').isVisible() && !(await page.locator('.ed-preview').isVisible()));
+  check('phone editor shows the edit section and keeps the preview hidden and inert until Preview is pressed', await page.locator('#module-inspector').isVisible() && !(await page.locator('.ed-preview').isVisible()) && await page.locator('.ed-preview').evaluate((pane) => pane.inert));
   await page.locator('[data-studio-preview]').first().click();
-  check('phone Preview opens the draft preview as its own view', await page.locator('.ed-preview').isVisible());
+  check('phone Preview opens the draft preview as its own view', await page.locator('.ed-preview').isVisible() && await page.locator('.ed-preview').evaluate((pane) => !pane.inert));
+  check('while the phone preview is open everything behind it is inert, so focus cannot reach the editor', await page.locator('#story-builder').evaluate((panel) => !!panel.closest('[inert]')) && await page.locator('.studio-head').evaluate((head) => !!head.closest('[inert]')) && await page.locator('.ed-preview').evaluate((pane) => !pane.closest('[inert]')));
+  await page.keyboard.press('Escape');
+  check('Escape closes the phone preview and gives the page back', !(await page.locator('.ed-preview').isVisible()) && await page.locator('#story-builder').evaluate((panel) => !panel.closest('[inert]')) && await page.locator('.ed-preview').evaluate((pane) => pane.inert));
+  await page.locator('[data-studio-preview]').first().click();
   await page.locator('[data-preview-close]').click();
-  check('phone Close preview returns to the edit section', !(await page.locator('.ed-preview').isVisible()) && await page.locator('#module-inspector').isVisible());
+  check('phone Close preview returns to the edit section', !(await page.locator('.ed-preview').isVisible()) && await page.locator('#module-inspector').isVisible() && await page.locator('#story-builder').evaluate((panel) => !panel.closest('[inert]')));
 
   check('phone header scrolls normally and desktop actions leave the focus order', await page.locator('.studio-head').evaluate((head) => getComputedStyle(head).position === 'static') && !(await page.locator('#save-btn').isVisible()) && await page.locator('#mobile-save-btn').isVisible());
   await page.locator('#module-fields').scrollIntoViewIfNeeded();
@@ -722,6 +726,54 @@ try {
   for (const [width, columns] of [[1440, 2], [390, 1]]) { await publicPage.setViewportSize({ width, height: 1000 }); check(`section reads in ${columns} columns at ${width}px`, await publicPage.locator('.story-section').evaluate((el, n) => getComputedStyle(el).gridTemplateColumns.split(' ').length === n && el.textContent.indexOf('left column') < el.textContent.indexOf('right column') && document.documentElement.scrollWidth <= innerWidth, columns)); if (shots) await publicPage.screenshot({ path: path.join(shots, `story-sections-${width}.png`), fullPage: true }); }
   check('public selected-text formatting and finite alignment/spacing survive publish', await publicPage.locator('.story-section [data-align=center]').evaluate((el) => getComputedStyle(el).textAlign === 'center' && getComputedStyle(el).marginBlockStart === '40px' && el.querySelector('strong').textContent === 'left'));
   check('nested image appears once and section source order survives publishing', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-section img').count() === 1);
+
+  // An agent draft: opening the editor, switching parts and opening Preview must not touch it, so a later agent update still lands (no 409).
+  {
+    const agentCreated = await post('/api/admin/drafts/new', new FormData());
+    const agentId = Number(agentCreated.headers.get('location').split('/').pop());
+    db.prepare("UPDATE drafts SET source='agent', status='new', title='Synthetic agent draft', body='Synthetic agent body text.', author='Staff Writer', section='news', area='conference', date=?, agent_note='Synthetic agent note.', updated_by=NULL WHERE id=?").run(new Date().toISOString().slice(0, 10), agentId);
+    const snapshot = () => JSON.stringify(db.prepare('SELECT updated_at, status, updated_by, title, body FROM drafts WHERE id=?').get(agentId));
+    const before = snapshot();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    await page.waitForFunction(() => document.getElementById('preview')?.srcdoc?.length > 50);
+    check('an agent draft opens with Body text in the outline and the agent note under Submitter & notes', await page.locator('[data-body-text]').isVisible() && await page.locator('[data-studio-tab=notes]').isVisible());
+    for (const tab of ['settings', 'photos', 'notes', 'review', 'history']) await page.locator(`[data-studio-tab=${tab}]`).click();
+    await page.locator('[data-body-text]').click();
+    check('the agent note is shown in Submitter & notes', await page.locator('[data-studio-tab=notes]').click().then(() => page.locator('#studio-panel-notes').innerText()).then((text) => text.includes('Synthetic agent note.')));
+    await page.waitForTimeout(1500);
+    check('opening an agent draft and moving between its parts changes nothing (no save on load, same version, status and editor)', snapshot() === before);
+    // Header actions move focus to a real control; the menu closes on Escape; problems come back live.
+    await page.locator('.ed-menu > summary').click();
+    await page.locator('.ed-menu-list a', { hasText: 'Schedule' }).click();
+    check('Schedule… opens Schedule & publish and focuses its date field (not a hidden input), closing the menu', await page.locator('#studio-panel-review').isVisible() && await page.evaluate(() => document.activeElement?.matches('#studio-schedule input:not([type=hidden])')) && !(await page.locator('.ed-menu').evaluate((menu) => menu.open)));
+    await page.locator('.ed-menu > summary').click();
+    await page.keyboard.press('Escape');
+    check('Escape closes the Publish menu and returns focus to its toggle', !(await page.locator('.ed-menu').evaluate((menu) => menu.open)) && await page.evaluate(() => document.activeElement?.matches('.ed-menu > summary')));
+    await page.locator('.ed-menu > summary').click();
+    await page.locator('[data-body-text]').focus();
+    check('moving focus out of the Publish menu closes it', !(await page.locator('.ed-menu').evaluate((menu) => menu.open)));
+    await page.locator('a[href="#publish-form"]').click();
+    check('Publish jumps to the Publish button without publishing', await page.evaluate(() => document.activeElement?.matches('#publish-form button')) && db.prepare('SELECT status FROM drafts WHERE id=?').get(agentId).status === 'new');
+    await page.locator('[data-studio-tab=settings]').click();
+    await page.locator('#f-title').fill('');
+    check('clearing a filled title shows "Headline is missing" at once, as a link to the field', await page.locator('[data-problem=title]').isVisible());
+    await page.locator('[data-problem=title] a').click();
+    check('the problem link focuses the title field', await page.evaluate(() => document.activeElement?.id === 'f-title'));
+    await page.locator('#f-title').fill('Synthetic agent draft');
+    check('...and it disappears again when the title is filled', !(await page.locator('[data-problem=title]').isVisible()));
+    check('the status strip is a labelled group and each outline dot has screen-reader text', await page.locator('.ed-strip').getAttribute('role') === 'group' && await page.locator('[data-body-text] .sr-only').textContent() !== '');
+    check('44px targets: undo, redo, problem links, module moves, preview width', await page.evaluate(() => [...document.querySelectorAll('#blocks-undo,#blocks-redo,.ed-problems a,.sb-module-actions button,[data-preview-width]')].filter((el) => el.getBoundingClientRect().width > 0).every((el) => el.getBoundingClientRect().height >= 43.5)));
+    check('undo and redo are hidden for a Markdown story with nothing to undo', await page.locator('.ed-undo').isHidden());
+    // A fenced example is not a live marker.
+    db.prepare("UPDATE drafts SET body=?, updated_at=updated_at WHERE id=?").run('Synthetic text.\n\n```\n{{photo 9}}\n```\n\n    {{photo 8}}\n\nMore text.', agentId);
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    check('marker-like lines in fenced and indented code are not reported as problems', await page.locator('.ed-problems a', { hasText: 'marker' }).count() === 0);
+    db.prepare("UPDATE drafts SET body=? WHERE id=?").run('Synthetic text.\n\n{{photo 9}}\n\nMore text.', agentId);
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    check('a live marker that matches no photo is reported', await page.locator('.ed-problems a', { hasText: 'marker' }).count() === 1);
+  }
+
   // Saved history must survive a reload and save unsaved edits before restoring.
   legacyId = await createLegacy();
   const revisionBaseline = 'Synthetic saved revision baseline.';

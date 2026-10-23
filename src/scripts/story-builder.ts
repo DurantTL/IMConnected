@@ -85,8 +85,6 @@ if (form && blocksField) {
       catch (error) { announce(error instanceof Error ? error.message : 'Check the module settings before saving.'); }
     }
     split.dataset.mode = modular ? 'modules' : 'markdown';
-    const writeTab = document.querySelector('[data-view=write]');
-    if (writeTab) writeTab.textContent = modular ? 'Build' : 'Write';
     workspace.hidden = !modular;
     markdown.hidden = modular;
     syncPanes();
@@ -101,6 +99,9 @@ if (form && blocksField) {
     if (bodyHeading) bodyHeading.textContent = modular ? 'Story modules' : 'Body text';
     markCurrent();
     useMarkdown.textContent = modular ? 'Switch to Markdown' : 'Markdown active';
+    // Undo and redo appear for module stories, and while a Markdown/module switch can still be undone.
+    const undoGroup = undo.closest<HTMLElement>('.ed-undo');
+    if (undoGroup) undoGroup.hidden = !modular && !history.length && !future.length;
     undo.disabled = !editable || !history.length;
     redo.disabled = !editable || !future.length;
     const count = document.getElementById('module-count');
@@ -750,6 +751,8 @@ if (form && blocksField) {
     (document.getElementById('module-library-search') as HTMLElement | null)?.focus();
     library.scrollIntoView({ block: 'start' });
   });
+  // Never a hidden input (the version and storyBlocks fields come first in their forms) or a disabled control.
+  const FOCUSABLE = 'input:not([type=hidden]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled), summary';
   for (const control of document.querySelectorAll<HTMLElement>('[data-open-panel]')) control.addEventListener('click', (event) => {
     const hash = control instanceof HTMLAnchorElement ? control.getAttribute('href') : null;
     if (hash?.startsWith('#')) event.preventDefault();
@@ -758,11 +761,17 @@ if (form && blocksField) {
     if (control.dataset.openDetails) { const details = document.getElementById(control.dataset.openDetails); if (details instanceof HTMLDetailsElement) details.open = true; }
     const target = hash && hash.length > 1 ? document.querySelector<HTMLElement>(hash) : null;
     if (!target) return;
-    const focusable = target.matches('input,select,textarea,button,summary') ? target : target.querySelector<HTMLElement>(target instanceof HTMLDetailsElement ? 'textarea,input,summary' : 'input,select,textarea,button');
     const heading = target.closest('[data-studio-panel]')?.querySelector<HTMLElement>('[data-panel-heading]');
-    (focusable ?? heading)?.focus();
+    (target.matches(FOCUSABLE) ? target : (target instanceof HTMLDetailsElement ? target.querySelector<HTMLElement>('textarea:not(:disabled)') : null) ?? target.querySelector<HTMLElement>(FOCUSABLE) ?? heading)?.focus();
     target.scrollIntoView({ block: 'center' });
   });
+  // The Publish menu closes on Escape (focus returns to its toggle), when focus leaves it, and on an outside click.
+  const publishMenu = document.querySelector<HTMLDetailsElement>('.ed-menu');
+  if (publishMenu) {
+    publishMenu.addEventListener('keydown', (event) => { if (event.key === 'Escape' && publishMenu.open) { publishMenu.open = false; publishMenu.querySelector('summary')?.focus(); } });
+    publishMenu.addEventListener('focusout', (event) => { const next = event.relatedTarget as Node | null; if (publishMenu.open && next && !publishMenu.contains(next)) publishMenu.open = false; });
+    document.addEventListener('click', (event) => { if (publishMenu.open && !publishMenu.contains(event.target as Node)) publishMenu.open = false; });
+  }
   const saveStatus = document.getElementById('save-status');
   const mobileSaveStatus = document.querySelector('[data-mobile-save-status]');
   if (saveStatus && mobileSaveStatus) {
@@ -771,13 +780,30 @@ if (form && blocksField) {
     new MutationObserver(reflectStatus).observe(saveStatus, { childList: true, subtree: true, characterData: true });
   }
   const narrow = window.matchMedia('(max-width: 767px)');
+  // On a phone the preview opens as a full-screen view: everything behind it is inert while it is open, and the closed card is inert too.
+  let background: HTMLElement[] = [];
+  function setPreviewOpen(open: boolean) {
+    if (!previewCard) return;
+    for (const el of background) el.inert = false;
+    background = [];
+    if (open) previewCard.dataset.open = 'true'; else delete previewCard.dataset.open;
+    previewCard.inert = narrow.matches && !open;
+    if (!open || !narrow.matches) return;
+    for (let el: HTMLElement = previewCard; el.parentElement && el !== document.body; el = el.parentElement) {
+      for (const sibling of Array.from(el.parentElement.children) as HTMLElement[]) if (sibling !== el && !sibling.inert && !['SCRIPT', 'STYLE'].includes(sibling.tagName)) { sibling.inert = true; background.push(sibling); }
+    }
+  }
+  narrow.addEventListener('change', () => setPreviewOpen(false));
+  setPreviewOpen(false);
   for (const control of document.querySelectorAll('[data-studio-preview]')) control.addEventListener('click', () => {
     // Three and two columns keep the preview beside the editor; on phones it opens as its own view.
-    if (narrow.matches && previewCard) previewCard.dataset.open = 'true';
+    if (narrow.matches) setPreviewOpen(true);
     previewCard?.scrollIntoView({ block: 'start' });
-    previewFrame.focus();
+    if (narrow.matches) previewCard?.querySelector<HTMLElement>('[data-preview-close]')?.focus(); else previewFrame.focus();
   });
-  for (const close of document.querySelectorAll('[data-preview-close]')) close.addEventListener('click', () => { delete previewCard?.dataset.open; (document.querySelector('[data-studio-preview]') as HTMLElement | null)?.focus(); });
+  const closePreview = () => { setPreviewOpen(false); (document.querySelector('[data-studio-preview]') as HTMLElement | null)?.focus(); };
+  for (const close of document.querySelectorAll('[data-preview-close]')) close.addEventListener('click', closePreview);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && narrow.matches && previewCard?.dataset.open) closePreview(); });
   form.addEventListener('input', () => {
     const storyTitle = (form.elements.namedItem('title') as HTMLInputElement)?.value.trim() || 'Untitled story';
     const author = (form.elements.namedItem('author') as HTMLInputElement)?.value.trim() || 'Add an author in Story settings';

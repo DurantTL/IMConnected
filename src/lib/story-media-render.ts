@@ -76,7 +76,7 @@ const mediaPlugin: NonNullable<SatteriMarkdownProcessorOptions['mdastPlugins']>[
 // positions, and swapped for a placeholder built from a random per-render nonce; the plugin accepts only those placeholders.
 interface MdNode { type: string; value?: string; children?: MdNode[]; position?: { start: { line: number }; end: { line: number } } }
 /** Lines (0-based) that are a whole, text-only line of a top-level paragraph, with that line's text from the source. */
-function paragraphLines(md: string): Map<number, string> {
+export function paragraphLines(md: string): Map<number, string> {
   const raw = md.split('\n'), out = new Map<number, string>();
   for (const paragraph of (markdownToMdast(md, { position: true }) as MdNode).children ?? []) {
     if (paragraph.type !== 'paragraph' || !paragraph.position) continue;
