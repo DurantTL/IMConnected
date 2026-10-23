@@ -4,6 +4,7 @@
 import { getDraft, isEditable, listPhotos, retireUploads } from './drafts';
 import { publishDraft, unpublishLive, validSlug } from './story-publish';
 import { EditorError, ERRORS, type ErrorCode } from './messages';
+import { getStoryBySlug } from './story-store';
 import { audit } from './auth/audit';
 
 export const BULK_MAX = 50;
@@ -41,9 +42,12 @@ export async function publishDraftItem(draftId: number, version: number, userId:
 }
 
 /** Take one live story off the site. */
-export function unpublishStoryItem(slug: string, userId: number, ip: string): ItemResult {
+export function unpublishStoryItem(slug: string, userId: number, ip: string, requireLive = false): ItemResult {
   if (!validSlug(slug)) return { ok: false, code: 'slug_bad' };
   try {
+    // Bulk only: a story that is already off the site (a reloaded result page, a stale list) is left alone, so another
+    // editor's draft version and the audit log are not disturbed and a story republished in between is not taken down.
+    if (requireLive && getStoryBySlug(slug)?.status !== 'live') return { ok: false, code: getStoryBySlug(slug, { includeUnpublished: true }) ? 'not_live' : 'story_missing' };
     const out = unpublishLive(slug, userId);
     if (!out) return { ok: false, code: 'story_missing' };
     try {

@@ -47,13 +47,13 @@ const base = siteUrl();
     <p class="admin-note">No published stories yet.</p>
   ) : (
     <>
-    <BulkBar action="unpublish" label="Unpublish selected" noun="stories" />
+    {!loadFailed && <BulkBar action="unpublish" label="Unpublish selected" noun="stories" />}
     <ul class="cms-list">
       {list.map((r) => (
         <li class="cms-item">
           <div class="bulk-row">
           <label class="bulk-pick">
-            <input class="bulk-item" type="checkbox" name="slug" value={r.slug} form="bulk-form" aria-label={r.title || r.slug} />
+            <input class="bulk-item" type="checkbox" name="slug" value={r.slug} form="bulk-form" aria-label={`${r.title || r.slug} (${r.date})`} />
           </label>
           <div class="bulk-body">
           <a class="title" href={`${base}/stories/${r.slug}/`} rel="noopener">{r.title || r.slug}</a>

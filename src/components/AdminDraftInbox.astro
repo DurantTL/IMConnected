@@ -114,7 +114,7 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
           <div class="bulk-row">
           {canBulk && (pickable ? (
             <label class="bulk-pick">
-              <input class="bulk-item" type="checkbox" name="id" value={d.id} form="bulk-form" aria-label={d.title || 'Untitled story'} />
+              <input class="bulk-item" type="checkbox" name="id" value={d.id} form="bulk-form" aria-label={`${d.title || 'Untitled story'} (received ${new Date(d.createdAt).toISOString().slice(0, 10)})`} />
               <input type="hidden" name={`v_${d.id}`} value={d.updatedAt} form="bulk-form" />
             </label>
           ) : <span class="bulk-pick" aria-hidden="true"></span>)}

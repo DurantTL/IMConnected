@@ -126,7 +126,7 @@ try {
   run("UPDATE drafts SET submitter_email = 'riley.sample@bulk-mail.test', submitter_phone = '555-0142', submitter_name = 'Riley Sample' WHERE id = ?", D);
   let list = await c1.get('/admin');
   check('the drafts list has a form-linked checkbox and a hidden version per draft, and a bulk form that posts to /admin/bulk', [A, B, C, D].every((id) => new RegExp(`name="id" value="${id}" form="bulk-form"`).test(list.text) && new RegExp(`name="v_${id}" value="\\d+" form="bulk-form"`).test(list.text)) && /<form[^>]*id="bulk-form"[^>]*action="\/admin\/bulk"/.test(list.text));
-  check('each checkbox is named by its story title (aria-label), and the hostile title is escaped in the list', list.text.includes('aria-label="Bulk Alpha Camp Report"') && list.text.includes('>&lt;script&gt;alert(1)&lt;/script&gt; Bulk Delta<'));
+  check('each checkbox is named by its story title (aria-label), and the hostile title is escaped in the list', list.text.includes('aria-label="Bulk Alpha Camp Report (') && list.text.includes('>&lt;script&gt;alert(1)&lt;/script&gt; Bulk Delta<'));
   check('"Select all" is a real labelled checkbox, hidden until JavaScript runs', /<label[^>]*id="bulk-all-label"[^>]*hidden[^>]*><input[^>]*type="checkbox"[^>]*id="bulk-all"/.test(list.text) && list.text.includes('Select all on this page'));
   const listVersions = versionsIn(list.text);
   check('the list versions match the stored draft versions', [A, B, C, D].every((id) => listVersions[id] === version(id)), JSON.stringify(listVersions));
@@ -170,17 +170,15 @@ try {
     check('A and C are on the page, section, feeds and search at once', allTrue(sa) && allTrue(sc), JSON.stringify([sa, sc]));
     const slugsNow = q('SELECT slug FROM stories').map((x) => x.slug);
     check('B is not live anywhere', slugsNow.filter((x) => x.includes('bulk')).length === 2 && !(await searchHits('Bulk Bravo Youth Rally')).length, `${slugsNow} ${await searchHits('Bulk Bravo Youth Rally')}`);
-    check('the failed item is offered again, pre-selected, with a link to open it', new RegExp(`name="id" value="${B}" checked`).test(r.text) && r.text.includes(`/admin/drafts/${B}`) && !new RegExp(`name="id" value="${A}"`).test(r.text));
+    check('a version-conflict item is NOT offered for one-click retry: no checkbox, no hidden version, only a link to open the draft', !new RegExp(`name="id" value="${B}"`).test(r.text) && !new RegExp(`name="v_${B}"`).test(r.text) && r.text.includes(`/admin/drafts/${B}`) && t.includes('changed since you loaded the list') && !r.text.includes('to try again'));
     check('the result page has a focusable heading and a status message', /<h1[^>]*id="bulk-heading"[^>]*tabindex="-1"/.test(r.text) && /role="status"/.test(r.text));
-    const retryVersions = versionsIn(r.text);
-    check('a version-conflict retry carries the draft\'s current version (and is confirmed again first)', retryVersions[B] === version(B));
     const ra = await c1.form('/admin/bulk', { action: 'publish', step: 'run', id: [A], [`v_${A}`]: listVersions[A] });
     check('re-running an already published draft fails with a plain reason instead of republishing', text(ra.text).includes('Only a new or in-review draft can be published') && q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.publish'")[0].n === auditBefore + 2);
 
     // ================= bulk unpublish =================
     const unpubBefore = q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.unpublish'")[0].n;
     const pub = await c1.get('/admin/published');
-    check('the published list has a checkbox per live story and an Unpublish bulk bar', pub.text.includes(`name="slug" value="${slugA}" form="bulk-form"`) && pub.text.includes('Unpublish selected') && pub.text.includes('aria-label="Bulk Alpha Camp Report"'));
+    check('the published list has a checkbox per live story and an Unpublish bulk bar', pub.text.includes(`name="slug" value="${slugA}" form="bulk-form"`) && pub.text.includes('Unpublish selected') && pub.text.includes('aria-label="Bulk Alpha Camp Report ('));
     let r2 = await cAdmin.form('/admin/bulk', { action: 'unpublish', slug: [slugA, slugC] });
     check('the unpublish confirmation lists titles and unpublishes nothing yet', r2.status === 200 && text(r2.text).includes('Bulk Alpha Camp Report') && (await surfaces(slugA, 'Bulk Alpha Camp Report')).page);
     r2 = await cAdmin.form('/admin/bulk', { action: 'unpublish', step: 'run', slug: [slugA, slugC, '2026-01-01-never-existed'] });
@@ -189,6 +187,10 @@ try {
     const ua = await surfaces(slugA, 'Bulk Alpha Camp Report');
     const uc = await surfaces(slugC, 'Bulk Charlie Health Fair');
     check('both stories are gone from the pages, feeds and search', ua.page === false && uc.page === false && noneTrue(ua) && noneTrue(uc), JSON.stringify([ua, uc]));
+    const draftSnap = JSON.stringify([draftRow(A), draftRow(C)]);
+    const auditSnap = q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.unpublish'")[0].n;
+    const again = await cAdmin.form('/admin/bulk', { action: 'unpublish', step: 'run', slug: [slugA, slugC] });
+    check('running the same bulk unpublish again (a re-POST) fails per item with "not on the site", and changes no draft and writes no audit row', again.status === 200 && text(again.text).includes('0 of 2 unpublished') && (text(again.text).match(/This story is not on the site any more/g) || []).length === 2 && JSON.stringify([draftRow(A), draftRow(C)]) === draftSnap && q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.unpublish'")[0].n === auditSnap);
     check('two draft.unpublish audit rows were written, and the drafts are back in review', q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.unpublish'")[0].n === unpubBefore + 2 && draftRow(A).status === 'in_review' && draftRow(C).status === 'in_review');
   }
 } finally {
@@ -207,6 +209,23 @@ if (browser) {
   try {
     const axePath = process.env.AXE_JS && fs.existsSync(process.env.AXE_JS) ? process.env.AXE_JS : '';
     if (!axePath) console.log('SKIP  axe checks (set AXE_JS to an axe.min.js)');
+    {
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, javaScriptEnabled: false });
+      await ctx.addCookies([{ name: '__Host-imc_session', value: E1.token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
+      const p = await ctx.newPage();
+      p.setDefaultTimeout(15000);
+      const id = await mkDraft('Bulk NoJS Story');
+      await p.goto(`${BASE}/admin`);
+      check('without JavaScript the non-working "Select all" is not shown', !(await p.isVisible('#bulk-all')) && !(await p.isVisible('#bulk-count')));
+      await p.check(`input.bulk-item[value="${id}"]`);
+      await p.click('#bulk-form button[type=submit]');
+      await p.waitForSelector('text=Nothing happens until you confirm');
+      check('without JavaScript a ticked checkbox still reaches the confirmation page', (await p.textContent('ol.bulk-titles')).includes('Bulk NoJS Story'));
+      await p.click('button:has-text("Yes, publish")');
+      await p.waitForSelector('text=Everything went through');
+      check('...and confirming publishes it', draftRow(id).status === 'published');
+      await ctx.close();
+    }
     for (const width of [390, 1280]) {
       // fresh drafts for each width
       const ids = [];

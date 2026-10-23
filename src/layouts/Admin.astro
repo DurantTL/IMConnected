@@ -135,6 +135,7 @@ const nav = [
   .bulk-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 12px; margin: 0 0 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
   .bulk-bar p { margin: 0; }
   .bulk-all { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 600; cursor: pointer; }
+  .bulk-all[hidden], .bulk-count[hidden] { display: none; }
   .bulk-all input, .bulk-pick input { width: 22px; height: 22px; margin: 0; flex: none; }
   .bulk-count { font-weight: 700; }
   .bulk-help { flex: 1 1 100%; font-size: .85rem; color: var(--ink-2); }

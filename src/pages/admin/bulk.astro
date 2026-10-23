@@ -16,7 +16,7 @@ export const prerender = false;
 
 if (Astro.request.method !== 'POST') return Astro.redirect('/admin', 302);
 
-interface Item { key: string; title: string; version: number; missing: boolean; ok?: boolean; reason?: string; slug?: string }
+interface Item { key: string; title: string; version: number; missing: boolean; ok?: boolean; code?: string; reason?: string; slug?: string }
 const user = Astro.locals.user!;
 const form = await readFormLimited(Astro.request, 256 * 1024);
 const fail = (status: number, message: string) => { Astro.response.status = status; return message; };
@@ -66,8 +66,8 @@ if (!problem && step === 'run') {
   for (const item of items) {
     item.title = titleOf(item);
     try {
-      const out = action === 'publish' ? await publishDraftItem(Number(item.key), item.version, user.id, ip) : unpublishStoryItem(item.key, user.id, ip);
-      if (out.ok) { item.ok = true; item.slug = out.slug; if (out.title) item.title = out.title; } else { item.ok = false; item.reason = bulkReason(out.code); }
+      const out = action === 'publish' ? await publishDraftItem(Number(item.key), item.version, user.id, ip) : unpublishStoryItem(item.key, user.id, ip, true);
+      if (out.ok) { item.ok = true; item.slug = out.slug; if (out.title) item.title = out.title; } else { item.ok = false; item.code = out.code; item.reason = bulkReason(out.code); }
     } catch (err) {
       console.error('[bulk] item failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
       item.ok = false; item.reason = 'Something went wrong. Please try again.';
@@ -83,9 +83,10 @@ if (!problem && step === 'run') {
 
 const okCount = items.filter((i) => i.ok).length;
 const failed = items.filter((i) => i.ok === false);
-// Retry: a failed item is offered again. A draft that failed on a version conflict is offered at its CURRENT version, but only
-// after the person confirms again on the next page, with a link to review it first.
-const retryVersion = (i: Item) => (action === 'publish' && i.reason?.startsWith('Version conflict') ? getDraft(Number(i.key))?.updatedAt ?? i.version : i.version);
+// Retry: a failed item is offered again at its ORIGINAL version. A version conflict is never offered for one-click retry:
+// the person must open the draft and review the changes first.
+const canRetry = (i: Item) => i.ok === false && i.code !== 'conflict';
+const retryable = items.filter(canRetry);
 const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
 const title = problem ? 'Bulk action' : done ? `${verb} result` : `Confirm ${action}`;
 ---
@@ -100,7 +101,7 @@ const title = problem ? 'Bulk action' : done ? `${verb} result` : `Confirm ${act
     <>
       <h1 id="bulk-heading" tabindex="-1">{okCount} of {items.length} {past}</h1>
       <p class={failed.length ? 'admin-error' : 'admin-ok'} role="status">
-        {okCount} {okCount === 1 ? 'item was' : 'items were'} {past}.{failed.length > 0 ? ` ${failed.length} could not be ${past}. They are selected below so you can try again.` : ' Everything went through.'}
+        {okCount} {okCount === 1 ? 'item was' : 'items were'} {past}.{failed.length > 0 ? ` ${failed.length} could not be ${past}. ${retryable.length ? ' The ones that can be retried are selected below.' : ''}` : ' Everything went through.'}
       </p>
       {failed.length > 0 ? (
         <form method="post" action="/admin/bulk">
@@ -109,23 +110,24 @@ const title = problem ? 'Bulk action' : done ? `${verb} result` : `Confirm ${act
             {items.map((i) => (
               <li class="cms-item">
                 <div class="bulk-row">
-                  {i.ok ? <span class="bulk-pick" aria-hidden="true"></span> : (
+                  {!canRetry(i) ? <span class="bulk-pick" aria-hidden="true"></span> : (
                     <label class="bulk-pick">
                       <input type="checkbox" name={action === 'publish' ? 'id' : 'slug'} value={i.key} checked aria-label={`Try again: ${i.title}`} />
-                      {action === 'publish' && <input type="hidden" name={`v_${i.key}`} value={retryVersion(i)} />}
+                      {action === 'publish' && <input type="hidden" name={`v_${i.key}`} value={i.version} />}
                     </label>
                   )}
                   <div class="bulk-body">
                     <span class="title">{i.title}</span>
                     <div class="cms-meta"><span class={`cms-badge ${i.ok ? 'ok' : 'bad'}`}>{i.ok ? (action === 'publish' ? 'Published' : 'Unpublished') : 'Failed'}</span></div>
                     {i.ok === false && <p class="bulk-reason">{i.reason}</p>}
+                    {i.code === 'conflict' && <p class="admin-note">This draft changed since you loaded the list. Open it, review the changes, then publish it from the editor.</p>}
                     {i.ok === false && action === 'publish' && getDraft(Number(i.key)) && <a href={`/admin/drafts/${i.key}`}>Open this draft</a>}
                   </div>
                 </div>
               </li>
             ))}
           </ul>
-          <button class="cms-btn" type="submit">Review the {failed.length} selected to try again</button>
+          {retryable.length > 0 && <button class="cms-btn" type="submit">Review the {retryable.length} selected to try again</button>}
           <a class="cms-btn secondary" href={back}>Back to the list</a>
         </form>
       ) : (

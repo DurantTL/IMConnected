@@ -145,6 +145,6 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
   }
 
   // ---- publish ----
-  const out = await publishDraftItem(draft.id, version, user.id, ip);
+  const out = await publishDraftItem(draft.id, version ?? -1, user.id, ip);
   return out.ok ? redirectTo(page, { n: 'published' }) : redirectTo(page, { e: out.code });
 };
