@@ -178,6 +178,34 @@ export function buildBatchNotice(items: { id: number; title: string }[], site: s
   return { subject: `${n} new draft${n === 1 ? '' : 's'} from the AI agent`, text, html };
 }
 
+/** The "your story is published" email to a form submitter: the escaped title, a thank-you and the story link. Nothing else. */
+export function buildPublishedEmail(title: string, storyUrl: string) {
+  const t = oneLine(title);
+  const text = [
+    `Thank you for sharing "${t}" with ${SITE.name}.`,
+    '',
+    'Good news: our editors have reviewed your story and it is now published. You can read it here:',
+    '',
+    storyUrl,
+    '',
+    'We are grateful you took the time to share it with the community. Please pass the link along to anyone who might enjoy it.',
+    '',
+    `Questions? Reply to this email or write to ${SITE.contactEmail}.`,
+    '',
+    `The ${SITE.name} team`,
+  ].join('\n');
+  const html = `<!doctype html><html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1d2433;max-width:560px;margin:0 auto;padding:24px;line-height:1.5">
+<p>Thank you for sharing &ldquo;${escHtml(t)}&rdquo; with ${escHtml(SITE.name)}.</p>
+<p>Good news: our editors have reviewed your story and it is now published.</p>
+<p style="margin:28px 0"><a href="${escHtml(storyUrl)}" style="background:#1f4e79;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;display:inline-block;font-weight:600">Read your story</a></p>
+<p style="font-size:14px;color:#555">Or paste this link into your browser:<br>${escHtml(storyUrl)}</p>
+<p>We are grateful you took the time to share it with the community. Please pass the link along to anyone who might enjoy it.</p>
+<p style="font-size:14px;color:#555">Questions? Reply to this email or write to ${escHtml(SITE.contactEmail)}.</p>
+<p>The ${escHtml(SITE.name)} team</p>
+</body></html>`;
+  return { subject: `Your story is now on ${SITE.name}`, text, html };
+}
+
 /** The invite email to a new editor: only the inviter's name, the site name and the link (all escaped in the HTML). */
 export function buildInviteEmail(inviterName: string, link: string) {
   const who = oneLine(inviterName) || 'An administrator';

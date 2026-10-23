@@ -177,6 +177,8 @@ export interface DraftPublished {
   slug: string;
   title: string;
   uploaded: Map<number, string>;
+  /** True when this publish was the draft's first (issue #121: the only one that may email the submitter). */
+  firstPublish: boolean;
 }
 
 /**
@@ -260,6 +262,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
 
   // One transaction, no await inside: draft row (version check + slug) and the story rows change together.
   const db = getDb();
+  let firstPublish = false;
   try {
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -267,6 +270,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
       if (!draft.slug && (storyExists(slug) || getDraftBySlug(slug))) throw new EditorError('slug_taken');
       const r = publishDraftRow(draft.id, version, { slug, userId });
       if (!r.ok) throw new EditorError(r.code);
+      firstPublish = r.firstPublish;
       writeStory(story, now, draft.slug ? 'upsert' : 'insert');
       assertFilesExist(stored.files);
       db.exec('COMMIT');
@@ -280,7 +284,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     throw err;
   }
   invalidateStories();
-  return { slug, title, uploaded: stored.uploaded };
+  return { slug, title, uploaded: stored.uploaded, firstPublish };
 }
 
 // ---- unpublish and edit ----

@@ -6,6 +6,7 @@ import { publishDraft, unpublishLive, validSlug } from './story-publish';
 import { EditorError, ERRORS, type ErrorCode } from './messages';
 import { getStoryBySlug } from './story-store';
 import { audit } from './auth/audit';
+import { notifySubmitterOfPublication } from './submitter-notice';
 
 export const BULK_MAX = 50;
 
@@ -31,6 +32,9 @@ export async function publishDraftItem(draftId: number, version: number, userId:
     } catch (err) {
       console.error('[drafts] published; cleanup afterwards failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
+    // After the commit, and only for the draft's first publish: the one thank-you email to a confirmed form submitter.
+    // Started without waiting, so the response never waits for the email service; it can never block or undo the publish.
+    if (out.firstPublish) void notifySubmitterOfPublication(draft.id, out.slug, out.title, { userId, ip }).catch(() => console.error(`[drafts] submitter notice for draft ${draft.id} failed unexpectedly`));
     return { ok: true, slug: out.slug, title: out.title };
   } catch (err) {
     if (err instanceof EditorError) return { ok: false, code: err.code };
