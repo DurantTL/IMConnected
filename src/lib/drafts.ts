@@ -8,7 +8,8 @@ import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
 // Submitter contact fields live here for signed-in editors to read. They are never logged or committed.
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+import { AgentError, AgentConflict, refusalDetails, refusalReason, type RefusalReason } from './agent';
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
@@ -815,9 +816,16 @@ export interface AgentDraftInput {
   photoLayout: PhotoLayout | null;
   /** null = leave an updated draft's photos alone. */
   photos: { bytes: Uint8Array; ext: string; alt: string }[] | null;
+  /** Optional retry key (raw) and the canonical content it covers; only sha256 hashes are stored. */
+  requestId?: string | null;
+  payloadKey?: string;
+  /** Keys the request sent; an update changes only these. Missing = all keys count as sent. */
+  present?: ReadonlySet<string>;
 }
 
-export type AgentUpsertResult = { ok: true; id: number; status: 'created' | 'updated' } | { ok: false; id: number };
+export type AgentUpsertResult =
+  | { ok: true; id: number; status: 'created' | 'updated' | 'replayed'; originalStatus?: 'created' | 'updated' }
+  | { ok: false; id: number; reason: RefusalReason; message: string };
 
 /**
  * An AI-agent story becomes a `new` draft (source agent, no author account). The same `sourceUrl` finds the same
@@ -828,35 +836,68 @@ export type AgentUpsertResult = { ok: true; id: number; status: 'created' | 'upd
 export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
   const written: string[] = [];
   let oldFiles: string[] = [];
+  const sha = (v: string) => createHash('sha256').update(v).digest('hex');
+  const requestHash = input.requestId ? sha(input.requestId) : null;
+  const payloadHash = sha(input.payloadKey ?? '');
+  const sent = (key: string) => !input.present || input.present.has(key);
   try {
     const res = tx((): AgentUpsertResult => {
       const db = getDb();
+      if (requestHash) {
+        const receipt = db.prepare('SELECT payload_hash, draft_id, result FROM agent_requests WHERE request_hash = ?').get(requestHash) as { payload_hash: string; draft_id: number; result: string } | undefined;
+        if (receipt) {
+          if (receipt.payload_hash !== payloadHash) throw new AgentConflict('request_id_reused', 'Use a new requestId for a different payload.', 409, { reason: 'request_id_reused', message: 'This requestId was already used for a different request. Use a new requestId, or retry the identical body.' });
+          return { ok: true, id: Number(receipt.draft_id), status: 'replayed', originalStatus: receipt.result as 'created' | 'updated' };
+        }
+      }
       const existing = input.sourceUrl
-        ? (db.prepare("SELECT id, status, updated_by FROM drafts WHERE source = 'agent' AND source_url = ?").get(input.sourceUrl) as { id: number; status: string; updated_by: number | null } | undefined)
+        ? (db.prepare("SELECT id, status, updated_by, slug FROM drafts WHERE source = 'agent' AND source_url = ?").get(input.sourceUrl) as { id: number; status: string; updated_by: number | null; slug: string | null } | undefined)
         : undefined;
       let id: number;
       let status: 'created' | 'updated';
+      const refuse = (e: { id: number; status: string; updated_by: number | null; slug: string | null }): AgentUpsertResult => ({ ok: false, ...refusalDetails(refusalReason(e.status, e.updated_by !== null), Number(e.id), e.slug) });
       if (existing) {
-        if (existing.status !== 'new' || existing.updated_by !== null) return { ok: false, id: Number(existing.id) };
+        if (existing.status !== 'new' || existing.updated_by !== null) return refuse(existing);
         id = Number(existing.id);
         status = 'updated';
+        const current = getDraft(id)!;
+        // Omitted keys keep the stored value; "" (or null) on an optional text field clears it.
+        const sets: string[] = [];
+        const args: (string | number | null)[] = [];
+        const set = (col: string, v: string | number | null) => { sets.push(`${col} = ?`); args.push(v); };
+        if (sent('title')) set('title', input.title);
+        if (sent('body')) set('body', input.body);
+        if (sent('dek')) set('dek', input.dek);
+        if (sent('author')) set('author', input.author);
+        if (sent('church')) set('church', input.church);
+        if (sent('note')) set('agent_note', input.note || null);
+        const section = sent('section') ? input.section : current.section;
+        if (sent('section')) set('section', section);
+        let area = current.area;
+        if (sent('area')) area = input.area;
+        else if (sent('section') && section !== current.section && area && !isValidArea(section, area)) {
+          throw new AgentError('bad_area', 'The stored area is not valid for the new section. Send "area" with the new section (or "" to clear it).');
+        }
+        if (sent('area') && area && !isValidArea(section, area)) throw new AgentError('bad_area', section ? 'That area is not valid for this section.' : 'Send a section together with an area.');
+        if (area !== current.area) set('area', area);
+        if (input.photoLayout !== null) set('photo_layout', input.photoLayout);
+        if (input.announcement !== undefined) set('announcement', announcementJson(input.announcement));
+        if (input.date) set('date', input.date);
         const now = Date.now();
         const r = db
-          .prepare(
-            `UPDATE drafts SET title = ?, dek = ?, body = ?, section = ?, area = ?, author = ?, church = ?, agent_note = ?, photo_layout = COALESCE(?, photo_layout),
-               announcement = CASE WHEN ? THEN ? ELSE announcement END, date = CASE WHEN ? = '' THEN date ELSE ? END, updated_at = MAX(?, updated_at + 1)
-             WHERE id = ? AND status = 'new' AND updated_by IS NULL`,
-          )
-          .run(input.title, input.dek, input.body, input.section, input.area, input.author, input.church, input.note || null, input.photoLayout, input.announcement !== undefined ? 1 : 0, input.announcement === undefined ? null : announcementJson(input.announcement), input.date, input.date, now, id);
-        if (Number(r.changes) !== 1) return { ok: false, id };
-        const current = getDraft(id)!;
-        db.prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(input.additionalSections === undefined ? current.additionalSections : input.additionalSections, input.section)), id);
+          .prepare(`UPDATE drafts SET ${sets.length ? sets.join(', ') + ', ' : ''}updated_at = MAX(?, updated_at + 1) WHERE id = ? AND status = 'new' AND updated_by IS NULL`)
+          .run(...args, now, id);
+        if (Number(r.changes) !== 1) return refuse({ ...(existing as { id: number; status: string; slug: string | null }), updated_by: -1 });
+        db.prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(input.additionalSections === undefined ? current.additionalSections : input.additionalSections, section)), id);
         if (input.photos) {
           oldFiles = listPhotos(id).map((p) => p.path).filter((p): p is string => !!p);
           db.prepare('DELETE FROM draft_photos WHERE draft_id = ?').run(id);
         }
       } else {
         status = 'created';
+        if (!input.title) throw new AgentError('title_required', 'A story needs a title.');
+        if (!input.body) throw new AgentError('body_required', 'A story needs body text.');
+        if (input.area && !input.section) throw new AgentError('bad_area', 'Send a section together with an area.');
         id = createDraft({
           source: 'agent',
           status: 'new',
@@ -873,6 +914,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
           ins.run(id, rel, p.ext, p.alt, i, Date.now());
         });
       }
+      if (requestHash) db.prepare('INSERT INTO agent_requests (request_hash, payload_hash, draft_id, result, created_at) VALUES (?, ?, ?, ?, ?)').run(requestHash, payloadHash, id, status, Date.now());
       return { ok: true, id, status };
     });
     if (res.ok) removeUploadFiles(oldFiles);

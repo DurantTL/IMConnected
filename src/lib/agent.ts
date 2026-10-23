@@ -17,6 +17,76 @@ export class AgentError extends Error {
 }
 
 export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, author: 120, church: 160, alt: 300, note: 1000, url: 2000, perHour: 60 };
+/** Room kept for the JSON around the photos (title, body of up to 20,000 characters, keys, quotes). */
+export const AGENT_JSON_ALLOWANCE_BYTES = 128 * 1024;
+/**
+ * Photos travel as base64 data: URLs, which are 4/3 the size of the image: the most image bytes one request can
+ * carry is floor(maxBodyBytes * 3 / 4) minus the JSON allowance (about 30 MB, not 40 MB).
+ */
+export function maxImageBytesPerRequest(): number {
+  return Math.floor((AGENT_LIMITS.maxBodyBytes * 3) / 4) - AGENT_JSON_ALLOWANCE_BYTES;
+}
+
+/** A 409 (or other non-400 refusal) that carries a stable `reason` and extra fields for the response. */
+export class AgentConflict extends AgentError {
+  constructor(code: string, message: string, public status = 409, public details: Record<string, unknown> = {}) {
+    super(code, message);
+  }
+}
+
+export const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
+
+export type RefusalReason = 'published' | 'in_review' | 'editor_editing' | 'rejected' | 'open_draft_exists';
+
+/** The body fields every "this draft cannot be changed" 409 carries, so the agent knows what to do next. */
+export function refusalDetails(reason: RefusalReason, id: number, slug: string | null): { reason: RefusalReason; id: number; message: string } {
+  const messages: Record<RefusalReason, string> = {
+    published: `This story is already published. Use POST /api/agent/stories/reopen with slug ${slug ?? '<slug>'} to propose changes for review.`,
+    in_review: 'An editor is reviewing this draft, so it was not changed. Send a note to the editors instead; they can edit it.',
+    editor_editing: 'An editor is working on this draft, so it was not changed. Send a note instead; the editor will see it.',
+    rejected: 'An editor rejected this draft, so it was not changed. Ask an editor if it should be reopened.',
+    open_draft_exists: 'A draft for this story is already waiting for review, so nothing was changed. An editor will see it.',
+  };
+  return { reason, id, message: messages[reason] };
+}
+
+/** Which refusal reason fits a draft the agent may not overwrite. */
+export function refusalReason(status: string, touchedByEditor: boolean): RefusalReason {
+  if (status === 'published') return 'published';
+  if (status === 'rejected') return 'rejected';
+  if (status === 'in_review') return 'in_review';
+  return touchedByEditor ? 'editor_editing' : 'open_draft_exists';
+}
+
+/** Canonical text of a JSON value (sorted keys), so a retry with reordered keys still counts as identical. */
+export function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v) ?? 'null';
+}
+
+/** null = no requestId sent. Throws AgentError (400) for a malformed one. */
+export function parseRequestId(o: Record<string, unknown>): string | null {
+  if (o.requestId === undefined || o.requestId === null) return null;
+  if (typeof o.requestId !== 'string' || !REQUEST_ID_RE.test(o.requestId)) throw new AgentError('bad_request_id', 'requestId must contain 8–128 letters, digits, underscores or hyphens.');
+  return o.requestId;
+}
+
+/** The link the agent sent, normalized exactly as it is stored (so lookups and updates find the same draft). */
+export function normalizeSourceUrl(rawUrl: string): string {
+  if (rawUrl.length > AGENT_LIMITS.url) throw new AgentError('bad_source_url', 'sourceUrl is too long.');
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    throw new AgentError('bad_source_url', 'sourceUrl must be an http(s) link.');
+  }
+  if ((u.protocol !== 'https:' && u.protocol !== 'http:') || u.username || u.password) throw new AgentError('bad_source_url', 'sourceUrl must be an http(s) link.');
+  return u.href;
+}
 
 export interface AgentPhoto {
   bytes: Uint8Array;
@@ -44,6 +114,15 @@ export interface AgentStory {
   photoLayout: PhotoLayout | null;
   /** null = the request had no `photos` key: an update leaves the draft's photos alone. */
   photos: AgentPhoto[] | null;
+  /** Optional retry key (raw); stored only as a hash. */
+  requestId?: string | null;
+  /** Hash input for retry protection: the request's content without the requestId. */
+  payloadKey?: string;
+  /**
+   * Keys the request actually sent (value not undefined). An update changes only these; an explicit "" or null
+   * clears an optional text field. Missing = every key counts as sent (callers that build the input by hand).
+   */
+  present?: ReadonlySet<string>;
 }
 
 const PHOTO_MAX_BYTES = LIMITS.maxPhotoMB * 1024 * 1024;
@@ -82,6 +161,8 @@ function parsePhoto(raw: unknown): AgentPhoto {
 export function parseAgentStory(input: unknown): AgentStory {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AgentError('invalid_json', 'The request body must be a JSON object.');
   const o = input as Record<string, unknown>;
+  const present = new Set(Object.keys(o).filter((k) => o[k] !== undefined));
+  const requestId = parseRequestId(o);
 
   const title = oneLine(optional(o, 'title'));
   const dek = oneLine(optional(o, 'dek'));
@@ -93,10 +174,12 @@ export function parseAgentStory(input: unknown): AgentStory {
   const date = optional(o, 'date').trim();
   const note = optional(o, 'note').replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  if (!title) throw new AgentError('title_required', 'A story needs a title.');
+  // A missing title or body is checked when the draft is created: an update that omits them keeps the stored text.
+  // Sending one as "" or null is never allowed.
+  if (present.has('title') && !title) throw new AgentError('title_required', 'A story needs a title.');
   if (title.length > LIMITS.title) throw new AgentError('title_too_long', `The title is longer than ${LIMITS.title} characters.`);
   if (dek.length > LIMITS.dek) throw new AgentError('dek_too_long', `The summary (dek) is longer than ${LIMITS.dek} characters.`);
-  if (!bodyRaw) throw new AgentError('body_required', 'A story needs body text.');
+  if (present.has('body') && !bodyRaw) throw new AgentError('body_required', 'A story needs body text.');
   if (bodyRaw.length > LIMITS.bodyMax) throw new AgentError('body_too_long', `The body is longer than ${LIMITS.bodyMax} characters.`);
   if (author.length > AGENT_LIMITS.author) throw new AgentError('author_too_long', 'The author is too long.');
   if (church.length > AGENT_LIMITS.church) throw new AgentError('church_too_long', 'The church is too long.');
@@ -104,8 +187,8 @@ export function parseAgentStory(input: unknown): AgentStory {
 
   // A missing section is allowed (the editor picks it); a wrong one is not.
   if (section && !getSection(section)) throw new AgentError('bad_section', 'That section does not exist. GET /api/agent/sections lists the valid ones.');
-  if (area && !section) throw new AgentError('bad_area', 'Send a section together with an area.');
-  if (area && !isValidArea(section, area)) throw new AgentError('bad_area', 'That area is not valid for this section.');
+  // An area without a section is checked against the draft's stored section when an update applies it.
+  if (area && section && !isValidArea(section, area)) throw new AgentError('bad_area', 'That area is not valid for this section.');
   let photoLayout: PhotoLayout | null = null;
   if (o.photoLayout !== undefined && o.photoLayout !== null) {
     if (!isPhotoLayout(o.photoLayout)) throw new AgentError('bad_photo_layout', `photoLayout must be one of: ${PHOTO_LAYOUT_VALUES.join(', ')}.`);
@@ -116,15 +199,7 @@ export function parseAgentStory(input: unknown): AgentStory {
   let sourceUrl: string | null = null;
   const rawUrl = optional(o, 'sourceUrl').trim();
   if (rawUrl) {
-    if (rawUrl.length > AGENT_LIMITS.url) throw new AgentError('bad_source_url', 'sourceUrl is too long.');
-    let u: URL;
-    try {
-      u = new URL(rawUrl);
-    } catch {
-      throw new AgentError('bad_source_url', 'sourceUrl must be an http(s) link.');
-    }
-    if ((u.protocol !== 'https:' && u.protocol !== 'http:') || u.username || u.password) throw new AgentError('bad_source_url', 'sourceUrl must be an http(s) link.');
-    sourceUrl = u.href;
+    sourceUrl = normalizeSourceUrl(rawUrl);
   }
 
   let photos: AgentPhoto[] | null = null;
@@ -140,7 +215,8 @@ export function parseAgentStory(input: unknown): AgentStory {
   if (o.announcement !== undefined) {
     try { announcement = normalizeAnnouncement(o.announcement); } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
   }
-  return { additionalSections, announcement, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos };
+  const { requestId: _ignored, ...content } = o;
+  return { additionalSections, announcement, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
 }
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----

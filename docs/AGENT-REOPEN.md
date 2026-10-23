@@ -2,7 +2,7 @@
 
 `POST /api/agent/stories/reopen` lets the communication director's AI agent propose additions to a **currently public** story, announcement or event. It copies the current published version into the linked draft and sets it to **In review**. The live story, photos, feeds and search stay unchanged until an editor reviews and publishes the update. This endpoint never publishes, unpublishes or rejects anything.
 
-Use the existing `AGENT_API_TOKEN` bearer token, different from `PUBLISH_TOKEN`. The route is machine-to-machine, has no browser CORS grant or cookie authentication, and shares the existing 60 requests/hour agent limit. JSON is limited to 40 MiB. No agent read access to private drafts or uploads is added.
+Use the existing `AGENT_API_TOKEN` bearer token, different from `PUBLISH_TOKEN`. The route is machine-to-machine, has no browser CORS grant or cookie authentication, and shares the existing 60 requests/hour agent limit (counted per server process, shared with every `/api/agent/*` route). JSON is limited to 40 MiB, which is about 30 MB of image bytes after base64 (`photoBudget.maxImageBytesPerRequest` in `GET /api/agent/sections`). Alt text is cut to 300 characters. The agent can read back only its own `source: agent` drafts through `GET /api/agent/stories/<id>` (whitelisted fields, never contacts, notes, paths or uploads); `POST .../reopen` itself is POST-only.
 
 ## Request
 
@@ -73,9 +73,11 @@ This is HTTP 201. An identical retry returns HTTP 200 with the same ID and `stat
 | 400 | `bad_slug`, `bad_request_id`, `bad_field`, existing photo/content validation codes | Fix the request. |
 | 401 | `unauthorized` | Check the agent bearer token. |
 | 404 | `story_not_found` | Use a currently public story slug. |
-| 409 | `already_reviewed` | An open or rejected draft already exists; ask an editor to finish/review it. No draft is overwritten. |
-| 409 | `request_id_reused` | That ID was used with different JSON; retry the original body or use a new ID for a distinct update. |
-| 409 | `module_body_conflict` | Omit `body` to preserve editor modules. |
+| 409 | `already_reviewed` | A draft for this story already exists and is not published; no draft is overwritten. The response also has `reason`, `id` and a `message`: `in_review`, `rejected`, `editor_editing` (status new but an editor touched it) or `open_draft_exists` (new and untouched). |
+| 409 | `request_id_reused` | That ID was used with different JSON; retry the original body or use a new ID for a distinct update. `reason` repeats the code. |
+| 409 | `module_body_conflict` | Omit `body` to preserve editor modules. `reason` repeats the code. |
+
+Every 409 carries `message` saying what to do next. The create/update route (`POST /api/agent/stories`) answers its own refusals the same way with `reason` `published`, `in_review`, `editor_editing` or `rejected`; for `published` its message points here, naming the slug.
 | 429 | `rate_limited` | Wait for `Retry-After` (shared agent rate window). |
 | 503 | `not_configured`, `unavailable` | Check configuration, or retry the identical body/ID after a transient failure. |
 

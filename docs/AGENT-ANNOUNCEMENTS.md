@@ -2,11 +2,11 @@
 
 The agent submits to `POST /api/agent/stories` with its existing bearer authentication. These requests create **new drafts** for an editor. A person reviews and publishes them. The agent cannot publish, submit raw modules or upload iframe HTML.
 
-An administrator configures `AGENT_API_TOKEN` as described in the [README](../README.md#ai-agent-api). `GET /api/agent/sections` returns valid categories and announcement capabilities. Use the same token for both endpoints; store it in the agent's secure configuration.
+An administrator configures `AGENT_API_TOKEN` as described in the [README](../README.md#ai-agent-api). `GET /api/agent/sections` returns valid categories and announcement capabilities. Use the same token for every endpoint; store it in the agent's secure configuration. The agent can read its own draft back with `GET /api/agent/stories/<id>` or `?sourceUrl=`, and may add an optional `requestId` to make a retry safe; an update that omits `announcement` keeps the stored metadata and `announcement: null` clears it (see the README's AI agent API section for omission rules, refusal reasons and the read-back fields).
 
 ## Request example
 
-This is a complete synthetic event request. The tiny PNG is a test placeholder; replace its data URI with the base64 bytes of the actual flyer. Send JPG, PNG, WebP or AVIF, up to six images at 10 MB each, within the 40 MB JSON request limit. The site never downloads remote image URLs. PDF, SVG and raw HTML are not accepted as photos.
+This is a complete synthetic event request. The tiny PNG is a test placeholder; replace its data URI with the base64 bytes of the actual flyer. Send JPG, PNG, WebP or AVIF, up to six images at 10 MB each. Images travel as base64 inside the JSON, which is 4/3 their size, so one request carries about 30 MB of image bytes at most (`floor(40 MiB * 3 / 4)` minus a 128 KiB JSON allowance); six 10 MB images do not fit in one request. `GET /api/agent/sections` reports the exact `photoBudget`. Alt text is cut to 300 characters. The site never downloads remote image URLs. PDF, SVG and raw HTML are not accepted as photos.
 
 ```json
 {

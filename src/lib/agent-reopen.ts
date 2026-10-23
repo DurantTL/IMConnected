@@ -2,13 +2,10 @@ import { createHash } from 'node:crypto';
 import { getDb } from './db';
 import { createDraft, getDraftBySlug, resetDraftFromStory, tx, writeUpload, removeUploadFiles } from './drafts';
 import { loadStory, validSlug } from './story-publish';
-import { AgentError, parseAgentStory } from './agent';
+import { AgentError, AgentConflict, REQUEST_ID_RE, parseAgentStory, refusalDetails, refusalReason } from './agent';
 import { LIMITS } from './limits';
 import { audit } from './auth/audit';
 
-export class ReopenConflict extends AgentError {
-  constructor(code: string, message: string, public status = 409) { super(code, message); }
-}
 const hash = (v: string) => createHash('sha256').update(v).digest('hex');
 const FIELDS = ['title', 'dek', 'body', 'section', 'area', 'author', 'church', 'date', 'photoLayout', 'announcement', 'additionalSections'] as const;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -18,7 +15,7 @@ export function parseAgentReopen(value: unknown, raw: string): ReopenRequest {
   if (!object(value)) throw new AgentError('invalid_json', 'The request body must be a JSON object.');
   if (Object.keys(value).some((k) => !['slug', 'requestId', 'changes', 'photos', 'note'].includes(k))) throw new AgentError('bad_field', 'Unknown reopen field.');
   if (!validSlug(value.slug)) throw new AgentError('bad_slug', 'Send the published story slug.');
-  if (typeof value.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(value.requestId)) throw new AgentError('bad_request_id', 'requestId must contain 8–128 letters, digits, underscores or hyphens.');
+  if (typeof value.requestId !== 'string' || !REQUEST_ID_RE.test(value.requestId)) throw new AgentError('bad_request_id', 'requestId must contain 8–128 letters, digits, underscores or hyphens.');
   const changes = value.changes === undefined ? {} : value.changes;
   if (!object(changes) || Object.keys(changes).some((k) => !(FIELDS as readonly string[]).includes(k))) throw new AgentError('bad_field', 'changes must contain only supported editorial fields.');
   for (const [key, v] of Object.entries(changes)) if (key !== 'announcement' && key !== 'additionalSections' && typeof v !== 'string') throw new AgentError('bad_field', `"${key}" must be text.`);
@@ -37,16 +34,19 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
       const db = getDb();
       const receipt = db.prepare('SELECT payload_hash,draft_id FROM agent_reopens WHERE request_hash=?').get(input.requestHash) as { payload_hash: string; draft_id: number } | undefined;
       if (receipt) {
-        if (receipt.payload_hash !== input.payloadHash) throw new ReopenConflict('request_id_reused', 'Use a new requestId for a different payload.');
+        if (receipt.payload_hash !== input.payloadHash) throw new AgentConflict('request_id_reused', 'Use a new requestId for a different payload.', 409, { reason: 'request_id_reused', message: 'This requestId was already used for a different request. Use a new requestId, or retry the identical body.' });
         return { id: receipt.draft_id, status: 'replayed' };
       }
       const live = db.prepare("SELECT draft,published_at,published_by,source FROM stories WHERE slug=? AND status='live'").get(input.slug) as { draft: number; published_at: number; published_by: number | null; source: string } | undefined;
-      if (!live || live.draft) throw new ReopenConflict('story_not_found', 'No public story exists at that slug.', 404);
+      if (!live || live.draft) throw new AgentConflict('story_not_found', 'No public story exists at that slug.', 404);
       const existing = getDraftBySlug(input.slug);
-      if (existing && existing.status !== 'published') throw new ReopenConflict('already_reviewed', 'This story already has an open or rejected draft. Ask an editor to review it.');
+      if (existing && existing.status !== 'published') {
+        const touched = (db.prepare('SELECT updated_by FROM drafts WHERE id=?').get(existing.id) as { updated_by: number | null }).updated_by !== null;
+        throw new AgentConflict('already_reviewed', 'This story already has an open or rejected draft. Ask an editor to review it.', 409, refusalDetails(refusalReason(existing.status, touched), existing.id, input.slug));
+      }
       const story = loadStory(input.slug);
-      if (!story) throw new ReopenConflict('story_not_found', 'No public story exists at that slug.', 404);
-      if (Object.hasOwn(input.changes, 'body') && story.fields.storyBlocks?.length) throw new ReopenConflict('module_body_conflict', 'This story uses editor modules. Omit body to preserve them, or ask an editor to update the modules.');
+      if (!story) throw new AgentConflict('story_not_found', 'No public story exists at that slug.', 404);
+      if (Object.hasOwn(input.changes, 'body') && story.fields.storyBlocks?.length) throw new AgentConflict('module_body_conflict', 'This story uses editor modules. Omit body to preserve them, or ask an editor to update the modules.', 409, { reason: 'module_body_conflict', message: 'This story uses editor modules, so the body cannot be replaced. Omit body to preserve the modules, or ask an editor to update them.' });
       // Existing public fields may predate agent limits or contain expanded Markdown escapes.
       // Validate supplied changes only; omitted editorial values must remain byte-for-byte intact.
       const parsed = parseAgentStory({ title: 'Reopened story', body: 'Existing published body is preserved.', section: story.fields.section, area: story.fields.area,

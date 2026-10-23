@@ -86,12 +86,18 @@ try {
   for (const status of ['new', 'in_review', 'rejected']) {
     const slug = `synthetic-${status.replace('_', '-')}`, before = JSON.stringify(draftFor(slug));
     const r = await call(request(slug)); check('protected linked draft remains untouched: ' + status, r.status === 409 && r.data.error === 'already_reviewed' && JSON.stringify(draftFor(slug)) === before);
+    const expected = { new: 'open_draft_exists', in_review: 'in_review', rejected: 'rejected' }[status];
+    check('409 carries reason, draft id and a next-step message: ' + status, r.data.reason === expected && r.data.id === draftFor(slug).id && typeof r.data.message === 'string' && r.data.message.length > 20);
   }
+  exec('UPDATE drafts SET updated_by=? WHERE slug=?', userId, 'synthetic-new');
+  const touchedNew = await call(request('synthetic-new'));
+  check('a new draft an editor has touched is refused as editor_editing', touchedNew.status === 409 && touchedNew.data.reason === 'editor_editing' && /editor/i.test(touchedNew.data.message));
+  exec('UPDATE drafts SET updated_by=NULL WHERE slug=?', 'synthetic-new');
   for (const photos of [[{ url: 'http://169.254.169.254/latest/' }], [{ data: 'data:image/svg+xml;base64,PHN2Zz4=' }]]) check('remote/nonimage photos cannot be appended', (await call(request('synthetic-agent-story', { photos }))).status === 400);
   const full = await call(request('synthetic-full', { photos: [{ data: PHOTO }] }));
   check('combined old and new photo limit is atomic', full.status === 400 && full.data.error === 'too_many_photos' && !draftFor('synthetic-full'));
   const bodyConflict = await call(request('synthetic-modules', { changes: { body: 'Replacement' } }));
-  check('body replacement cannot silently discard editor modules', bodyConflict.status === 409 && bodyConflict.data.error === 'module_body_conflict' && !draftFor('synthetic-modules'));
+  check('body replacement cannot silently discard editor modules', bodyConflict.status === 409 && bodyConflict.data.error === 'module_body_conflict' && bodyConflict.data.reason === 'module_body_conflict' && !!bodyConflict.data.message && !draftFor('synthetic-modules'));
   const payload = request('synthetic-agent-story', { photos: [{ data: PHOTO, alt: 'New synthetic photo' }], note: 'Synthetic agent update note' });
   const first = await call(payload), d = draftFor(payload.slug), pp = draftPhotos(d.id);
   check('published agent story reuses its linked draft and requires review', first.status === 201 && first.data.status === 'reopened' && first.data.requiresReview && first.data.id === d.id && d.status === 'in_review' && d.updated_by === null);
@@ -101,7 +107,7 @@ try {
   const retry = await call(payload);
   check('identical retry returns receipt without duplicate photos or mutation', retry.status === 200 && retry.data.status === 'replayed' && retry.data.id === d.id && JSON.stringify(draftFor(payload.slug)) === JSON.stringify(d) && draftPhotos(d.id).length === 2);
   const reused = await call({ ...payload, photos: [] });
-  check('requestId reuse with a changed payload conflicts', reused.status === 409 && reused.data.error === 'request_id_reused');
+  check('requestId reuse with a changed payload conflicts', reused.status === 409 && reused.data.error === 'request_id_reused' && reused.data.reason === 'request_id_reused' && !!reused.data.message);
   check('a new request cannot overwrite the pending review', (await call({ ...payload, requestId: 'new-reopen-request' })).status === 409);
   const eventPayload = request('synthetic-event', { changes: { title: 'Updated event title' }, photos: [{ data: PHOTO, alt: 'New event photo' }], note: '<script>Synthetic event update note</script>' });
   const responses = await Promise.all([call(eventPayload), call(eventPayload)]);
@@ -136,7 +142,7 @@ try {
   const receipts = rows('SELECT * FROM agent_reopens');
   check('retry receipts contain only hashes and draft identities', receipts.length === 6 && receipts.every((r) => /^[a-f0-9]{64}$/.test(r.request_hash) && /^[a-f0-9]{64}$/.test(r.payload_hash)));
   const authGet = await call({}, { method: 'GET' });
-  check('no draft read API added and successful responses are no-store/no-CORS', authGet.status === 405 && first.headers.get('cache-control') === 'no-store' && !first.headers.has('access-control-allow-origin'));
+  check('reopen has no GET and successful responses are no-store/no-CORS', authGet.status === 405 && first.headers.get('cache-control') === 'no-store' && !first.headers.has('access-control-allow-origin'));
   const publishForm = new FormData(); publishForm.set('version', String(draftFor('synthetic-event').updated_at));
   const published = await fetch(BASE + `/api/admin/drafts/${event.id}/publish`, { method: 'POST', redirect: 'manual', headers: { Origin: BASE, Cookie: `__Host-imc_session=${session}` }, body: publishForm });
   check('a synthetic human editor can publish the reopened event normally', published.status === 303 && published.headers.get('location').includes('n=published') && draftFor('synthetic-event').status === 'published' && row('SELECT title FROM stories WHERE slug=?', 'synthetic-event').title === 'Updated event title');
@@ -146,6 +152,8 @@ try {
   check('an older receipt cannot reapply photos after another publish/reopen cycle', (await call(eventPayload)).status === 200 && JSON.stringify(draftFor('synthetic-event')) === afterSecond && draftPhotos(event.id).length === 3);
   const capabilities = await call({}, { method: 'GET', endpoint: '/api/agent/sections' });
   check('existing capability discovery advertises the explicit reviewed-update API', capabilities.status === 200 && capabilities.data.reopen.endpoint === '/api/agent/stories/reopen');
+  const idGet = await call({}, { method: 'GET', endpoint: `/api/agent/stories/${row('SELECT id FROM drafts WHERE slug=?', 'synthetic-agent-story').id}` });
+  check('GET /api/agent/stories/<id> is the read-back route while stories/reopen stays POST-only', idGet.status === 200 && idGet.data.draft.slug === 'synthetic-agent-story' && idGet.data.draft.status === 'in_review' && idGet.data.draft.editorTouched === true && !('agent_note' in idGet.data.draft) && !idGet.raw.includes('Synthetic agent update note') && !idGet.raw.includes('/uploads/'));
   let limited;
   for (let i = 0; i < 65; i++) { limited = await call({}, { method: 'GET', endpoint: '/api/agent/sections' }); if (limited.status === 429) break; }
   const reopenLimited = await call(request('synthetic-agent-story'));

@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { agentAuth, agentJson } from '../../../../lib/agent-api';
-import { AgentError, AGENT_LIMITS, agentRateLimited } from '../../../../lib/agent';
-import { parseAgentReopen, reopenAgentStory, ReopenConflict } from '../../../../lib/agent-reopen';
+import { AgentConflict, AgentError, AGENT_LIMITS, agentRateLimited } from '../../../../lib/agent';
+import { parseAgentReopen, reopenAgentStory } from '../../../../lib/agent-reopen';
 import { readLimited } from '../../../../lib/bearer';
 import { clientIp } from '../../../../lib/request';
 import { siteUrl } from '../../../../lib/draft-http';
@@ -26,7 +26,8 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     }
     return agentJson(result.status === 'reopened' ? 201 : 200, { ok: true, ...result, requiresReview: true, url: `${siteUrl()}/admin/drafts/${result.id}` });
   } catch (err) {
-    if (err instanceof AgentError) return agentJson(err instanceof ReopenConflict ? err.status : 400, { ok: false, error: err.code, message: err.message });
+    if (err instanceof AgentConflict) return agentJson(err.status, { ok: false, error: err.code, ...err.details, message: String(err.details.message ?? err.message) });
+    if (err instanceof AgentError) return agentJson(400, { ok: false, error: err.code, message: err.message });
     console.error('[agent] could not reopen the story');
     return agentJson(503, { ok: false, error: 'unavailable', message: 'The story could not be reopened right now. Retry the identical request in a few minutes.' });
   }
