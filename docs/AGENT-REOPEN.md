@@ -28,11 +28,25 @@ Content-Type: application/json
 
 - `slug` is the existing public story's slug, the part after `/stories/` in its address. This works for all public stories, including material originally published by a human or Studio. Hidden/draft-only, unpublished and nonexistent stories return 404.
 - `requestId` is required: 8–128 ASCII letters, digits, underscores or hyphens. Choose a unique value for this proposed update. Keep it and the **exact JSON request body** for retries. The server stores only hashes, a draft ID and timestamp in its receipt.
-- `photos` is an optional list of **new images to append**. Omission or `[]` adds none. Existing photos remain in order, with their original alt text, focal position and zoom. The existing lead flyer is retained. There may be at most six photos in total. Photos use the same signature-validated JPG/PNG/WebP/AVIF data URLs as initial submissions, up to 10 MiB each; remote URLs, SVG, PDF and raw HTML are rejected. The server never downloads an image URL.
+- `photos` is an optional list of **new images to append**. Omission or `[]` adds none. Each photo may carry `focalX`, `focalY` (0 to 100, default 50) and `zoom` (1 to 3, default 1), stored as the editor stores them; anything else is `400 bad_photo_crop`. Per-photo `fit` and `caption` are planned (issues #82 and #84) and are not accepted yet. Existing photos remain in order, with their original alt text, focal position and zoom. The existing lead flyer is retained. There may be at most six photos in total. Photos use the same signature-validated JPG/PNG/WebP/AVIF data URLs as initial submissions, up to 10 MiB each; remote URLs, SVG, PDF and raw HTML are rejected. The server never downloads an image URL.
 - `note` optionally replaces the private agent note for the editors; omission preserves it. It is not returned in the response, logged or added to public content.
-- `changes` is optional. Omitted editorial fields keep their current **published** values. Supported keys are `title`, `dek`, `body`, `section`, `area`, `author`, `church`, `date`, `photoLayout`, `announcement` and `additionalSections`. Other keys are rejected. Use the same field limits, Markdown escaping, section/area, layout and announcement validation as `POST /api/agent/stories`. Send a complete replacement announcement object, including the buttons/video to keep; `announcement: null` explicitly turns it into an ordinary story.
+- `changes` is optional. Omitted editorial fields keep their current **published** values. Supported keys are `title`, `dek`, `body`, `section`, `area`, `author`, `authorTitle`, `church`, `date`, `photoCredit`, `photoLayout`, `featured`, `announcement` and `additionalSections`. Other keys are rejected. Use the same field limits, Markdown escaping, section/area, layout and announcement validation as `POST /api/agent/stories`.
+- **`announcement` is a patch.** An object is merged into the story's current announcement: only the keys you send change. `""` clears an optional text field (`eventDate`, `location`, `videoUrl`); `links` present replaces the whole list; omitted keys keep their values; `announcement: null` removes it (the story becomes an ordinary story). `kind` is required only when the story has no announcement yet. The merged result is validated with the usual announcement rules, so a patch that would leave an invalid announcement is `400 bad_announcement` and nothing is created.
+- **`authorTitle`, `photoCredit` and `featured`** are saved on the draft only (an editor still reviews and publishes). `authorTitle` and `photoCredit` are one-line text of at most 120 characters (the publish step keeps 120), `""` clears them; `featured` must be `true` or `false` (`400 bad_field` otherwise). Omitted = the published value is kept.
+- **Section-only changes.** `changes.section` without `changes.area` moves the story to the new section's default area: its first listed area (for example `youth` for the Youth section), or no area when the section has none (Features, Kids). An area that is still valid for the section (re-sending the current section) is kept. An explicit `area` that does not belong to the section is still `400 bad_area`. This differs on purpose from `POST /api/agent/stories` (update by `sourceUrl`), where a section change that leaves the stored area invalid is `400 bad_area` until the request also sends `area`.
+- **`{{photo N}}` markers.** A standalone `{{photo N}}` line in `changes.body` places photo N (1 = the lead) inline. After the request the story has its existing photos plus the appended ones; a marker past that count is `400 bad_photo_marker` naming it. Markers in code fences, indented code, code spans, quotes or lists, escaped (`\{{photo 9}}`) or in the middle of a sentence stay literal text and are not checked.
 
-For example, to propose a new event date, location and registration link:
+For example, an event was published with the wrong place. Send only the location; the date, buttons, video and flyer stay as published:
+
+```json
+{
+  "slug": "2026-10-22-synthetic-community-gathering",
+  "requestId": "synthetic-gathering-location-v3",
+  "changes": { "announcement": { "location": "Synthetic Community Center, Room 4" } }
+}
+```
+
+To propose a new event date, location and registration link in one request (the `links` list is replaced as a whole):
 
 ```json
 {
@@ -70,7 +84,7 @@ This is HTTP 201. An identical retry returns HTTP 200 with the same ID and `stat
 
 | Status | Error | Action |
 | --- | --- | --- |
-| 400 | `bad_slug`, `bad_request_id`, `bad_field`, existing photo/content validation codes | Fix the request. |
+| 400 | `bad_slug`, `bad_request_id`, `bad_field`, `bad_announcement`, `bad_photo_crop`, `bad_photo_marker`, `bad_area`, `author_title_too_long`, `photo_credit_too_long`, existing photo/content validation codes | Fix the request. |
 | 401 | `unauthorized` | Check the agent bearer token. |
 | 404 | `story_not_found` | Use a currently public story slug. |
 | 409 | `already_reviewed` | A draft for this story already exists and is not published; no draft is overwritten. The response also has `reason`, `id` and a `message`: `in_review`, `rejected`, `editor_editing` (status new but an editor touched it) or `open_draft_exists` (new and untouched). |

@@ -33,6 +33,16 @@ export function normalizeAnnouncement(value: unknown): Announcement | null {
   if (rawVideo && !video) throw new Error('Use a supported HTTPS YouTube or Vimeo video URL.');
   return { kind: r.kind, ...(eventDate ? { eventDate } : {}), ...(location ? { location } : {}), links, ...(video ? { videoUrl: video.url } : {}) };
 }
+/**
+ * Agent patch semantics: a partial object merged into the stored announcement, then validated as a whole by
+ * normalizeAnnouncement. A key that is present replaces that field ("" clears an optional text field, `links` replaces the
+ * whole list); an omitted key keeps the stored value. `kind` is required only when there is nothing stored to merge into.
+ */
+export function mergeAnnouncement(current: Announcement | null, patch: Record<string, unknown>): Announcement {
+  if (!current && patch.kind === undefined) throw new Error('Choose announcement or event: kind is required when there is no announcement yet.');
+  const sent = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+  return normalizeAnnouncement({ ...(current ?? {}), ...sent }) as Announcement;
+}
 export function parseAnnouncement(value: unknown): Announcement | null {
   if (typeof value !== 'string') return normalizeAnnouncement(value);
   if (value.length > 12_000) throw new Error('Announcement data is too large.');

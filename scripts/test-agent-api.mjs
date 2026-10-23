@@ -36,7 +36,7 @@ const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 // A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
 const CLIENT_TMP = path.join(SCRATCH, 'client');
 fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
-const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526 };
+const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -58,7 +58,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [] };
+const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -157,7 +157,8 @@ start('c', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.c), DA
 start('d', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.d), DATA_DIR: path.join(SCRATCH, 'data-d'), SITE_URL: `http://localhost:${P.d}`, AGENT_API_TOKEN: AGENT_TOKEN });
 start('e', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.e), DATA_DIR: path.join(SCRATCH, 'data-e'), SITE_URL: `http://localhost:${P.e}`, AGENT_API_TOKEN: PUBLISH_TOKEN }); // the agent token reuses the publish token
 start('f', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.f), DATA_DIR: path.join(SCRATCH, 'data-f'), SITE_URL: `http://localhost:${P.f}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 80 checks, its own rate window
-for (const port of [P.a, P.b, P.c, P.d, P.e, P.f]) await waitFor(`http://localhost:${port}/`);
+start('g', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.g), DATA_DIR: path.join(SCRATCH, 'data-g'), SITE_URL: `http://localhost:${P.g}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 81 checks, its own rate window
+for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -628,6 +629,124 @@ try {
     check('...maxImageBytesPerRequest = floor(maxRequestBytes * 3 / 4) - jsonAllowanceBytes (about 30 MB, below 6 x 10 MB)', b.maxImageBytesPerRequest === Math.floor(b.maxRequestBytes * 3 / 4) - b.jsonAllowanceBytes && b.maxImageBytesPerRequest < b.maxPhotos * b.maxPhotoBytes && b.maxImageBytesPerRequest < 30 * 1024 * 1024);
     check('...the existing fields are still there (additive only)', caps.data.sections.length === 5 && !!caps.data.additionalSections && !!caps.data.announcement && caps.data.reopen.endpoint === '/api/agent/stories/reopen' && Array.isArray(caps.data.photoFormats) && caps.data.limits.photos === 6);
     check('the f server logs hold no token, note or upload path', !logs.f.join('\n').includes(AGENT_TOKEN) && !logs.f.join('\n').includes('Picked because') && !logs.f.join('\n').includes('uploads'));
+  }
+
+  // ================= issue 81: announcement patches, crops, author title/credit/featured, photo markers =================
+  {
+    const G = `http://localhost:${P.g}`;
+    const GDB = path.join(SCRATCH, 'data-g', 'imconnected.db');
+    const qg = (sql, ...args) => { const db = new DatabaseSync(GDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    await fetch(G + '/admin/login'); // opens the database and applies migrations
+    const gpost = (json) => call(G, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json });
+    const gget = (url) => call(G, 'GET', url, { token: AGENT_TOKEN });
+    const SRC = 'https://www.facebook.com/example-page/posts/9100';
+    const ann = (id) => { const v = qg('SELECT announcement FROM drafts WHERE id = ?', id)[0].announcement; return v === null ? null : JSON.parse(v); };
+    const full = { kind: 'event', eventDate: '2026-12-01', location: 'Synthetic Hall', links: [{ label: 'Register', url: 'https://example.invalid/register' }], videoUrl: 'https://youtu.be/abcdefghijk' };
+    const base = (over = {}) => story({ sourceUrl: SRC, photos: [{ data: dataUrl(PNG_A), alt: 'One' }, { data: dataUrl(PNG_B), alt: 'Two' }], ...over });
+
+    // create keeps full-object semantics: kind is required, nothing to merge into
+    let r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9101', announcement: { location: 'Nowhere' } }));
+    check('create with an announcement object but no kind is 400 bad_announcement', r.status === 400 && r.data.error === 'bad_announcement');
+    check('...and nothing was created', qg("SELECT COUNT(*) c FROM drafts WHERE source_url LIKE '%9101'")[0].c === 0);
+    r = await gpost(base({ announcement: full, authorTitle: 'Youth Director', photoCredit: 'Synthetic Photographer', featured: true,
+      photos: [{ data: dataUrl(PNG_A), alt: 'One', focalX: 20, focalY: 80.5, zoom: 2 }, { data: dataUrl(PNG_B), alt: 'Two' }] }));
+    const id = r.data.id;
+    check('create with announcement, authorTitle, photoCredit, featured and a cropped photo: 201', r.status === 201 && Number.isInteger(id), r.text.slice(0, 200));
+    let d = qg('SELECT * FROM drafts WHERE id = ?', id)[0];
+    check('authorTitle, photoCredit and featured are stored on the draft', d.author_title === 'Youth Director' && d.photo_credit === 'Synthetic Photographer' && d.featured === 1 && d.status === 'new');
+    let ph = qg('SELECT * FROM draft_photos WHERE draft_id = ? ORDER BY position', id);
+    check('crop fields are stored like the editor stores them; omitted ones default to 50 / 50 / 1', ph[0].focal_x === 20 && ph[0].focal_y === 80.5 && ph[0].zoom === 2 && ph[1].focal_x === 50 && ph[1].focal_y === 50 && ph[1].zoom === 1);
+    let g = await gget(`/api/agent/stories/${id}`);
+    check('read-back returns the crops, authorTitle, photoCredit and featured', g.data.draft.authorTitle === 'Youth Director' && g.data.draft.photoCredit === 'Synthetic Photographer' && g.data.draft.featured === true && g.data.draft.photos[0].focalX === 20 && g.data.draft.photos[0].focalY === 80.5 && g.data.draft.photos[0].zoom === 2 && g.data.draft.photos[1].zoom === 1);
+
+    // announcement patches on a sourceUrl update (omitted photos: untouched)
+    r = await gpost({ sourceUrl: SRC, announcement: { location: 'Synthetic Gym' } });
+    check('update: { location } alone changes only the location', r.status === 201 && r.data.status === 'updated' && JSON.stringify(ann(id)) === JSON.stringify({ ...full, location: 'Synthetic Gym', videoUrl: 'https://www.youtube.com/watch?v=abcdefghijk' }), JSON.stringify(ann(id)));
+    r = await gpost({ sourceUrl: SRC, announcement: { eventDate: '' } });
+    check('update: "" clears just that optional field', r.status === 201 && ann(id).eventDate === undefined && ann(id).location === 'Synthetic Gym' && ann(id).kind === 'event' && ann(id).links.length === 1 && !!ann(id).videoUrl);
+    r = await gpost({ sourceUrl: SRC, announcement: { links: [{ label: 'Map', url: 'https://example.invalid/map' }, { label: 'Call', url: 'tel:+15555550100' }] } });
+    check('update: links present replaces the whole list', r.status === 201 && JSON.stringify(ann(id).links) === JSON.stringify([{ label: 'Map', url: 'https://example.invalid/map' }, { label: 'Call', url: 'tel:+15555550100' }]) && ann(id).location === 'Synthetic Gym');
+    r = await gpost({ sourceUrl: SRC, announcement: { kind: 'announcement' } });
+    check('update: kind alone changes the kind and keeps the rest', r.status === 201 && ann(id).kind === 'announcement' && ann(id).links.length === 2 && ann(id).location === 'Synthetic Gym');
+    const keep = JSON.stringify(ann(id));
+    for (const [name, patch] of [['a video from another host', { videoUrl: 'https://evil.invalid/v' }], ['a bad date', { eventDate: '2026-02-31' }], ['four links', { links: [1, 2, 3, 4].map((n) => ({ label: 'L' + n, url: 'https://example.invalid/' + n })) }], ['a bad kind', { kind: 'party' }], ['a non-object', 'soon']]) {
+      r = await gpost({ sourceUrl: SRC, announcement: patch });
+      check(`update: an invalid merged result is refused (${name}) and the stored announcement is unchanged`, r.status === 400 && r.data.error === 'bad_announcement' && JSON.stringify(ann(id)) === keep, r.text.slice(0, 160));
+    }
+    r = await gpost({ sourceUrl: SRC, title: 'Retitled only' });
+    check('update: omitting announcement keeps it', r.status === 201 && JSON.stringify(ann(id)) === keep);
+    r = await gpost({ sourceUrl: SRC, announcement: null });
+    check('update: null removes the announcement', r.status === 201 && ann(id) === null);
+    r = await gpost({ sourceUrl: SRC, announcement: { location: 'Synthetic Hall' } });
+    check('update: a patch with no kind on a draft without an announcement is 400 bad_announcement', r.status === 400 && r.data.error === 'bad_announcement' && ann(id) === null);
+    r = await gpost({ sourceUrl: SRC, announcement: { kind: 'event', location: 'Synthetic Hall' } });
+    check('update: a patch with kind creates an announcement when none exists', r.status === 201 && JSON.stringify(ann(id)) === JSON.stringify({ kind: 'event', location: 'Synthetic Hall', links: [] }));
+
+    // authorTitle / photoCredit / featured: omission keeps, "" clears, escaping like other text fields
+    r = await gpost({ sourceUrl: SRC, dek: 'A new summary.' });
+    d = qg('SELECT * FROM drafts WHERE id = ?', id)[0];
+    check('update: omitted authorTitle, photoCredit and featured are kept', r.status === 201 && d.author_title === 'Youth Director' && d.photo_credit === 'Synthetic Photographer' && d.featured === 1);
+    r = await gpost({ sourceUrl: SRC, authorTitle: 'A <b>Bold</b>\n  Title', photoCredit: '<script>x</script> Studio', featured: false });
+    d = qg('SELECT * FROM drafts WHERE id = ?', id)[0];
+    check('update: new values are stored (one line, "<" kept as typed like author and church) and featured can be turned off', r.status === 201 && d.author_title === 'A <b>Bold</b> Title' && d.photo_credit === '<script>x</script> Studio' && d.featured === 0);
+    g = await gget(`/api/agent/stories/${id}`);
+    check('...and read-back is JSON data, never HTML', g.status === 200 && g.data.draft.authorTitle === 'A <b>Bold</b> Title');
+    r = await gpost({ sourceUrl: SRC, authorTitle: '', photoCredit: '' });
+    d = qg('SELECT * FROM drafts WHERE id = ?', id)[0];
+    check('update: "" clears authorTitle and photoCredit', r.status === 201 && d.author_title === '' && d.photo_credit === '' && d.featured === 0);
+    for (const featured of ['true', 1, null, 'yes']) {
+      r = await gpost({ sourceUrl: SRC, featured });
+      check(`featured must be a boolean: ${JSON.stringify(featured)} is 400 bad_field`, r.status === 400 && r.data.error === 'bad_field');
+    }
+    r = await gpost({ sourceUrl: SRC, authorTitle: 'x'.repeat(121) });
+    check('authorTitle over 120 characters is 400 author_title_too_long', r.status === 400 && r.data.error === 'author_title_too_long');
+    r = await gpost({ sourceUrl: SRC, photoCredit: 'x'.repeat(121) });
+    check('photoCredit over 120 characters is 400 photo_credit_too_long', r.status === 400 && r.data.error === 'photo_credit_too_long');
+    r = await gpost({ sourceUrl: SRC, authorTitle: 'y'.repeat(120), photoCredit: 'y'.repeat(120) });
+    check('...exactly 120 is fine', r.status === 201);
+
+    // photo crops
+    for (const [name, crop] of [['focalX 101', { focalX: 101 }], ['focalX -1', { focalX: -1 }], ['focalY 100.5', { focalY: 100.5 }], ['zoom 0.5', { zoom: 0.5 }], ['zoom 3.1', { zoom: 3.1 }], ['zoom as text', { zoom: '2' }], ['focalX null', { focalX: null }], ['focalY NaN as text', { focalY: 'NaN' }]]) {
+      const before = qg('SELECT COUNT(*) c FROM draft_photos WHERE draft_id = ?', id)[0].c;
+      r = await gpost({ sourceUrl: SRC, photos: [{ data: dataUrl(PNG_A), ...crop }] });
+      check(`photo crop out of range or not a number is 400 bad_photo_crop (${name}) and keeps the photos`, r.status === 400 && r.data.error === 'bad_photo_crop' && qg('SELECT COUNT(*) c FROM draft_photos WHERE draft_id = ?', id)[0].c === before);
+    }
+    r = await gpost({ sourceUrl: SRC, photos: [{ data: dataUrl(PNG_A), alt: 'Edge', focalX: 0, focalY: 100, zoom: 3 }, { data: dataUrl(PNG_B), zoom: 1 }] });
+    ph = qg('SELECT * FROM draft_photos WHERE draft_id = ? ORDER BY position', id);
+    check('crop limits 0, 100 and 1..3 are inclusive', r.status === 201 && ph.length === 2 && ph[0].focal_x === 0 && ph[0].focal_y === 100 && ph[0].zoom === 3 && ph[1].focal_x === 50);
+    check('photo signature checks are unchanged: an SVG with a crop is still photo_not_image', (await gpost({ sourceUrl: SRC, photos: [{ data: dataUrl(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), 'image/svg+xml'), zoom: 2 }] })).data.error === 'photo_not_image');
+
+    // {{photo N}} markers
+    const nPhotos = () => qg('SELECT COUNT(*) c FROM draft_photos WHERE draft_id = ?', id)[0].c;
+    const bodyOf = () => qg('SELECT body FROM drafts WHERE id = ?', id)[0].body;
+    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 2}}\n\nMore text.' });
+    check('update: a marker for an existing photo is accepted', r.status === 201 && bodyOf().includes('{{photo 2}}'));
+    const bodyBefore = bodyOf();
+    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 3}}\n\nMore.' });
+    check('update: a marker past the photo count is 400 bad_photo_marker naming it', r.status === 400 && r.data.error === 'bad_photo_marker' && r.data.message.includes('{{photo 3}}') && bodyOf() === bodyBefore, r.text.slice(0, 200));
+    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 3}}\n\nMore.', photos: [{ data: dataUrl(PNG_A) }, { data: dataUrl(PNG_B) }, { data: dataUrl(PNG_A) }] });
+    check('update: the count after the request is what matters (body and 3 new photos together)', r.status === 201 && nPhotos() === 3);
+    r = await gpost({ sourceUrl: SRC, photos: [{ data: dataUrl(PNG_A) }] });
+    check('update: shrinking the photos below a stored marker is 400 bad_photo_marker', r.status === 400 && r.data.error === 'bad_photo_marker' && nPhotos() === 3);
+    r = await gpost({ sourceUrl: SRC, body: 'Example:\n\n```\n{{photo 9}}\n```\n\n    {{photo 8}}\n\n`{{photo 7}}`\n\n\\{{photo 6}}\n\n> {{photo 5}}\n\n- {{photo 4}}\n\nPlain text {{photo 9}} inline.' });
+    check('update: markers in code fences, indented code, spans, escaped, quotes, lists or inline stay literal and are not validated', r.status === 201, r.text.slice(0, 200));
+    r = await gpost({ sourceUrl: SRC, body: 'x\n\n~~~\n{{photo 9}}\n~~~\n\n{{photo 4}}' });
+    check('update: a marker after a closed fence is validated again', r.status === 400 && r.data.error === 'bad_photo_marker' && r.data.message.includes('{{photo 4}}'));
+    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', body: 'Story.\n\n{{photo 3}}\n\nEnd.' }));
+    check('create: a marker past the two photos is 400 bad_photo_marker and no draft is made', r.status === 400 && r.data.error === 'bad_photo_marker' && qg("SELECT COUNT(*) c FROM drafts WHERE source_url LIKE '%9102'")[0].c === 0);
+    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', photos: undefined, body: 'Story.\n\n{{photo 1}}\n\nEnd.' }));
+    check('create: a marker with no photos at all is refused', r.status === 400 && r.data.error === 'bad_photo_marker');
+    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', body: 'Story.\n\n{{photo 2}}\n\n```\n{{photo 6}}\n```' }));
+    check('create: a valid marker plus a fenced one is accepted', r.status === 201);
+
+    // capabilities
+    const caps = await gget('/api/agent/sections');
+    const c = caps.data;
+    check('capabilities: announcement patch semantics are advertised (additive)', c.announcement?.patch?.semantics?.includes('partial merge') && c.announcement.kinds.length === 2 && !!c.reopen.endpoint);
+    check('capabilities: photo crop fields and ranges', JSON.stringify(c.photoCrop.fields) === '["focalX","focalY","zoom"]' && c.photoCrop.ranges.zoom[1] === 3 && c.photoCrop.ranges.focalX[1] === 100 && c.photoCrop.planned.includes('fit') && c.photoCrop.planned.includes('caption'));
+    check('capabilities: authorTitle, photoCredit, featured with limits', c.storyFields.authorTitle.maxLength === 120 && c.storyFields.photoCredit.maxLength === 120 && c.storyFields.featured.type === 'boolean');
+    check('capabilities: marker support', c.photoMarkers.syntax === '{{photo N}}' && /bad_photo_marker/.test(c.photoMarkers.rule));
+    check('the g server logs hold no token, note or upload path', !logs.g.join('\n').includes(AGENT_TOKEN) && !logs.g.join('\n').includes('uploads'));
   }
 
   // ================= rate limit =================
