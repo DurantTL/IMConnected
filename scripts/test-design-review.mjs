@@ -63,8 +63,14 @@ try {
   // Two news stories get a photo, so section rows mix photo and no-photo cards (their headlines must still line up).
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgaPgPAAKAAX9Fl7IMAAAAAElFTkSuQmCC', 'base64');
   const sha = crypto.createHash('sha256').update(png).digest('hex');
-  for (const n of [2, 3]) {
-    const slug = `synthetic-design-${n}`, rel = `stories/${slug}/${sha}.png`;
+  // Four older stories (past the 90 day home window) fill the home page "From the archive" rail; two of them have photos too.
+  const archiveFixtures = [['news', 'schools', 'An older story from a past issue', '2025-03-04'], ['features', null, 'A feature from a past issue', '2025-04-11'], ['columns', null, 'A column from a past issue', '2025-05-16'], ['youth', 'pathfinders', 'A youth story from a past issue', '2025-06-20']];
+  for (const [i, [section, area, title, date]] of archiveFixtures.entries()) {
+    insert.run(`synthetic-archive-${i + 1}`, title, 'Synthetic archive example for the IMConnected story magazine.', section, area, 0, 'This synthetic story is an archive fixture without real people.', Date.now() + 100 + i, Date.now() + 100 + i);
+    fixtureDb.prepare('UPDATE stories SET date = ?, rev = rev + 1 WHERE slug = ?').run(date, `synthetic-archive-${i + 1}`);
+  }
+  for (const slug of ['synthetic-design-2', 'synthetic-design-3', 'synthetic-archive-1', 'synthetic-archive-3']) {
+    const rel = `stories/${slug}/${sha}.png`;
     fs.mkdirSync(path.join(scratch, 'media', 'stories', slug), { recursive: true });
     fs.writeFileSync(path.join(scratch, 'media', rel), png);
     const { id } = fixtureDb.prepare('SELECT id FROM stories WHERE slug = ?').get(slug);
@@ -95,7 +101,7 @@ try {
   const feedResponse = await fetch(BASE + '/stories.json');
   assert.equal(feedResponse.status, 200);
   const feed = await feedResponse.json();
-  check('design evidence contains only the eight synthetic fixture stories', feed.stories.length === 8 && feed.stories.every((story) => story.id.startsWith('synthetic-design-')));
+  check('design evidence contains only the twelve synthetic fixture stories', feed.stories.length === 12 && feed.stories.every((story) => /^synthetic-(design|archive)-/.test(story.id)));
   const sampleStory = feed.stories.find((story) => story.image) || feed.stories[0];
   const storyPath = new URL(sampleStory.url).pathname;
   const targets = [ ['home', '/'], ['section', '/news/'], ['story', storyPath], ['submit', '/submit/'], ['search', '/search/?q=church'], ['login', '/admin/login'] ];
@@ -131,7 +137,8 @@ try {
       check(`${name} at ${width}px responds successfully`, response.status() === 200);
       check(`${name} at ${width}px has no horizontal page overflow`, dimensions.scroll <= dimensions.width);
       check(`${name} at ${width}px has no uncaught script errors`, errors.length === 0);
-      if (name === 'section') {
+      if (name === 'home') check(`${name} at ${width}px shows the archive rail`, await page.locator('.archive-rail h2').innerText() === 'From the archive');
+      if (name === 'section' || name === 'home') {
         // Cards side by side in a grid row share their top and headline position, photo or not (layout offsets ignore the reveal animation).
         const ragged = await page.evaluate(() => {
           const rows = new Map();
