@@ -101,8 +101,6 @@ try {
     const openViewer = async (page, n = 0) => { await page.locator('a[data-photo]').nth(n).click(); await page.locator(dlg).waitFor({ state: 'visible' }); await sleep(50); };
     // the image is on screen if its box overlaps the dialog by at least a third of the screen in each direction, and a zoomed image still covers the screen
     const coverage = (page) => page.evaluate(() => { const r = document.querySelector('.viewer-img').getBoundingClientRect(); const vw = innerWidth, vh = innerHeight; return { l: r.left, t: r.top, r: r.right, b: r.bottom, vw, vh }; });
-    const media = ['image'];
-    void media;
 
     // ---------------- desktop, mouse and keyboard ----------------
     {
@@ -182,18 +180,22 @@ try {
       const cx = 640, cy = 400;
       await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 60, cy + 20, { steps: 4 }); await page.mouse.up(); await sleep(100);
       const after = await tf(page);
-      check('dragging a zoomed photo pans it', near(after.x - before.x, 60, 2) && near(after.y - before.y, 20, 2) || after.y === before.y, JSON.stringify({ before, after }));
+      check('dragging a zoomed photo pans it by exactly the drag (+60, +20)', near(after.x - before.x, 60, 1) && near(after.y - before.y, 20, 1), JSON.stringify({ before, after }));
       check('the viewer stays open after a drag that ends on the photo', await page.locator(dlg).isVisible());
-      await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 3000, cy + 3000, { steps: 6 }); await page.mouse.up(); await sleep(100);
+      for (let i = 0; i < 6; i++) { await page.mouse.move(100, 100); await page.mouse.down(); await page.mouse.move(900, 700, { steps: 6 }); await page.mouse.up(); await sleep(60); }
       let c = await coverage(page);
-      check('panning far right/down is clamped: the photo edge stops at the screen edge (never lost off-screen)', c.l <= 0.5 && c.t <= 0.5 && c.l > -(c.r - c.l), JSON.stringify(c));
-      await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx - 6000, cy - 6000, { steps: 6 }); await page.mouse.up(); await sleep(100);
+      check('panning far right/down is clamped exactly: the photo edges stop at the screen edges (never lost off-screen)', near(c.l, 0, 1) && near(c.t, 0, 1), JSON.stringify(c));
+      for (let i = 0; i < 10; i++) { await page.mouse.move(900, 700); await page.mouse.down(); await page.mouse.move(100, 100, { steps: 6 }); await page.mouse.up(); await sleep(60); }
       c = await coverage(page);
-      check('panning far left/up is clamped the same way', c.r >= c.vw - 0.5 && c.b >= c.vh - 0.5, JSON.stringify(c));
+      check('panning far left/up is clamped exactly the same way', near(c.r, c.vw, 1) && near(c.b, c.vh, 1), JSON.stringify(c));
       check('the viewer is still open after those drags', await page.locator(dlg).isVisible());
+      const k0 = await tf(page);
       await page.keyboard.press('ArrowLeft'); await sleep(100);
+      const k1b = await tf(page);
+      check('while zoomed (and overflowing) ArrowLeft pans by 80 px (it does not change the photo)', (await page.locator('.viewer-pos').textContent()) === ' (1 of 3)' && near(k1b.x - k0.x, 80, 1), JSON.stringify({ k0, k1b }));
+      for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowRight');
       c = await coverage(page);
-      check('while zoomed the arrow keys pan (they do not change the photo) and stay clamped', (await page.locator('.viewer-pos').textContent()) === ' (1 of 3)' && c.r >= c.vw - 0.5, JSON.stringify(c));
+      check('repeated arrow keys stop at the clamp', near(c.r, c.vw, 1) && (await page.locator('.viewer-pos').textContent()) === ' (1 of 3)', JSON.stringify(c));
 
       // prev/next resets
       await page.click('.viewer-next'); await sleep(100);
@@ -205,6 +207,36 @@ try {
       check('Previous also resets the zoom', (await tf(page)).s === 1 && (await page.locator('.viewer-zoom-level').textContent()) === '100%');
       await page.keyboard.press('ArrowRight'); await sleep(100);
       check('at fit the arrow keys still change photos', (await page.locator('.viewer-pos').textContent()) === ' (2 of 3)');
+
+      // a photo that does not overflow sideways: Up/Down pan, Left/Right fall through to photo navigation
+      await page.keyboard.press('0'); await sleep(100);
+      const gotoPortrait = async () => {
+        for (let i = 0; i < 3 && !(await page.evaluate(() => { const im = document.querySelector('.viewer-img'); return im.naturalHeight > im.naturalWidth; })); i++) { await page.click('.viewer-next'); await sleep(150); }
+        return page.evaluate(() => { const im = document.querySelector('.viewer-img'); return im.naturalHeight > im.naturalWidth; });
+      };
+      check('found the portrait photo', await gotoPortrait());
+      const fitBox = await page.locator('.viewer-img').boundingBox();
+      check('a tall photo opens fitted: the whole photo is on screen at 100%', fitBox.y >= 0 && fitBox.y + fitBox.height <= 800 && fitBox.x >= 0 && fitBox.x + fitBox.width <= 1280, JSON.stringify(fitBox));
+      await page.keyboard.press('+'); await sleep(300); // 1.5x: taller than the screen, narrower than it
+      const posBefore = await page.locator('.viewer-pos').textContent();
+      const y0 = (await tf(page)).y;
+      await page.keyboard.press('ArrowDown'); await sleep(100);
+      const y1 = (await tf(page)).y;
+      check('zoomed portrait photo: ArrowDown pans it (it overflows vertically) and does not change photo', near(y1 - y0, -80, 1) && (await page.locator('.viewer-pos').textContent()) === posBefore, `${y0} ${y1}`);
+      // press on the zoomed photo, drag onto the dark area beside it, release: the viewer stays open
+      const ib = await page.locator('.viewer-img').boundingBox();
+      await page.mouse.move(ib.x + ib.width / 2, 300); await page.mouse.down(); await page.mouse.move(Math.max(2, Math.floor(ib.x / 2)), 330, { steps: 6 }); await page.mouse.up(); await sleep(150);
+      check('a drag that starts on the zoomed photo and ends on the dark area does not close the viewer', await page.locator(dlg).isVisible());
+      await page.mouse.click(Math.max(2, Math.floor(ib.x / 2)), 400); await sleep(150);
+      check('and a plain click on the dark area right afterwards still closes it', !(await page.locator(dlg).isVisible()));
+      await openViewer(page, 0);
+      check('found the portrait photo again', await gotoPortrait());
+      await page.keyboard.press('+'); await sleep(300);
+      const pos2 = await page.locator('.viewer-pos').textContent();
+      await page.keyboard.press('ArrowRight'); await sleep(150);
+      const after2 = await page.locator('.viewer-pos').textContent();
+      check('zoomed portrait photo: ArrowRight (no sideways overflow) still shows the next photo, and the zoom resets', after2 !== pos2 && (await tf(page)).s === 1, `${pos2} -> ${after2}`);
+      check('the zoom group is described by the arrow-key hint', await page.evaluate(() => { const g = document.querySelector('.viewer-zoom'); const h = document.getElementById(g.getAttribute('aria-describedby')); return /arrow keys move the photo; press 0 to reset/.test(h?.textContent ?? ''); }));
 
       // close and focus return
       await page.keyboard.press('+'); await sleep(250);
@@ -284,18 +316,40 @@ try {
       await touch('touchEnd', []);
       await sleep(200);
       check('a huge pinch stops at 4x', near((await tf(page)).s, 4, 0.01), JSON.stringify(await tf(page)));
+      // pinch, lift one finger, keep dragging with the other: the photo pans and the viewer neither closes nor changes photo
+      await page.click('.viewer-zoom-reset', { force: true }); await sleep(100);
+      await touch('touchStart', [{ x: cx - 30, y: cy }, { x: cx + 30, y: cy }]);
+      for (let i = 1; i <= 6; i++) await touch('touchMove', [{ x: cx - 30 - i * 8, y: cy }, { x: cx + 30 + i * 8, y: cy }]);
+      const afterPinch = await tf(page);
+      const raw = (type, x, y, id) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: [{ x, y, id }] });
+      await raw('touchEnd', cx - 78, cy, 0); // lifts the left finger (id 0); the right finger (id 1) stays down
+      await sleep(50);
+      const fingerX = cx + 78;
+      for (let i = 1; i <= 5; i++) await raw('touchMove', fingerX - i * 10, cy + i * 6, 1);
+      await raw('touchEnd', fingerX - 50, cy + 30, 1);
+      await sleep(150);
+      const afterLift = await tf(page);
+      check('after a pinch, the finger that stays down keeps panning the photo', afterLift.s === afterPinch.s && (near(afterLift.x - afterPinch.x, -50, 3)) && (await page.locator('.viewer-pos').textContent()) === ' (1 of 3)' && await page.locator(dlg).isVisible(), JSON.stringify({ afterPinch, afterLift }));
+      await page.click('.viewer-zoom-reset', { force: true }); await sleep(100);
       // one-finger drag pans, clamped, and does not swipe to another photo
+      await touch('touchStart', [{ x: cx - 10, y: cy }, { x: cx + 10, y: cy }]);
+      for (let i = 1; i <= 10; i++) await touch('touchMove', [{ x: cx - 10 - i * 15, y: cy }, { x: cx + 10 + i * 15, y: cy }]);
+      await touch('touchEnd', []);
+      await sleep(200);
       const drag = async (dx, dy) => { await touch('touchStart', [{ x: 195, y: 390 }]); for (let i = 1; i <= 6; i++) await touch('touchMove', [{ x: 195 + (dx * i) / 6, y: 390 + (dy * i) / 6 }]); await touch('touchEnd', []); await sleep(150); };
+      const p0 = await tf(page);
       await drag(-60, -40);
       const p1 = await tf(page);
-      await drag(5000 > 390 ? 380 : 0, 380);
-      await drag(380, 380);
+      check('a one-finger drag pans a zoomed photo by the drag (-60, -40) without changing photo', near(p1.x - p0.x, -60, 2) && near(p1.y - p0.y, -40, 2) && p1.s > 3.9 && (await page.locator('.viewer-pos').textContent()) === ' (1 of 3)', JSON.stringify({ p0, p1 }));
+      await drag(380, 380); await drag(380, 380); await drag(380, 380);
       let c = await coverage(page);
-      check('a one-finger drag pans a zoomed photo without changing photo, clamped to the screen edge', (await page.locator('.viewer-pos').textContent()) === ' (1 of 3)' && c.l <= 0.5 && c.t <= 0.5 && p1.s > 3.9, JSON.stringify({ p1, c }));
+      const p2 = await tf(page);
+      check('dragging far right/down is clamped exactly to the screen edges (phone width)', near(c.l, 0, 1) && near(c.t, 0, 2) && p2.x > p1.x, JSON.stringify({ p1, p2, c }));
       await drag(-380, -380); await drag(-380, -380); await drag(-380, -380);
       c = await coverage(page);
-      check('dragging the other way is clamped too (phone width)', c.r >= c.vw - 0.5 && c.b >= c.vh - 0.5, JSON.stringify(c));
-      check('the viewer is still open after the drags', await page.locator(dlg).isVisible());
+      const p3 = await tf(page);
+      check('dragging the other way is clamped exactly too (phone width)', near(c.r, c.vw, 1) && near(c.b, c.vh, 2) && p3.x < p2.x && p3.y < p2.y, JSON.stringify({ p2, p3, c }));
+      check('the viewer is still open after panning by touch', await page.locator(dlg).isVisible());
       await page.click('.viewer-zoom-reset', { force: true }); await sleep(100);
       // double-tap
       const tap = async (x, y) => { await touch('touchStart', [{ x, y }]); await touch('touchEnd', []); };
@@ -327,6 +381,14 @@ try {
       const onScreen = rects.every((r) => r.l >= 0 && r.r <= 320 && r.t >= 0 && r.b <= 640 && r.w >= 44 && r.h >= 44);
       const overlap = rects.some((a, i) => rects.some((b, j) => i < j && a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b));
       check('at 320 px every viewer button is on screen, at least 44 px, and none overlap', onScreen && !overlap, JSON.stringify(rects));
+      // a reader with a 20 px root font (125%) at 320 px: the zoom group wraps or hides its label, nothing overlaps or leaves the screen
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await sleep(100);
+      const big = await page.evaluate(() => [...document.querySelectorAll('dialog.viewer button')].map((b) => { const r = b.getBoundingClientRect(); return { n: b.getAttribute('aria-label'), l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height }; }));
+      const bigOn = big.every((r) => r.l >= 0 && r.r <= 320 && r.t >= 0 && r.b <= 640 && r.w >= 44 && r.h >= 44);
+      const bigOverlap = big.some((a, i) => big.some((b, j) => i < j && a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b));
+      const lvl = await page.evaluate(() => getComputedStyle(document.querySelector('.viewer-zoom-level')).display);
+      check('at 320 px with a 20 px root font the viewer buttons stay on screen and do not overlap (the % label is hidden, the live region still announces)', bigOn && !bigOverlap && lvl === 'none', JSON.stringify({ lvl, big }));
       await ctx.close();
     }
 

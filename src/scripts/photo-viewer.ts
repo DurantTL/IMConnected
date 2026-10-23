@@ -109,9 +109,10 @@ function init(): void {
   }
 
   function resetZoom(announce = false): void {
+    const was = scale;
     scale = 1; tx = 0; ty = 0;
     stageImg.classList.remove('smooth');
-    render(announce);
+    render(announce && was !== 1); // nothing to announce when already at fit
   }
 
   const altOf = (a: HTMLAnchorElement, i: number) => a.querySelector('img')?.getAttribute('alt')?.trim() || `Photo ${i + 1} of ${total}`;
@@ -142,11 +143,12 @@ function init(): void {
     d.innerHTML =
       '<div class="viewer-stage"><img class="viewer-img" alt="" decoding="async" draggable="false"></div>' +
       '<button type="button" class="viewer-btn viewer-close" aria-label="Close photo viewer"><span aria-hidden="true">&times;</span></button>' +
-      '<div class="viewer-zoom" role="group" aria-label="Zoom">' +
+      '<div class="viewer-zoom" role="group" aria-label="Zoom" aria-describedby="viewer-zoom-hint">' +
       '<button type="button" class="viewer-btn viewer-zoom-out" aria-label="Zoom out" aria-disabled="true"><span aria-hidden="true">&minus;</span></button>' +
       '<button type="button" class="viewer-btn viewer-zoom-in" aria-label="Zoom in"><span aria-hidden="true">+</span></button>' +
       '<button type="button" class="viewer-btn viewer-zoom-reset" aria-label="Reset zoom" aria-disabled="true">Reset</button>' +
       '<span class="viewer-zoom-level" aria-hidden="true">100%</span></div>' +
+      '<p class="sr-only" id="viewer-zoom-hint">While zoomed, arrow keys move the photo; press 0 to reset.</p>' +
       '<p class="sr-only viewer-zoom-status" role="status" aria-live="polite" aria-atomic="true"></p>' +
       (total > 1
         ? '<button type="button" class="viewer-btn viewer-prev" aria-label="Previous photo"><span aria-hidden="true">&#8249;</span></button>' +
@@ -176,7 +178,9 @@ function init(): void {
     d.addEventListener('wheel', (e) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      zoomTo(scale * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.01)), e.clientX, e.clientY);
+      // Clamped so one notch of a Chrome mouse wheel (100) is a step of about 1.6x, not a jump to the limit.
+      const dy = Math.max(-50, Math.min(50, e.deltaY * (e.deltaMode === 1 ? 5 : 1)));
+      zoomTo(scale * Math.exp(-dy * 0.01), e.clientX, e.clientY);
     }, { passive: false });
     d.addEventListener('dblclick', (e) => {
       if (Date.now() - lastTapToggle < 600 || e.target !== stageImg) return; // a touch double-tap is handled below
@@ -203,9 +207,12 @@ function init(): void {
       if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomTo(scale * STEP, undefined, undefined, true); return; }
       if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomTo(scale / STEP, undefined, undefined, true); return; }
       if (e.key === '0') { e.preventDefault(); resetZoom(true); return; }
-      if (scale > 1 && e.key.startsWith('Arrow') && !(document.activeElement as HTMLElement | null)?.matches('.viewer-prev, .viewer-next')) {
-        // Zoomed: the arrow keys pan, a keyboard user's only way to look around. Reset (or 0) brings photo navigation back;
-        // the Previous and Next buttons keep working throughout.
+      const horizontal = e.key === 'ArrowLeft' || e.key === 'ArrowRight';
+      // Zoomed: an arrow key pans, a keyboard user's only way to look around, but only along an axis the photo overflows.
+      // On an axis it does not overflow Left/Right keep changing photo; Reset (or 0) brings navigation back; the Previous and
+      // Next buttons keep working throughout, whichever element has focus.
+      const overflows = scale > 1 && (horizontal ? stageImg.offsetWidth * scale > d.clientWidth : stageImg.offsetHeight * scale > d.clientHeight);
+      if (overflows && e.key.startsWith('Arrow')) {
         e.preventDefault();
         if (e.key === 'ArrowLeft') tx += 80; else if (e.key === 'ArrowRight') tx -= 80; else if (e.key === 'ArrowUp') ty += 80; else ty -= 80;
         render(false);
@@ -226,6 +233,7 @@ function init(): void {
     let tracking = false;
     let moved = false;
     let pinched = false;
+    let wasPinch = false;
     let pinchDist = 0;
     let downOnImg = false;
     let lastTap = { t: 0, x: 0, y: 0 };
@@ -233,9 +241,10 @@ function init(): void {
     const mid = () => { const [a, b] = Array.from(pts.values()); return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; };
     d.addEventListener('pointerdown', (e) => {
       if ((e.target as HTMLElement).closest('button')) return;
+      swiped = false; // a new gesture: never let an earlier drag swallow this one's click
       if (e.pointerType === 'mouse' && (scale === 1 || e.button !== 0)) return;
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pts.size === 1) { tracking = true; moved = false; pinched = false; startX = lastX = e.clientX; startY = lastY = e.clientY; }
+      if (pts.size === 1) { tracking = true; moved = false; pinched = false; wasPinch = false; startX = lastX = e.clientX; startY = lastY = e.clientY; }
       else if (pts.size === 2) { pinched = true; pinchDist = dist() || 1; }
       if (pts.size === 1) downOnImg = e.target === stageImg; // no explicit pointer capture: it would retarget the click that follows
     });
@@ -259,13 +268,15 @@ function init(): void {
     const end = (e: PointerEvent, cancelled: boolean) => {
       if (!pts.delete(e.pointerId)) return;
       if (pts.size === 1) { // one finger of a pinch lifted: carry on panning with the other without a jump
-        const [p] = Array.from(pts.values()); lastX = p.x; lastY = p.y;
+        const [p] = Array.from(pts.values());
+        lastX = startX = p.x; lastY = startY = p.y;
+        pinched = false; wasPinch = true;
         return;
       }
       if (pts.size > 0 || !tracking) return;
       tracking = false;
-      if (moved && (pinched || scale > 1)) { swiped = true; setTimeout(() => { swiped = false; }, 400); }
-      if (cancelled || pinched) return;
+      if (moved && e.pointerType === 'mouse' && (wasPinch || pinched || scale > 1)) { swiped = true; setTimeout(() => { swiped = false; }, 400); }
+      if (cancelled || pinched || wasPinch) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       if (scale === 1 && Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
@@ -288,12 +299,15 @@ function init(): void {
     };
     d.addEventListener('pointerup', (e) => end(e, false));
     d.addEventListener('pointercancel', (e) => end(e, true));
+    // Safari's own pinch gesture on the photo would zoom the page instead of the photo.
+    for (const type of ['gesturestart', 'gesturechange']) stageImg.addEventListener(type, (e) => e.preventDefault());
     window.addEventListener('resize', () => { if (d.open) render(false); });
     d.addEventListener('close', () => {
       document.documentElement.classList.remove('viewer-open');
       stageImg.removeAttribute('src');
       resetZoom();
       zoomStatus.textContent = '';
+      clearTimeout(announceTimer);
       pts.clear();
       tracking = false;
       (opener && opener.isConnected ? opener : null)?.focus();
