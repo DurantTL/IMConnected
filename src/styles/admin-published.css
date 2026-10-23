@@ -1,8 +1,5 @@
 /* Published list (issue #140). Generic .adm-* names are shared with the drafts list (#139) so the two files can merge.
    Colours come from the admin shell's custom properties, with the approved palette as fallback. */
-.admin-page-head { display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:18px; }
-.admin-page-head h1 { margin:4px 0 6px; font-size:2rem; line-height:1.15; color:var(--adm-navy,#003b5c); letter-spacing:-.01em; }
-.admin-eyebrow { margin:0; font-size:.75rem; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--adm-muted,#536872); }
 .adm-sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 
 .adm-stat-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px; }

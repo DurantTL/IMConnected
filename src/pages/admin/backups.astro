@@ -19,9 +19,9 @@ const hint = /storage quota/i.test(err)
     ? 'Share the Shared Drive with the service account as Content manager, and check the folder ID.'
     : '';
 ---
-<Admin title="Backups" current="editors">
-  <div class="cms-bar">
-    <h1>Backups</h1>
+<Admin title="Backups" current="backups">
+  <div class="cms-bar admin-page-head">
+    <div><p class="admin-eyebrow">Site</p><h1>Backups</h1></div>
     <a class="cms-btn secondary" href="/admin/editors">Editors</a>
   </div>
   <p class="admin-note">Every night the site saves a copy of its database (stories, drafts, editor accounts, the audit log) and of the photos folder, keeps 7 daily and 4 weekly copies on the server, and uploads them to a Google Drive folder with the same keep rule. Times are UTC.</p>

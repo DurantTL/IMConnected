@@ -625,16 +625,6 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 .event-spotlight :focus-visible { outline-color:#2DD4BF; }
 
 /* Shared publication identity in the separate editor app. */
-body.admin { background:#ECEAE5; }
-body.admin .admin-bar { background:#0B3954; color:#fff; border-bottom:3px solid #2DD4BF; }
-body.admin .admin-brand .brand-wordmark { width:210px; }
-body.admin .admin-brand .admin-brand-kicker { color:#E0F5F7; font-size:.58rem; margin-top:2px; }
-body.admin .admin-bar nav a,body.admin .admin-bar nav button { color:#E0F5F7; }
-body.admin .admin-bar nav a:hover,body.admin .admin-bar nav button:hover { background:#164b63; color:#fff; }
-body.admin .admin-bar nav a[aria-current] { background:#2DD4BF; color:#0B3954; border-color:#2DD4BF; }
-body.admin .admin-bar .nav-count { background:#E0F5F7; color:#0B3954; }
-body.admin .admin-bar .admin-public-link { color:#E0F5F7; border-color:#779cad; }
-body.admin .admin-bar .admin-public-link:hover { color:#fff; border-color:#2DD4BF; }
 @media(max-width:920px) {
   body:not(.admin) .site-header .bar { min-height:100px; }
   .site-header .brand-wordmark { width:290px; }
@@ -684,7 +674,7 @@ body.admin .admin-bar .admin-public-link:hover { color:#fff; border-color:#2DD4B
 #article-body { scroll-margin-top:32px; }
 
 body:not(.admin) .card.lead.without-photo .card-copy { background:transparent; }
-.site-header :focus-visible, body.admin .admin-bar :focus-visible, .site-footer :focus-visible { outline-color:#2DD4BF; }
+.site-header :focus-visible, .site-footer :focus-visible { outline-color:#2DD4BF; }
 
 /* Type scale: closer contrast between utility text and reading text. Navigation ~.95rem, utilities ~.85rem,
    story text ~1.07rem with a 3.2rem headline cap, so the small end stays legible and the article no longer shouts. */
