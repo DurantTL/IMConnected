@@ -99,8 +99,8 @@ const twoFa = (p: (typeof people)[number]) => {
 };
 ---
 <Admin title="Editors" current="editors">
-  <div class="cms-bar">
-    <h1>Editors</h1>
+  <div class="cms-bar admin-page-head">
+    <div><p class="admin-eyebrow">Site</p><h1>Editors</h1></div>
     {isAdmin && <a class="cms-btn secondary" href="/admin/audit">Audit log</a>}
     {isAdmin && <a class="cms-btn secondary" href="/admin/backups">Backups</a>}
   </div>

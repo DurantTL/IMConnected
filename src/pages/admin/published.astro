@@ -38,7 +38,7 @@ const error = errorText(q.get('e'));
 const base = siteUrl();
 ---
 <Admin title="Published" current="published" wide>
-  <div class="cms-bar"><h1>Published stories</h1></div>
+  <div class="cms-bar admin-page-head"><div><p class="admin-eyebrow">Stories</p><h1>Published stories</h1></div></div>
   {notice && <p class="admin-ok" role="status">{notice}</p>}
   {error && <p class="admin-error" role="alert">{error}</p>}
   {loadFailed && <p class="admin-error" role="alert">The story list could not be read. Please reload in a minute.</p>}
