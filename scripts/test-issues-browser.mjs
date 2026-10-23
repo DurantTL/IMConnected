@@ -165,12 +165,12 @@ try {
   const empty = await post('/admin/issues', { number: 8, version: ver(8), action: 'delete' });
   const emptyList = await get('/issues/');
   check('deleting an unused issue works and leaves the list unchanged', empty.status === 200 && [...emptyList.text.matchAll(/<h2 id="issue-(\d+)"/g)].map((m) => m[1]).join() === '12,10');
-  const html = (await get('/issues/12/')).text;
+  check('the issue links say their visible words first (label in name), with the issue number only as hidden extra text', !/class="issue-more"[^>]*aria-label/.test(emptyList.text) && /class="issue-more"[^>]*>(See all \d+ stories|Open this issue)<span class="sr-only"> in Issue #12<\/span>/.test(emptyList.text));
   check('hostile text in an issue title is escaped, never rendered as HTML (in the page or the title; meta attributes keep it as inert quoted text)', await (async () => {
     await post('/admin/issues', { number: 10, version: ver(10), action: 'save', date: '2026-08-17', title: '<img src=x onerror=alert(1)> & <b>bold</b>' });
     const l = (await get('/issues/')).text, p = (await get('/issues/10/')).text;
     const mainOf = (h) => h.match(/<main[\s\S]*<\/main>/)?.[0] ?? '';
-    return !/<img src=x|<b>bold/.test(mainOf(l) + mainOf(p)) && !/<title>[^<]*<(img|b)/.test(l + p) && l.includes('&lt;img src=x onerror=alert(1)&gt; &amp; &lt;b&gt;bold&lt;/b&gt;') && html.length > 0;
+    return !/<img src=x|<b>bold/.test(mainOf(l) + mainOf(p)) && !/<title>[^<]*<(img|b)/.test(l + p) && l.includes('&lt;img src=x onerror=alert(1)&gt; &amp; &lt;b&gt;bold&lt;/b&gt;');
   })());
 
   // ================= browser: axe, 320px, no JavaScript, row alignment, screenshots =================

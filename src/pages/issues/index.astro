@@ -31,10 +31,10 @@ const sent = (date: string) => formatDate(new Date(`${date}T00:00:00.000Z`));
           <section class="issue-block" aria-labelledby={`issue-${g.number}`}>
             <div class="issue-block-head">
               <div>
-                <h2 id={`issue-${g.number}`}><a href={issueHref(g.number)}>Issue #{g.number}{g.title && <span class="issue-title">{g.title}</span>}</a></h2>
+                <h2 id={`issue-${g.number}`}><a href={issueHref(g.number)}>Issue #{g.number}{g.title && <><span class="sr-only">: </span><span class="issue-title">{g.title}</span></>}</a></h2>
                 <p class="issue-meta">Sent <time datetime={g.date}>{sent(g.date)}</time> · {g.stories.length} {g.stories.length === 1 ? 'story' : 'stories'}</p>
               </div>
-              <a class="issue-more" href={issueHref(g.number)} aria-label={`Read all ${g.stories.length} ${g.stories.length === 1 ? 'story' : 'stories'} in Issue #${g.number}`}>{g.stories.length > PREVIEW_COUNT ? `See all ${g.stories.length} stories` : 'Open this issue'} <span aria-hidden="true">→</span></a>
+              <a class="issue-more" href={issueHref(g.number)}>{g.stories.length > PREVIEW_COUNT ? `See all ${g.stories.length} stories` : 'Open this issue'}<span class="sr-only"> in Issue #{g.number}</span> <span aria-hidden="true">→</span></a>
             </div>
             <div class="grid cols-3">
               {g.stories.slice(0, PREVIEW_COUNT).map((s) => <StoryCard story={s} />)}
