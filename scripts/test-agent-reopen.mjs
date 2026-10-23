@@ -51,6 +51,10 @@ try {
   seed('synthetic-noarea');
   exec("UPDATE stories SET area='',rev=rev+1 WHERE slug='synthetic-noarea'");
   seed('synthetic-patch-misc', { count: 2 });
+  // Issue #98: stories that already sit in a (synthetic) newsletter issue, and ones without.
+  exec("INSERT INTO newsletter_issues(number,date,title,created_at,updated_at) VALUES(5,'2026-08-10','Synthetic Summer',1,1)");
+  for (const slug of ['synthetic-issue-keep', 'synthetic-issue-clear', 'synthetic-issue-conflict']) { seed(slug); exec('UPDATE stories SET newsletter_issue=5,newsletter_position=2,rev=rev+1 WHERE slug=?', slug); }
+  for (const slug of ['synthetic-issue-set', 'synthetic-issue-bad']) seed(slug);
   for (const slug of ['synthetic-patch-youth', 'synthetic-patch-features', 'synthetic-patch-areabad', 'synthetic-patch-samesec']) seed(slug);
   const expandedBody = '\n  ' + '&lt;'.repeat(6000) + '\n';
   exec('UPDATE stories SET body=?,author=?,rev=rev+1 WHERE slug=?', expandedBody, 'A'.repeat(150), 'synthetic-escaped');
@@ -230,6 +234,19 @@ try {
   check('reopen: re-sending the current section keeps an empty area exactly (no default applied)', noArea.status === 201 && draftFor('synthetic-noarea').area === '');
   const retryYouth = await call81(reopenReq('synthetic-patch-youth', { changes: { section: 'youth' } }));
   check('reopen: an identical retry of a section-only change replays', retryYouth.status === 200 && retryYouth.data.status === 'replayed');
+  const issueOf = (slug) => { const d = draftFor(slug); return d && { n: d.newsletter_issue, p: d.newsletter_position }; };
+  let ri = await call81(reopenReq('synthetic-issue-keep', { changes: { dek: 'Synthetic updated summary.' } }));
+  check('reopen: a story\'s newsletter issue and position carry into the draft when changes omit it', ri.status === 201 && JSON.stringify(issueOf('synthetic-issue-keep')) === JSON.stringify({ n: 5, p: 2 }), ri.raw.slice(0, 200));
+  ri = await call81(reopenReq('synthetic-issue-set', { changes: { newsletterIssue: { number: 6, date: '2026-08-17', title: 'Synthetic Late Summer', position: 4 } } }));
+  check('reopen: changes.newsletterIssue with a new number creates the issue and sets the draft', ri.status === 201 && JSON.stringify(issueOf('synthetic-issue-set')) === JSON.stringify({ n: 6, p: 4 }) && row('SELECT date,title FROM newsletter_issues WHERE number=6').date === '2026-08-17', ri.raw.slice(0, 200));
+  const readIssue = await call81({}, { method: 'GET', endpoint: `/api/agent/stories/${draftFor('synthetic-issue-set').id}` });
+  check('reopen: read-back shows newsletterIssue {number, date, title, position}', JSON.stringify(readIssue.data.draft.newsletterIssue) === JSON.stringify({ number: 6, date: '2026-08-17', title: 'Synthetic Late Summer', position: 4 }));
+  ri = await call81(reopenReq('synthetic-issue-clear', { changes: { newsletterIssue: null } }));
+  check('reopen: changes.newsletterIssue null clears issue and position on the draft (the live story keeps them)', ri.status === 201 && JSON.stringify(issueOf('synthetic-issue-clear')) === JSON.stringify({ n: null, p: null }) && row("SELECT newsletter_issue n FROM stories WHERE slug='synthetic-issue-clear'").n === 5);
+  ri = await call81(reopenReq('synthetic-issue-conflict', { changes: { newsletterIssue: { number: 5, date: '2026-08-11' } } }));
+  check('reopen: a conflicting issue date is 400 newsletter_issue_conflict naming the stored date, and no draft is created', ri.status === 400 && ri.data.error === 'newsletter_issue_conflict' && ri.data.message.includes('2026-08-10') && !draftFor('synthetic-issue-conflict') && row('SELECT date FROM newsletter_issues WHERE number=5').date === '2026-08-10');
+  ri = await call81(reopenReq('synthetic-issue-bad', { changes: { newsletterIssue: { number: 7, date: '2999-01-01' } } }));
+  check('reopen: a malformed (future-dated) issue is 400 bad_newsletter_issue and creates nothing', ri.status === 400 && ri.data.error === 'bad_newsletter_issue' && !draftFor('synthetic-issue-bad') && !row('SELECT 1 x FROM newsletter_issues WHERE number=7'));
   const caps81 = await call81({}, { method: 'GET', endpoint: '/api/agent/sections' });
   check('capabilities advertise the reopen change fields and the section-only rule', caps81.status === 200 && caps81.data.reopen.changesFields.includes('authorTitle') && caps81.data.reopen.changesFields.includes('featured') && /default area/.test(caps81.data.reopen.sectionOnly));
   check('none of these reopens wrote a live story row', JSON.stringify(rows('SELECT * FROM stories ORDER BY id')) === rowsBefore81 && JSON.stringify(rows('SELECT * FROM story_photos ORDER BY id')) === photosBefore81);

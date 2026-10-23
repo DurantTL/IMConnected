@@ -1,0 +1,54 @@
+---
+// Administrators only (src/middleware.ts guards the path and this page checks the role again): the newsletter issues that stories
+// point at (issue #98). An issue's date is the day it was sent. Edits are version-checked and audited; an issue that a draft or
+// story still uses cannot be deleted. Nothing here shows contacts.
+import Admin from '../../layouts/Admin.astro';
+import { deleteIssue, listIssuesWithCounts, updateIssue } from '../../lib/newsletter-issues';
+import { readFormLimited } from '../../lib/draft-http';
+export const prerender = false;
+const user = Astro.locals.user!;
+if (user.role !== 'admin') return new Response('Administrators only.', { status: 403 });
+let error = '', success = '';
+if (Astro.request.method === 'POST') {
+  const form = await readFormLimited(Astro.request, 16 * 1024);
+  const text = (name: string) => (form && form !== 'too_big' && typeof form.get(name) === 'string' ? String(form.get(name)) : '');
+  const number = /^\d{1,4}$/.test(text('number')) ? Number(text('number')) : 0;
+  const version = /^\d{1,16}$/.test(text('version')) ? Number(text('version')) : -1;
+  if (!form || form === 'too_big' || !number || version < 0) { Astro.response.status = 400; error = 'The form could not be read. Reload the page and try again.'; }
+  else {
+    const result = text('action') === 'delete' ? deleteIssue(number, version, user.id) : updateIssue(number, version, { date: text('date'), title: text('title') }, user.id);
+    if (result.ok) success = text('action') === 'delete' ? `Issue #${number} deleted.` : `Issue #${number} saved.`;
+    else { Astro.response.status = result.reason === 'conflict' || result.reason === 'in_use' ? 409 : result.reason === 'gone' ? 404 : 400; error = result.message; }
+  }
+}
+const issues = listIssuesWithCounts();
+---
+<Admin title="Newsletter issues" current="issues" wide>
+  <div class="cms-bar"><div><p class="sb-eyebrow">Archive</p><h1>Newsletter issues</h1><p class="admin-note">Each issue's date is the day it was sent; the title is optional. Stories point at an issue from their Story settings, and the AI agent creates issues as it sends stories. Correct a date or title here. An issue can be deleted only when no draft or story uses it.</p></div></div>
+  {error && <p class="admin-error" role="alert">{error}</p>}
+  {success && <p class="admin-ok" role="status">{success}</p>}
+  {issues.length === 0 && <p class="admin-note">No newsletter issues yet.</p>}
+  <ul class="issue-list">{issues.map((i) => (
+    <li class="issue-row">
+      <form method="post" class="issue-form">
+        <input type="hidden" name="number" value={i.number} />
+        <input type="hidden" name="version" value={i.updatedAt} />
+        <h2>Issue #{i.number}</h2>
+        <p class="admin-note">{i.stories} {i.stories === 1 ? 'story' : 'stories'}, {i.drafts} {i.drafts === 1 ? 'draft' : 'drafts'}</p>
+        <label>Date sent<input type="date" name="date" value={i.date} required /></label>
+        <label>Title <span class="hint">optional</span><input type="text" name="title" value={i.title} maxlength="200" autocomplete="off" /></label>
+        <div class="issue-actions">
+          <button class="cms-btn" type="submit" name="action" value="save">Save issue #{i.number}</button>
+          <button class="cms-btn danger" type="submit" name="action" value="delete" formnovalidate disabled={i.stories + i.drafts > 0} title={i.stories + i.drafts > 0 ? 'Still used by stories or drafts' : undefined}>Delete issue #{i.number}</button>
+        </div>
+      </form>
+    </li>
+  ))}</ul>
+</Admin>
+<style>
+  .issue-list{padding:0;list-style:none;display:grid;gap:12px}
+  .issue-row{padding:18px;border:1px solid var(--line);border-radius:8px}
+  .issue-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;align-items:end}
+  .issue-form h2,.issue-form .admin-note,.issue-actions{grid-column:1/-1;margin:0}
+  .issue-actions{display:flex;flex-wrap:wrap;gap:12px}
+</style>

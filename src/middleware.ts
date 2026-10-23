@@ -89,6 +89,7 @@ function harden(res: Response): Response {
 // /admin/editors (names only). The pages and the actions check the role again.
 const adminOnly = (path: string, method: string) =>
   path === '/admin/navigation' ||
+  path === '/admin/issues' ||
   path === '/admin/audit' ||
   path === '/api/admin/audit' ||
   path === '/admin/backups' ||

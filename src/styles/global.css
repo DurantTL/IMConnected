@@ -538,6 +538,7 @@ body:not(.admin) .article .byline { border-top:1px solid var(--line); border-bot
 body:not(.admin) .article>figure { margin:0 0 36px; }
 body:not(.admin) .article>figure img { border-radius:0; }
 body:not(.admin) .article .prose { max-width:66ch; line-height:1.85; }
+.article-provenance { margin:10px 0 0; color:var(--ink-3); font:600 .85rem/1.5 var(--sans); }
 .article-reading { display:flex; align-items:center; gap:18px; color:var(--ink-3); font:600 .75rem/1.5 var(--sans); margin-top:16px; }
 .article-reading a { display:inline-flex; align-items:center; min-height:44px; color:var(--brand-text); text-underline-offset:4px; }
 body:not(.admin) .article .share { max-width:66ch; margin-inline:auto; }

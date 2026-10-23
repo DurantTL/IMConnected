@@ -18,6 +18,8 @@ export interface FeedItem {
   dek?: string;
   section: string;
   additionalSections?: string[];
+  /** Additive (issue #98): present only for a story with a newsletter issue. */
+  newsletterIssue?: { number: number; date: string; title: string; position: number | null };
   sectionLabel: string;
   area?: string;
   areaLabel?: string;
@@ -49,6 +51,7 @@ export interface FeedSource {
     dek?: string;
     section: string;
   additionalSections?: string[];
+    newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
     area?: string;
     column?: string;
     author: string;
@@ -78,6 +81,7 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     dek: d.dek ? stripMediaMarkers(d.dek) : undefined,
     section: d.section,
     additionalSections: normalizeAdditionalSections(d.additionalSections, d.section),
+    ...(d.newsletterIssue ? { newsletterIssue: d.newsletterIssue } : {}),
     sectionLabel: getSection(d.section)?.label ?? d.section,
     area: d.area,
     areaLabel: areaLabel(d.section, d.area),

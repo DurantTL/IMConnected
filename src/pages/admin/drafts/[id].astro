@@ -9,6 +9,7 @@ import { SOURCE_LABEL, STATUS_LABEL, getDraft, isEditable, listPhotos } from '..
 import { noticeText, fmtTime, looksLikeEmail } from '../../../lib/admin-ui';
 import { errorText } from '../../../lib/messages';
 import { siteUrl } from '../../../lib/draft-http';
+import { listIssues } from '../../../lib/newsletter-issues';
 import { driveConfig } from '../../../lib/db/gdrive.mjs';
 import '../../../styles/story-builder.css';
 export const prerender = false;
@@ -19,6 +20,7 @@ if (!draft) {
   Astro.response.status = 404;
 }
 const photos = draft ? listPhotos(draft.id) : [];
+const issues = draft ? listIssues() : [];
 const editable = draft ? isEditable(draft) : false;
 const q = Astro.url.searchParams;
 const published = q.get('n') === 'published';
@@ -161,6 +163,16 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               </label>
               <label>Date
                 <input type="date" name="date" value={draft.date} />
+              </label>
+              <label>Newsletter issue <span class="hint">where this story first appeared</span>
+                <input type="hidden" name="newsletterIssuePresent" value="1" />
+                <select name="newsletterIssue" id="f-newsletter-issue">
+                  <option value="" selected={!draft.newsletterIssue}>None</option>
+                  {issues.map((i) => <option value={i.number} selected={draft.newsletterIssue?.number === i.number}>Issue #{i.number} · {i.date}{i.title ? ` · ${i.title}` : ''}</option>)}
+                </select>
+              </label>
+              <label>Position in the issue <span class="hint">1 to 999, optional</span>
+                <input type="number" name="newsletterPosition" min="1" max="999" step="1" inputmode="numeric" value={draft.newsletterIssue?.position ?? ''} />
               </label>
               <label>Photo credit
                 <input type="text" name="photoCredit" value={draft.photoCredit} maxlength="120" autocomplete="off" />

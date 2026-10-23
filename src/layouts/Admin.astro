@@ -6,7 +6,7 @@ import { countOpenDrafts } from '../lib/drafts';
 
 interface Props {
   title: string;
-  current?: 'dashboard' | 'drafts' | 'announcements' | 'events' | 'navigation' | 'published' | 'editors' | 'account';
+  current?: 'dashboard' | 'drafts' | 'announcements' | 'events' | 'navigation' | 'issues' | 'published' | 'editors' | 'account';
   /** Wider main column (the story editor). */
   wide?: boolean;
 }
@@ -27,7 +27,7 @@ const nav = [
   { key: 'published', href: '/admin/published', label: 'Published' },
   { key: 'editors', href: '/admin/editors', label: 'Editors' },
   { key: 'account', href: '/admin/account', label: 'My account' },
-  ...(user?.role === 'admin' ? [{ key: 'navigation', href: '/admin/navigation', label: 'Website menu' }] : []),
+  ...(user?.role === 'admin' ? [{ key: 'navigation', href: '/admin/navigation', label: 'Website menu' }, { key: 'issues', href: '/admin/issues', label: 'Newsletter issues' }] : []),
 ];
 ---
 <!doctype html>

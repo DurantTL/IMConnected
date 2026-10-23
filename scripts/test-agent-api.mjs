@@ -36,7 +36,7 @@ const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 // A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
 const CLIENT_TMP = path.join(SCRATCH, 'client');
 fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
-const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529, j: 4530 };
+const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529, j: 4530, k: 4531 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -58,7 +58,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [], j: [] };
+const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [], j: [], k: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -161,7 +161,8 @@ start('g', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.g), DA
 start('h', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.h), DATA_DIR: path.join(SCRATCH, 'data-h'), SITE_URL: `http://localhost:${P.h}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 90 batch checks, its own rate window
 start('i', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.i), DATA_DIR: path.join(SCRATCH, 'data-i'), SITE_URL: `http://localhost:${P.i}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '25' }); // issue 90: hourly story ceiling lowered to 25 (test/ops tuning only)
 start('j', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.j), DATA_DIR: path.join(SCRATCH, 'data-j'), SITE_URL: `http://localhost:${P.j}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '10' }); // issue 90: ceiling below the batch size limit
-for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i, P.j]) await waitFor(`http://localhost:${port}/`);
+start('k', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.k), DATA_DIR: path.join(SCRATCH, 'data-k'), SITE_URL: `http://localhost:${P.k}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 98 newsletter issue checks, its own rate window
+for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i, P.j, P.k]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -933,6 +934,85 @@ try {
     x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(3, 1) });
     check('...then the next story is a retryable 429', x.status === 429 && !!x.headers.get('retry-after'));
     // Giving budget back for transient "unavailable" items is not exercised here: it needs a database failure mid-batch, which the end-to-end harness cannot induce.
+  }
+
+  // ================= newsletter issue (issue #98) =================
+  {
+    const K = `http://localhost:${P.k}`;
+    const KDB = path.join(SCRATCH, 'data-k', 'imconnected.db');
+    const qk = (sql, ...args) => { const db = new DatabaseSync(KDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    await fetch(K + '/admin/login');
+    const post = (json) => call(K, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json });
+    const read = (id) => call(K, 'GET', `/api/agent/stories/${id}`, { token: AGENT_TOKEN });
+    const mk = (n, over = {}) => ({ title: `Synthetic Issue Story ${n}`, body: 'Synthetic body for an archive story.', sourceUrl: `https://www.facebook.com/example-page/posts/98${n}`, ...over });
+    const issues = () => qk('SELECT number, date, title FROM newsletter_issues ORDER BY number');
+
+    await call(K, 'GET', '/stories.json'); // the first public request adopts the built archive
+    const storiesBefore = qk('SELECT COUNT(*) c FROM stories')[0].c;
+    let r = await call(K, 'GET', '/api/agent/sections', { token: AGENT_TOKEN });
+    check('GET /api/agent/sections advertises newsletterIssue and lists it for reopen', r.status === 200 && r.data.newsletterIssue?.field === 'newsletterIssue' && r.data.reopen.changesFields.includes('newsletterIssue'));
+
+    r = await post(mk(1, { newsletterIssue: { number: 12, date: '2026-09-14', title: 'September Roundup', position: 3 } }));
+    check('create with a new issue: 201 and the issue row exists', r.status === 201 && JSON.stringify(issues()) === JSON.stringify([{ number: 12, date: '2026-09-14', title: 'September Roundup' }]), `${r.status} ${r.text.slice(0, 160)}`);
+    const id1 = r.data.id;
+    let v = (await read(id1)).data;
+    check('...read-back returns newsletterIssue {number, date, title, position}', JSON.stringify(v.draft.newsletterIssue) === JSON.stringify({ number: 12, date: '2026-09-14', title: 'September Roundup', position: 3 }), JSON.stringify(v).slice(0, 300));
+    check('...the draft row carries the issue and position', qk('SELECT newsletter_issue n, newsletter_position p FROM drafts WHERE id = ?', id1)[0].n === 12 && qk('SELECT newsletter_position p FROM drafts WHERE id = ?', id1)[0].p === 3);
+
+    r = await post(mk(2, { newsletterIssue: { number: 12, date: '2026-09-14', position: 4 } }));
+    check('a second story with the same number and date reuses the issue (no title needed)', r.status === 201 && issues().length === 1 && issues()[0].title === 'September Roundup', `${r.status} ${r.text.slice(0, 160)}`);
+    const id2 = r.data.id;
+
+    const draftsBefore = qk('SELECT COUNT(*) c FROM drafts')[0].c;
+    r = await post(mk(3, { newsletterIssue: { number: 12, date: '2026-09-15' } }));
+    check('a different date for a known issue: 400 newsletter_issue_conflict naming the stored date', r.status === 400 && r.data.error === 'newsletter_issue_conflict' && r.data.message.includes('2026-09-14'), `${r.status} ${r.text.slice(0, 200)}`);
+    check('...nothing was written (no draft, issue unchanged)', qk('SELECT COUNT(*) c FROM drafts')[0].c === draftsBefore && issues()[0].date === '2026-09-14');
+    r = await post(mk(3, { newsletterIssue: { number: 12, date: '2026-09-14', title: 'A Different Title' } }));
+    check('a different non-empty title: 400 newsletter_issue_conflict, nothing written', r.status === 400 && r.data.error === 'newsletter_issue_conflict' && qk('SELECT COUNT(*) c FROM drafts')[0].c === draftsBefore && issues()[0].title === 'September Roundup');
+    r = await post(mk(3, { newsletterIssue: { number: 13, date: '2026-09-21' }, body: 'Synthetic body.\n\n{{photo 3}}' }));
+    check('a refused story (bad photo marker) creates no issue', r.status === 400 && !issues().some((i) => i.number === 13), `${r.status} ${r.text.slice(0, 160)}`);
+
+    for (const [label, ni] of [
+      ['a string', 'Issue 12'], ['an array', []], ['number 0', { number: 0, date: '2026-09-14' }], ['number 10000', { number: 10000, date: '2026-09-14' }], ['a fractional number', { number: 1.5, date: '2026-09-14' }],
+      ['a missing date', { number: 14 }], ['a date that is not real', { number: 14, date: '2026-02-30' }], ['a future date', { number: 14, date: '2999-01-01' }],
+      ['position 0', { number: 14, date: '2026-09-14', position: 0 }], ['position 1000', { number: 14, date: '2026-09-14', position: 1000 }], ['an unknown key', { number: 14, date: '2026-09-14', extra: 1 }], ['a non-text title', { number: 14, date: '2026-09-14', title: 5 }],
+    ]) {
+      r = await post(mk(4, { newsletterIssue: ni }));
+      check(`malformed (${label}): 400 bad_newsletter_issue`, r.status === 400 && r.data.error === 'bad_newsletter_issue', `${r.status} ${r.text.slice(0, 160)}`);
+    }
+    check('...none of them wrote a draft or an issue', qk('SELECT COUNT(*) c FROM drafts')[0].c === draftsBefore && issues().length === 1);
+
+    // update of a new, untouched draft (same sourceUrl): omission keeps, an object changes position, null clears
+    r = await post(mk(1, { dek: 'A fresh summary.' }));
+    v = (await read(id1)).data;
+    check('an update that omits newsletterIssue keeps it', r.status === 201 && v.draft.newsletterIssue?.number === 12 && v.draft.newsletterIssue?.position === 3, `${r.status} ${r.text.slice(0, 160)}`);
+    r = await post(mk(1, { newsletterIssue: { number: 12, date: '2026-09-14', position: 7 } }));
+    v = (await read(id1)).data;
+    check('an update with the issue object moves the position', r.status === 201 && v.draft.newsletterIssue?.position === 7);
+    r = await post(mk(1, { newsletterIssue: null }));
+    v = (await read(id1)).data;
+    check('newsletterIssue: null clears the draft\'s issue and position (the issue row stays)', r.status === 201 && v.draft.newsletterIssue === null && qk('SELECT newsletter_issue n, newsletter_position p FROM drafts WHERE id = ?', id1)[0].n === null && qk('SELECT newsletter_position p FROM drafts WHERE id = ?', id1)[0].p === null && issues().length === 1);
+    r = await post(mk(1, { newsletterIssue: { number: 12, date: '2026-09-20' } }));
+    check('an update with a conflicting date: 400 and the draft is unchanged', r.status === 400 && r.data.error === 'newsletter_issue_conflict' && qk('SELECT newsletter_issue n FROM drafts WHERE id = ?', id1)[0].n === null);
+    r = await post(mk(1, { newsletterIssue: { number: 12, date: '2026-09-14', title: 'September Roundup', position: 3 } }));
+    check('a retry with the same number, date and title is fine', r.status === 201, r.text.slice(0, 160));
+
+    // batch items
+    r = await call(K, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: { requestId: 'issue98-batch-0001', stories: [
+      mk(5, { newsletterIssue: { number: 20, date: '2026-10-05', title: 'October Issue', position: 1 } }),
+      mk(6, { newsletterIssue: { number: 20, date: '2026-10-05', position: 2 } }),
+      mk(7, { newsletterIssue: { number: 20, date: '2026-10-06' } }),
+      mk(8, { newsletterIssue: { number: 0, date: '2026-10-05' } }),
+    ] } });
+    const res = r.data.results ?? [];
+    check('batch items accept newsletterIssue: the new issue is created once and reused', r.status === 200 && res[0]?.ok && res[1]?.ok && issues().some((i) => i.number === 20 && i.title === 'October Issue') && qk('SELECT COUNT(*) c FROM drafts WHERE newsletter_issue = 20')[0].c === 2, `${r.status} ${r.text.slice(0, 300)}`);
+    check('...a conflicting item is refused with newsletter_issue_conflict and the malformed one with bad_newsletter_issue, independently', res[2]?.error === 'newsletter_issue_conflict' && res[3]?.error === 'bad_newsletter_issue', JSON.stringify(res));
+    check('...the batch receipt does not hold the conflict text', !qk('SELECT results FROM agent_batches')[0].results.includes('2026-10-05'));
+
+    // privacy and publication
+    const body = (await read(id2)).text;
+    check('read-back carries no contacts', !/@e2e-mail|submitter/i.test(body));
+    check('the agent cannot publish: creating issues changed nothing public', qk('SELECT COUNT(*) c FROM stories')[0].c === storiesBefore && qk('SELECT COUNT(*) c FROM stories WHERE newsletter_issue IS NOT NULL')[0].c === 0 && !(await call(K, 'GET', '/stories.json')).text.includes('Synthetic Issue Story'));
   }
 
   // ================= rate limit =================

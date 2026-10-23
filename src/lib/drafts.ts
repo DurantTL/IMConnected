@@ -4,6 +4,7 @@ import { restoreMediaMarkers } from './revision-media';
 import { audit } from './auth/audit';
 import { parseAnnouncement, announcementJson, mergeAnnouncement, type Announcement } from './announcement';
 import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
+import { issueExists, normalizeRef, refFromRow, resolveIssueInput, type NewsletterRef } from './newsletter-issues';
 // Story drafts: the rows in `drafts` / `draft_photos` and the uploaded photo files under DATA_DIR/uploads/.
 // Submitter contact fields live here for signed-in editors to read. They are never logged or committed.
 import fs from 'node:fs';
@@ -35,6 +36,8 @@ export interface DraftFields {
   dek: string;
   section: string;
   additionalSections?: string[];
+  /** The newsletter issue this story first appeared in (issue #98). undefined = not sent (a save keeps the stored one); null = none. */
+  newsletterIssue?: NewsletterRef | null;
   area: string;
   column: string;
   author: string;
@@ -118,8 +121,8 @@ const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0));
 /** Shown as the publisher of a story that Studio published. */
 export const STUDIO_NAME = 'IMConnected Studio';
 
-const DRAFT_SELECT = `SELECT d.*, u.name AS updated_by_name, p.name AS published_by_name
-  FROM drafts d LEFT JOIN users u ON u.id = d.updated_by LEFT JOIN users p ON p.id = d.published_by`;
+const DRAFT_SELECT = `SELECT d.*, u.name AS updated_by_name, p.name AS published_by_name, ni.date AS issue_date, ni.title AS issue_title
+  FROM drafts d LEFT JOIN users u ON u.id = d.updated_by LEFT JOIN users p ON p.id = d.published_by LEFT JOIN newsletter_issues ni ON ni.number = d.newsletter_issue`;
 
 function toDraft(r: Row): Draft {
   return {
@@ -130,6 +133,7 @@ function toDraft(r: Row): Draft {
     dek: s(r.dek),
     section: s(r.section),
     additionalSections: parseAdditionalSections(r.additional_sections, s(r.section)),
+    newsletterIssue: refFromRow(r),
     area: s(r.area),
     column: s(r.story_column),
     author: s(r.author),
@@ -223,8 +227,14 @@ export function createDraft(opts: NewDraft): number {
     );
   const id = Number(r.lastInsertRowid);
   getDb().prepare('UPDATE drafts SET announcement = ?, additional_sections = ? WHERE id = ?').run(bulletin, JSON.stringify(normalizeAdditionalSections(f.additionalSections, f.section)), id);
+  if (f.newsletterIssue) writeDraftIssue(id, f.newsletterIssue);
   if (blocks !== undefined) getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(blocks), blocks.length ? storyBlocksToMarkdown(blocks) : f.body, id);
   return id;
+}
+
+/** Sets (or, with null, clears) a draft's newsletter issue and position. The issue row must already exist. */
+export function writeDraftIssue(id: number, ref: NewsletterRef | null): void {
+  getDb().prepare('UPDATE drafts SET newsletter_issue = ?, newsletter_position = ? WHERE id = ?').run(ref?.number ?? null, ref ? ref.position ?? null : null, id);
 }
 
 export function getDraft(id: number): Draft | null {
@@ -360,6 +370,7 @@ function saveDraftInTransaction(id: number, expected: number, f: DraftFields, ph
     const ownedPhotos = listPhotos(id);
     if (storyBlockPhotos(blocks).some((b) => b.photoId !== undefined && !ownedPhotos.some((p) => p.id === b.photoId))) return fail('invalid', 'photo_gone');
     const body = blocks.length ? storyBlocksToMarkdown(blocks) : f.body;
+    if (f.newsletterIssue && !issueExists(f.newsletterIssue.number)) return fail('invalid', 'bad_issue');
     const v = takeVersion(id, expected, userId, "status = 'in_review'");
     if (v === null) return CONFLICT;
     const before = editorialSnapshot(id, cur);
@@ -371,6 +382,7 @@ function saveDraftInTransaction(id: number, expected: number, f: DraftFields, ph
     const focus = getDb().prepare('UPDATE draft_photos SET focal_x = COALESCE(?, focal_x), focal_y = COALESCE(?, focal_y), zoom = COALESCE(?, zoom), fit = COALESCE(?, fit), fit_fill = COALESCE(?, fit_fill) WHERE id = ? AND draft_id = ?');
     for (const [pid, f] of photoFocus) focus.run(f.focalX ?? null, f.focalY ?? null, f.zoom ?? null, f.fit ?? null, f.fitFill ?? null, pid, id);
     getDb().prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(f.additionalSections === undefined ? cur.additionalSections : f.additionalSections, f.section)), id);
+    if (f.newsletterIssue !== undefined) writeDraftIssue(id, f.newsletterIssue);
     const after = editorialSnapshot(id, getDraft(id)!);
     if (forceRevision || JSON.stringify(before) !== JSON.stringify(after)) recordDraftRevision(id, userId, before);
     return { ok: true, updatedAt: v } as SaveResult;
@@ -398,7 +410,9 @@ export function restoreDraftRevision(id: number, expected: number, revisionId: n
       return { ...p, photoId: match.id };
     });
     const markers = snapshot.fields.storyBlocks?.length ? { body: snapshot.fields.body, missing: false } : restoreMediaMarkers(snapshot.fields.body, snapshot.photos.map((p) => p.key), ordered.map((p) => p.key));
-    const fields = { ...snapshot.fields, body: markers.body, storyBlocks: blocks };
+    // An older revision has no issue (null); an issue deleted since is dropped rather than failing the restore.
+    const snapshotIssue = normalizeRef(snapshot.fields.newsletterIssue);
+    const fields = { ...snapshot.fields, body: markers.body, storyBlocks: blocks, newsletterIssue: snapshotIssue && issueExists(snapshotIssue.number) ? snapshotIssue : null };
     const alts = new Map<number, string>(), focus = new Map<number, PhotoCrop>();
     for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) { alts.set(match.id, p.alt); focus.set(match.id, { focalX: p.focalX, focalY: p.focalY, zoom: p.zoom, fit: p.fit ?? 'cover', fitFill: p.fitFill ?? 'blur' }); } } // a pre-027 revision restores the default fit
     const saved = saveDraftInTransaction(id, expected, fields, alts, userId, fields.photoLayout, focus, true);
@@ -638,6 +652,7 @@ export function resetDraftFromStory(id: number, userId: number | null, f: DraftF
       )
       .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
     getDb().prepare('UPDATE drafts SET announcement = ?, additional_sections = ? WHERE id = ?').run(announcementJson(f.announcement), JSON.stringify(normalizeAdditionalSections(f.additionalSections, f.section)), id);
+    writeDraftIssue(id, f.newsletterIssue ?? null);
     const old = replacePhotos(id, photos);
     remapStoryBlocks(id, f.storyBlocks);
     return old;
@@ -816,6 +831,14 @@ export function mergeAgentAnnouncement(current: Announcement | null, patch: Reco
   try { return mergeAnnouncement(current, patch); } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
 }
 
+/** The agent's newsletterIssue against the stored issues (creates an unknown one). Call inside the draft's write transaction; a conflict is a typed 400 and rolls everything back. */
+export function resolveAgentIssue(input: { number: number; date: string; title: string; position: number | null } | null): NewsletterRef | null {
+  if (input === null) return null;
+  const r = resolveIssueInput(input);
+  if (!r.ok) throw new AgentError(r.code, r.message);
+  return r.ref;
+}
+
 export interface AgentDraftInput {
   announcement?: Announcement | null;
   /** A partial announcement merged into the stored one (create: must carry `kind`). */
@@ -830,6 +853,8 @@ export interface AgentDraftInput {
   body: string;
   section: string;
   additionalSections?: string[];
+  /** undefined = not sent (keeps the stored one); null = clear; an object is resolved against the stored issues inside the write transaction. */
+  newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
   area: string;
   author: string;
   church: string;
@@ -921,6 +946,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
           .run(...args, now, id);
         if (Number(r.changes) !== 1) return refuse(db.prepare('SELECT id, status, updated_by, slug, published_commit, unpublished_at FROM drafts WHERE id = ?').get(id) as ExistingAgentRow);
         db.prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(input.additionalSections === undefined ? current.additionalSections : input.additionalSections, section)), id);
+        if (input.newsletterIssue !== undefined) writeDraftIssue(id, resolveAgentIssue(input.newsletterIssue));
         if (input.photos) {
           oldFiles = listPhotos(id).map((p) => p.path).filter((p): p is string => !!p);
           db.prepare('DELETE FROM draft_photos WHERE draft_id = ?').run(id);
@@ -939,6 +965,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
           sourceUrl: input.sourceUrl,
           agentNote: input.note || null,
         });
+        if (input.newsletterIssue) writeDraftIssue(id, resolveAgentIssue(input.newsletterIssue));
       }
       if (input.photos) {
         const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');

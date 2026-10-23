@@ -14,6 +14,8 @@ const stories = defineCollection({
     dek: z.string().optional(),
     section: z.enum(SECTION_KEYS),
     additionalSections: z.array(z.enum(SECTION_KEYS)).max(20).optional(),
+    /** Newsletter issue the story first appeared in (issue #98); the database holds the real value, the archive's adoption/import leave it alone. */
+    newsletterIssue: z.object({ number: z.number().int().min(1).max(9999), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), title: z.string().default(''), position: z.number().int().min(1).max(999).nullable().default(null) }).optional(),
     /** Sub-area within a section, e.g. news → churches */
     area: z.string().optional(),
     /** Column name, for section: columns */

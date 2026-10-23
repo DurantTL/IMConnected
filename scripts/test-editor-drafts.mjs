@@ -646,6 +646,108 @@ let S;
   check('the audit log holds no submitter email or phone', !all.includes(SUB.email) && !all.includes(SUB.phone) && !all.includes('taylor'));
 }
 
+// ================= newsletter issue (issue #98): editor setting, publish, reopen, provenance line, feeds, restore, admin page =================
+{
+  const mkAdmin = (email, name) => {
+    const now = Date.now();
+    const id = Number(run("INSERT INTO users (email, name, role, status, created_at, updated_at) VALUES (?, ?, 'admin', 'active', ?, ?)", email, name, now, now).lastInsertRowid);
+    const token = randomBytes(32).toString('base64url');
+    run('INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, mfa_passed) VALUES (?, ?, ?, ?, ?, 1)', createHash('sha256').update(token).digest('hex'), id, now, now, now + 3600_000);
+    return { id, name, token };
+  };
+  const ADM = mkAdmin('issues-admin@example.test', 'Issues Admin');
+  const adm = new Client(ADM);
+  const T = Date.now();
+  run("INSERT INTO newsletter_issues (number, date, title, created_at, updated_at) VALUES (31, '2026-09-14', 'Synthetic <b>September</b>', ?, ?)", T, T);
+  run("INSERT INTO newsletter_issues (number, date, title, created_at, updated_at) VALUES (32, '2026-09-21', '', ?, ?)", T, T);
+  run("INSERT INTO newsletter_issues (number, date, title, created_at, updated_at) VALUES (33, '2026-09-28', 'Unused Synthetic Issue', ?, ?)", T, T);
+  const issueFields = (n, pos = '') => ({ newsletterIssuePresent: 1, newsletterIssue: n, newsletterPosition: pos });
+  const D = idOf(await c1.form('/api/admin/drafts/new', {}));
+  let r = await c1.get(`/admin/drafts/${D}`);
+  check('the Settings tab offers a Newsletter issue select (existing issues, escaped) and a position box', r.text.includes('name="newsletterIssue"') && r.text.includes('name="newsletterPosition"') && r.text.includes('Issue #31') && r.text.includes('Synthetic &lt;b&gt;September&lt;/b&gt;') && !r.text.includes('Synthetic <b>September'));
+  r = await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story' }), ...issueFields(31, 2) });
+  check('saving stores the issue and position on the draft', r.data.ok && draftRow(D).newsletter_issue === 31 && draftRow(D).newsletter_position === 2, JSON.stringify(r.data));
+  r = await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story' }), ...issueFields(999, 1) });
+  check('an issue that does not exist is refused and the draft keeps its issue', !r.data.ok && draftRow(D).newsletter_issue === 31, JSON.stringify(r.data));
+  for (const [label, f] of [['position 0', issueFields(31, 0)], ['position 1000', issueFields(31, 1000)], ['position text', issueFields(31, 'two')], ['issue text', issueFields('abc', 1)]]) {
+    r = await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story' }), ...f });
+    check(`a malformed setting is refused (${label}) and nothing changes`, !r.data.ok && draftRow(D).newsletter_issue === 31 && draftRow(D).newsletter_position === 2, JSON.stringify(r.data));
+  }
+  r = await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story', dek: 'An older page without the picker.' }) });
+  check('a form without the picker keeps the stored issue (older pages)', r.data.ok && draftRow(D).newsletter_issue === 31 && draftRow(D).newsletter_position === 2);
+  r = await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story' }), ...issueFields(32, '') });
+  check('choosing another issue with no position stores a null position', r.data.ok && draftRow(D).newsletter_issue === 32 && draftRow(D).newsletter_position === null);
+  const revPayloads = q('SELECT id, payload FROM draft_revisions WHERE draft_id = ? ORDER BY id', D);
+  check('draft revisions record the issue (number and position only, never its date or title)', revPayloads.some((x) => JSON.parse(x.payload).fields.newsletterIssue?.number === 31) && !revPayloads.some((x) => /September|2026-09-14/.test(x.payload)));
+  const rev31 = revPayloads.filter((x) => JSON.parse(x.payload).fields.newsletterIssue?.number === 31).at(-1);
+  r = await c1.json(`/api/admin/drafts/${D}/revisions`, { version: version(D), revisionId: rev31?.id });
+  check('restoring an earlier revision brings back its issue and position', r.status === 200 && draftRow(D).newsletter_issue === 31 && draftRow(D).newsletter_position === 2, `${r.status} ${r.text.slice(0, 120)}`);
+  // a revision from before the field existed restores to no issue
+  run("UPDATE draft_revisions SET payload = json_remove(payload, '$.fields.newsletterIssue') WHERE id = ?", rev31.id);
+  r = await c1.json(`/api/admin/drafts/${D}/revisions`, { version: version(D), revisionId: rev31.id });
+  check('a revision from before the field existed restores to no issue', r.status === 200 && draftRow(D).newsletter_issue === null && draftRow(D).newsletter_position === null, `${r.status} ${r.text.slice(0, 120)}`);
+  r = await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story' }), ...issueFields(31, 2) });
+
+  // publish
+  const plainId = idOf(await c1.form('/api/admin/drafts/new', {}));
+  await c1.json(`/api/admin/drafts/${plainId}/save`, { version: version(plainId), ...baseFields({ title: 'Story Without An Issue' }) });
+  await c1.form(`/api/admin/drafts/${plainId}/publish`, { version: version(plainId) });
+  r = await c1.form(`/api/admin/drafts/${D}/publish`, { version: version(D) });
+  const slug = draftRow(D).slug;
+  check('publishing carries the issue and position to the story row', r.params.get('n') === 'published' && story(slug).newsletter_issue === 31 && story(slug).newsletter_position === 2, r.loc);
+  const page = (await getPub(`/stories/${slug}/`)).text;
+  check('the story page shows "Originally published in IMConnected Issue #31 · September 14, 2026" under the byline', /Originally published in IMConnected Issue #31 · <time datetime="2026-09-14">September 14, 2026<\/time>/.test(page) && page.indexOf('class="byline"') < page.indexOf('Originally published'), page.slice(Math.max(0, page.indexOf('Originally') - 40), page.indexOf('Originally') + 200));
+  check('...the issue title (hostile text) is never rendered as HTML on the public page', !page.includes('<b>September</b>'));
+  check('a story without an issue shows no provenance line', !(await getPub(`/stories/${draftRow(plainId).slug}/`)).text.includes('Originally published in IMConnected'));
+  const feed = JSON.parse((await getPub('/stories.json')).text);
+  const fi = feed.stories.find((x) => x.id === slug), fp = feed.stories.find((x) => x.id === draftRow(plainId).slug);
+  check('/stories.json carries newsletterIssue {number, date, title, position} (version unchanged) and omits it otherwise', JSON.stringify(fi?.newsletterIssue) === JSON.stringify({ number: 31, date: '2026-09-14', title: 'Synthetic <b>September</b>', position: 2 }) && !!fp && !('newsletterIssue' in fp) && feed.version === 1, JSON.stringify(fi?.newsletterIssue));
+  if (PUBLISH_TOKEN) {
+    const studio = await (await fetch(BASE + '/api/stories?limit=100', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } })).json();
+    check('Studio GET /api/stories carries it too', studio.stories.find((x) => x.id === slug)?.newsletterIssue?.number === 31);
+  }
+
+  // edit the live story: the issue stays through reopen and a second publish
+  r = await c1.form('/api/admin/stories/edit', { slug });
+  check('editing the live story loads its issue and position into the draft', idOf(r) === D && draftRow(D).newsletter_issue === 31 && draftRow(D).newsletter_position === 2, r.loc);
+  await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story', dek: 'Updated summary.' }) });
+  await c1.form(`/api/admin/drafts/${D}/publish`, { version: version(D) });
+  check('...and it survives publishing the change', story(slug).newsletter_issue === 31 && story(slug).newsletter_position === 2 && story(slug).dek === 'Updated summary.');
+  await c1.form('/api/admin/stories/edit', { slug });
+  await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story' }), ...issueFields('', '') });
+  await c1.form(`/api/admin/drafts/${D}/publish`, { version: version(D) });
+  check('clearing the setting and republishing clears it on the story; the page loses the line', story(slug).newsletter_issue === null && story(slug).newsletter_position === null && !(await getPub(`/stories/${slug}/`)).text.includes('Originally published in IMConnected'));
+  await c1.form('/api/admin/stories/edit', { slug });
+  await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story' }), ...issueFields(31, 2) });
+  await c1.form(`/api/admin/drafts/${D}/publish`, { version: version(D) });
+
+  // admin page
+  check('editors cannot open /admin/issues', (await c1.get('/admin/issues')).status === 403);
+  r = await adm.get('/admin/issues');
+  check('administrators see the issues with story counts, the hostile title escaped', r.status === 200 && r.text.includes('Issue #31') && r.text.includes('1 story, 1 draft') && /value="Synthetic [^"]*September/.test(r.text) && !/<b>September/.test(r.text.replace(/value="[^"]*"/g, '')), r.text.slice(r.text.indexOf('<ul class="issue-list'), r.text.indexOf('<ul class="issue-list') + 700));
+  check('...the admin navigation links to it for administrators only', r.text.includes('href="/admin/issues"') && !(await c1.get('/admin')).text.includes('href="/admin/issues"'));
+  check('...and no contact details are on the page', !/@example\.test|555-0142/.test(r.text.replace(/issues-admin@example\.test/g, '')));
+  const ver = (n) => q('SELECT updated_at u FROM newsletter_issues WHERE number = ?', n)[0].u;
+  r = await adm.form('/admin/issues', { number: 31, version: ver(31), action: 'save', date: '2026-09-15', title: 'Corrected Synthetic Title' });
+  const i31 = q('SELECT * FROM newsletter_issues WHERE number = 31')[0];
+  check('an admin edit changes date and title and is audited (issue.update)', r.status === 200 && i31.date === '2026-09-15' && i31.title === 'Corrected Synthetic Title' && q("SELECT COUNT(*) n FROM audit_log WHERE action = 'issue.update' AND target = 'issue:31' AND user_id = ?", ADM.id)[0].n === 1, `${r.status} ${r.text.slice(0, 100)}`);
+  check('...the story page shows the corrected date at once', (await getPub(`/stories/${slug}/`)).text.includes('September 15, 2026'));
+  const stale = await adm.form('/admin/issues', { number: 31, version: T, action: 'save', date: '2026-09-16', title: 'x' });
+  check('a stale version is refused (409) and changes nothing', stale.status === 409 && q('SELECT date FROM newsletter_issues WHERE number = 31')[0].date === '2026-09-15');
+  r = await adm.form('/admin/issues', { number: 31, version: ver(31), action: 'save', date: '2999-01-01', title: 'x' });
+  check('a future date is refused', r.status === 400 && q('SELECT date FROM newsletter_issues WHERE number = 31')[0].date === '2026-09-15');
+  r = await adm.form('/admin/issues', { number: 31, version: ver(31), action: 'delete' });
+  check('deleting an issue that a story uses is refused (409), unaudited and kept', r.status === 409 && q('SELECT COUNT(*) n FROM newsletter_issues WHERE number = 31')[0].n === 1 && q("SELECT COUNT(*) n FROM audit_log WHERE action = 'issue.delete'")[0].n === 0);
+  const E = idOf(await c1.form('/api/admin/drafts/new', {}));
+  await c1.json(`/api/admin/drafts/${E}/save`, { version: version(E), ...baseFields({ title: 'Draft In Issue Thirty Two' }), ...issueFields(32, 1) });
+  r = await adm.form('/admin/issues', { number: 32, version: ver(32), action: 'delete' });
+  check('deleting an issue that only a draft uses is refused too', r.status === 409 && q('SELECT COUNT(*) n FROM newsletter_issues WHERE number = 32')[0].n === 1);
+  r = await c1.form('/admin/issues', { number: 33, version: ver(33), action: 'delete' });
+  check('an editor cannot post to /admin/issues (403, nothing deleted)', r.status === 403 && q('SELECT COUNT(*) n FROM newsletter_issues WHERE number = 33')[0].n === 1);
+  r = await adm.form('/admin/issues', { number: 33, version: ver(33), action: 'delete' });
+  check('an unreferenced issue can be deleted, audited (issue.delete)', r.status === 200 && q('SELECT COUNT(*) n FROM newsletter_issues WHERE number = 33')[0].n === 0 && q("SELECT COUNT(*) n FROM audit_log WHERE action = 'issue.delete' AND target = 'issue:33'")[0].n === 1);
+}
+
 // ================= logs and the built site =================
 {
   if (SERVER_LOG) {

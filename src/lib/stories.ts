@@ -25,6 +25,8 @@ export interface PublicStory {
     dek?: string;
     section: string;
     additionalSections?: string[];
+    /** The newsletter issue this story first appeared in (date = the day it was sent). */
+    newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
     area?: string;
     column?: string;
     author: string;

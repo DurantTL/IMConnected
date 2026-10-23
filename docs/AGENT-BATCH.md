@@ -18,6 +18,7 @@ machine-to-machine API as `POST /api/agent/stories`: bearer `AGENT_API_TOKEN`, n
       "section": "youth",
       "area": "pathfinders",
       "church": "Example Hills Church",
+      "newsletterIssue": { "number": 12, "date": "2026-09-14", "position": 3 },
       "sourceUrl": "https://www.facebook.com/example-page/posts/1001",
       "requestId": "post-1001-v1"
     },
@@ -74,6 +75,7 @@ The batch `requestId` is stored only as a SHA-256, with a hash of the batch cont
 
 - Retry the **identical body** with the **same** `requestId` after a timeout: you get `200` with `"replayed": true` and the original per-item results (statuses as first answered). Nothing is written, no email is sent, no audit entry is added.
 - The same `requestId` with a different body is `409 request_id_reused`. Use a new id for a new batch.
+- **`newsletterIssue`** works on every item exactly as on `POST /api/agent/stories` (see the README): the first item that names a new issue number creates the issue, later items reuse it, and an item whose date or non-empty title disagrees with the stored issue fails alone with `newsletter_issue_conflict` (the stored date is named in the live response; the receipt keeps only the generic text). A malformed value fails that item with `bad_newsletter_issue`.
 - The receipt is written after all items have committed. If the server crashes mid-batch, there is no receipt and the retry re-processes the items. That is safe because each item is idempotent: set a **`sourceUrl`** (a second send updates the same untouched draft) and, better, a per-item **`requestId`** (an identical item is answered `replayed`). Agents should set both on every item.
 - A batch where an item failed with a temporary `unavailable` stores **no receipt**, so a retry re-processes **every** item, not just the failed ones. Items with neither a `sourceUrl` nor a per-item `requestId` may therefore be **created twice**. Set at least one of them on every item. Stories that failed with `unavailable` give their share of the hourly story budget back.
 - Receipts hold no story-derived text: a refusal keeps its `reason` and draft `id`, and a replay shows the fixed per-reason text (for `published`, without the slug); other failures show a generic message with the original `error` code.
