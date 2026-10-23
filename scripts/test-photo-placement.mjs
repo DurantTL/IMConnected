@@ -93,10 +93,11 @@ try {
   await startServer();
   const res = await call('POST', '/api/publish', { headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` }, json: { newsletter: { name: 'E2E Issue', issueDate: '2099-01-02' }, stories: [
     { ref: 'inline', title: 'Zz placement inline', section: 'news', area: 'churches', author: 'Test Author', body: bodyText, photos: [photo(0, 'Alt one'), photo(1, 'Alt two'), photo(2, 'Alt three')] },
+    { ref: 'plain', title: 'Zz placement none', section: 'news', area: 'churches', author: 'Test Author', body: 'Intro paragraph of the story.\n\n- Synthetic item one\n- Synthetic item two\n\nParagraph after the list.\n\n{{photo 1}}\n\nClosing paragraph.', photos: [photo(0, 'Plain one')] },
     { ref: 'mods', title: 'Zz placement modules', section: 'news', area: 'churches', author: 'Test Author', body: 'Synthetic body.', photos: [photo(0, 'Mod one'), photo(1, 'Mod two'), photo(2, 'Mod three')] },
   ] } });
-  check('Studio publish accepts the stories', res.status === 200 && res.data.stories?.length === 2, res.text.slice(0, 300));
-  const inlineSlug = slugOf(res, 'inline'), modsSlug = slugOf(res, 'mods');
+  check('Studio publish accepts the stories', res.status === 200 && res.data.stories?.length === 3, res.text.slice(0, 300));
+  const plainSlug = slugOf(res, 'plain'), inlineSlug = slugOf(res, 'inline'), modsSlug = slugOf(res, 'mods');
   const page = async (slug) => (await call('GET', `/stories/${slug}/`)).text;
   const html = await page(inlineSlug);
   for (const o of OPTS) check(`inline {{photo N ${o}}} renders data-placement="${o}" on a figure whose link goes to the full image`, new RegExp(`<figure class="story-inline-photo" data-placement="${o}"><a href="/media/stories/[^"]+" data-photo`).test(html));
@@ -130,7 +131,7 @@ try {
     const targets = [{ name: 'inline', slug: inlineSlug, sel: 'figure.story-inline-photo' }, { name: 'modules', slug: modsSlug, sel: '.prose > figure.story-module-image' }];
     const measure = (p, sel) => p.evaluate((s) => {
       const prose = document.querySelector('.prose').getBoundingClientRect();
-      return { prose: prose.width, vw: document.documentElement.clientWidth, figs: [...document.querySelectorAll(s)].map((f) => { const r = f.getBoundingClientRect(); const cs = getComputedStyle(f); return { placement: f.dataset.placement ?? 'plain', width: r.width, left: r.left, right: r.right, float: cs.float, next: (() => { let n = f.nextElementSibling; while (n && !n.matches('p, .story-module-text')) n = n.nextElementSibling; if (!n) return 0; const range = document.createRange(); range.selectNodeContents(n); const lines = [...range.getClientRects()].filter((l) => l.width > 0); return lines.length ? Math.min(...lines.slice(0, 3).map((l) => l.width)) : 0; })() }; }) };
+      return { prose: prose.width, vw: document.documentElement.clientWidth, figs: [...document.querySelectorAll(s)].map((f) => { const r = f.getBoundingClientRect(); const cs = getComputedStyle(f); return { placement: f.dataset.placement ?? 'plain', width: r.width, left: r.left, right: r.right, float: cs.float, next: (() => { let n = f.nextElementSibling; while (n && !(n.matches('p, .story-module-text') && n.textContent.length > 300)) n = n.nextElementSibling; if (!n) return 0; const range = document.createRange(); range.selectNodeContents(n); const lines = [...range.getClientRects()].filter((l) => l.width > 0); return lines.length ? Math.min(...lines.slice(0, 3).map((l) => l.width)) : 0; })() }; }) };
     }, sel);
     const near = (a, b, tol = 3) => Math.abs(a - b) <= tol;
     const overflow = [];
@@ -170,6 +171,15 @@ try {
     await p.goto(`${BASE}/stories/${inlineSlug}/`, { waitUntil: 'load' });
     const order = await p.evaluate(() => [...document.querySelector('.prose').children].map((k) => k.matches('figure') ? 'F' + (k.dataset.placement ?? '') : k.tagName));
     check('floated photos keep their place in the reading order (DOM order unchanged)', order.indexOf('Fleft') > order.indexOf('Ffull') && order.indexOf('Fright') > order.indexOf('Fleft') && order[order.indexOf('Fleft') - 1] === 'P', order.join(','));
+    {
+      // a story with no left/right photo keeps the pre-#86 list spacing (the float containment is scoped to stories that have a float)
+      const gaps = (page) => page.evaluate(() => { const ul = document.querySelector('.prose ul'); const before = ul.previousElementSibling.getBoundingClientRect(), after = ul.nextElementSibling.getBoundingClientRect(), r = ul.getBoundingClientRect(); const fs = parseFloat(getComputedStyle(ul).fontSize); return { display: getComputedStyle(ul).display, above: r.top - before.bottom, below: after.top - r.bottom, em115: 1.15 * fs }; });
+      const p4 = await ctx.newPage();
+      await p4.goto(`${BASE}/stories/${plainSlug}/`, { waitUntil: 'load' });
+      const g = await gaps(p4);
+      check('a story without a left or right photo keeps the normal list spacing (display block, 1.15em above and below)', g.display === 'block' && Math.abs(g.above - g.em115) <= 1 && Math.abs(g.below - g.em115) <= 1, JSON.stringify(g));
+      await p4.close();
+    }
     const besideCheck = () => p.evaluate(() => { const f = document.querySelector('figure[data-placement=left]').getBoundingClientRect(); return ['ul', 'blockquote'].flatMap((tag) => { const el = [...document.querySelectorAll('.prose ' + tag)].find((e) => e.textContent.includes('Synthetic')); if (!el) return []; const r = el.getBoundingClientRect(); return [{ tag, overlapsRows: r.top < f.bottom, left: r.left, floatRight: f.right }]; }); });
     const besideInline = await besideCheck();
     check('inline: a list beside a left float starts after the photo, not under it', besideInline.length === 1 && besideInline.every((b) => b.overlapsRows && b.left >= b.floatRight - 1), JSON.stringify(besideInline));

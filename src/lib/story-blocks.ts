@@ -243,8 +243,8 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
       total += b.items.join('').length;
     }
     if (r.placement !== undefined && r.placement !== null && r.placement !== '') {
-      if (depth > 0) return error('Size and alignment is not available for photos inside a section. Place the photo outside the section.');
       if (b.type !== 'image' || !['wide', 'full', 'left', 'right'].includes(r.placement as string)) return error('Choose column width, wide, full width, left or right for an image.');
+      if (depth > 0) return error('Size and alignment is not available for photos inside a section. Place the photo outside the section.');
       b.placement = r.placement as StoryBlock['placement'];
     }
     if (['image', 'flyer'].includes(b.type)) { Object.assign(b, normalizePhoto(r)); total += b.alt?.length ?? 0; }

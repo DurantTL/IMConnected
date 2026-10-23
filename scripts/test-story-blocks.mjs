@@ -14,7 +14,7 @@ let count = 0;
 const check = (name, fn) => { fn(); count++; console.log(`PASS ${name}`); };
 try {
   const require = createRequire(import.meta.url);
-  await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts', media: 'src/lib/story-media-render.ts', excerpt: 'src/lib/excerpt.ts', search: 'src/lib/search.ts', index: 'src/lib/search-index.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri') return { id: require.resolve(id), external: true }; } }] });
+  await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts', media: 'src/lib/story-media-render.ts', excerpt: 'src/lib/excerpt.ts', search: 'src/lib/search.ts', index: 'src/lib/search-index.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri' || id === 'satteri') return { id: require.resolve(id), external: true }; } }] });
   const { walkStoryBlocks, countStoryBlocks, normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, parseStoryVideo, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
   const { renderStoryBlocksSafe } = await import(pathToFileURL(path.join(scratch, 'render.js')));
   const { renderMediaMarkdown } = await import(pathToFileURL(path.join(scratch, 'media.js')));
@@ -63,9 +63,23 @@ try {
   check('placement is refused for images inside a section, and allowed outside (issue #86)', () => {
     const image = { id: 'n1', type: 'image', url: '/media/stories/synthetic/a.png', placement: 'wide' };
     assert.throws(() => normalizeStoryBlocks([{ id: 's1', type: 'section', content: [[image]] }]), /not available for photos inside a section/);
+    assert.throws(() => normalizeStoryBlocks([{ id: 's1', type: 'section', content: [[{ id: 'n2', type: 'text', text: 'Hi', placement: 'left' }]] }]), /column width, wide, full width, left or right/);
     assert.equal(normalizeStoryBlocks([{ id: 's1', type: 'section', content: [[{ ...image, placement: undefined }]] }])[0].content[0][0].placement, undefined);
     assert.equal(normalizeStoryBlocks([{ ...image, id: 'top' }])[0].placement, 'wide');
   });
+  {
+    const escapedAlone = await renderMediaMarkdown('\\{{photo 1}}', mediaPhotos);
+    check('an escaped marker alone renders literally', () => { assert.equal(escapedAlone.used.size, 0); assert.doesNotMatch(escapedAlone.html, /story-inline-photo/); assert.ok(escapedAlone.html.includes('{{photo 1}}')); assert.doesNotMatch(escapedAlone.html, /\uE000/); });
+    for (const escaped of ['\\{{photo 2 left}}', '\\{\\{photo 2}}', '\\{{photo 2}}']) {
+      const mixed = await renderMediaMarkdown(`Before.\n{{photo 1}}\n${escaped}\nAfter.`, mediaPhotos);
+      check(`${escaped} next to a real marker stays literal; only the real marker uses a photo`, () => {
+        assert.deepEqual([...mixed.used], [0]); assert.equal((mixed.html.match(/class="story-inline-photo/g) ?? []).length, 1); assert.doesNotMatch(mixed.html, /data-placement/);
+        assert.ok(mixed.html.includes(escaped.replace(/\\/g, '').replace('{{photo', '{{photo'))); assert.doesNotMatch(mixed.html, /\uE000/);
+      });
+    }
+    const sentinel = await renderMediaMarkdown('{{photo 1}}\n\uE000{{photo 2}}', mediaPhotos);
+    check('the private-use sentinel is stripped from the source first, so it can neither hide a marker nor leak into the output', () => { assert.deepEqual([...sentinel.used], [0, 1]); assert.doesNotMatch(sentinel.html, /\uE000/); });
+  }
   const isolated = await Promise.all([renderMediaMarkdown('{{photo 1}}', mediaPhotos), renderMediaMarkdown('{{photo 2}}', mediaPhotos)]);
   check('concurrent renderer requests do not share photo state', () => { assert.deepEqual([...isolated[0].used], [0]); assert.deepEqual([...isolated[1].used], [1]); });
   check('derived excerpts skip marker-only paragraphs and marker fragments', () => { assert.equal(storyExcerpt('{{photo 1}}\n\nSynthetic article text.'), 'Synthetic article text.'); assert.equal(storyExcerpt('Before {{photo 99}} after.'), 'Before after.'); });

@@ -200,8 +200,8 @@ export function assertPhotoMarkers(body: string, photoCount: number): void {
     if (fenceMatch) { fence = fenceMatch[1]; continue; }
     if (/^(?: {4,}|\t)/.test(raw)) continue;
     const line = raw.trim();
-    // The renderer drops the backslash of an escaped marker and still renders it, so it is checked like any other.
-    const n = photoMarkerIndex(line.startsWith('\\{{') ? line.slice(1) : line, Infinity);
+    // A backslash-escaped marker is a literal example (the renderer never turns it into a photo), so it is not counted.
+    const n = photoMarkerIndex(line, Infinity);
     if (n !== null && n >= photoCount) throw new AgentError('bad_photo_marker', `The marker "${line}" points to photo ${n + 1}, but the story will have ${photoCount} photo${photoCount === 1 ? '' : 's'}.`);
   }
 }

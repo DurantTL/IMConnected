@@ -761,7 +761,7 @@ try {
     r = await gpost({ sourceUrl: SRC, body: 'Example:\n\n```\n{{photo 9}}\n```\n\n    {{photo 8}}\n\n`{{photo 7}}`\n\n> {{photo 5}}\n\n- {{photo 4}}\n\nPlain text {{photo 9}} inline.' });
     check('update: markers in code fences, indented code, spans, quotes, lists or inline stay literal and are not validated', r.status === 201, r.text.slice(0, 200));
     r = await gpost({ sourceUrl: SRC, body: 'x\n\n\\{{photo 6}}' });
-    check('update: a backslash-escaped marker line is checked too (the renderer still renders it)', r.status === 400 && r.data.error === 'bad_photo_marker' && r.data.message.includes('{{photo 6}}'));
+    check('update: a backslash-escaped marker line is a literal example and is not validated (the renderer never renders it as a photo)', r.status === 201, r.text.slice(0, 200));
     r = await gpost({ sourceUrl: SRC, body: 'x\n\n~~~\n{{photo 9}}\n~~~\n\n{{photo 4}}' });
     check('update: a marker after a closed fence is validated again', r.status === 400 && r.data.error === 'bad_photo_marker' && r.data.message.includes('{{photo 4}}'));
     r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', body: 'Story.\n\n{{photo 3}}\n\nEnd.' }));
