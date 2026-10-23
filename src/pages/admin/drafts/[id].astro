@@ -134,7 +134,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
               <label class="full">Summary (dek) <span class="hint">one or two sentences, up to {LIMITS.dek} characters</span>
                 <input type="text" name="dek" value={draft.dek} maxlength={LIMITS.dek} autocomplete="off" />
               </label>
-              <fieldset class="full key-points"><legend>Key points <span class="hint">optional, up to 3 short lines of plain text (160 characters each); shown in a box above the story</span></legend>
+              <fieldset class="full ed-key-points"><legend>Key points <span class="hint">optional, up to 3 short lines of plain text (160 characters each); shown in a box above the story</span></legend>
                 <input type="hidden" name="keyPointsPresent" value="1" />
                 {[0, 1, 2].map((i) => <label>Key point {i + 1}<input type="text" name={`keyPoint${i}`} value={draft.keyPoints?.[i] ?? ''} maxlength="160" autocomplete="off" /></label>)}
               </fieldset>

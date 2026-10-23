@@ -83,10 +83,10 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       </header>
 
       {keyPoints.length > 0 && (
-        <aside class="key-points" aria-labelledby="key-points-title">
+        <section class="key-points" aria-labelledby="key-points-title">
           <h2 id="key-points-title">Key points</h2>
           <ul>{keyPoints.map((point) => <li>{point}</li>)}</ul>
-        </aside>
+        </section>
       )}
 
       {laid && <StoryPhotos layout={layout} plan={plan} photos={allPhotos} credit={d.photoCredit} />}

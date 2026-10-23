@@ -27,6 +27,7 @@ const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  ' + extra}`);
   if (!ok) fails++;
 };
+const KPJ = JSON.stringify(['Synthetic point one.', 'Synthetic point two.']);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const q = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
 const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).run(...args); } finally { db.close(); } };
@@ -275,12 +276,14 @@ try {
   }
   // --- area only: one item fails, the others do not ---
   {
+    run('UPDATE stories SET key_points = ?, rev = rev + 1 WHERE slug IN (?, ?)', KPJ, SE, SF); // issue #117: bulk edit must keep key points
     const before = { E: stable(SE), F: stable(SF), G: stable(SG) };
     const revs = { E: sRow(SE).rev, F: sRow(SF).rev, G: sRow(SG).rev };
     const r = await c1.form('/admin/bulk', { action: 'editstory', step: 'run', slug: [SE, SF, SG], tick_area: '1', e_area: 'camp' });
     const t = text(r.text);
     check('area-only: 2 of 3 updated, the Youth story fails with a plain reason naming its section', t.includes('2 of 3 updated') && t.includes('does not belong to this item') && t.includes('Youth & Pathfinders'), t.slice(0, 400));
     check('E got the new category (rev +1, edited_at set); F already matched and was not rewritten; G was not touched', sRow(SE).area === 'camp' && sRow(SE).rev === revs.E + 1 && sRow(SE).edited_at > 0 && sRow(SF).rev === revs.F && sRow(SG).rev === revs.G && sRow(SG).area === 'pathfinders');
+    check('key points on live stories survive a bulk edit (issue #117)', sRow(SE).key_points === KPJ && sRow(SF).key_points === KPJ);
     check('only the ticked field changed (every other column is identical)', stable(SE) === before.E && stable(SF) === before.F && stable(SG) === before.G);
     check('the already-matched item says so', t.includes('Already matched'));
   }
@@ -387,6 +390,7 @@ try {
     const X3 = await mk('Bulk Zulu Draft Three', { section: 'news', area: 'churches', date: '2026-09-03' });
     const X4 = await mk(HOT + ' Draft', { section: 'news', area: 'camp', date: '2026-09-04' });
     run("UPDATE drafts SET submitter_email = 'casey.sample@bulk-mail.test', submitter_phone = '555-0191', submitter_name = 'Casey Sample' WHERE id IN (?, ?, ?, ?)", X1, X2, X3, X4);
+    run('UPDATE drafts SET key_points = ? WHERE id IN (?, ?, ?, ?)', KPJ, X1, X2, X3, X4);
     const lst = await c1.get('/admin');
     const vs = versionsIn(lst.text);
     const ids = [X1, X2, X3, X4];
@@ -408,6 +412,7 @@ try {
     const t = text(r.text);
     check('draft edit: 3 of 4 updated; the draft changed after the list loaded fails with a version conflict', sv.status === 200 && t.includes('3 of 4 updated') && t.includes('Version conflict') && t.includes('nothing was changed'), t.slice(0, 300));
     check('the ticked fields changed on the three drafts and they are In review (the editor save rules)', [X1, X2, X4].every((id) => draftRow(id).section === 'youth' && draftRow(id).area === 'pathfinders' && draftRow(id).featured === 1 && draftRow(id).additional_sections === '["kids"]' && draftRow(id).status === 'in_review'), JSON.stringify([X1, X2, X4].map((id) => [draftRow(id).section, draftRow(id).area, draftRow(id).featured, draftRow(id).additional_sections, draftRow(id).status])));
+    check('key points on drafts survive a bulk edit (issue #117)', [X1, X2, X4].every((id) => draftRow(id).key_points === KPJ));
     check('everything else on the drafts (text, date, contact details) is byte-identical', keep(X1) === k[X1] && keep(X2) === k[X2] && keep(X4) === k[X4]);
     check('the conflicting draft is untouched', JSON.stringify(draftRow(X3)) === x3);
     check('(I1) the version-conflicted draft is not pre-selected and carries no version; other failures would stay', !new RegExp(`name="id" value="${X3}"`).test(r.text) && !new RegExp(`name="v_${X3}"`).test(r.text) && t.includes('This draft changed since you loaded the list') && r.text.includes(`/admin/drafts/${X3}`));
