@@ -85,7 +85,7 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
         </div>
         <div class="row-2" id="event-fields" data-types="event">
           <div class="field">
-            <label for="eventDate">Event date (events only) <span data-event-star hidden>*</span></label>
+            <label for="eventDate">Event date (required for events)</label>
             <input id="eventDate" name="eventDate" type="date" />
           </div>
           <div class="field">
@@ -178,7 +178,12 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
   };
   const bodyEl = document.getElementById('body');
   const eventDate = document.getElementById('eventDate');
-  let currentType = 'story';
+  let currentType = 'story', prevType = 'story', announced = false;
+  const typeStatus = document.createElement('p');
+  typeStatus.className = 'sr-only';
+  typeStatus.setAttribute('role', 'status');
+  typeStatus.setAttribute('aria-live', 'polite');
+  form.prepend(typeStatus);
   function syncType() {
     currentType = (form.querySelector('input[name="kind"]:checked') || {}).value || 'story';
     const copy = TYPE_COPY[currentType];
@@ -186,8 +191,15 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
     document.getElementById('body-hint').textContent = copy.hint;
     bodyEl.minLength = copy.min;
     eventDate.required = currentType === 'event';
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+    eventDate.min = day;
+    if (announced && currentType !== prevType) {
+      const had = prevType === 'event', has = currentType === 'event';
+      if (has !== had) typeStatus.textContent = has ? 'Event date and location fields added.' : 'Event date and location fields removed.';
+    }
+    prevType = currentType;
+    announced = true;
     for (const el of form.querySelectorAll('[data-types]')) el.hidden = !el.dataset.types.split(' ').includes(currentType);
-    for (const el of form.querySelectorAll('[data-event-star]')) el.hidden = currentType !== 'event';
     btn.textContent = copy.button;
   }
   for (const r of form.querySelectorAll('input[name="kind"]')) r.addEventListener('change', syncType);
@@ -282,8 +294,10 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
 
   // Optimize camera photos before upload; retain already-compressed WebP/AVIF originals.
   const MAX_EDGE = 2000;
-  async function shrink(file) {
+  async function shrink(file, flyer) {
     if (/^image\/(webp|avif)$/i.test(file.type) || /\.(webp|avif)$/i.test(file.name)) return file;
+    // A flyer (the first photo of an announcement or event) is kept exactly as sent when it is a PNG within the size limit.
+    if (flyer && (file.type === 'image/png' || /\.png$/i.test(file.name)) && file.size <= LIMITS.maxPhotoMB * 1024 * 1024) return file;
     try {
       const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
       const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
@@ -291,7 +305,9 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(bmp.width * scale);
       canvas.height = Math.round(bmp.height * scale);
-      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      const ctx2d = canvas.getContext('2d');
+      if (currentType !== 'story') { ctx2d.fillStyle = '#fff'; ctx2d.fillRect(0, 0, canvas.width, canvas.height); } // transparent flyers must not turn black in JPEG
+      ctx2d.drawImage(bmp, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
       if (!blob) return file;
       return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
@@ -314,7 +330,7 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
       const files = fd.getAll('photos').filter((f) => f instanceof File && f.size > 0);
       fd.delete('photos');
       if (files.length) btn.textContent = 'Preparing photos…';
-      for (const f of files) fd.append('photos', await shrink(f));
+      for (const [i, f] of files.entries()) fd.append('photos', await shrink(f, i === 0 && currentType !== 'story'));
       btn.textContent = 'Sending…';
       const res = await fetch(form.action, { method: 'POST', body: fd, headers: { Accept: 'application/json' } });
       const data = await res.json().catch(() => ({}));

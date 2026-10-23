@@ -38,6 +38,8 @@ function oneLine(fd: FormData, k: string, label: string): string {
 export class ValidationError extends Error {}
 
 const str = (fd: FormData, k: string, max: number) => String(fd.get(k) ?? '').trim().slice(0, max);
+/** Plain text on one line (control characters, C1 and U+2028/2029 become spaces, whitespace collapsed); no length cut. */
+const cleanLine = (v: unknown) => String(v ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim();
 
 export function parseSubmission(fd: FormData): Submission {
   const rawKind = str(fd, 'kind', 20) || 'story';
@@ -73,8 +75,8 @@ export function parseSubmission(fd: FormData): Submission {
   if (s.kind !== 'story') {
     // A typed announcement (src/lib/announcement.ts decides what is valid). Links and video stay editor-only, and the
     // event fields are ignored for a plain announcement, so a story or announcement can never carry them.
-    const eventDate = s.kind === 'event' ? str(fd, 'eventDate', 10) : '';
-    const location = s.kind === 'event' ? String(fd.get('location') ?? '').trim() : '';
+    const eventDate = s.kind === 'event' ? String(fd.get('eventDate') ?? '').trim() : '';
+    const location = s.kind === 'event' ? cleanLine(fd.get('location')) : '';
     if (s.kind === 'event') {
       if (!eventDate) throw new ValidationError('Please enter the date of your event.');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) throw new ValidationError('Please enter the event date as a real date, like 2026-11-14.');

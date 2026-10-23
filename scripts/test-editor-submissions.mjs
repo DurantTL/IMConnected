@@ -517,7 +517,7 @@ try {
 
     r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event no date', body: SHORT }));
     check('event without a date: 400 and no draft', r.status === 400 && /date of your event/.test(r.data.error) && draftsByTitle('Event no date').length === 0, r.text.slice(0, 200));
-    for (const bad of ['next friday', '2026-13-45', '2026-02-30', '11/14/2026']) {
+    for (const bad of ['next friday', '2026-13-45', '2026-02-30', '11/14/2026', `${evDate}T00:00junk`]) {
       r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event bad date', body: SHORT, eventDate: bad }));
       check(`event with a malformed date "${bad}": 400 and no draft`, r.status === 400 && /real date/.test(r.data.error) && draftsByTitle('Event bad date').length === 0, r.text.slice(0, 200));
     }
@@ -525,6 +525,16 @@ try {
     check('event dated before today (America/Chicago): 400', r.status === 400 && /already passed/.test(r.data.error) && draftsByTitle('Event past').length === 0, r.text.slice(0, 200));
     r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event today', body: SHORT, eventDate: chicagoDay(0) }));
     check('event dated today (America/Chicago): accepted', r.status === 200 && draftsByTitle('Event today').length === 1, r.text.slice(0, 200));
+    r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event tab place', body: SHORT, eventDate: evDate, location: '  Fellowship\thall\u2028East\u0085 wing\n ' }));
+    check('a pasted tab, line separator or newline in the location becomes a single space (accepted)', r.status === 200 && JSON.parse(draftsByTitle('Event tab place')[0]?.announcement ?? 'null')?.location === 'Fellowship hall East wing', r.text.slice(0, 200));
+    const noJsFd = (over) => { const fd = new FormData(); for (const [k, v] of Object.entries(form(over))) fd.append(k, String(v)); return fd; };
+    const noJs = await fetch(BASE + '/api/submit', { method: 'POST', headers: { Origin: BASE }, body: noJsFd({ kind: 'event', title: 'Event nojs', body: SHORT, eventDate: evDate }), redirect: 'manual' });
+    check('no-JavaScript event submission redirects to /submit/thanks/?type=event', noJs.status === 303 && noJs.headers.get('location') === '/submit/thanks/?type=event', `${noJs.status} ${noJs.headers.get('location')}`);
+    const noJsStory = await fetch(BASE + '/api/submit', { method: 'POST', headers: { Origin: BASE }, body: noJsFd({ title: 'Story nojs' }), redirect: 'manual' });
+    check('no-JavaScript story still redirects to plain /submit/thanks/', noJsStory.status === 303 && noJsStory.headers.get('location') === '/submit/thanks/');
+    const noJsBad = await fetch(BASE + '/api/submit', { method: 'POST', headers: { Origin: BASE }, body: noJsFd({ kind: 'event', title: 'Event nojs bad', body: SHORT }) });
+    check('no-JavaScript error page has a neutral heading', noJsBad.status === 400 && (await noJsBad.text()).includes('We couldn’t send your submission'));
+    run("DELETE FROM drafts WHERE title IN ('Event tab place', 'Event nojs', 'Story nojs')");
     r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event long place', body: SHORT, eventDate: evDate, location: 'p'.repeat(201) }));
     check('event with a location over 200 characters: 400', r.status === 400 && draftsByTitle('Event long place').length === 0);
 
@@ -557,6 +567,7 @@ try {
 
   // ---- the form itself, in Chromium (skipped when Playwright is not installed) ----
   {
+    const chicagoDay = (offset = 0) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date(Date.now() + offset * 86400_000));
     let chromium = null;
     try {
       const pr = createRequire(process.env.PLAYWRIGHT_ROOT ? path.join(process.env.PLAYWRIGHT_ROOT, 'package.json') : import.meta.url);
@@ -585,6 +596,8 @@ try {
           check(`[${w}px] choosing Event shows date and location and makes the date required`, (await vis('#eventDate')) && (await vis('#location')) && await p.locator('#eventDate').evaluate((el) => el.required));
           const evHint = await hint();
           check(`[${w}px] the body hint and label change for an event (minimum 40, not 200)`, evHint !== storyHint && /40 characters/.test(evHint) && /Event details/.test(await p.locator('#body-label').innerText()) && (await p.locator('#body').evaluate((el) => el.minLength)) === 40);
+          check(`[${w}px] the date label says it is required for events, and min is today (America/Chicago)`, /required for events/.test(await p.locator('label[for="eventDate"]').innerText()) && (await p.locator('#eventDate').getAttribute('min')) === chicagoDay(0));
+          check(`[${w}px] switching to Event announces the added fields in a polite live region`, /added/.test(await p.locator('form > p.sr-only[role="status"]').innerText()) && (await p.locator('form > p.sr-only[role="status"]').getAttribute('aria-live')) === 'polite');
           check(`[${w}px] the button says "Send my event"`, (await p.locator('#submit-btn').innerText()) === 'Send my event');
           const overflow = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
           check(`[${w}px] no horizontal scroll with Event chosen`, overflow <= 0, String(overflow));
@@ -594,6 +607,7 @@ try {
             await p.screenshot({ path: path.join(shots, `form-event-${w}-full.png`), fullPage: true });
           }
           await p.locator('.type-choice label', { hasText: 'Announcement' }).click();
+          check(`[${w}px] ...and leaving Event announces them removed`, await (async () => { await p.locator('.type-choice label', { hasText: 'Announcement' }).click(); return /removed/.test(await p.locator('form > p.sr-only[role="status"]').innerText()); })());
           check(`[${w}px] choosing Announcement hides the date and location again`, !(await vis('#eventDate')) && !(await vis('#location')) && /Say what people need/.test(await hint()));
           await p.locator('.type-choice label', { hasText: 'Story' }).click();
           check(`[${w}px] back to Story restores the 200-character minimum`, (await p.locator('#body').evaluate((el) => el.minLength)) === 200 && (await hint()) === storyHint);
