@@ -118,4 +118,30 @@ await scenario('featured in a small issue', (seed, _s, db) => inIssue(seed, db, 
   check('a three-story issue: the module keeps the panel story rather than show fewer', mod.join() === 'j1,j2,j3', mod.join());
   check('the panel itself still shows it', panel(html).includes('/stories/j1/'));
 });
+await scenario('only the featured story', (seed, scratch) => {
+  const dir = path.join(scratch, 'media', 'stories', 'synthetic-panel'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'lead.png'), png(1200, 800, [8, 126, 139]));
+  seed('only', 40, { featured: 1, church: 'Synthetic Church One', image: '/media/stories/synthetic-panel/lead.png', imageAlt: 'Synthetic only' });
+}, (html) => {
+  const p = panel(html);
+  check('only story is featured: the panel shows it', p.includes('/stories/only/'));
+  check('the empty state and the empty "Stories worth sharing" block are not shown under the panel', !html.includes('No stories yet') && !html.includes('Stories worth sharing') && !html.includes('class="hero"'));
+  check('the statline still counts the story', statline(html) === '1 story from 1 church, school or club across Iowa and Missouri', String(statline(html)));
+  check('the panel link is named by its title', p.includes('aria-labelledby="featured-title"') && p.includes('id="featured-title"'));
+  check('alt text equal to the title becomes empty alt', /<img[^>]* alt(="")?[ >]/.test(p) && !p.includes('alt="Synthetic only"'));
+  check('with no events above, the panel photo loads eagerly at high priority', p.includes('loading="eager"') && p.includes('fetchpriority="high"'));
+});
+
+await scenario('church normalisation', (seed) => {
+  seed('c1', 1, { church: 'St. Mark’s Church' });
+  seed('c2', 2, { church: "  st. mark's   CHURCH " });
+  seed('c3', 3, { church: 'Des Moines Seventh-day Adventist Church' });
+  seed('c4', 4, { church: 'Des Moines SDA Church' });
+  seed('c5', 5, { church: 'Iowa-Missouri Conference' });
+  seed('c6', 6, { church: 'Conference Office' });
+  seed('c7', 7, { church: 'Synthetic Club' });
+}, (html) => {
+  check('curly/straight apostrophes, case and spacing fold together; SDA equals Seventh-day Adventist; conference-office values are not counted (7 stories, 3 places)', statline(html) === '7 stories from 3 churches, schools and clubs across Iowa and Missouri', String(statline(html)));
+});
+
 console.log(`\n${checks} home featured-panel checks passed.`);
