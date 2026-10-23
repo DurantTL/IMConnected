@@ -103,6 +103,9 @@ export interface AgentPhoto {
   focalX?: number;
   focalY?: number;
   zoom?: number;
+  /** Whole-photo fit (issue #82): 'cover' crops to fill the frame, 'contain' shows the whole image over fitFill. Undefined = the default (cover / blur). */
+  fit?: 'cover' | 'contain';
+  fitFill?: 'blur' | 'paper' | 'navy';
 }
 
 export interface AgentStory {
@@ -177,12 +180,20 @@ function parsePhoto(raw: unknown): AgentPhoto {
   const alt = oneLine(optional(p, 'alt')).slice(0, AGENT_LIMITS.alt);
   const caption = oneLine(optional(p, 'caption'));
   if (caption.length > AGENT_LIMITS.caption) throw new AgentError('photo_caption_too_long', `A photo caption is longer than ${AGENT_LIMITS.caption} characters.`);
-  const crop: { focalX?: number; focalY?: number; zoom?: number } = {};
+  const crop: { focalX?: number; focalY?: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' } = {};
   for (const [key, lo, hi] of [['focalX', 0, 100], ['focalY', 0, 100], ['zoom', 1, 3]] as const) {
     const v = p[key];
     if (v === undefined) continue;
     if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) throw new AgentError('bad_photo_crop', `Photo ${key} must be a number from ${lo} to ${hi}.`);
     crop[key] = key === 'zoom' ? Math.round(v * 100) / 100 : v;
+  }
+  if (p.fit !== undefined) {
+    if (p.fit !== 'cover' && p.fit !== 'contain') throw new AgentError('bad_photo_fit', 'Photo fit must be "cover" or "contain".');
+    crop.fit = p.fit;
+  }
+  if (p.fitFill !== undefined) {
+    if (p.fitFill !== 'blur' && p.fitFill !== 'paper' && p.fitFill !== 'navy') throw new AgentError('bad_photo_fit_fill', 'Photo fitFill must be "blur", "paper" or "navy".');
+    crop.fitFill = p.fitFill;
   }
   return { bytes: new Uint8Array(bytes), ext, alt, caption, ...crop };
 }

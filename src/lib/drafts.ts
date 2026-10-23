@@ -942,7 +942,7 @@ export interface AgentDraftInput {
   /** null = not sent: a new draft gets the default, an updated one keeps its layout. */
   photoLayout: PhotoLayout | null;
   /** null = leave an updated draft's photos alone. */
-  photos: { bytes: Uint8Array; ext: string; alt: string; caption?: string; focalX?: number; focalY?: number; zoom?: number }[] | null;
+  photos: { bytes: Uint8Array; ext: string; alt: string; caption?: string; focalX?: number; focalY?: number; zoom?: number; fit?: PhotoFit; fitFill?: PhotoFitFill }[] | null;
   /** Optional retry key (raw) and the canonical content it covers; only sha256 hashes are stored. */
   requestId?: string | null;
   payloadKey?: string;
@@ -1045,11 +1045,11 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         if (input.newsletterIssue) writeDraftIssue(id, resolveAgentIssue(input.newsletterIssue));
       }
       if (input.photos) {
-        const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, caption, position, created_at, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, caption, position, created_at, focal_x, focal_y, zoom, fit, fit_fill) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         input.photos.forEach((p, i) => {
           const rel = writeUpload(id, p.bytes, p.ext);
           written.push(rel);
-          ins.run(id, rel, p.ext, p.alt, p.caption ?? '', i, Date.now(), p.focalX ?? 50, p.focalY ?? 50, p.zoom ?? 1);
+          ins.run(id, rel, p.ext, p.alt, p.caption ?? '', i, Date.now(), p.focalX ?? 50, p.focalY ?? 50, p.zoom ?? 1, p.fit ?? 'cover', p.fitFill ?? 'blur');
         });
       }
       if (requestHash) db.prepare('INSERT INTO agent_requests (request_hash, payload_hash, draft_id, result, created_at) VALUES (?, ?, ?, ?, ?)').run(requestHash, payloadHash, id, status, Date.now());
