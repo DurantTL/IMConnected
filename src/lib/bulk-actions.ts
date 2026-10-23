@@ -32,12 +32,9 @@ export async function publishDraftItem(draftId: number, version: number, userId:
     } catch (err) {
       console.error('[drafts] published; cleanup afterwards failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     }
-    // After the commit: the one thank-you email to a confirmed form submitter. It never blocks or undoes the publish.
-    try {
-      await notifySubmitterOfPublication(draft.id, out.slug, out.title, { userId, ip });
-    } catch {
-      /* never fails a publish */
-    }
+    // After the commit, and only for the draft's first publish: the one thank-you email to a confirmed form submitter.
+    // Started without waiting, so the response never waits for the email service; it can never block or undo the publish.
+    if (out.firstPublish) void notifySubmitterOfPublication(draft.id, out.slug, out.title, { userId, ip }).catch(() => {});
     return { ok: true, slug: out.slug, title: out.title };
   } catch (err) {
     if (err instanceof EditorError) return { ok: false, code: err.code };
