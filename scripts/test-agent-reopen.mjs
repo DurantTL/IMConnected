@@ -48,6 +48,8 @@ try {
   seed('synthetic-escaped');
   for (const slug of ['synthetic-patch-loc', 'synthetic-patch-clear', 'synthetic-patch-links', 'synthetic-patch-remove']) seed(slug, { kind: announcement });
   seed('synthetic-patch-plain');
+  seed('synthetic-noarea');
+  exec("UPDATE stories SET area='',rev=rev+1 WHERE slug='synthetic-noarea'");
   seed('synthetic-patch-misc', { count: 2 });
   for (const slug of ['synthetic-patch-youth', 'synthetic-patch-features', 'synthetic-patch-areabad', 'synthetic-patch-samesec']) seed(slug);
   const expandedBody = '\n  ' + '&lt;'.repeat(6000) + '\n';
@@ -167,8 +169,10 @@ try {
     AUTH_SECRET: 'synthetic-reopen-auth-' + 'x'.repeat(40), PUBLISH_TOKEN: 'synthetic-publish-' + 'p'.repeat(40),
     RESEND_API_KEY: '', EMAIL_API_URL: '', GDRIVE_SERVICE_ACCOUNT_JSON: '', GDRIVE_FOLDER_ID: '', DISCORD_WEBHOOK_URL: '',
   }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let ready2 = false;
   server2.stdout.on('data', (d) => logs.push(String(d))); server2.stderr.on('data', (d) => logs.push(String(d)));
-  for (let i = 0; i < 100; i++) { try { await fetch(BASE2 + '/admin/login'); break; } catch { await delay(100); } }
+  for (let i = 0; i < 100; i++) { try { await fetch(BASE2 + '/admin/login'); ready2 = true; break; } catch { await delay(100); } }
+  check('second server starts', ready2);
   const call81 = (value, opts = {}) => call(value, { ...opts, base: BASE2 });
   // ---- issue 81: announcement patches, crops, author title / credit / featured, markers, section-only change ----
   const annOf = (slug) => { const v = draftFor(slug).announcement; return v === null ? null : JSON.parse(v); };
@@ -206,9 +210,9 @@ try {
   check('reopen: a marker past existing + appended photos is 400 bad_photo_marker naming it, no draft', r81.status === 400 && r81.data.error === 'bad_photo_marker' && r81.data.message.includes('{{photo 4}}') && !draftFor('synthetic-patch-misc'));
   r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { body: 'Intro.\n\n{{photo 3}}\n\nEnd.' } }));
   check('reopen: ...and also without any appended photos', r81.status === 400 && r81.data.error === 'bad_photo_marker');
-  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { authorTitle: 'Pastor <b>Synthetic</b>', photoCredit: '', featured: false, body: 'Intro.\n\n{{photo 4}}\n\n```\n{{photo 9}}\n```\n\n\\{{photo 8}}' }, photos: [{ data: PHOTO, alt: 'Cropped', focalX: 10, focalY: 90, zoom: 2.5 }, { data: PHOTO, alt: 'Plain' }] }));
+  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { authorTitle: 'Pastor <b>Synthetic</b>', photoCredit: '', featured: false, body: 'Intro.\n\n{{photo 4}}\n\n```\n{{photo 9}}\n```' }, photos: [{ data: PHOTO, alt: 'Cropped', focalX: 10, focalY: 90, zoom: 2.5 }, { data: PHOTO, alt: 'Plain' }] }));
   const misc = draftFor('synthetic-patch-misc'), miscPhotos = misc ? draftPhotos(misc.id) : [];
-  check('reopen: valid marker, fenced and escaped markers, crops and author fields are accepted', r81.status === 201 && !!misc && misc.status === 'in_review', r81.raw.slice(0, 200));
+  check('reopen: valid marker, fenced markers, crops and author fields are accepted', r81.status === 201 && !!misc && misc.status === 'in_review', r81.raw.slice(0, 200));
   check('reopen: authorTitle stored as typed ("<" kept, like author), photoCredit cleared by "", featured turned off, omitted fields kept', misc.author_title === 'Pastor <b>Synthetic</b>' && misc.photo_credit === '' && misc.featured === 0 && misc.title === 'Synthetic published title' && misc.author === 'Synthetic Author');
   check('reopen: appended photos keep their crops (defaults 50 / 50 / 1 when omitted); the originals keep theirs', miscPhotos.length === 4 && miscPhotos[0].focal_x === 23 && miscPhotos[1].zoom === 1.8 && miscPhotos[2].focal_x === 10 && miscPhotos[2].focal_y === 90 && miscPhotos[2].zoom === 2.5 && miscPhotos[3].focal_x === 50 && miscPhotos[3].focal_y === 50 && miscPhotos[3].zoom === 1);
   const miscRead = await call81({}, { method: 'GET', endpoint: `/api/agent/stories/${misc.id}` });
@@ -222,6 +226,8 @@ try {
   check('reopen: an explicit area that does not fit the new section is still 400 bad_area', badArea.status === 400 && badArea.data.error === 'bad_area' && !draftFor('synthetic-patch-areabad'));
   const sameArea = await call81(reopenReq('synthetic-patch-samesec', { changes: { section: 'news' } }));
   check('reopen: re-sending the current section keeps the current area', sameArea.status === 201 && draftFor('synthetic-patch-samesec').area === 'conference');
+  const noArea = await call(reopenReq('synthetic-noarea', { changes: { section: 'news' } }));
+  check('reopen: re-sending the current section keeps an empty area exactly (no default applied)', noArea.status === 201 && draftFor('synthetic-noarea').area === '');
   const retryYouth = await call81(reopenReq('synthetic-patch-youth', { changes: { section: 'youth' } }));
   check('reopen: an identical retry of a section-only change replays', retryYouth.status === 200 && retryYouth.data.status === 'replayed');
   const caps81 = await call81({}, { method: 'GET', endpoint: '/api/agent/sections' });
@@ -237,7 +243,7 @@ try {
   check('logs never expose token, note, contacts or upload paths', !logs.join('').includes(TOKEN) && !logs.join('').includes('private-synthetic') && !logs.join('').includes('Synthetic agent update note') && !logs.join('').includes('/uploads/'));
   console.log(`\n${checks} agent reopen checks passed.`);
 } finally {
-  if (server2) server2.kill();
+  if (server2) { server2.kill(); await Promise.race([new Promise((r) => server2.once('exit', r)), delay(3000)]); }
   if (server) { server.kill(); await Promise.race([new Promise((r) => server.once('exit', r)), delay(3000)]); }
   db?.close(); fs.rmSync(scratch, { recursive: true, force: true });
 }

@@ -54,7 +54,7 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
       const changes: Record<string, unknown> = { ...input.changes };
       if (typeof changes.section === 'string' && changes.area === undefined) {
         const target = getSection(changes.section);
-        if (target && !isValidArea(changes.section, story.fields.area)) changes.area = target.areas?.[0]?.key ?? '';
+        if (target && changes.section !== story.fields.section && !isValidArea(changes.section, story.fields.area)) changes.area = target.areas?.[0]?.key ?? '';
       }
       const parsed = parseAgentStory({ title: 'Reopened story', body: 'Existing published body is preserved.', section: story.fields.section, area: story.fields.area,
         ...changes, ...(input.photos !== undefined ? { photos: input.photos } : {}), note: input.note });
