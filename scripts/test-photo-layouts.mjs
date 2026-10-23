@@ -416,12 +416,13 @@ try {
 
   // ================= part 4: a real browser (optional) =================
   let pw;
-  for (const spec of ['playwright', '/opt/node22/lib/node_modules/playwright']) { try { pw = require(spec); break; } catch { /* try the next */ } }
+  if (process.env.PLAYWRIGHT_ROOT) { try { pw = createRequire(path.join(process.env.PLAYWRIGHT_ROOT, 'package.json'))('playwright'); } catch { /* fall back */ } }
+  for (const spec of pw ? [] : ['playwright', '/opt/node22/lib/node_modules/playwright']) { try { pw = require(spec); break; } catch { /* try the next */ } }
   if (!pw) {
     browserSkipReason = 'Playwright is not installed';
   } else {
     let browser;
-    try { browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox'] }); } catch (err) { browserSkipReason = 'no browser could be launched: ' + String(err.message).split('\n')[0]; }
+    try { browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: process.env.CHROMIUM_NO_SANDBOX === '1' || process.getuid?.() === 0 ? ['--no-sandbox'] : [] }); } catch (err) { browserSkipReason = 'no browser could be launched: ' + String(err.message).split('\n')[0]; }
     if (browser) {
       const overflow = [];
       const WIDTHS = [390, 768, 1280];
@@ -506,11 +507,11 @@ try {
         if (touch) await first.tap(); else await first.click();
         const dlg = page.locator('dialog.viewer');
         await dlg.waitFor({ state: 'visible' });
-        const st = await page.evaluate(() => { const d = document.querySelector('dialog.viewer'); return { open: d.open, modal: d.getAttribute('aria-modal'), label: d.getAttribute('aria-label'), active: document.activeElement?.getAttribute('aria-label'), count: d.querySelector('.viewer-count').textContent, alt: d.querySelector('.viewer-img').getAttribute('alt'), describedby: d.getAttribute('aria-describedby'), desc: document.getElementById(d.getAttribute('aria-describedby') ?? 'none')?.textContent, live: document.getElementById(d.getAttribute('aria-describedby') ?? 'none')?.getAttribute('aria-live'), src: d.querySelector('.viewer-img').getAttribute('src') }; });
+        const st = await page.evaluate(() => { const d = document.querySelector('dialog.viewer'); return { open: d.open, modal: d.getAttribute('aria-modal'), label: d.getAttribute('aria-label'), active: document.activeElement?.getAttribute('aria-label'), count: d.querySelector('.viewer-count').textContent, alt: d.querySelector('.viewer-img').getAttribute('alt'), describedby: d.getAttribute('aria-describedby'), desc: document.getElementById((d.getAttribute('aria-describedby') ?? 'none').split(' ')[0])?.textContent, live: document.getElementById((d.getAttribute('aria-describedby') ?? 'none').split(' ')[0])?.getAttribute('aria-live'), src: d.querySelector('.viewer-img').getAttribute('src') }; });
         check(`${tag}: clicking a photo opens the dialog (aria-modal, labelled with the photo's alt text), focus on the close button`, st.open && st.modal === 'true' && st.label === 'Photo viewer' && st.alt === 'Synthetic heroGrid photo 1' && st.active === 'Close photo viewer' && st.count === 'Synthetic heroGrid photo 1 (1 of 6)' && /\/media\/stories\//.test(st.src), JSON.stringify(st));
         check(`${tag}: on open the dialog's accessible description is the opened photo's alt text and "1 of 6" (what a screen reader reads), and the region stays live for moves`, st.desc === 'Synthetic heroGrid photo 1 (1 of 6)' && st.live === 'polite', JSON.stringify(st));
         const names = await page.evaluate(() => [...document.querySelectorAll('dialog.viewer button')].map((b) => b.getAttribute('aria-label')));
-        check(`${tag}: the buttons are named`, JSON.stringify(names) === JSON.stringify(['Close photo viewer', 'Previous photo', 'Next photo']), JSON.stringify(names));
+        check(`${tag}: the buttons are named`, JSON.stringify(names) === JSON.stringify(['Close photo viewer', 'Zoom out', 'Zoom in', 'Reset zoom', 'Previous photo', 'Next photo']), JSON.stringify(names));
         await page.keyboard.press('ArrowRight');
         check(`${tag}: ArrowRight shows the next photo (label and counter follow)`, (await dlg.getAttribute('aria-label')) === 'Photo viewer' && (await page.locator('.viewer-img').getAttribute('alt')) === 'Synthetic heroGrid photo 2' && (await page.locator('.viewer-count').textContent()) === 'Synthetic heroGrid photo 2 (2 of 6)');
         await page.keyboard.press('ArrowLeft');
