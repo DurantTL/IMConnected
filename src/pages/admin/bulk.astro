@@ -101,7 +101,7 @@ const title = problem ? 'Bulk action' : done ? `${verb} result` : `Confirm ${act
     <>
       <h1 id="bulk-heading" tabindex="-1">{okCount} of {items.length} {past}</h1>
       <p class={failed.length ? 'admin-error' : 'admin-ok'} role="status">
-        {okCount} {okCount === 1 ? 'item was' : 'items were'} {past}.{failed.length > 0 ? ` ${failed.length} could not be ${past}. ${retryable.length ? ' The ones that can be retried are selected below.' : ''}` : ' Everything went through.'}
+        {okCount} {okCount === 1 ? 'item was' : 'items were'} {past}.{failed.length > 0 ? ` ${failed.length} could not be ${past}. ${retryable.length ? 'The ones that can be retried are selected below.' : ''}` : ' Everything went through.'}
       </p>
       {failed.length > 0 ? (
         <form method="post" action="/admin/bulk">
