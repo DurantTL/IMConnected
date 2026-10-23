@@ -78,10 +78,25 @@ try {
       });
     }
     const sentinel = await renderMediaMarkdown('{{photo 1}}\n\n\uE000{{photo 2}}', mediaPhotos);
-    check('a stored private-use character before a marker makes the line a non-marker (as the agent check and the remap read it), and the sentinel never leaks into the output', () => { assert.deepEqual([...sentinel.used], [0]); assert.doesNotMatch(sentinel.html, /\uE000/); });
+    check('a stored private-use character before a marker makes the line a non-marker (as the agent check and the remap read it) and is kept as written', () => { assert.deepEqual([...sentinel.used], [0]); assert.match(sentinel.html, /\uE000\{\{photo 2\}\}/); assert.doesNotMatch(sentinel.html, /IMCMEDIA/); });
+    for (const [label, md] of [['abc&#10;{{photo 2}}', '{{photo 1}}\n\nabc&#10;{{photo 2}}'], ['&NewLine;', '{{photo 1}}\n\nabc&NewLine;{{photo 2}}'], ['&#x0A; at the end', '{{photo 1}}\n\nabc&#x0A;{{photo 2}}'], ['two', '{{photo 1}}\nx&#10;{{photo 2}}\n{{photo 2}}']]) {
+      const r = await renderMediaMarkdown(md, mediaPhotos);
+      const realSecond = label === 'two';
+      check(`a character reference that decodes to a line break (${label}) never splits off a live marker, and the written lines keep their meaning`, () => { assert.deepEqual([...r.used].sort(), realSecond ? [0, 1] : [0]); assert.doesNotMatch(r.html, /undefined|IMCMEDIA/); assert.match(r.html, /\{\{photo 2\}\}/); });
+    }
+    const blankAfter = await renderMediaMarkdown('{{photo 1}}\nabc&#10;def\n\nfoo', mediaPhotos);
+    check('decoded line breaks do not move a marker onto another line or join the next paragraph', () => { assert.deepEqual([...blankAfter.used], [0]); assert.match(blankAfter.html, /<p>foo<\/p>/); assert.doesNotMatch(blankAfter.html, /undefined|IMCMEDIA/); });
+    const stored = await renderMediaMarkdown('{{photo 1}}\n\nKeep \uE000 this', mediaPhotos);
+    check('a stored private-use character in the text is kept', () => assert.match(stored.html, /Keep \uE000 this/));
     for (const [label, md] of [['&#123;&#123;photo 2}}', '{{photo 1}}\n\n&#123;&#123;photo 2}}'], ['&lbrace;&lbrace;photo 2}}', '{{photo 1}}\n\n&lbrace;&lbrace;photo 2}}'], ['{{photo 2&#125;&#125;', '{{photo 1}}\n\n{{photo 2&#125;&#125;'], ['{{photo 2&#125;&#125; alone', '{{photo 2&#125;&#125;'], ['&#123;&#123;photo 2}} alone', '&#123;&#123;photo 2}}']]) {
       const r = await renderMediaMarkdown(md, mediaPhotos);
-      check(`a character-reference marker (${label}) stays literal; only a real marker uses a photo`, () => { assert.ok(!r.used.has(1), JSON.stringify([...r.used])); assert.match(r.html, /\{\{photo 2\}\}/); assert.doesNotMatch(r.html, /\uE000/); });
+      if (label.startsWith('{{photo 2&#125;')) {
+        // Written in marker shape but malformed: like any malformed marker, nothing public and a warning in the private preview.
+        const p = await renderMediaMarkdown(md, mediaPhotos, true);
+        check(`a malformed marker-shaped line (${label}) never shows a photo; preview warns`, () => { assert.ok(!r.used.has(1), JSON.stringify([...r.used])); assert.doesNotMatch(r.html, /IMCMEDIA/); assert.match(p.html, /Media marker skipped: \{\{photo 2&amp;#125;&amp;#125;/); });
+        continue;
+      }
+      check(`a character-reference marker (${label}) stays literal; only a real marker uses a photo`, () => { assert.ok(!r.used.has(1), JSON.stringify([...r.used])); assert.match(r.html, /\{\{photo 2\}\}/); assert.doesNotMatch(r.html, /IMCMEDIA/); });
     }
   }
   const isolated = await Promise.all([renderMediaMarkdown('{{photo 1}}', mediaPhotos), renderMediaMarkdown('{{photo 2}}', mediaPhotos)]);
