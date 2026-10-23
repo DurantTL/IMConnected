@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { agentAuth, agentJson } from '../../../lib/agent-api';
-import { AGENT_JSON_ALLOWANCE_BYTES, AGENT_LIMITS, agentRateLimited, maxImageBytesPerRequest } from '../../../lib/agent';
+import { AGENT_JSON_ALLOWANCE_BYTES, AGENT_LIMITS, agentRateLimited, batchStoriesPerHour, maxImageBytesPerRequest } from '../../../lib/agent';
 import { PHOTO_LAYOUT_VALUES } from '../../../lib/photo-layouts';
 import { LIMITS } from '../../../lib/limits';
 import { SECTIONS } from '../../../lib/site';
@@ -28,6 +28,7 @@ export const GET: APIRoute = ({ request }) => {
       maxImageBytesPerRequest: maxImageBytesPerRequest(),
       jsonAllowanceBytes: AGENT_JSON_ALLOWANCE_BYTES,
     },
+    batch: { endpoint: '/api/agent/stories/batch', method: 'POST', required: ['requestId', 'stories'], maxBatchStories: AGENT_LIMITS.batchMaxStories, maxStoriesPerHour: batchStoriesPerHour(), note: 'Each item is the same object as POST /api/agent/stories and is written independently; the response lists one result per item. The whole request shares one photoBudget (maxImageBytesPerRequest, 40 MiB body), so photo-heavy batches must be split. A batch counts as one of the 60 calls per hour and its stories count against maxStoriesPerHour; over that, the whole batch is 429 and nothing is written. Retry the identical body with the same batch requestId. See docs/AGENT-BATCH.md.' },
     readBack: { byId: '/api/agent/stories/<id>', bySourceUrl: '/api/agent/stories?sourceUrl=<link>', method: 'GET' },
     requestId: { field: 'requestId', pattern: '8-128 characters: letters, digits, underscore, hyphen', behavior: 'An identical retry answers 200 with status "replayed" and changes nothing; the same requestId with a different body is 409 request_id_reused.' },
     announcement: { kinds: ['announcement', 'event'], fields: ['kind', 'eventDate', 'location', 'links', 'videoUrl'], maxLinks: 3, videoProviders: ['YouTube', 'Vimeo'], flyer: 'First uploaded photo; JPG, PNG, WebP or AVIF. Use body text for an accessible summary.', omission: 'Preserves existing metadata on update; null clears it.',
