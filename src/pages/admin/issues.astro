@@ -24,7 +24,7 @@ if (Astro.request.method === 'POST') {
 const issues = listIssuesWithCounts();
 ---
 <Admin title="Newsletter issues" current="issues" wide>
-  <div class="cms-bar"><div><p class="sb-eyebrow">Archive</p><h1>Newsletter issues</h1><p class="admin-note">Each issue's date is the day it was sent; the title is optional. Stories point at an issue from their Story settings, and the AI agent creates issues as it sends stories. Correct a date or title here. An issue can be deleted only when no draft or story uses it.</p></div></div>
+  <div class="cms-bar admin-page-head"><div><p class="admin-eyebrow">Archive</p><h1>Newsletter issues</h1><p class="admin-note">Each issue's date is the day it was sent; the title is optional. Stories point at an issue from their Story settings, and the AI agent creates issues as it sends stories. Correct a date or title here. An issue can be deleted only when no draft or story uses it.</p></div></div>
   {error && <p class="admin-error" role="alert">{error}</p>}
   {success && <p class="admin-ok" role="status">{success}</p>}
   {issues.length === 0 && <p class="admin-note">No newsletter issues yet.</p>}

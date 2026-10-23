@@ -149,6 +149,7 @@ const hasPk = passkeyList.length > 0 && passkeysOn;
 const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 ---
 <Admin title="My account" current="account">
+  <p class="admin-eyebrow">Site</p>
   <h1>My account</h1>
   <p class="admin-note">{user.name} · {user.email} · {user.role}</p>
   {message && <p class="admin-ok" role="status">{message}</p>}

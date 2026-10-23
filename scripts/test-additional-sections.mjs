@@ -17,7 +17,7 @@ try {
   check('duplicates and the primary section normalize to canonical extra memberships', JSON.stringify(normalizeAdditionalSections(['youth', 'news', 'youth', 'kids'], 'news')) === '["youth","kids"]');
   for (const value of [null, 'youth', [7], ['unknown'], ['<script>'], new Array(21).fill('youth')]) { let refused = false; try { normalizeAdditionalSections(value, 'news'); } catch { refused = true; } check('invalid or unbounded additional memberships are refused', refused); }
   db = openDatabase(scratch); const migrations = readMigrationsFromDir(path.resolve('src/lib/db/migrations'));
-  runMigrations(db, migrations.filter((m) => !m.name.startsWith('024_')));
+  runMigrations(db, migrations.filter((m) => m.name < '024_')); // the schema as it was just before 024
   const run = (sql, ...args) => db.prepare(sql).run(...args), row = (sql, ...args) => db.prepare(sql).get(...args), rows = (sql, ...args) => db.prepare(sql).all(...args);
   run("INSERT INTO stories(slug,title,section,author,date,body,published_at,updated_at) VALUES('synthetic-legacy','Synthetic legacy','news','Synthetic Author','2026-10-22','Legacy body.',1,1)");
   run("INSERT INTO drafts(source,status,title,created_at,updated_at) VALUES('editor','in_review','Synthetic legacy',1,1)");
