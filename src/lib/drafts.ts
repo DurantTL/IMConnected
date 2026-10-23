@@ -403,6 +403,19 @@ export function restoreDraftRevision(id: number, expected: number, revisionId: n
     if (!snapshot) return fail('invalid', 'revision_gone');
     const current = editorialSnapshot(id, cur);
     const byKey = new Map(current.photos.map((p) => [p.key, p]));
+    // A photo replaced since the revision has a new media_key; follow the recorded lineage so the slot (place, references, metadata) survives.
+    const aliasOf = getDb().prepare('SELECT new_key FROM draft_photo_key_aliases WHERE old_key = ? AND draft_id = ?');
+    let usedNewerFile = false;
+    snapshot.photos = snapshot.photos.map((p) => {
+      let key = p.key;
+      for (let hops = 0; hops < 50 && !byKey.has(key); hops++) {
+        const next = aliasOf.get(key, id) as { new_key: string } | undefined;
+        if (!next) break;
+        key = next.new_key;
+      }
+      if (key !== p.key && byKey.has(key)) { usedNewerFile = true; return { ...p, key }; }
+      return p;
+    });
     const oldToCurrent = new Map(snapshot.photos.flatMap((p) => { const match = byKey.get(p.key); return match ? [[p.id, match] as const] : []; }));
     const ordered = [...snapshot.photos.flatMap((p) => byKey.has(p.key) ? [byKey.get(p.key)!] : []), ...current.photos.filter((p) => !snapshot.photos.some((old) => old.key === p.key))];
     let removedReferences = false;
@@ -424,11 +437,11 @@ export function restoreDraftRevision(id: number, expected: number, revisionId: n
     ordered.forEach((p, index) => position.run(index, id, p.id));
     const missing = removedReferences || markers.missing || snapshot.photos.some((p) => !byKey.has(p.key));
     audit('draft.revision_restore', { userId, target: `draft:${id}`, detail: { revisionId, missingMedia: missing } });
-    return { ok: true, updatedAt: saved.updatedAt, warnings: missing ? ['Some older photos are no longer available. Missing module references were removed; review inline markers and the first photo or flyer before publishing.'] : [] };
+    return { ok: true, updatedAt: saved.updatedAt, warnings: [...(missing ? ['Some older photos are no longer available. Missing module references were removed; review inline markers and the first photo or flyer before publishing.'] : []), ...(usedNewerFile ? ['A photo was replaced after that revision; the newer file was kept in its place.'] : [])] };
   });
 }
 
-export type OpResult = { ok: true; updatedAt: number; warning?: 'markers' } | Failure;
+export type OpResult = { ok: true; updatedAt: number; warning?: 'markers'; noop?: boolean } | Failure;
 
 /** Max photos a draft may hold. */
 export function photoCount(draftId: number): number {
@@ -484,18 +497,36 @@ function lockFailure(draftId: number): OpResult {
   return CONFLICT;
 }
 
-/** Reorder, set the lead image, or delete one photo, under the same version check as a save. */
-export function changePhoto(draftId: number, expected: number, userId: number, op: 'up' | 'down' | 'lead' | 'delete' | 'move', photoId: number, toPosition?: number): OpResult {
+/** Reorder, set the lead image, or delete one photo, under the same version check as a save. `ctx.ip` is for the audit entry written in the same transaction. */
+export function changePhoto(draftId: number, expected: number, userId: number, op: 'up' | 'down' | 'lead' | 'delete' | 'move', photoId: number, toPosition?: number, ctx: { ip?: string } = {}): OpResult {
   let removed: string | null = null;
   let warning: 'markers' | undefined;
   const res = tx((): OpResult => {
     const photos = listPhotos(draftId);
     const i = photos.findIndex((p) => p.id === photoId);
     if (i === -1) return fail('invalid', 'photo_gone');
+    const order = photos.map((p) => p.id);
+    if (op === 'lead') {
+      order.splice(i, 1);
+      order.unshift(photoId);
+    } else if (op === 'move') {
+      // Drag and drop: toPosition is 1-based. Anything out of range is clamped to the ends.
+      const target = Math.min(order.length, Math.max(1, Math.trunc(toPosition ?? i + 1))) - 1;
+      order.splice(i, 1);
+      order.splice(target, 0, photoId);
+    } else if (op !== 'delete') {
+      const j = op === 'up' ? i - 1 : i + 1;
+      if (j >= 0 && j < order.length) [order[i], order[j]] = [order[j], order[i]];
+    }
+    if (op !== 'delete' && order.every((id, pos) => id === photos[pos].id)) {
+      // Nothing moves: no version bump, revision or audit entry, but a stale page or closed draft is still refused.
+      const cur = getDraft(draftId);
+      if (!cur || !isEditable(cur)) return lockFailure(draftId);
+      return cur.updatedAt === expected ? { ok: true, updatedAt: expected, noop: true } : CONFLICT;
+    }
     const v = takeVersion(draftId, expected, userId);
     if (v === null) return lockFailure(draftId);
     const before = editorialSnapshot(draftId, getDraft(draftId)!);
-    const order = photos.map((p) => p.id);
     if (op === 'delete') {
       order.splice(i, 1);
       removed = photos[i].path;
@@ -505,22 +536,12 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
         const kept = mapStoryPhotos(blocks, (p) => p.photoId === photoId ? null : p);
         getDb().prepare('UPDATE drafts SET story_blocks = ?, body = ? WHERE id = ?').run(JSON.stringify(kept), storyBlocksToMarkdown(kept), draftId);
       }
-    } else if (op === 'lead') {
-      order.splice(i, 1);
-      order.unshift(photoId);
-    } else if (op === 'move') {
-      // Drag and drop: toPosition is 1-based. Anything out of range is clamped to the ends.
-      const target = Math.min(order.length, Math.max(1, Math.trunc(toPosition ?? i + 1))) - 1;
-      order.splice(i, 1);
-      order.splice(target, 0, photoId);
-    } else {
-      const j = op === 'up' ? i - 1 : i + 1;
-      if (j >= 0 && j < order.length) [order[i], order[j]] = [order[j], order[i]];
     }
     const set = getDb().prepare('UPDATE draft_photos SET position = ? WHERE id = ?');
     order.forEach((id, pos) => set.run(pos, id));
-    if (op !== 'delete' && order.some((id, pos) => id !== photos[pos].id)) warning = remapMarkersAfterReorder(draftId, before.photos.map((p) => p.key), order);
+    warning = remapMarkersAfterReorder(draftId, before.photos.map((p) => p.key), order);
     if (JSON.stringify(before) !== JSON.stringify(editorialSnapshot(draftId, getDraft(draftId)!))) recordDraftRevision(draftId, userId, before);
+    if (op !== 'delete') audit('draft.photo_move', { userId, target: `draft:${draftId}`, ip: ctx.ip, detail: op === 'move' ? { op, to: toPosition } : { op } });
     return { ok: true, updatedAt: v };
   });
   if (res.ok && removed) removeUploadFiles([removed]);
@@ -528,15 +549,16 @@ export function changePhoto(draftId: number, expected: number, userId: number, o
 }
 
 /**
- * {{photo N}} markers count positions, so a reorder must rewrite them to follow their photos (by stable media_key,
+ * {{photo N}} markers count positions, so a reorder or delete must rewrite them to follow their photos (by stable media_key,
  * through the Markdown AST so code, links and escaped examples stay inert). Module stories use photo IDs and need nothing.
- * Returns 'markers' when a gallery range can no longer be expressed and was marked for review. Call inside tx().
+ * Returns 'markers' when a marker changed meaning and needs a look (a gallery shrank or could not be kept, a deleted photo's
+ * marker became "missing"). Call inside tx().
  */
 function remapMarkersAfterReorder(draftId: number, oldKeys: string[], newOrder: number[]): 'markers' | undefined {
   const draft = getDraft(draftId);
   if (!draft || draft.storyBlocks?.length) return undefined;
   const keyOf = new Map((getDb().prepare('SELECT id, media_key FROM draft_photos WHERE draft_id = ?').all(draftId) as { id: number; media_key: string }[]).map((r) => [Number(r.id), String(r.media_key)]));
-  const mapped = restoreMediaMarkers(draft.body, oldKeys, newOrder.map((id) => keyOf.get(id)!));
+  const mapped = restoreMediaMarkers(draft.body, oldKeys, newOrder.map((id) => keyOf.get(id)!), { reorder: true });
   if (mapped.body !== draft.body) getDb().prepare('UPDATE drafts SET body = ? WHERE id = ?').run(mapped.body, draftId);
   return mapped.missing ? 'markers' : undefined;
 }
@@ -544,19 +566,24 @@ function remapMarkersAfterReorder(draftId: number, oldKeys: string[], newOrder: 
 /**
  * Replace the file in one slot (issue 87). The slot keeps its id, position, alt, caption and crop; it gets a new media_key so
  * revisions can tell the two files apart, so markers and modules (which follow the slot, not the file) keep pointing at it.
+ * The old key is recorded as an alias of the new one so restoring an older revision still finds the slot.
  * The new file is already on disk; it is removed again on any failure, and the old upload only after the commit.
  */
-export function replacePhotoFile(draftId: number, expected: number, userId: number, photoId: number, file: { rel: string; ext: string }): OpResult {
+export function replacePhotoFile(draftId: number, expected: number, userId: number, photoId: number, file: { rel: string; ext: string }, ctx: { ip?: string } = {}): OpResult {
   let old: string | null = null;
   let res: OpResult;
   try { res = tx((): OpResult => {
-    const row = getDb().prepare('SELECT path FROM draft_photos WHERE id = ? AND draft_id = ?').get(photoId, draftId) as { path: string | null } | undefined;
+    const row = getDb().prepare('SELECT path, media_key FROM draft_photos WHERE id = ? AND draft_id = ?').get(photoId, draftId) as { path: string | null; media_key: string } | undefined;
     if (!row) return fail('invalid', 'photo_gone');
     const v = takeVersion(draftId, expected, userId);
     if (v === null) return lockFailure(draftId);
     recordDraftRevision(draftId, userId, editorialSnapshot(draftId, getDraft(draftId)!));
     old = row.path;
-    getDb().prepare("UPDATE draft_photos SET path = ?, url = NULL, ext = ?, media_key = lower(hex(randomblob(16))), created_at = ? WHERE id = ? AND draft_id = ?").run(file.rel, file.ext, Date.now(), photoId, draftId);
+    const newKey = randomBytes(16).toString('hex');
+    getDb().prepare('UPDATE draft_photos SET path = ?, url = NULL, ext = ?, media_key = ?, created_at = ? WHERE id = ? AND draft_id = ?').run(file.rel, file.ext, newKey, Date.now(), photoId, draftId);
+    getDb().prepare('UPDATE draft_photo_key_aliases SET new_key = ? WHERE new_key = ? AND draft_id = ?').run(newKey, row.media_key, draftId);
+    getDb().prepare('INSERT INTO draft_photo_key_aliases (old_key, new_key, draft_id) VALUES (?, ?, ?)').run(row.media_key, newKey, draftId);
+    audit('draft.photo_replace', { userId, target: `draft:${draftId}`, ip: ctx.ip });
     return { ok: true, updatedAt: v };
   });
   } catch (err) { removeUploadFiles([file.rel]); throw err; }

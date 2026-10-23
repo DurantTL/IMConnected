@@ -750,6 +750,6 @@ if (form && blocksField) {
     const reviewAuthor = document.querySelector('[data-review-author]'); if (reviewAuthor) reviewAuthor.textContent = author;
   });
   const notice = new URLSearchParams(location.search).get('n');
-  setPanel(location.hash.slice(1) || (notice === 'photos' || notice === 'uploaded' ? 'photos' : notice === 'published' ? 'review' : 'content'));
+  setPanel(location.hash.slice(1) || (['photos', 'uploaded', 'photo_moved', 'photos_markers', 'photo_replaced', 'photo_unchanged'].includes(notice ?? '') ? 'photos' : notice === 'published' ? 'review' : 'content'));
   render();
 }

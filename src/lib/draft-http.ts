@@ -8,12 +8,13 @@ export function jsonResponse(status: number, payload: Record<string, unknown>): 
 }
 
 /** 303 back to a page. Only fixed codes travel in the query string (n = a notice in NOTICES, e = an error in ERRORS). */
-export function redirectTo(path: string, params: { n?: string; e?: ErrorCode; pos?: string; of?: string } = {}): Response {
+export function redirectTo(path: string, params: { n?: string; e?: ErrorCode; pos?: string; of?: string; photo?: string } = {}): Response {
   const q = new URLSearchParams();
   if (params.n) q.set('n', params.n);
   if (params.e) q.set('e', params.e);
   if (params.pos && /^\d{1,3}$/.test(params.pos)) q.set('pos', params.pos);
   if (params.of && /^\d{1,3}$/.test(params.of)) q.set('of', params.of);
+  if (params.photo && /^\d{1,12}$/.test(params.photo)) q.set('photo', params.photo);
   const qs = q.toString();
   return new Response(null, { status: 303, headers: { Location: qs ? `${path}?${qs}` : path, ...NO_STORE } });
 }

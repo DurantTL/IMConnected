@@ -150,24 +150,26 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       const ext = sniffImage(bytes);
       if (!ext) return refuse('photo_type');
       const rel = writeUpload(draft.id, bytes, ext);
-      const r = replacePhotoFile(draft.id, version, user.id, photoId, { rel, ext });
-      if (r.ok) audit('draft.photo_replace', { userId: user.id, target: `draft:${draft.id}`, ip });
-      return done(r, 'photo_replaced');
+      const r = replacePhotoFile(draft.id, version, user.id, photoId, { rel, ext }, { ip });
+      return r.ok ? redirectTo(page, { n: 'photo_replaced', photo: String(photoId) }) : done(r, 'photo_replaced');
     }
-    const moved = (r: OpResult, detail: Record<string, unknown>, fallback: string, notice = 'photo_moved') => {
+    // The audit entry, revision and version bump are written inside the lib transaction; this only builds the redirect.
+    const moved = (r: OpResult, fallback: string, notice = 'photo_moved') => {
       if (!r.ok) return done(r, fallback);
-      audit('draft.photo_move', { userId: user.id, target: `draft:${draft.id}`, ip, detail });
+      if (r.noop) return redirectTo(page, { n: 'photo_unchanged', photo: String(photoId) });
       const now = listPhotos(draft.id);
-      const params = { n: r.warning ? 'photos_markers' : notice, pos: String(now.findIndex((p) => p.id === photoId) + 1), of: String(now.length) };
-      return redirectTo(page, params);
+      return redirectTo(page, { n: r.warning ? 'photos_markers' : notice, pos: String(now.findIndex((p) => p.id === photoId) + 1), of: String(now.length), photo: String(photoId) });
     };
     if (m[1] === 'move') {
       const to = intParam(form.get('to'));
       if (to === null || to < 1) return refuse('photo_op');
-      return moved(changePhoto(draft.id, version, user.id, 'move', photoId, to), { to }, 'photos');
+      return moved(changePhoto(draft.id, version, user.id, 'move', photoId, to, { ip }), 'photos');
     }
-    if (m[1] === 'delete') return done(changePhoto(draft.id, version, user.id, 'delete', photoId), 'photos');
-    return moved(changePhoto(draft.id, version, user.id, m[1] as 'up' | 'down' | 'lead', photoId), { op: m[1] }, 'photos', 'photos');
+    if (m[1] === 'delete') {
+      const r = changePhoto(draft.id, version, user.id, 'delete', photoId, undefined, { ip });
+      return r.ok && r.warning ? redirectTo(page, { n: 'photos_markers' }) : done(r, 'photos');
+    }
+    return moved(changePhoto(draft.id, version, user.id, m[1] as 'up' | 'down' | 'lead', photoId, undefined, { ip }), 'photos', 'photos');
   }
 
   // ---- publish ----

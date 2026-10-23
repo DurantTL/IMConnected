@@ -137,10 +137,67 @@ try {
   check('no file is refused (upload_none)', /e=upload_none/.test((await post(`/api/admin/drafts/${id}/photos`, none)).headers.get('location')));
   const staleRep = formOf({ version: draft(id).updated_at - 5, op: `replace:${b.id}` }); staleRep.set(`replacement_${b.id}`, new Blob([png(COLORS[0])], { type: 'image/png' }), 'y.png');
   check('a stale version is refused and the new file is removed again', /e=conflict/.test((await post(`/api/admin/drafts/${id}/photos`, staleRep)).headers.get('location')) && JSON.stringify(uploadFiles(id)) === JSON.stringify(files1));
+  const big = formOf({ version: draft(id).updated_at, op: `replace:${b.id}` }); big.set(`replacement_${b.id}`, new Blob([Buffer.alloc(10 * 1024 * 1024 + 1, 1)], { type: 'image/png' }), 'big.png');
+  check('an oversize replacement is refused (photo_big) and leaves no file', /e=photo_big/.test((await post(`/api/admin/drafts/${id}/photos`, big)).headers.get('location')) && JSON.stringify(uploadFiles(id)) === JSON.stringify(files1));
   const otherId = await newDraft();
-  const wrongSlot = formOf({ version: draft(id).updated_at, op: 'replace:999999' }); wrongSlot.set('replacement_999999', new Blob([png(COLORS[0])], { type: 'image/png' }), 'z.png');
-  check('a photo that is not on this draft is refused', /e=photo_gone/.test((await post(`/api/admin/drafts/${id}/photos`, wrongSlot)).headers.get('location')) && uploadFiles(otherId).length === 0);
+  const other = new FormData(); other.set('version', String(draft(otherId).updated_at)); other.set('op', 'upload'); other.set('photos', new Blob([png(COLORS[0])], { type: 'image/png' }), 'o.png');
+  await post(`/api/admin/drafts/${otherId}/photos`, other);
+  const foreign = photos(otherId)[0], foreignFiles = uploadFiles(otherId), foreignKey = foreign.media_key;
+  const wrongSlot = formOf({ version: draft(id).updated_at, op: `replace:${foreign.id}` }); wrongSlot.set(`replacement_${foreign.id}`, new Blob([png(COLORS[3])], { type: 'image/png' }), 'z.png');
+  check('a photo that belongs to ANOTHER draft is refused (photo_gone) and that draft is untouched', /e=photo_gone/.test((await post(`/api/admin/drafts/${id}/photos`, wrongSlot)).headers.get('location')) && photos(otherId)[0].media_key === foreignKey && JSON.stringify(uploadFiles(otherId)) === JSON.stringify(foreignFiles) && JSON.stringify(uploadFiles(id)) === JSON.stringify(files1));
   check('refusals changed no photo, revision or file', JSON.stringify(photos(id)) === stateB && revisions(id) === revs2 && JSON.stringify(uploadFiles(id)) === JSON.stringify(files1));
+
+  // ---- no-op moves do not bump the version or audit ----
+  const v0 = draft(id).updated_at, rv0 = revisions(id), au0 = audits('draft.photo_move');
+  const noop = await photoOp(id, `up:${photos(id)[0].id}`);
+  check('moving the first photo up is a no-op: no version bump, revision or audit entry', noop.status === 303 && /n=photo_unchanged/.test(noop.headers.get('location')) && draft(id).updated_at === v0 && revisions(id) === rv0 && audits('draft.photo_move') === au0);
+  check('a no-op with a stale version is still refused', /e=conflict/.test((await photoOp(id, `up:${photos(id)[0].id}`, {}, v0 - 5)).headers.get('location')));
+
+  // ---- galleries, out-of-range markers and delete (own 4-photo draft) ----
+  const gid = await newDraft();
+  const gup = new FormData(); gup.set('version', String(draft(gid).updated_at)); gup.set('op', 'upload');
+  COLORS.forEach((col, i) => gup.append('photos', new Blob([png(col)], { type: 'image/png' }), `g${i}.png`));
+  await post(`/api/admin/drafts/${gid}/photos`, gup);
+  let [g1, g2, g3, g4] = photos(gid);
+  const GBODY = 'Top.\n\n{{gallery 2-4 columns=3}}\n\n{{photo 6}}\n\n{{photo 4 left}}\n';
+  const gsave = () => post(`/api/admin/drafts/${gid}/save`, formOf({ version: draft(gid).updated_at, title: 'Synthetic gallery story', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: GBODY, photoLayout: 'one' }));
+  await gsave();
+  const swap = await photoOp(gid, `down:${g2.id}`); // order g1 g3 g2 g4: the gallery set {2,3,4} is still continuous
+  check('a reorder inside a gallery keeps the range and gives no warning', draft(gid).body === GBODY.replace('{{photo 4 left}}', '{{photo 4 left}}') && !/photos_markers/.test(swap.headers.get('location')), draft(gid).body);
+  const lead = await photoOp(gid, `lead:${g3.id}`); // g3 g1 g2 g4: gallery members now at 3,1,4 -> keep 3-4
+  check('Make lead on a gallery member shrinks the range to the photos still together, and says so', draft(gid).body === 'Top.\n\n{{gallery 3-4 columns=3}}\n\n{{photo 6}}\n\n{{photo 4 left}}\n' && /n=photos_markers/.test(lead.headers.get('location')), draft(gid).body + lead.headers.get('location'));
+  check('a marker for a photo that does not exist is kept exactly as written (out of range, not erased)', draft(gid).body.includes('{{photo 6}}'));
+  await photoOp(gid, `move:${g3.id}`, { to: 4 }); // g1 g2 g4 g3: gallery members g2,g4 sit at 2,3
+  check('a gallery whose photos stay together follows them when other photos move (and a marker follows its photo)', draft(gid).body.includes('{{gallery 2-3 columns=3}}') && draft(gid).body.includes('{{photo 3 left}}'), draft(gid).body);
+  await photoOp(gid, `move:${g4.id}`, { to: 1 }); // g4 g1 g2 g3: g4 at 1, g2 at 3: no longer together
+  check('a gallery that cannot be kept becomes {{gallery missing}}', draft(gid).body.includes('{{gallery missing}}'), draft(gid).body);
+  // delete: later markers shift onto the right photos; the deleted photo's marker is missing
+  await gsave();
+  [g1, g2, g3, g4] = photos(gid);
+  const delBody = 'A\n\n{{photo 2}}\n\n{{photo 3}}\n\n{{photo 4}}\n\n```\n{{photo 3}}\n```\n';
+  await post(`/api/admin/drafts/${gid}/save`, formOf({ version: draft(gid).updated_at, title: 'Synthetic gallery story', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: delBody, photoLayout: 'one' }));
+  const delRes = await photoOp(gid, `delete:${g3.id}`);
+  check('deleting a photo marks its marker missing and shifts later markers onto the same photos; code stays literal', draft(gid).body === 'A\n\n{{photo 2}}\n\n{{photo missing}}\n\n{{photo 3}}\n\n```\n{{photo 3}}\n```\n' && /n=photos_markers/.test(delRes.headers.get('location')), draft(gid).body);
+
+  // ---- restore across a replace keeps the slot ----
+  const rid = await newDraft();
+  const rup = new FormData(); rup.set('version', String(draft(rid).updated_at)); rup.set('op', 'upload');
+  COLORS.slice(0, 3).forEach((col, i) => rup.append('photos', new Blob([png(col)], { type: 'image/png' }), `r${i}.png`));
+  await post(`/api/admin/drafts/${rid}/photos`, rup);
+  const [r1, r2, r3] = photos(rid);
+  const RBODY = 'Top.\n\n{{photo 2}}\n\n{{photo 3 wide}}\n';
+  await post(`/api/admin/drafts/${rid}/save`, formOf({ version: draft(rid).updated_at, title: 'Synthetic restore story', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: RBODY, photoLayout: 'one', [`photo_${r2.id}_alt`]: 'Alt R2', [`photo_${r2.id}_zoom`]: 2 }));
+  const restoreTo = db.prepare('SELECT MAX(id) m FROM draft_revisions WHERE draft_id=?').get(rid).m; // the state before the save, with all three photos
+  await post(`/api/admin/drafts/${rid}/save`, formOf({ version: draft(rid).updated_at, title: 'Synthetic restore story', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: RBODY + '\nMore.\n', photoLayout: 'one', [`photo_${r2.id}_alt`]: 'Alt R2', [`photo_${r2.id}_zoom`]: 2 }));
+  const rev = formOf({ version: draft(rid).updated_at, op: `replace:${r2.id}` }); rev.set(`replacement_${r2.id}`, new Blob([png(COLORS[3])], { type: 'image/png' }), 'rr.png');
+  await post(`/api/admin/drafts/${rid}/photos`, rev);
+  const withKeys = db.prepare('SELECT id FROM draft_revisions WHERE draft_id=? ORDER BY id DESC LIMIT 1').get(rid).id; // taken by the replace: still names r2's old key
+  const newKey = photos(rid)[1].media_key, rFiles = uploadFiles(rid);
+  const restored = await post(`/api/admin/drafts/${rid}/revisions`, formOf({ version: draft(rid).updated_at, revisionId: withKeys }));
+  const rj = await restored.json();
+  check('restoring a revision taken before a Replace succeeds and says the newer file was kept', restored.status === 200 && rj.ok && rj.warnings.some((w) => /replaced/.test(w)), JSON.stringify(rj));
+  check('the slot keeps its place, id, new file and key; markers and metadata survive; no file is resurrected', photos(rid).map((p) => p.id).join() === [r1.id, r2.id, r3.id].join() && photos(rid)[1].media_key === newKey && draft(rid).body.includes('{{photo 2}}') && !draft(rid).body.includes('missing') && photos(rid)[1].alt === 'Alt R2' && photos(rid)[1].zoom === 2 && JSON.stringify(uploadFiles(rid)) === JSON.stringify(rFiles));
+  void restoreTo;
 
   // ---- module story: the image module follows the slot through reorder and replace ----
   const mid = await newDraft();
@@ -156,7 +213,7 @@ try {
   const rep2 = formOf({ version: draft(mid).updated_at, op: `replace:${m2.id}` }); rep2.set(`replacement_${m2.id}`, new Blob([png(COLORS[3])], { type: 'image/png' }), 'm.png');
   await post(`/api/admin/drafts/${mid}/photos`, rep2);
   check('image module still points at the same slot after reorder and replace; module story body unchanged', JSON.parse(draft(mid).story_blocks).find((x) => x.type === 'image').photoId === m2.id && photos(mid)[0].id === m2.id && draft(mid).body === bodyBefore && photos(mid)[0].media_key !== m2.media_key);
-  check('no other draft was touched', draft(otherId).body === '' && photos(otherId).length === 0 && m1.id !== undefined);
+  check('no other draft was touched', draft(otherId).body === '' && photos(otherId).length === 1 && photos(otherId)[0].media_key === foreignKey && m1.id !== undefined);
 
   // ---- browser: drag, buttons, announcement, axe, touch targets, 320px ----
   browser = await chromium.launch(launchOptions());
@@ -174,6 +231,15 @@ try {
   // drag photo 1 (A) below photo 3
   await page.setViewportSize({ width: 1280, height: 3200 }); const boxA = await handles.nth(0).boundingBox();
   const lastCard = await page.locator('[data-photo-item]').nth(2).boundingBox();
+  const dragRev0 = revisions(id), dragAudit0 = audits('draft.photo_move');
+  // Escape cancels a drag
+  await page.mouse.move(boxA.x + boxA.width / 2, boxA.y + boxA.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(boxA.x + boxA.width / 2, lastCard.y + lastCard.height - 4, { steps: 6 });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await sleep(500);
+  check('Escape cancels a drag: nothing saved, no indicator left', revisions(id) === dragRev0 && audits('draft.photo_move') === dragAudit0 && await page.locator('.drop-after, .drop-before, .is-dragging').count() === 0);
   await page.mouse.move(boxA.x + boxA.width / 2, boxA.y + boxA.height / 2);
   await page.mouse.down();
   await page.mouse.move(boxA.x + boxA.width / 2, boxA.y + boxA.height / 2 + 40, { steps: 4 });
@@ -182,9 +248,12 @@ try {
   await page.mouse.up();
   check('dropping saves the new order (B, C, A) through the version-checked form', await expectOrder([b.id, c.id, a.id]));
   await page.waitForURL(/n=photo_moved/);
-  check('the new position is announced in a status message after the reload', (await page.locator('[role=status]', { hasText: 'Photo moved to position 3 of 3.' }).count()) >= 1);
+  await page.waitForLoadState('load');
+  await page.waitForFunction(() => document.querySelector('#photo-reorder-live')?.textContent === 'Photo moved to position 3 of 3.');
+  check('the position is announced by a live region filled after load (it is not in the page at load)', await page.locator('#photo-reorder-live').getAttribute('data-announce') === 'Photo moved to position 3 of 3.' && await page.locator('.admin-ok[role=status]').count() === 0);
+  check('after the reload the Photos tab is open and focus is on a control of the moved photo', await page.locator('[data-studio-tab="photos"]').getAttribute('aria-selected') === 'true' && await page.evaluate((pid) => !!document.activeElement?.closest(`li[data-photo-item="${pid}"]`) && document.activeElement.matches('button'), String(a.id)));
   check('markers followed the dragged photo (A was 1, now 3; B 2 -> 1, C 3 -> 2; the code examples stay literal)', draft(id).body.includes('{{photo 1}}\n\n{{photo 2 wide}}') && draft(id).body.includes('```\n{{photo 1}}\n```') && draft(id).body.includes('`{{photo 3}}`'), draft(id).body);
-  check('drag recorded a revision and an audit entry', audits('draft.photo_move') >= 6);
+  check('the drag recorded exactly one revision and one audit entry', revisions(id) === dragRev0 + 1 && audits('draft.photo_move') === dragAudit0 + 1);
   // buttons by click
   await page.locator('[data-studio-tab="photos"]').click();
   await page.getByRole('button', { name: 'Move photo 3 up' }).click();
@@ -194,10 +263,52 @@ try {
   await page.locator('[data-studio-tab="photos"]').click();
   await page.setViewportSize({ width: 1280, height: 3200 });
   const h0 = await handles.nth(0).boundingBox();
-  const revs3 = revisions(id);
+  const revs3 = revisions(id), noopAudit0 = audits('draft.photo_move'), noopUrl = page.url(), noopVersion = draft(id).updated_at;
   await page.mouse.move(h0.x + 10, h0.y + 10); await page.mouse.down(); await page.mouse.move(h0.x + 10, h0.y + 14, { steps: 2 }); await page.mouse.up();
   await sleep(400);
-  check('dropping a photo where it was changes nothing', revisions(id) === revs3, JSON.stringify([revs3, revisions(id), orderNow(), page.url(), h0]));
+  check('dropping a photo where it was changes nothing: no request, version, revision or audit entry', page.url() === noopUrl && draft(id).updated_at === noopVersion && audits('draft.photo_move') === noopAudit0 && revisions(id) === revs3, JSON.stringify([revs3, revisions(id), orderNow(), page.url(), h0]));
+
+  // touch drag: a real touch pointer (CDP) on the handle
+  {
+    const touchContext = await browser.newContext({ viewport: { width: 1280, height: 3200 }, hasTouch: true });
+    await touchContext.addCookies([{ name: '__Host-imc_session', value: token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
+    const tp = await touchContext.newPage();
+    await tp.goto(`${BASE}/admin/drafts/${id}#photos`);
+    await tp.locator('[data-studio-tab="photos"]').click();
+    const before = orderNow(), tRev = revisions(id), tAudit = audits('draft.photo_move');
+    const hb = await tp.locator('[data-photo-handle]').nth(0).boundingBox(), lb = await tp.locator('[data-photo-item]').nth(2).boundingBox();
+    const cdp = await touchContext.newCDPSession(tp);
+    const x = hb.x + hb.width / 2, y0 = hb.y + hb.height / 2, y1 = lb.y + lb.height - 4;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: y0 }] });
+    for (let i = 1; i <= 8; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y0 + (y1 - y0) * i / 8 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    check('a touch drag from the handle moves the first photo to the end (one revision, one audit entry)', await expectOrder([before[1], before[2], before[0]]) && revisions(id) === tRev + 1 && audits('draft.photo_move') === tAudit + 1);
+    await touchContext.close();
+    // put it back: A, B, C -> use the buttons
+    await page.goto(`${BASE}/admin/drafts/${id}`);
+    await page.locator('[data-studio-tab="photos"]').click();
+    for (const name of ['Move photo 3 up', 'Move photo 2 up']) {
+      const was = page.url();
+      await page.getByRole('button', { name }).click();
+      await page.waitForURL((u) => u.href !== was);
+      await page.waitForLoadState('load');
+    }
+  }
+  // other chosen files do not ride along with a move or a replace
+  {
+    await page.goto(`${BASE}/admin/drafts/${id}`);
+    await page.locator('[data-studio-tab="photos"]').click();
+    const idle = photos(id);
+    const decoy = path.join(scratch, 'decoy-file-name.png'); fs.writeFileSync(decoy, png(COLORS[0]));
+    await page.locator('.ph-replace summary').nth(2).click();
+    await page.locator(`input[name="replacement_${idle[2].id}"]`).setInputFiles(decoy);
+    // A later listener on the same event sees what the page's own filter left in the form data (Playwright cannot read multipart bodies).
+    await page.evaluate(() => { document.querySelector('#photo-form').addEventListener('formdata', (e) => { sessionStorage.setItem('sentKeys', [...e.formData.entries()].map(([k, v]) => k + (v instanceof File ? ':file=' + v.name : '')).join(',')); }); });
+    await Promise.all([page.waitForURL(/photo=/), page.getByRole('button', { name: 'Move photo 3 up' }).click()]);
+    await page.waitForLoadState('load');
+    const sent = [await page.evaluate(() => sessionStorage.getItem('sentKeys') ?? '')];
+    check('a file chosen for another photo is not uploaded with a move', sent[0].includes('op') && !sent[0].includes('decoy-file-name') && !sent[0].includes('replacement_') && !sent[0].includes(':file='), String(sent.length) + ' ' + sent.map((x) => x.slice(0, 400)).join('|'));
+  }
 
   // replace through the browser
   await page.locator('[data-studio-tab="photos"]').click();
@@ -208,7 +319,8 @@ try {
   await page.getByRole('button', { name: 'Replace photo 1 with the chosen file' }).click();
   await page.waitForURL(/n=photo_replaced/);
   check('the browser Replace keeps the slot and gives it a new media_key', photos(id)[0].id === slot0.id && photos(id)[0].media_key !== key0 && photos(id)[0].alt === slot0.alt);
-  check('the replaced notice is visible', (await page.locator('[role=status]', { hasText: 'Photo replaced.' }).count()) >= 1);
+  await page.waitForFunction(() => /^Photo replaced\./.test(document.querySelector('#photo-reorder-live')?.textContent ?? ''));
+  check('the replaced notice is announced through the live region and focus returns to that photo\'s Replace control', await page.evaluate((pid) => document.activeElement?.matches('.ph-replace summary') && !!document.activeElement.closest(`li[data-photo-item="${pid}"]`), String(slot0.id)));
 
   // accessibility, touch targets, sideways scroll
   await page.locator('[data-studio-tab="photos"]').click();
