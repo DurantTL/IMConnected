@@ -499,6 +499,15 @@ try {
     await c1.form(`/api/admin/drafts/${D}/unschedule`, { version: version(D) });
     await sleep(2500);
     check('(d) unscheduled during the window: not published, no failure recorded', draftRow(D).status !== 'published' && draftRow(D).publish_at === null && draftRow(D).publish_fail_count === 0 && draftRow(D).publish_error === null);
+
+    // (e) the person who scheduled it is disabled during the window: the publish transaction itself refuses
+    const OE = await mkDraft('Race Owner Disabled Subject');
+    await schedule(c2, OE, `${nextYear}-05-05T10:00`);
+    dueNow(OE);
+    check('(setup e) claimed', await claimed(OE));
+    run("UPDATE users SET status = 'disabled' WHERE id = ?", E2.id);
+    await sleep(2500);
+    check('(e) owner disabled during the window: not published, fails at once with schedule_owner_inactive', draftRow(OE).status !== 'published' && draftRow(OE).publish_error === 'schedule_owner_inactive', JSON.stringify({ s: draftRow(OE).status, e: draftRow(OE).publish_error }));
   }
 } catch (err) {
   console.error('TEST SCRIPT ERROR', err);

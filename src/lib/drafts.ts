@@ -670,15 +670,16 @@ export function publishDraftRow(id: number, expected: number, info: { slug: stri
     // issue #121: every draft records its first publish here, in the publish transaction, whether or not an email will be sent.
     const firstPublish = (getDb().prepare('SELECT submitter_notified_at FROM drafts WHERE id = ?').get(id) as { submitter_notified_at: number | null } | undefined)?.submitter_notified_at == null;
     const r = getDb()
-      .prepare("UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')" + (scheduled ? ' AND publish_at IS NOT NULL AND publish_at <= ? AND studio_overwrote_at IS NULL' : ''))
+      .prepare("UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')" + (scheduled ? ' AND publish_at IS NOT NULL AND publish_at <= ? AND studio_overwrote_at IS NULL AND EXISTS (SELECT 1 FROM users WHERE users.id = drafts.publish_at_by AND users.status = \'active\')' : ''))
       .run(now, info.slug, DB_PUBLISH_MARKER, now, info.userId, next, info.userId, id, expected, ...(scheduled ? [scheduled.now] : []));
     if (Number(r.changes) === 1) return { ok: true, updatedAt: next, firstPublish };
     if (scheduled) {
       // The scheduler's guard (issue #124): said no, so find out why, inside this same transaction.
-      const cur = getDb().prepare('SELECT status, publish_at, studio_overwrote_at FROM drafts WHERE id = ?').get(id) as { status: string; publish_at: number | null; studio_overwrote_at: number | null } | undefined;
+      const cur = getDb().prepare("SELECT status, publish_at, studio_overwrote_at, (SELECT status FROM users WHERE users.id = drafts.publish_at_by) AS owner_status FROM drafts WHERE id = ?").get(id) as { status: string; publish_at: number | null; studio_overwrote_at: number | null; owner_status: string | null } | undefined;
       if (cur && (cur.status === 'new' || cur.status === 'in_review')) {
         if (cur.studio_overwrote_at !== null) return fail('conflict', 'schedule_studio_overwrote');
         if (cur.publish_at === null || cur.publish_at > scheduled.now) return fail('conflict', 'schedule_not_due');
+        if (cur.owner_status !== 'active') return fail('conflict', 'schedule_owner_inactive');
       }
     }
     return lockFailure(id) as Failure;
