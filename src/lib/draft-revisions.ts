@@ -14,7 +14,7 @@ export function editorialSnapshot(id: number, f: DraftFields): EditorialSnapshot
     church: f.church, date: f.date, photoCredit: f.photoCredit, photoLayout: f.photoLayout, featured: f.featured, body: f.body,
     storyBlocks: normalizeStoryBlocks(f.storyBlocks ?? []), announcement: normalizeAnnouncement(f.announcement),
   };
-  const rows = getDb().prepare('SELECT id, media_key, alt, caption, focal_x, focal_y, zoom, fit, fit_fill FROM draft_photos WHERE draft_id=? ORDER BY position').all(id) as Record<string, unknown>[];
+  const rows = getDb().prepare('SELECT id, media_key, alt, caption, focal_x, focal_y, zoom, fit, fit_fill FROM draft_photos WHERE draft_id=? ORDER BY position, id').all(id) as Record<string, unknown>[];
   const photos = rows.map((p) => ({ id: Number(p.id), key: String(p.media_key), alt: String(p.alt), caption: String(p.caption), focalX: Number(p.focal_x), focalY: Number(p.focal_y), zoom: Number(p.zoom), fit: photoFit(p.fit), fitFill: photoFitFill(p.fit_fill) }));
   return { fields, photos };
 }

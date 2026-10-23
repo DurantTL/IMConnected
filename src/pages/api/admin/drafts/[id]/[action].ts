@@ -3,7 +3,7 @@ import { renderAnnouncementDetails } from '../../../../../lib/announcement-rende
 import { renderInlinePhoto } from '../../../../../lib/story-media-render';
 import type { APIRoute } from 'astro';
 import {
-  addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, photoCount, restoreDraft,
+  addUploadedPhotos, changePhoto, replacePhotoFile, getDraft, isEditable, listPhotos, photoCount, restoreDraft,
   saveAuditDue, saveDraft, writeUpload, removeUploadFiles, type OpResult,
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
@@ -138,10 +138,39 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       }
       return done(addUploadedPhotos(draft.id, version, user.id, stored), 'uploaded');
     }
-    const m = /^(up|down|lead|delete):(\d{1,12})$/.exec(op);
+    const m = /^(up|down|lead|delete|move|replace):(\d{1,12})$/.exec(op);
     if (!m) return refuse('photo_op');
-    if (!listPhotos(draft.id).some((p) => p.id === Number(m[2]))) return refuse('photo_gone');
-    return done(changePhoto(draft.id, version, user.id, m[1] as 'up' | 'down' | 'lead' | 'delete', Number(m[2])), 'photos');
+    const photoId = Number(m[2]);
+    if (!listPhotos(draft.id).some((p) => p.id === photoId)) return refuse('photo_gone');
+    if (m[1] === 'replace') {
+      const file = form.get(`replacement_${photoId}`);
+      if (!(file instanceof File) || file.size === 0) return refuse('upload_none');
+      if (file.size > LIMITS.maxPhotoMB * 1024 * 1024) return refuse('photo_big');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const ext = sniffImage(bytes);
+      if (!ext) return refuse('photo_type');
+      const rel = writeUpload(draft.id, bytes, ext);
+      const r = replacePhotoFile(draft.id, version, user.id, photoId, { rel, ext }, { ip });
+      return r.ok ? redirectTo(page, { n: 'photo_replaced', photo: String(photoId) }) : done(r, 'photo_replaced');
+    }
+    // The audit entry, revision and version bump are written inside the lib transaction; this only builds the redirect.
+    const moved = (r: OpResult, fallback: string, notice = 'photo_moved') => {
+      const focus = m[1];
+      if (!r.ok) return done(r, fallback);
+      if (r.noop) return redirectTo(page, { n: 'photo_unchanged', photo: String(photoId), focus });
+      const now = listPhotos(draft.id);
+      return redirectTo(page, { n: r.warning ? 'photos_markers' : notice, pos: String(now.findIndex((p) => p.id === photoId) + 1), of: String(now.length), photo: String(photoId), focus });
+    };
+    if (m[1] === 'move') {
+      const to = intParam(form.get('to'));
+      if (to === null || to < 1) return refuse('photo_op');
+      return moved(changePhoto(draft.id, version, user.id, 'move', photoId, to, { ip }), 'photos');
+    }
+    if (m[1] === 'delete') {
+      const r = changePhoto(draft.id, version, user.id, 'delete', photoId, undefined, { ip });
+      return r.ok && r.warning ? redirectTo(page, { n: 'photos_markers' }) : done(r, 'photos');
+    }
+    return moved(changePhoto(draft.id, version, user.id, m[1] as 'up' | 'down' | 'lead', photoId, undefined, { ip }), 'photos', 'photos');
   }
 
   // ---- publish ----
