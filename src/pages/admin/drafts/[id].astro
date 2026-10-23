@@ -81,7 +81,7 @@ const KEYED = [
 const hasNotes = !!draft && (isAgent || !!draft.agentNote || hasSubmitter);
 // The compact line under the headline (kept in step by the page script as the Story settings change).
 const detailsLine = draft ? ([sectionKnown ? eyebrow : '', draft.author, draft.date, draft.church].filter(Boolean).join(' · ') || 'Section, author and date are set in Story settings.') : '';
-const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draft.status === 'rejected' ? 'Rejected' : scheduledAt !== null ? `Scheduled ${fmtChicago(scheduledAt)}` : draft.status === 'new' ? 'New' : 'In review · saved';
+const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draft.status === 'rejected' ? 'Rejected' : scheduledAt !== null ? `Scheduled for ${fmtChicago(scheduledAt)}` : draft.status === 'new' ? 'New' : 'In review · saved';
 ---
 <Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current={draft?.announcement?.kind === 'event' ? 'events' : draft?.announcement ? 'announcements' : 'drafts'} wide compact>
   {!draft ? (

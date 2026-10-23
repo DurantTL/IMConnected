@@ -14,7 +14,7 @@ const { chromium } = require('playwright');
 const ROOT = process.cwd(), BASE = 'http://localhost:4863', scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'imc-community-'));
 const shots = process.env.SHOTS || ''; if (shots) fs.mkdirSync(shots, { recursive: true });
 let db, server, browser, checks = 0; const logs = [];
-const openContent = (pg) => pg.locator('[data-studio-tab=content]:visible, #module-outline [data-select-module]:visible').first().click();
+const openContent = (pg) => pg.locator('[data-studio-tab=modules]').click(); // the module library lives in the sidebar's Modules tab
 const check = (name, ok) => { assert.ok(ok, name); checks++; console.log('PASS ' + name); };
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const crc = (bytes) => { let n = 0xffffffff; for (const b of bytes) { n ^= b; for (let k = 0; k < 8; k++) n = n & 1 ? 0xedb88320 ^ n >>> 1 : n >>> 1; } return (n ^ 0xffffffff) >>> 0; };

@@ -22,7 +22,7 @@ const PUBLISH_TOKEN = process.env.PUBLISH_TOKEN || '';
 const SHOTS = process.env.SHOTS ? path.resolve(process.env.SHOTS) : '';
 const SERVER_LOG = process.env.SERVER_LOG ? path.resolve(process.env.SERVER_LOG) : '';
 
-const openContent = (pg) => pg.locator('[data-studio-tab=content]:visible, #module-outline [data-select-module]:visible').first().click();
+const openContent = (pg) => pg.locator('#story-builder').scrollIntoViewIfNeeded();
 let fails = 0;
 const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  ' + extra}`);
@@ -919,7 +919,7 @@ if (browser) {
     await c1.form(`/api/admin/drafts/${W}/photos`, { version: version(W), op: 'upload' }, [{ bytes: PNG_A, filename: 'a.png' }, { bytes: PNG_B, filename: 'b.png' }]);
     await c1.form(`/api/admin/drafts/${W}/photos`, { version: version(W), op: 'upload' }, [{ bytes: PNG_B, filename: 'c.png' }]);
     await page.goto(`${BASE}/admin/drafts/${W}`);
-    await page.locator('[data-studio-tab=photos]').click();
+    await page.locator('#photos').scrollIntoViewIfNeeded();
     await page.waitForSelector('.ed-photo img');
     await page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth > 0));
     check('390px: uploaded photos load through the guarded route', true);
@@ -958,7 +958,7 @@ if (browser) {
     await page.goto(`${BASE}/admin/drafts/${W}`);
     await page.locator('[data-studio-tab=settings]').click();
     await page.fill('input[name=title]', 'Title edited before a photo change');
-    await page.locator('[data-studio-tab=photos]').click();
+    await page.locator('#photos').scrollIntoViewIfNeeded();
     await page.locator('.ed-photo').nth(1).locator('button', { hasText: 'Make lead' }).click();
     await page.waitForURL(/n=photos/);
     check('a photo action first saves unsaved edits, then applies', draftRow(W).title === 'Title edited before a photo change' && q('SELECT id FROM draft_photos WHERE draft_id = ? ORDER BY position', W).length === 3);

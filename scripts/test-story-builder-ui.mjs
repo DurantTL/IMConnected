@@ -365,6 +365,19 @@ try {
   await page.frameLocator('#preview').locator('a[href="https://example.invalid/synthetic-details"]').click();
   check('canvas links select settings without navigating the private preview', await page.locator('#module-title').textContent() === 'Button / link settings' && await page.locator('[data-module-field="label"]').evaluate((field) => field === document.activeElement) && await page.locator('#preview').evaluate((frame) => frame.contentWindow.location.href) === canvasUrl);
   if (shots) await page.screenshot({ path: path.join(shots, 'story-builder-canvas-selection.png') });
+  await page.locator('#story-builder h2').first().click();
+  await page.keyboard.press('/');
+  check('"/" jumps to the module search and opens the Modules tab (not while typing in a field)', await page.locator('[data-studio-tab=modules]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.id === 'module-library-search'));
+  await page.keyboard.type('a/b');
+  check('"/" is typed normally inside a field', await page.locator('#module-library-search').inputValue() === 'a/b');
+  await page.locator('#module-library-reset').click();
+  await page.locator('.ed-insert').first().click();
+  check('a plus button between modules opens the Modules tab to insert after that module', await page.locator('[data-studio-tab=modules]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.id === 'module-library-search') && await page.locator('#module-outline [data-select-module][aria-current=true]').count() === 1);
+  await openPreview(page);
+  await page.locator('[data-preview-width=phone]').click();
+  check('the preview dialog narrows to a phone width with the Phone toggle', (await page.locator('#preview').boundingBox()).width <= 376 && await page.locator('[data-preview-width=phone]').getAttribute('aria-pressed') === 'true');
+  await page.locator('[data-preview-width=desktop]').click();
+  await closePreview(page);
 
   const axePath = process.env.AXE_JS || (() => { try { return playwrightRequire.resolve('axe-core/axe.min.js'); } catch { return ''; } })();
   if (axePath && fs.existsSync(axePath)) {
@@ -432,7 +445,7 @@ try {
   await closePreview(page);
   check('Close preview returns to the editor', !(await previewDialog.isVisible()) && await page.locator('#module-inspector').count() === 1 && await page.locator('#story-builder').evaluate((panel) => !panel.closest('[inert]')));
 
-  check('phone header scrolls normally and desktop actions leave the focus order', await page.locator('#ed-bar').evaluate((head) => getComputedStyle(head).position === 'static') && !(await page.locator('#save-btn').isVisible()) && await page.locator('#mobile-save-btn').isVisible());
+  check('phone header scrolls normally and desktop actions leave the focus order', await page.locator('#ed-bar').evaluate((head) => !['sticky', 'fixed'].includes(getComputedStyle(head).position)) && !(await page.locator('#save-btn').isVisible()) && await page.locator('#mobile-save-btn').isVisible());
   await page.locator('#module-fields').scrollIntoViewIfNeeded();
   const phoneSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
   await page.locator('#mobile-save-btn').click();
@@ -843,6 +856,31 @@ try {
     check('the Layout options menu items are all buttons and the hint mentions dragging and arrow keys', await page.locator('#ed-layout-button').click().then(() => page.locator('#ed-layout-menu button').count()) === 5 && (await page.locator('#ed-layout-menu .ed-hint').innerText()).includes('drag the sidebar') && (await page.locator('#ed-layout-menu .ed-hint').innerText()).includes('remembered in this browser'));
     await page.screenshot({ path: path.join(shots || scratch, 'v4-layout-menu-1280.png') });
     await page.keyboard.press('Escape');
+
+    // Publishing: the problem list is live and links focus real controls; marker problems ignore code blocks.
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    await openTab(page, 'review');
+    check('with a complete draft the Publishing tab says there are no problems', await page.locator('.ed-ok').isVisible() && await page.locator('.ed-problems').isHidden());
+    await page.locator('#f-title').fill('');
+    check('clearing the headline shows "Headline is missing" in Publishing at once', await page.locator('[data-problem=title]').isVisible() && await page.locator('.ed-ok').isHidden());
+    await page.locator('[data-problem=title] a').click();
+    check('the problem link focuses the headline field in the canvas', await page.evaluate(() => document.activeElement?.id === 'f-title'));
+    await page.locator('#f-title').fill('Synthetic agent draft');
+    await openTab(page, 'review');
+    check('...and the problem disappears when the headline is filled again', await page.locator('[data-problem=title]').isHidden() && await page.locator('.ed-ok').isVisible());
+    await page.locator('#f-body').fill('Synthetic text.\n\n```\n{{photo 9}}\n```\n\n    {{photo 8}}\n\nMore text.');
+    db.prepare('UPDATE drafts SET body=? WHERE id=?').run('Synthetic text.\n\n```\n{{photo 9}}\n```\n\n    {{photo 8}}\n\nMore text.', agentId);
+    await page.goto(BASE + `/admin/drafts/${agentId}`); await openTab(page, 'review');
+    check('marker-like lines inside fenced and indented code are not reported as problems', await page.locator('.ed-problems a', { hasText: 'marker' }).count() === 0);
+    db.prepare('UPDATE drafts SET body=? WHERE id=?').run('Synthetic text.\n\n{{photo 9}}\n\nMore text.', agentId);
+    await page.goto(BASE + `/admin/drafts/${agentId}`); await openTab(page, 'review');
+    check('a live marker that matches no photo is reported, as a link to the story text', await page.locator('.ed-problems a', { hasText: 'marker' }).count() === 1);
+    await page.locator('.ed-problems a', { hasText: 'marker' }).click();
+    check('the marker problem focuses the Story card', await page.evaluate(() => !!document.activeElement?.closest('#story-builder')));
+    db.prepare('UPDATE drafts SET body=?, updated_at=? WHERE id=?').run('Synthetic agent body text.', Number(JSON.parse(before).updated_at), agentId);
+    check('44px targets in the top bar, canvas and sidebar', await page.evaluate(() => [...document.querySelectorAll('#ed-bar button, #ed-bar a, .ed-tab, .ed-problems a, .ed-sidebar button, .ed-insert, .ed-btn')].filter((el) => el.getBoundingClientRect().width > 0 && !el.closest('[hidden]')).every((el) => el.getBoundingClientRect().height >= 43.5)));
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    check('sidebar tab panels and dots carry no stale status text (the dots are gone with the outline)', await page.locator('.ed-dot').count() === 0);
 
     // Keyboard: "/" focuses the module search for a module story; it types normally in fields.
     // No horizontal scroll at the five widths, on every sidebar tab.
