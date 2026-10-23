@@ -303,7 +303,7 @@ try {
     const img = await fetch(`${BASE}/api/admin/photos/${photoIds[0]}`, { headers: cookie(E1) });
     check('...an editor can load the photo; without a session it is refused', img.status === 200 && Buffer.from(await img.arrayBuffer()).equals(PNG_A) && (await fetch(`${BASE}/api/admin/photos/${photoIds[0]}`, { redirect: 'manual' })).status === 401);
     const inbox = await adminGet('/admin', E1);
-    check('the inbox shows the draft with a "From AI agent" badge and a Source filter', inbox.text.includes('Example Pathfinder Club Hosts Fall Campout') && inbox.text.includes('From AI agent') && inbox.text.includes('<option value="agent"'));
+    check('the inbox shows the draft with a "From AI agent" badge and a Source filter', inbox.text.includes('Example Pathfinder Club Hosts Fall Campout') && /<td data-label="Source">\s*<div class="adm-cell-stack">\s*<span>From AI agent<\/span>/.test(inbox.text) && inbox.text.includes('<option value="agent"'));
 
     // editors are notified
     check('editors who opted in get the "new story" email, saying it is from the AI agent', await until(() => emails().length > mailBefore));

@@ -3,7 +3,8 @@
    with the approved values as fallbacks, so this file also works on its own. */
 
 .adm-stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin: 0 0 18px; padding: 0; list-style: none; }
-.adm-stat { display: flex; flex-direction: column; gap: 2px; padding: 16px 18px; border: 1px solid var(--adm-line, #dce6ea); border-radius: var(--adm-radius, 14px); background: var(--adm-card, #fff); color: var(--adm-ink, #243640); text-decoration: none; min-width: 0; }
+.adm-stat-cards li { display: flex; min-width: 0; }
+.adm-stat { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 16px 18px; border: 1px solid var(--adm-line, #dce6ea); border-radius: var(--adm-radius, 14px); background: var(--adm-card, #fff); color: var(--adm-ink, #243640); text-decoration: none; min-width: 0; }
 .adm-stat:hover { border-color: var(--adm-navy, #003b5c); }
 .adm-stat:focus-visible { outline: 3px solid var(--adm-gold, #f0b323); outline-offset: 2px; }
 .adm-stat[aria-current] { border: 2px solid var(--adm-navy, #003b5c); padding: 15px 17px; box-shadow: 0 14px 40px rgba(0, 59, 92, .08); }
@@ -26,7 +27,7 @@
 .adm-summary strong { color: var(--adm-ink, #243640); }
 .adm-summary-sep { color: var(--adm-line, #dce6ea); }
 .adm-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0; padding: 0; list-style: none; }
-.adm-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 2px 6px 2px 12px; border: 1px solid var(--adm-line, #dce6ea); border-radius: 999px; background: var(--adm-navy-soft, #e6f0f4); color: var(--adm-navy, #003b5c); font-size: .85rem; font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+.adm-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 2px 6px 2px 12px; border: 1px solid var(--adm-line, #dce6ea); border-radius: 999px; background: var(--adm-navy-soft, #e6f0f4); color: var(--adm-navy, #003b5c); font-size: .85rem; font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
 .adm-chip-x { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; font-weight: 700; }
 .adm-chip:hover .adm-chip-x { background: var(--adm-navy, #003b5c); color: #fff; }
 .adm-chip:focus-visible, .adm-summary a:focus-visible, .adm-pager a:focus-visible, .adm-table a:focus-visible { outline: 3px solid var(--adm-gold, #f0b323); outline-offset: 2px; }
@@ -114,3 +115,5 @@
   .adm-open-text { display: none; }
   .adm-badge { white-space: normal; }
 }
+
+.adm-summary > a, .adm-perpage a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }

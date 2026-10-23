@@ -75,7 +75,7 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
     <div>
       <p class="admin-eyebrow">Stories</p>
       <h1>{queueTitle}</h1>
-      <p class="admin-note">Everything waiting for a person: new submissions, drafts in review, scheduled and rejected.</p>
+      <p class="admin-note">Search, filter and sort drafts. Nothing goes live until a person publishes it.</p>
     </div>
     <div>
       <form method="post" action="/api/admin/drafts/new"><input type="hidden" name="kind" value={newKind} /><button class="cms-btn" type="submit">New {newKind}</button></form>
@@ -89,8 +89,8 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
   <nav aria-label="Show by status">
     <ul class="adm-stat-cards">
       {cards.map((c) => (
-        <li style="display: contents">
-          <a class="adm-stat" href={href({ status: c.status as typeof f.status })} aria-current={f.status === c.status ? 'true' : undefined}>
+        <li>
+          <a class="adm-stat" href={href({ status: c.status as typeof f.status, sort: '' })} aria-current={f.status === c.status ? 'true' : undefined}>
             <span class="adm-stat-label">{c.label}</span>
             <strong>{counts[c.key]}</strong>
             <span class="adm-stat-note">{c.note}</span>
@@ -196,7 +196,7 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
     <div class="adm-search-actions"><button type="submit">Apply</button></div>
   </form>
 
-  <div class="adm-summary" aria-live="polite">
+  <div class="adm-summary">
     <span><strong>{result.total}</strong> {result.total === 1 ? 'draft' : 'drafts'} shown</span>
     <span class="adm-summary-sep" aria-hidden="true">·</span>
     <span>{sortLabel(f.sort)}</span>
@@ -265,7 +265,7 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
             <td data-label="Source">
               <div class="adm-cell-stack">
                 <span>{d.source === 'agent' ? 'From AI agent' : SOURCE_LABEL[d.source]}</span>
-                {d.source !== 'editor' && d.source !== 'agent' && (d.emailVerified ? <span class="adm-badge live">Email verified</span> : <span class="adm-badge featured">Email not verified</span>)}
+                {d.source === 'form' && (d.emailVerified ? <span class="adm-badge live">Email verified</span> : <span class="adm-badge featured">Email not verified</span>)}
               </div>
             </td>
             <td data-label="Issue">{d.newsletterIssue !== null ? `#${d.newsletterIssue}` : '—'}</td>

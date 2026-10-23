@@ -206,6 +206,16 @@ try {
   check('sortable headers carry aria-sort and are links', /<th scope="col" aria-sort="ascending"><a href="\/admin\?sort=title">Story<\/a>/.test(r.text) || /aria-sort="ascending"><a href="\/admin\?sort=title"/.test(r.text));
   check('an inactive sortable header says aria-sort="none"', /aria-sort="none"><a href="[^"]*sort=date_desc"/.test(r.text));
 
+  // A chosen sort must not stick to the status cards: Scheduled keeps its soonest-first default.
+  r = await list('sort=title&q=Synthetic');
+  const schedHref = (r.text.match(/<a class="adm-stat" href="([^"]*)"[^>]*>\s*<span class="adm-stat-label">Scheduled</) || [])[1];
+  check('status card links drop the chosen sort (keeping other filters)', schedHref && !schedHref.includes('sort=') && schedHref.includes('status=scheduled') && schedHref.includes('q=Synthetic'), schedHref);
+  const afterCard = await list(schedHref.replace(/^\/admin\?/, '').replace(/&amp;/g, '&'));
+  check('...so Scheduled opens in publish-time order', same(afterCard.ids, ids(D.filter((d) => d.kind === 'story' && d.publishAt && open(d)).sort((a, b) => a.publishAt - b.publishAt || a.i - b.i))) && afterCard.text.includes('Publish time, soonest first'));
+  r = await list('status=scheduled&sort=updated');
+  check('a sort equal to the default is left out of links (Sort select submits it always)', !/href="[^"]*sort=updated/.test((await list('sort=updated&status=new')).text) && !/href="[^"]*sort=scheduled/.test((await list('status=scheduled&sort=scheduled')).text));
+  check('an explicit non-default sort survives a filter change but not a card click', /href="[^"]*sort=title/.test((await list('sort=title')).text.replace(/<a class="adm-stat"[^>]*>/g, '')));
+
   // ---- invalid values fall back ----
   const plain = (await list('')).ids;
   for (const bad of ['sort=bogus', 'status=bogus', 'kind=bogus', 'source=nobody', 'source=form%27%20OR%201%3D1', 'section=zzz', 'issue=abc', 'issue=0', 'issue=99999', 'from=2026-13-45', 'to=notadate', 'perPage=1e9', 'page=1.5']) {

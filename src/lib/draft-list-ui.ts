@@ -20,7 +20,9 @@ type Overrides = Partial<Omit<DraftListFilter, 'sort'>> & { sort?: DraftSort | '
  */
 export function listHref(view: ListView, over: Overrides = {}): string {
   const f: DraftListFilter = { ...view.filter, ...over, sort: view.filter.sort };
-  const sortParam = 'sort' in over ? over.sort || '' : view.sortParam;
+  const asked = 'sort' in over ? over.sort || '' : view.sortParam;
+  // The default for the resulting status is never written into the URL, so a status link keeps its own default.
+  const sortParam = asked === (f.status === 'scheduled' ? 'scheduled' : 'updated') ? '' : asked;
   const params = new URLSearchParams();
   let path = KIND_PATH.story;
   if (f.kind === 'all') params.set('kind', 'all');
