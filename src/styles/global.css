@@ -635,3 +635,26 @@ body.admin .admin-bar .admin-public-link:hover { color:#fff; border-color:#2DD4B
 
 body:not(.admin) .card.lead.without-photo .card-copy { background:transparent; }
 .site-header :focus-visible, body.admin .admin-bar :focus-visible, .site-footer :focus-visible { outline-color:#2DD4BF; }
+
+/* Type scale: closer contrast between utility text and reading text. Navigation ~.95rem, utilities ~.85rem,
+   story text ~1.07rem with a 3.2rem headline cap, so the small end stays legible and the article no longer shouts. */
+body:not(.admin) .publication-line { font-size:.78rem; }
+body:not(.admin) .masthead-note { font-size:.82rem; }
+body:not(.admin) .header-search, body:not(.admin) .header-submit { font-size:.85rem; }
+body:not(.admin) .section-nav-row .nav a { font-size:.95rem; }
+body:not(.admin) .masthead-edition { font-size:.75rem; }
+body:not(.admin) .conference-strip p { font-size:.72rem; }
+body:not(.admin) .article-breadcrumb { font-size:.85rem; }
+body:not(.admin) .article .kicker { font-size:.78rem; }
+body:not(.admin) .article .byline, body:not(.admin) .article-reading { font-size:.85rem; }
+body:not(.admin) .article h1 { font-size:clamp(2.25rem,3.6vw,3.2rem); line-height:1.08; letter-spacing:-.03em; }
+body:not(.admin) .article .dek { font-size:clamp(1.18rem,1rem + .4vw,1.3rem); }
+body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
+@media(max-width:650px) {
+  body:not(.admin) .publication-line { font-size:.68rem; }
+  body:not(.admin) .article h1 { font-size:2.2rem; }
+  body:not(.admin) .article .dek { font-size:1.1rem; }
+  body:not(.admin) .article .prose { font-size:1.05rem; }
+}
+/* The 210px wordmark, Search with its icon and the menu button need about 375px; drop the icon below 381px for a little margin. */
+@media(max-width:380px) { body:not(.admin) .header-search svg { display:none; } }
