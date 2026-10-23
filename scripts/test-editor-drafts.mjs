@@ -696,7 +696,7 @@ let S;
   const slug = draftRow(D).slug;
   check('publishing carries the issue and position to the story row', r.params.get('n') === 'published' && story(slug).newsletter_issue === 31 && story(slug).newsletter_position === 2, r.loc);
   const page = (await getPub(`/stories/${slug}/`)).text;
-  check('the story page shows "Originally published in IMConnected Issue #31 · September 14, 2026" under the byline', /Originally published in IMConnected Issue #31 · <time datetime="2026-09-14">September 14, 2026<\/time>/.test(page) && page.indexOf('class="byline"') < page.indexOf('Originally published'), page.slice(Math.max(0, page.indexOf('Originally') - 40), page.indexOf('Originally') + 200));
+  check('the story page shows "Originally published in IMConnected Issue #31 · September 14, 2026" with the issue linked to /issues/31/ under the byline', /Originally published in <a href="\/issues\/31\/">IMConnected Issue #31<\/a> · <time datetime="2026-09-14">September 14, 2026<\/time>/.test(page) && page.indexOf('class="byline"') < page.indexOf('Originally published'), page.slice(Math.max(0, page.indexOf('Originally') - 40), page.indexOf('Originally') + 200));
   check('...the issue title (hostile text) is never rendered as HTML on the public page', !page.includes('<b>September</b>'));
   check('a story without an issue shows no provenance line', !(await getPub(`/stories/${draftRow(plainId).slug}/`)).text.includes('Originally published in IMConnected'));
   const feed = JSON.parse((await getPub('/stories.json')).text);

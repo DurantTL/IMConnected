@@ -1,0 +1,49 @@
+---
+import Base from '../../layouts/Base.astro';
+import StoryCard from '../../components/StoryCard.astro';
+import { asUnavailable, getPublicStories } from '../../lib/public-stories';
+import { groupByIssue, issueHref, PREVIEW_COUNT } from '../../lib/issue-pages';
+import { formatDate } from '../../lib/site';
+
+// Issue #99: every newsletter issue with at least one live story, newest first. Rendered on the server from the stories
+// table; the middleware caches it (publicCacheKey) and every story or issue write clears it.
+export const prerender = false;
+
+let all: Awaited<ReturnType<typeof getPublicStories>>;
+try {
+  all = await getPublicStories();
+} catch (err) {
+  return asUnavailable(err);
+}
+const issues = groupByIssue(all);
+const sent = (date: string) => formatDate(new Date(`${date}T00:00:00.000Z`));
+---
+<Base title="IMConnected Issues" description="Browse IMConnected stories by the newsletter issue they first appeared in, newest issue first." current="issues">
+  <div class="wrap issues-page">
+    <header class="page-head">
+      <span class="kicker">IMConnected</span>
+      <h1>Issues</h1>
+      <p>Stories from every IMConnected newsletter, grouped by the issue they first appeared in and shown in the order we sent them.</p>
+    </header>
+    {issues.length ? (
+      <div class="issue-blocks">
+        {issues.map((g) => (
+          <section class="issue-block" aria-labelledby={`issue-${g.number}`}>
+            <div class="issue-block-head">
+              <div>
+                <h2 id={`issue-${g.number}`}><a href={issueHref(g.number)}>Issue #{g.number}{g.title && <><span class="sr-only">: </span><span class="issue-title">{g.title}</span></>}</a></h2>
+                <p class="issue-meta">Sent <time datetime={g.date}>{sent(g.date)}</time> · {g.stories.length} {g.stories.length === 1 ? 'story' : 'stories'}</p>
+              </div>
+              <a class="issue-more" href={issueHref(g.number)}>{g.stories.length > PREVIEW_COUNT ? `See all ${g.stories.length} stories` : 'Open this issue'}<span class="sr-only"> in Issue #{g.number}</span> <span aria-hidden="true">→</span></a>
+            </div>
+            <div class="grid cols-3">
+              {g.stories.slice(0, PREVIEW_COUNT).map((s) => <StoryCard story={s} />)}
+            </div>
+          </section>
+        ))}
+      </div>
+    ) : (
+      <p class="empty-state">No newsletter issues are in the archive yet. <a href="/">Read the latest stories.</a></p>
+    )}
+  </div>
+</Base>

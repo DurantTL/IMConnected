@@ -4,7 +4,7 @@ export interface NavigationItem { id: string; label: string; href: string; visib
 export interface Navigation { version: number; items: NavigationItem[] }
 export const NAVIGATION_LIMIT = 12;
 export function defaultNavigation(): NavigationItem[] {
-  return [{ id: 'home', label: 'Latest', href: '/', visible: true }, ...SECTIONS.map((s) => ({ id: s.key, label: s.label, href: `/${s.key}/`, visible: true })), { id: 'announcements', label: 'Announcements', href: '/announcements/', visible: true }];
+  return [{ id: 'home', label: 'Latest', href: '/', visible: true }, ...SECTIONS.map((s) => ({ id: s.key, label: s.label, href: `/${s.key}/`, visible: true })), { id: 'announcements', label: 'Announcements', href: '/announcements/', visible: true }, { id: 'issues', label: 'Issues', href: '/issues/', visible: true }];
 }
 export function navigationHref(value: unknown): string {
   if (typeof value !== 'string' || !value || value.length > 2048 || /[\u0000-\u0020\u007f\\<>"']/.test(value)) throw new Error('Use a public /page/ address or a full HTTPS link.');

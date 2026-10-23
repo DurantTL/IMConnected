@@ -42,7 +42,7 @@ const galleryPhotos = laid ? plan.rest.map((i) => allPhotos[i]) : null;
 const leadPhoto = d.image && !inlinePhotos.has(d.image) && !inlineIndices.has(0) ? allPhotos[0] : undefined;
 const plainGallery = leadPhoto ? allPhotos.slice(1) : allPhotos;
 const leadFocus = d.announcement ? undefined : photoFocusStyle(leadPhoto);
-const issue = d.newsletterIssue ?? null; // issue #98: shown for any story with an issue set (plain text until the issue page exists)
+const issue = d.newsletterIssue ?? null; // issue #98: shown for any story with an issue set (links to /issues/<n>/, issue #99)
 const announcementDetails = await renderAnnouncementDetails(d.announcement);
 ---
 <Base title={d.title} description={d.dek} image={d.image} type="article" current={d.section}>
@@ -73,7 +73,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
         {d.church && <span>{d.church}</span>}
         <time datetime={d.date.toISOString()}>{formatDate(d.date)}</time>
       </div>
-      {issue && <p class="article-provenance">Originally published in IMConnected Issue #{issue.number} · <time datetime={issue.date}>{formatDate(new Date(`${issue.date}T00:00:00.000Z`))}</time></p>}
+      {issue && <p class="article-provenance">Originally published in <a href={`/issues/${issue.number}/`}>IMConnected Issue #{issue.number}</a> · <time datetime={issue.date}>{formatDate(new Date(`${issue.date}T00:00:00.000Z`))}</time></p>}
       <p class="article-reading"><span>{readingMinutes} min read</span><a href="#article-body">Read the story <span aria-hidden="true">↓</span></a></p>
       </header>
 
