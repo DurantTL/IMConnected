@@ -46,6 +46,7 @@ export const ERRORS = {
   photo_not_image: 'An uploaded photo is not a JPG, PNG, WebP or AVIF image.',
   story_missing: 'That story was not found on the site.',
   load_failed: 'We could not load that story right now. Please try again.',
+  not_live: 'This story is not on the site any more.',
   unpublish_failed: 'We could not unpublish right now. Please try again in a few minutes.',
   section_unknown: 'That story uses a section this editor does not know.',
 } as const;

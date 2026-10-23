@@ -4,6 +4,7 @@ import { SECTIONS } from '../lib/site';
 import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, listRecentPublished, type StatusFilter } from '../lib/drafts';
 import { fmtTime, sectionLabel } from '../lib/admin-ui';
 import { siteUrl } from '../lib/draft-http';
+import BulkBar from './BulkBar.astro';
 import { driveConfig } from '../lib/db/gdrive.mjs';
 
 cleanupRejectedPhotos();
@@ -26,6 +27,7 @@ const recentPublished = showHome ? listRecentPublished(5) : [];
 const base = siteUrl();
 // Administrators are told when nightly backups are not set up (no email is sent for that).
 const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
+const canBulk = drafts.some((d) => d.status === 'new' || d.status === 'in_review');
 const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad' : s === 'new' ? 'warn' : '');
 ---
 <Admin title={queueTitle} current={kind === 'event' ? 'events' : kind === 'announcement' ? 'announcements' : 'drafts'} wide>
@@ -102,9 +104,21 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
   {drafts.length === 0 ? (
     <p class="admin-note">No drafts match. Items of this content type will appear here. Switch to All drafts to review every type together.</p>
   ) : (
+    <>
+    {canBulk && <BulkBar action="publish" label="Publish selected" noun="drafts" />}
     <ul class="cms-list">
-      {drafts.map((d) => (
+      {drafts.map((d) => {
+        const pickable = d.status === 'new' || d.status === 'in_review';
+        return (
         <li class="cms-item">
+          <div class="bulk-row">
+          {canBulk && (pickable ? (
+            <label class="bulk-pick">
+              <input class="bulk-item" type="checkbox" name="id" value={d.id} form="bulk-form" aria-label={`${d.title || 'Untitled story'} (received ${new Date(d.createdAt).toISOString().slice(0, 10)})`} />
+              <input type="hidden" name={`v_${d.id}`} value={d.updatedAt} form="bulk-form" />
+            </label>
+          ) : <span class="bulk-pick" aria-hidden="true"></span>)}
+          <div class="bulk-body">
           <a class="title" href={`/admin/drafts/${d.id}`}>{d.title || 'Untitled story'}</a>
           <div class="cms-meta">
             <span class={`cms-badge ${badge(d.status)}`}>{STATUS_LABEL[d.status]}</span>
@@ -115,9 +129,13 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
             <span>{d.photoCount} {d.photoCount === 1 ? 'photo' : 'photos'}</span>
             <span>Received <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time></span>
           </div>
+          </div>
+          </div>
         </li>
-      ))}
+        );
+      })}
     </ul>
+    </>
   )}
 </Admin>
 <script is:inline>

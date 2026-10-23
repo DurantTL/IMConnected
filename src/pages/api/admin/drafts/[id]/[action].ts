@@ -3,12 +3,12 @@ import { renderAnnouncementDetails } from '../../../../../lib/announcement-rende
 import { renderInlinePhoto } from '../../../../../lib/story-media-render';
 import type { APIRoute } from 'astro';
 import {
-  addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, photoCount, rejectDraft, restoreDraft, retireUploads,
+  addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, photoCount, rejectDraft, restoreDraft,
   saveAuditDue, saveDraft, writeUpload, removeUploadFiles, type OpResult,
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
-import { publishDraft } from '../../../../../lib/story-publish';
-import { EditorError, ERRORS, type ErrorCode } from '../../../../../lib/messages';
+import { publishDraftItem } from '../../../../../lib/bulk-actions';
+import { ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
 import { sniffImage } from '../../../../../lib/submission';
 import { renderStoryBlocksSafe } from '../../../../../lib/story-block-render';
@@ -21,7 +21,6 @@ import { jsonResponse, readFormLimited, redirectTo, siteUrl } from '../../../../
 export const prerender = false;
 
 // Every action is a POST: the middleware checks Origin and the session before this runs.
-const publishing = new Set<number>();
 
 const ACTIONS = new Set(['save', 'preview', 'photos', 'publish', 'reject', 'restore']);
 
@@ -146,27 +145,6 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
   }
 
   // ---- publish ----
-  if (!isEditable(draft)) return refuse('not_publishable');
-  if (version !== draft.updatedAt) return refuse('conflict');
-  if (publishing.has(draft.id)) return refuse('already_publishing');
-  publishing.add(draft.id);
-  try {
-    // One transaction: the draft row (version check, slug) and the story, its photos and its search entry. Nothing is
-    // half-written if it fails, and the story is live on the very next request.
-    const out = await publishDraft(draft, listPhotos(draft.id), version, user.id);
-    // Housekeeping after the story is recorded: a failure here must never read as "not published".
-    try {
-      audit('draft.publish', { userId: user.id, target: `draft:${draft.id}`, detail: { slug: out.slug }, ip });
-      retireUploads(draft.id, out.uploaded);
-    } catch (err) {
-      console.error('[drafts] published; cleanup afterwards failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    }
-    return redirectTo(page, { n: 'published' });
-  } catch (err) {
-    if (err instanceof EditorError) return redirectTo(page, { e: err.code });
-    console.error('[drafts] publish failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    return redirectTo(page, { e: 'publish_failed' });
-  } finally {
-    publishing.delete(draft.id);
-  }
+  const out = await publishDraftItem(draft.id, version ?? -1, user.id, ip);
+  return out.ok ? redirectTo(page, { n: 'published' }) : redirectTo(page, { e: out.code });
 };
