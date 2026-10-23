@@ -100,6 +100,14 @@ try {
   console.log('--- subject:', m.subject, '\n--- text:\n' + m.text + '\n---');
   check('the draft is marked and the audit notes it by draft id only', draftRow(A).submitter_notified_at > 0 && auditFor('draft.submitter_notified', A).length === 1 && !/riley|example\.test/i.test(JSON.stringify(q('SELECT * FROM audit_log WHERE target = ?', `draft:${A}`))));
 
+  // ---- a form event (issue #123) is a form draft like any other: the same email on its first publish ----
+  const EV = await mkDraft('Synthetic Fall Potluck');
+  run('UPDATE drafts SET announcement = ? WHERE id = ?', JSON.stringify({ kind: 'event', eventDate: '2099-01-01', location: 'Fellowship hall', links: [] }), EV);
+  mails.length = 0;
+  r = await publish(EV);
+  await waitMails(1); await settle();
+  check('publishing a confirmed form event sends the submitter email once, with the live link', draftRow(EV).status === 'published' && mails.length === 1 && mails[0].to?.[0] === 'riley.sample@example.test' && (mails[0].text || '').includes(`${BASE}/stories/${draftRow(EV).slug}/`) && auditFor('draft.submitter_notified', EV).length === 1, `${r.status} mails=${mails.length}`);
+
   // ---- not again: publishing again, or unpublish then republish ----
   mails.length = 0;
   r = await publish(A);

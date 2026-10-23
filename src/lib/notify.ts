@@ -9,7 +9,7 @@ export function notifyEditorAddresses(): string[] {
 }
 
 /** One email per opted-in active editor, sent as a single batch request. Returns counts only (addresses are never logged). */
-export async function notifyEditorsOfSubmission(draft: { id: number; title: string; church: string; fromAgent?: boolean }, env = process.env): Promise<{ sent: number; failed: number }> {
+export async function notifyEditorsOfSubmission(draft: { id: number; title: string; church: string; fromAgent?: boolean; kind?: 'story' | 'announcement' | 'event' }, env = process.env): Promise<{ sent: number; failed: number }> {
   let to: string[];
   try {
     to = notifyEditorAddresses();
@@ -18,7 +18,7 @@ export async function notifyEditorsOfSubmission(draft: { id: number; title: stri
   }
   if (!to.length) return { sent: 0, failed: 0 };
   const site = (env.SITE_URL || 'https://stories.imadventist.org').replace(/\/+$/, '');
-  const mail = buildSubmissionNotice(draft.title, draft.church, `${site}/admin/drafts/${draft.id}`, draft.fromAgent === true);
+  const mail = buildSubmissionNotice(draft.title, draft.church, `${site}/admin/drafts/${draft.id}`, draft.fromAgent === true, draft.kind ?? 'story');
   // One batch request, one message per recipient (no BCC), so Resend's request rate limit isn't hit.
   return postEmailBatch(to.map((addr) => ({ to: addr, ...mail })), env);
 }
