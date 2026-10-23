@@ -5,8 +5,8 @@ import type { PublicStory } from './stories';
  *
  * Where the rail's "all of the archive" link points. Issue #99 (the issues browser) switches this to '/issues/'.
  */
-export const ARCHIVE_LINK = '/news/';
-export const ARCHIVE_LINK_LABEL = 'Browse the archive';
+export const ARCHIVE_LINK = '/issues/';
+export const ARCHIVE_LINK_LABEL = 'Browse past issues';
 /** The rail shows this many stories (phones hide the fourth in CSS) and is hidden entirely below the minimum. */
 export const ARCHIVE_RAIL_SIZE = 4;
 export const ARCHIVE_RAIL_MIN = 2;
