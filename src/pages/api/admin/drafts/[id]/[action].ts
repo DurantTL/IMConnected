@@ -3,7 +3,7 @@ import { renderAnnouncementDetails } from '../../../../../lib/announcement-rende
 import { renderInlinePhoto } from '../../../../../lib/story-media-render';
 import type { APIRoute } from 'astro';
 import {
-  addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, photoCount, restoreDraft,
+  addUploadedPhotos, changePhoto, replacePhotoFile, getDraft, isEditable, listPhotos, photoCount, restoreDraft,
   saveAuditDue, saveDraft, writeUpload, removeUploadFiles, type OpResult,
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
@@ -138,10 +138,36 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       }
       return done(addUploadedPhotos(draft.id, version, user.id, stored), 'uploaded');
     }
-    const m = /^(up|down|lead|delete):(\d{1,12})$/.exec(op);
+    const m = /^(up|down|lead|delete|move|replace):(\d{1,12})$/.exec(op);
     if (!m) return refuse('photo_op');
-    if (!listPhotos(draft.id).some((p) => p.id === Number(m[2]))) return refuse('photo_gone');
-    return done(changePhoto(draft.id, version, user.id, m[1] as 'up' | 'down' | 'lead' | 'delete', Number(m[2])), 'photos');
+    const photoId = Number(m[2]);
+    if (!listPhotos(draft.id).some((p) => p.id === photoId)) return refuse('photo_gone');
+    if (m[1] === 'replace') {
+      const file = form.get(`replacement_${photoId}`);
+      if (!(file instanceof File) || file.size === 0) return refuse('upload_none');
+      if (file.size > LIMITS.maxPhotoMB * 1024 * 1024) return refuse('photo_big');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const ext = sniffImage(bytes);
+      if (!ext) return refuse('photo_type');
+      const rel = writeUpload(draft.id, bytes, ext);
+      const r = replacePhotoFile(draft.id, version, user.id, photoId, { rel, ext });
+      if (r.ok) audit('draft.photo_replace', { userId: user.id, target: `draft:${draft.id}`, ip });
+      return done(r, 'photo_replaced');
+    }
+    const moved = (r: OpResult, detail: Record<string, unknown>, fallback: string, notice = 'photo_moved') => {
+      if (!r.ok) return done(r, fallback);
+      audit('draft.photo_move', { userId: user.id, target: `draft:${draft.id}`, ip, detail });
+      const now = listPhotos(draft.id);
+      const params = { n: r.warning ? 'photos_markers' : notice, pos: String(now.findIndex((p) => p.id === photoId) + 1), of: String(now.length) };
+      return redirectTo(page, params);
+    };
+    if (m[1] === 'move') {
+      const to = intParam(form.get('to'));
+      if (to === null || to < 1) return refuse('photo_op');
+      return moved(changePhoto(draft.id, version, user.id, 'move', photoId, to), { to }, 'photos');
+    }
+    if (m[1] === 'delete') return done(changePhoto(draft.id, version, user.id, 'delete', photoId), 'photos');
+    return moved(changePhoto(draft.id, version, user.id, m[1] as 'up' | 'down' | 'lead', photoId), { op: m[1] }, 'photos', 'photos');
   }
 
   // ---- publish ----

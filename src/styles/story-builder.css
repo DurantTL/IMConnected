@@ -257,3 +257,12 @@
 .sb-pan-crop[aria-disabled=true], .sb-focal[aria-disabled=true] { cursor:not-allowed; }
 .sb-focal[aria-disabled=true] .sb-focal-marker { display:none; }
 .sb-focus-settings :disabled { cursor:not-allowed; }
+/* Photo reorder and replace (issue 87) */
+.ed-photo .ph-handle { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; padding:0 12px; border:1px dashed var(--line); border-radius:8px; cursor:grab; touch-action:none; user-select:none; font-size:.85rem; }
+.ed-photo.is-dragging { opacity:.6; outline:2px solid var(--accent,#0B3954); }
+.ed-photo.drop-before { box-shadow:0 -4px 0 0 var(--accent,#0B3954); }
+.ed-photo.drop-after { box-shadow:0 4px 0 0 var(--accent,#0B3954); }
+.ed-photo .ops button, .ed-photo .ph-replace summary { min-height:44px; min-width:44px; }
+.ed-photo .ph-replace { flex-basis:100%; min-width:0; }
+.ed-photo .ph-replace summary { display:inline-flex; align-items:center; cursor:pointer; }
+.ed-photo .ph-replace input[type=file] { max-width:100%; }

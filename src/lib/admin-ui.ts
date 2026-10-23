@@ -19,6 +19,9 @@ export const NOTICES: Record<string, string> = {
   restored: 'Draft restored to In review.',
   uploaded: 'Photos uploaded.',
   photos: 'Photos updated.',
+  photo_moved: 'Photo order saved. Inline photo markers still point at the same photos.',
+  photos_markers: 'Photo order saved. A photo gallery marker no longer covers a continuous range and was marked missing; review the inline photos.',
+  photo_replaced: 'Photo replaced. Its alt text, caption, crop and place in the story were kept.',
   // 'published' is shown by the draft page itself, with a link to the story.
   published: "Published. It's live now.",
   unpublished: "Story unpublished. It's off the site now.",

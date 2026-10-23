@@ -24,7 +24,8 @@ const issues = draft ? listIssues() : [];
 const editable = draft ? isEditable(draft) : false;
 const q = Astro.url.searchParams;
 const published = q.get('n') === 'published';
-const notice = noticeText(q.get('n'));
+const movedAt = ['photo_moved', 'photos'].includes(q.get('n') ?? '') && /^\d{1,3}$/.test(q.get('pos') ?? '') && /^\d{1,3}$/.test(q.get('of') ?? '') ? `Photo moved to position ${q.get('pos')} of ${q.get('of')}.` : '';
+const notice = movedAt || noticeText(q.get('n'));
 const error = errorText(q.get('e'));
 const liveUrl = draft?.slug ? `${siteUrl()}/stories/${draft.slug}/` : '';
 const isAgent = draft?.source === 'agent';
@@ -311,9 +312,11 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
             <div class="studio-panel-heading"><div><span class="sb-eyebrow">Photo studio</span><h2>Bring the story into focus</h2><p class="admin-note">Choose your lead image, arrange the gallery and keep the subject in frame.</p></div><button type="button" class="cms-btn secondary" data-studio-preview>See reader preview</button></div>
             <p class="admin-note">The first photo leads the story. JPG, PNG, WebP or AVIF, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
             {photos.length > 0 && (
-              <ol class="ed-photos">
+              <p class="admin-note" id="photo-reorder-help">Reorder: use Up and Down on any device or keyboard. With a mouse or touch, drag a photo by its Drag handle onto a new place. Inline photo markers follow their photos.</p>
+              <p class="sr-only" role="status" aria-live="polite" id="photo-reorder-live"></p>
+              <ol class="ed-photos" aria-describedby="photo-reorder-help">
                 {photos.map((p, i) => (
-                  <li class="ed-photo">
+                  <li class="ed-photo" data-photo-item={p.id}>
                     <div class="sb-photo-preview"><span class="sb-crop-label">Reader crop preview</span>{(p.path || p.url && safeImg(p.url)) ? <div class="sb-pan-crop" data-pan-photo={p.id} tabindex={editable && p.fit !== 'contain' ? 0 : -1} aria-disabled={p.fit === 'contain' ? 'true' : undefined} {...(photoFrameAttrs(p, p.path ? `/api/admin/photos/${p.id}` : p.url!) ?? {})} role="group" aria-label={`Pan crop for photo ${i + 1}. Drag the image or use arrow keys. Shift moves ten percent.`}><img data-focus-preview={p.id} src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt="" draggable="false" style={photoFocusStyle({ ...p, fit: 'cover' })} referrerpolicy="no-referrer" /></div> : <div></div>}<p class="admin-note" data-pan-note={p.id}>{p.fit === 'contain' ? 'The whole photo is shown, so there is nothing to pan.' : 'Drag the crop to move the image. Arrow keys pan; Shift moves faster.'}</p></div>
                     <div class="fields">
                       <strong>{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
@@ -354,10 +357,16 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                       </details>}
                     </div>
                     <div class="ops">
+                      {editable && photos.length > 1 && <span class="ph-handle" data-photo-handle={p.id} hidden title="Drag to reorder" aria-hidden="true">⋮⋮ Drag</span>}
                       <button type="submit" form="photo-form" name="op" value={`up:${p.id}`} disabled={i === 0} aria-label={`Move photo ${i + 1} up`}>Up</button>
                       <button type="submit" form="photo-form" name="op" value={`down:${p.id}`} disabled={i === photos.length - 1} aria-label={`Move photo ${i + 1} down`}>Down</button>
                       {i > 0 && <button type="submit" form="photo-form" name="op" value={`lead:${p.id}`}>Make lead</button>}
                       <button type="submit" form="photo-form" name="op" value={`delete:${p.id}`} class="del" aria-label={`Delete photo ${i + 1}`}>Delete</button>
+                      {editable && <details class="ph-replace"><summary>Replace photo</summary>
+                        <label>New file for photo {i + 1}<input type="file" name={`replacement_${p.id}`} form="photo-form" accept="image/jpeg,image/png,image/webp,image/avif" /></label>
+                        <p class="admin-note">Keeps this photo's alt text, caption, crop and place in the story.</p>
+                        <button type="submit" form="photo-form" name="op" value={`replace:${p.id}`} aria-label={`Replace photo ${i + 1} with the chosen file`}>Replace</button>
+                      </details>}
                     </div>
                   </li>
                 ))}
@@ -430,4 +439,5 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
   )}
 </Admin>
 <script type="application/json" id="story-builder-data" set:html={JSON.stringify({ emptyStory: !draft?.body.trim() && !(draft?.storyBlocks?.length), photos: photos.map((p) => ({ id: p.id, src: p.path ? `/api/admin/photos/${p.id}` : p.url && safeImg(p.url) ? p.url : '', alt: p.alt, focalX: p.focalX ?? 50, focalY: p.focalY ?? 50, zoom: p.zoom, fit: p.fit, fitFill: p.fitFill })) }).replace(/</g, '\\u003c')}></script>
-<script>import '../../../scripts/draft-editor';</script>
+<script>import '../../../scripts/draft-editor';
+import '../../../scripts/photo-reorder';</script>
