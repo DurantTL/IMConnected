@@ -65,13 +65,13 @@ const crumb = trail || title;
     <title>{title} | {SITE.name} editors</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   </head>
-  <body class:list={['admin', { 'adm-compact': compact, 'adm-plain': !user }]}>
+  <body class:list={['admin', { 'adm-compact': compact, 'adm-plain': !signedIn }]}>
     <a class="skip" href="#main">Skip to content</a>
     <div class="adm-shell">
-      <div class="adm-side">
+      <aside class="adm-side" aria-label="IMConnected editor dashboard">
         <a class="admin-brand" href="/admin"><span class="adm-tile" aria-hidden="true">I</span><span class="adm-brand-text"><strong>IMConnected</strong><span class="admin-brand-kicker">Editor dashboard</span></span></a>
-        {user && (
-          <details class="adm-menu" id="adm-menu">
+        {signedIn && (
+          <details class="adm-menu" id="adm-menu" open>
             <summary><span>Menu</span></summary>
             <div class="adm-panel">
               {signedIn && (
@@ -97,20 +97,6 @@ const crumb = trail || title;
               </div>
             </div>
           </details>
-        )}
-      </div>
-      <div class="adm-col">
-        <div class="adm-top">
-          <p class="adm-trail"><span class="adm-trail-root">Editor dashboard</span><span class="adm-trail-sep" aria-hidden="true">/</span><span class="adm-trail-here">{crumb}</span></p>
-          <a class="admin-public-link" href="/">View website <span aria-hidden="true">→</span></a>
-          {user && <span class="adm-role">{isAdmin ? 'Administrator' : 'Editor'}</span>}
-          {user && <span class="adm-avatar" aria-hidden="true">{initials}</span>}
-        </div>
-        <main id="main" class:list={['admin-main', { wide }]}>
-          <slot />
-        </main>
-      </div>
-    </div>
     <script is:inline>
       (function () {
         var d = document.getElementById('adm-menu');
@@ -121,6 +107,26 @@ const crumb = trail || title;
         if (mq.addEventListener) mq.addEventListener('change', sync);
       })();
     </script>
+        )}
+        {!signedIn && (
+          <div class="adm-plain-actions">
+            <a class="adm-site-link" href="/">View website <span aria-hidden="true">→</span></a>
+            {user && <form method="post" action="/api/admin/logout"><button type="submit">Sign out</button></form>}
+          </div>
+        )}
+      </aside>
+      <div class="adm-col">
+        <header class="adm-top">
+          <p class="adm-trail"><span class="adm-trail-root">Editor dashboard</span><span class="adm-trail-sep" aria-hidden="true">/</span><span class="adm-trail-here">{crumb}</span></p>
+          <a class="admin-public-link" href="/">View website <span aria-hidden="true">→</span></a>
+          {user && <span class="adm-role">{isAdmin ? 'Administrator' : 'Editor'}</span>}
+          {user && <span class="adm-avatar" aria-hidden="true">{initials}</span>}
+        </header>
+        <main id="main" class:list={['admin-main', { wide }]}>
+          <slot />
+        </main>
+      </div>
+    </div>
   </body>
 </html>
 <style is:global>
@@ -150,7 +156,11 @@ const crumb = trail || title;
 
   /* Sidebar (a top bar below 1024px) */
   .adm-side { position: relative; background: var(--adm-navy); color: #fff; }
-  .adm-side :focus-visible { outline-color: var(--adm-gold); }
+  body.admin .adm-side :focus-visible, body.admin .adm-side summary:focus-visible { outline: 3px solid var(--adm-gold); outline-offset: 2px; }
+  .adm-plain-actions { display: flex; align-items: center; gap: 12px; padding: 0 var(--gutter) 12px; flex-wrap: wrap; }
+  .adm-plain-actions form { margin: 0; }
+  .adm-plain-actions button { min-height: 44px; padding: 8px 16px; border: 1px solid rgb(255 255 255 / .35); border-radius: 10px; background: none; color: #fff; font: 700 .9rem var(--adm-sans); cursor: pointer; }
+  .adm-plain .adm-site-link { display: flex; }
   .admin-brand { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 8px var(--gutter); color: #fff; text-decoration: none; }
   .adm-tile { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--adm-gold); color: var(--adm-navy-deep); font: 800 1.2rem/1 var(--adm-sans); }
   .adm-brand-text { display: grid; line-height: 1.2; min-width: 0; }
@@ -206,6 +216,7 @@ const crumb = trail || title;
     .adm-plain .adm-shell { display: block; }
     .adm-plain .adm-side { position: static; height: auto; }
     .adm-plain .admin-brand { max-width: 1200px; margin: 0 auto; }
+    .adm-plain-actions { max-width: 1200px; margin: 0 auto; padding: 0 20px 12px; }
 
     /* Compact icon rail (story editor) */
     .adm-compact .adm-shell { grid-template-columns: 72px minmax(0, 1fr); }
@@ -266,7 +277,7 @@ const crumb = trail || title;
   .cms-filters select, .ed select, .ed input[type=text], .ed input[type=date], .ed textarea, .ed-photo input[type=text], .ed input[type=file] { font: inherit; padding: 9px 10px; border: 1px solid var(--adm-field); border-radius: var(--adm-field-radius); background: #fff; color: var(--adm-ink); max-width: 100%; }
   .cms-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 16px; font: inherit; font-weight: 700; line-height: 1.2; border: 1px solid var(--adm-navy-deep); border-radius: var(--adm-field-radius); background: var(--adm-navy-deep); color: #fff; text-decoration: none; cursor: pointer; }
   .cms-btn:hover { background: var(--adm-navy); }
-  .cms-btn.secondary { background: #fff; color: var(--adm-navy); border-color: var(--adm-line); }
+  .cms-btn.secondary { background: #fff; color: var(--adm-navy); border-color: var(--adm-field); }
   .cms-btn.secondary:hover { background: var(--adm-navy-soft); }
   .cms-btn.danger { background: var(--adm-coral); color: #fff; border-color: var(--adm-coral); }
   .cms-btn.danger:hover { background: #8f453b; }
