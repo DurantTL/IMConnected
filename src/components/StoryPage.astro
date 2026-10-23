@@ -80,7 +80,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       </div>
       {issue && <p class="article-provenance">Originally published in <a href={`/issues/${issue.number}/`}>IMConnected Issue #{issue.number}</a> · <time datetime={issue.date}>{formatDate(new Date(`${issue.date}T00:00:00.000Z`))}</time></p>}
       <p class="article-reading"><span>{readingMinutes} min read</span><a href="#article-body">Read the story <span aria-hidden="true">↓</span></a></p>
-      <div class="listen" data-listen role="group" aria-label="Listen to this story" hidden>
+      <div class="listen" data-listen role="group" aria-label="Listen" hidden>
         <button type="button" data-listen-start>Listen to this story</button>
         <button type="button" data-listen-pause hidden>Pause</button>
         <button type="button" data-listen-stop hidden aria-label="Stop listening">Stop</button>
@@ -89,10 +89,10 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       </header>
 
       {keyPoints.length > 0 && (
-        <aside class="key-points" aria-labelledby="key-points-title">
+        <section class="key-points" aria-labelledby="key-points-title">
           <h2 id="key-points-title">Key points</h2>
           <ul>{keyPoints.map((point) => <li>{point}</li>)}</ul>
-        </aside>
+        </section>
       )}
 
       {laid && <StoryPhotos layout={layout} plan={plan} photos={allPhotos} credit={d.photoCredit} />}

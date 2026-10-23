@@ -889,9 +889,9 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
           id = cur.id;
           getDb()
             .prepare(
-              "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, story_blocks = '[]', published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
+              "UPDATE drafts SET status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, story_blocks = '[]', key_points = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
             )
-            .run(fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.photoLayout, fields.body, commit, now, now, id);
+            .run(fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.photoLayout, fields.body, keyPointsJson((getDb().prepare('SELECT key_points FROM stories WHERE slug = ?').get(st.slug) as { key_points: string } | undefined)?.key_points), commit, now, now, id); // mirrors the story row's list ([] when there is no story)
         } else {
           id = createDraft({ source: 'studio', status: 'published', fields, slug: st.slug });
           getDb().prepare('UPDATE drafts SET published_commit = ?, published_at = ?, published_via_studio = 1 WHERE id = ?').run(commit, now, id);
