@@ -1,90 +1,232 @@
 ---
 import Admin from '../../layouts/Admin.astro';
-import { listLiveDrafts } from '../../lib/drafts';
-import { listStories, LIST_MAX } from '../../lib/story-store';
+import '../../styles/admin-published.css';
+import { listStoriesPage, parsePublishedFilter, publishedCounts, publishedFacets, PUBLISHED_PER_PAGE, type PublishedFilter, type PublishedRow } from '../../lib/story-store';
+import { SECTIONS, getSection } from '../../lib/site';
 import { noticeText, fmtTime, sectionLabel } from '../../lib/admin-ui';
 import { errorText } from '../../lib/messages';
 import { siteUrl } from '../../lib/draft-http';
 import BulkBar from '../../components/BulkBar.astro';
 export const prerender = false;
 
-interface Row { slug: string; title: string; section: string; area?: string; date: string; draftId?: number; by?: string | null; at?: number | null }
-const rows = new Map<string, Row>();
-let loadFailed = false;
-try {
-  for (let offset = 0; ; offset += LIST_MAX) {
-    const page = listStories({ limit: LIST_MAX, offset });
-    for (const s of page) rows.set(s.slug, { slug: s.slug, title: s.title, section: s.section, area: s.area, date: s.date });
-    if (page.length < LIST_MAX) break;
-  }
-} catch (err) {
-  loadFailed = true;
-  console.error('[admin] could not read the story list', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-}
-// Who published it and when, from the dashboard's own record.
-try {
-  for (const d of listLiveDrafts()) {
-    const cur = rows.get(d.slug as string);
-    if (cur) Object.assign(cur, { draftId: d.id, by: d.publishedByName, at: d.publishedAt });
-  }
-} catch (err) {
-  console.error('[admin] could not read the draft record', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-}
-const list = [...rows.values()].sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
-
 const q = Astro.url.searchParams;
 const notice = noticeText(q.get('n'));
 const error = errorText(q.get('e'));
 const base = siteUrl();
+const f = parsePublishedFilter(q);
+
+let items: PublishedRow[] = [];
+let total = 0, page = 1, pages = 1;
+let counts = { all: 0, featured: 0, openDraft: 0, editedThisMonth: 0, thisYear: 0, year: '' };
+let facets: { issues: number[]; years: string[] } = { issues: [], years: [] };
+let loadFailed = false;
+try {
+  const res = listStoriesPage(f);
+  ({ items, total, page, pages } = res);
+  counts = publishedCounts();
+  facets = publishedFacets();
+} catch (err) {
+  loadFailed = true;
+  console.error('[admin] could not read the story list', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+}
+
+const SORT_LABELS: Record<string, string> = {
+  published_desc: 'Published, newest first', published_asc: 'Published, oldest first', edited_desc: 'Recently edited',
+  date_desc: 'Story date, newest first', title: 'Title A to Z', section: 'Section',
+};
+
+/** The list address for a filter, leaving out every default. */
+function href(over: Partial<PublishedFilter> & { edited?: boolean } = {}, keep = true): string {
+  const g: PublishedFilter = keep ? { ...f, ...over } : { ...f, q: '', section: '', area: '', issue: null, year: '', featured: false, openDraft: false, editedThisMonth: false, page: 1, ...over };
+  const p = new URLSearchParams();
+  if (g.q) p.set('q', g.q);
+  if (g.section) p.set('section', g.section);
+  if (g.area) p.set('area', g.area);
+  if (g.issue !== null) p.set('issue', String(g.issue));
+  if (g.year) p.set('year', g.year);
+  if (g.featured) p.set('featured', 'yes');
+  if (g.openDraft) p.set('openDraft', 'yes');
+  if (g.editedThisMonth) p.set('edited', 'month');
+  if (g.sort !== 'published_desc') p.set('sort', g.sort);
+  if (g.perPage !== 25) p.set('perPage', String(g.perPage));
+  if (g.page > 1) p.set('page', String(g.page));
+  const s = p.toString();
+  return '/admin/published' + (s ? '?' + s : '');
+}
+
+const anyFilter = !!(f.q || f.section || f.issue !== null || f.year || f.featured || f.openDraft || f.editedThisMonth);
+const flags = { featured: f.featured, openDraft: f.openDraft, edited: f.editedThisMonth, year: !!counts.year && f.year === counts.year };
+const other = !!(f.q || f.section || f.issue !== null || (f.year && f.year !== counts.year));
+// A card is current when its filter is the only one in use.
+const only = (k: keyof typeof flags) => !other && (Object.keys(flags) as (keyof typeof flags)[]).every((x) => flags[x] === (x === k));
+const cards = [
+  { label: 'All live', n: counts.all, link: href({}, false), active: !anyFilter },
+  { label: 'Featured', n: counts.featured, link: href({ featured: true }, false), active: only('featured') },
+  { label: 'With an open draft', n: counts.openDraft, link: href({ openDraft: true }, false), active: only('openDraft') },
+  { label: 'Edited this month', n: counts.editedThisMonth, link: href({ editedThisMonth: true }, false), active: only('edited') },
+  { label: `This year (${counts.year})`, n: counts.thisYear, link: href({ year: counts.year }, false), active: only('year') },
+];
+
+const sec = f.section ? getSection(f.section) : undefined;
+const chips: { label: string; remove: string }[] = [];
+if (f.q) chips.push({ label: `Search: ${f.q}`, remove: href({ q: '', page: 1 }) });
+if (f.section) chips.push({ label: `Section: ${sec?.label ?? f.section}`, remove: href({ section: '', area: '', page: 1 }) });
+if (f.area) chips.push({ label: `Area: ${sec?.areas?.find((a) => a.key === f.area)?.label ?? f.area}`, remove: href({ area: '', page: 1 }) });
+if (f.issue !== null) chips.push({ label: f.issue === 'none' ? 'No issue' : `Issue #${f.issue}`, remove: href({ issue: null, page: 1 }) });
+if (f.year) chips.push({ label: `Year: ${f.year}`, remove: href({ year: '', page: 1 }) });
+if (f.featured) chips.push({ label: 'Featured', remove: href({ featured: false, page: 1 }) });
+if (f.openDraft) chips.push({ label: 'With an open draft', remove: href({ openDraft: false, page: 1 }) });
+if (f.editedThisMonth) chips.push({ label: 'Edited this month', remove: href({ editedThisMonth: false, page: 1 }) });
+
+const from = total === 0 ? 0 : (page - 1) * f.perPage + 1;
+const to = Math.min(total, page * f.perPage);
+// Page numbers: first, last, and two either side of the current page.
+const nums: (number | null)[] = [];
+for (let n = 1; n <= pages; n++) if (n === 1 || n === pages || Math.abs(n - page) <= 2) { if (nums.length && nums[nums.length - 1] !== null && n - (nums[nums.length - 1] as number) > 1) nums.push(null); nums.push(n); }
+const fmtDay = (ms: number) => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: 'short', day: 'numeric' });
+const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d); return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' }) : d; };
 ---
 <Admin title="Published" current="published" wide>
-  <div class="cms-bar"><h1>Published stories</h1></div>
+  <div class="admin-page-head">
+    <div>
+      <p class="admin-eyebrow">Stories</p>
+      <h1>Published</h1>
+      <p class="admin-note">Editing loads the story's current text into a draft. Publishing that draft overwrites the same story, and the change is live at once.</p>
+    </div>
+    <div></div>
+  </div>
   {notice && <p class="admin-ok" role="status">{notice}</p>}
   {error && <p class="admin-error" role="alert">{error}</p>}
   {loadFailed && <p class="admin-error" role="alert">The story list could not be read. Please reload in a minute.</p>}
-  <p class="admin-note">Editing loads the story's current text into a new draft. Publishing that draft overwrites the same story, and the change is live at once.</p>
-  {list.length === 0 && !loadFailed ? (
-    <p class="admin-note">No published stories yet.</p>
-  ) : (
+  {!loadFailed && (
     <>
-    {!loadFailed && <BulkBar action="unpublish" label="Unpublish selected" noun="stories" more={[{ action: "editstory", label: "Edit fields" }]} />}
-    <ul class="cms-list">
-      {list.map((r) => (
-        <li class="cms-item">
-          <div class="bulk-row">
-          <label class="bulk-pick">
-            <input class="bulk-item" type="checkbox" name="slug" value={r.slug} form="bulk-form" aria-label={`${r.title || r.slug} (${r.date})`} />
-          </label>
-          <div class="bulk-body">
-          <a class="title" href={`${base}/stories/${r.slug}/`} rel="noopener">{r.title || r.slug}</a>
-          <div class="cms-meta">
-            <span>{sectionLabel(r.section, r.area)}</span>
-            <span>{r.date}</span>
-            {r.at && <span>Published <time datetime={new Date(r.at).toISOString()} data-local>{fmtTime(r.at)}</time>{r.by ? ` by ${r.by}` : ''}</span>}
-          </div>
-          <div class="cms-actions">
-            <form method="post" action="/api/admin/stories/edit">
-              <input type="hidden" name="slug" value={r.slug} />
-              <button class="cms-btn" type="submit">Edit</button>
-            </form>
-            <form method="post" action="/api/admin/stories/unpublish" data-confirm={`Unpublish "${r.title || r.slug}"? It will be hidden from the public site.`}>
-              <input type="hidden" name="slug" value={r.slug} />
-              <button class="cms-btn danger" type="submit">Unpublish</button>
-            </form>
-          </div>
-          </div>
-          </div>
-        </li>
+    <nav class="adm-stat-cards" aria-label="Show by group">
+      {cards.map((c) => (
+        <a class="adm-stat" href={c.link} aria-current={c.active ? 'true' : undefined}><span class="adm-stat-label">{c.label}</span><strong>{c.n}</strong></a>
       ))}
-    </ul>
+    </nav>
+    <form class="adm-search" method="get" action="/admin/published" role="search">
+      <label class="adm-q">Search<input type="search" name="q" value={f.q} maxlength="200" placeholder="Title, church, author or text" /></label>
+      <label>Section
+        <select name="section">
+          <option value="">All sections</option>
+          {SECTIONS.map((s) => <option value={s.key} selected={f.section === s.key}>{s.label}</option>)}
+        </select>
+      </label>
+      <label>Area
+        <select name="area" disabled={!sec?.areas}>
+          <option value="">{sec?.areas ? 'All areas' : 'Choose a section first'}</option>
+          {sec?.areas?.map((a) => <option value={a.key} selected={f.area === a.key}>{a.label}</option>)}
+        </select>
+      </label>
+      <label>Issue
+        <select name="issue">
+          <option value="">All issues</option>
+          <option value="none" selected={f.issue === 'none'}>No issue</option>
+          {facets.issues.map((n) => <option value={String(n)} selected={f.issue === n}>Issue #{n}</option>)}
+        </select>
+      </label>
+      <label>Year
+        <select name="year">
+          <option value="">All years</option>
+          {facets.years.map((y) => <option value={y} selected={f.year === y}>{y}</option>)}
+        </select>
+      </label>
+      <label>Sort by
+        <select name="sort">
+          {Object.entries(SORT_LABELS).map(([v, l]) => <option value={v} selected={f.sort === v}>{l}</option>)}
+        </select>
+      </label>
+      <label>Show
+        <select name="perPage">
+          {PUBLISHED_PER_PAGE.map((n) => <option value={String(n)} selected={f.perPage === n}>{n} a page</option>)}
+        </select>
+      </label>
+      {f.featured && <input type="hidden" name="featured" value="yes" />}
+      {f.openDraft && <input type="hidden" name="openDraft" value="yes" />}
+      {f.editedThisMonth && <input type="hidden" name="edited" value="month" />}
+      <button class="adm-apply" type="submit">Apply</button>
+    </form>
+    <div class="adm-summary">
+      <span><strong>{total}</strong> {total === 1 ? 'story' : 'stories'} shown{anyFilter ? ` of ${counts.all} live` : ''}</span>
+      {chips.map((c) => <span class="adm-chip">{c.label} <a href={c.remove} aria-label={`Remove filter ${c.label}`}>&times;</a></span>)}
+      {anyFilter && <a class="adm-clear" href={href({}, false)}>Clear filters</a>}
+    </div>
+    {total === 0 ? (
+      <p class="admin-note">{anyFilter ? 'No published stories match these filters.' : 'No published stories yet.'}</p>
+    ) : (
+      <>
+      <BulkBar action="unpublish" label="Unpublish selected" noun="stories" more={[{ action: "editstory", label: "Edit fields" }]} />
+      <div class="adm-table-wrap">
+      <table class="adm-table">
+        <caption class="adm-sr">Published stories, {from} to {to} of {total}</caption>
+        <thead>
+          <tr>
+            <th scope="col"><span class="adm-sr">Select</span></th>
+            <th scope="col">Story</th>
+            <th scope="col">State</th>
+            <th scope="col">Section</th>
+            <th scope="col">Issue</th>
+            <th scope="col">Story date</th>
+            <th scope="col">Published</th>
+            <th scope="col">Edited</th>
+            <th scope="col"><span class="adm-sr">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((r) => (
+            <tr>
+              <td class="adm-pick" data-label="">
+                <label class="bulk-pick"><input class="bulk-item" type="checkbox" name="slug" value={r.slug} form="bulk-form" aria-label={`${r.title || r.slug} (${r.date})`} /></label>
+              </td>
+              <td class="adm-story" data-label="">
+                <a class="adm-title" href={`${base}/stories/${r.slug}/`} rel="noopener">{r.title || r.slug}</a>
+                <span class="adm-sub">{r.church ? `${r.church} · ` : ''}/stories/{r.slug}/</span>
+              </td>
+              <td data-label="State">
+                <span class="adm-badge live">Live</span>
+                {r.featured && <span class="adm-badge featured">Featured</span>}
+                {r.openDraft && <span class="adm-badge opendraft">Open draft</span>}
+              </td>
+              <td data-label="Section">{sectionLabel(r.section, r.area)}</td>
+              <td data-label="Issue">{r.issue !== null ? `#${r.issue}` : '—'}</td>
+              <td data-label="Story date">{fmtStoryDate(r.date)}</td>
+              <td data-label="Published">
+                {r.publishedAt ? <time datetime={new Date(r.publishedAt).toISOString()} title={fmtTime(r.publishedAt)}>{fmtDay(r.publishedAt)}</time> : '—'}
+                {r.publishedBy && <span class="adm-sub">by {r.publishedBy}</span>}
+              </td>
+              <td data-label="Edited">{r.editedAt ? <time datetime={new Date(r.editedAt).toISOString()} title={fmtTime(r.editedAt)}>{fmtDay(r.editedAt)}</time> : '—'}</td>
+              <td class="adm-actions" data-label="">
+                <form method="post" action="/api/admin/stories/edit">
+                  <input type="hidden" name="slug" value={r.slug} />
+                  <button class="cms-btn" type="submit">Edit</button>
+                </form>
+                <form method="post" action="/api/admin/stories/unpublish" data-confirm={`Unpublish "${r.title || r.slug}"? It will be hidden from the public site.`}>
+                  <input type="hidden" name="slug" value={r.slug} />
+                  <button class="cms-btn danger" type="submit">Unpublish</button>
+                </form>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      </div>
+      <div class="adm-pager">
+        <span>Showing {from} to {to} of {total}{anyFilter ? ` matching, ${counts.all} live in all` : ''}</span>
+        {pages > 1 && (
+          <nav aria-label="Pages">
+            {page > 1 ? <a href={href({ page: page - 1 })} rel="prev">Previous</a> : <span class="adm-off">Previous</span>}
+            {nums.map((n) => n === null ? <span class="adm-gap">…</span> : <a href={href({ page: n })} aria-current={n === page ? 'page' : undefined} aria-label={`Page ${n}`}>{n}</a>)}
+            {page < pages ? <a href={href({ page: page + 1 })} rel="next">Next</a> : <span class="adm-off">Next</span>}
+          </nav>
+        )}
+      </div>
+      </>
+    )}
     </>
   )}
 </Admin>
 <script is:inline>
-  document.querySelectorAll('time[data-local]').forEach(function (t) {
-    var d = new Date(t.getAttribute('datetime'));
-    if (!isNaN(d)) t.textContent = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-  });
   document.querySelectorAll('form[data-confirm]').forEach(function (f) {
     f.addEventListener('submit', function (e) { if (!confirm(f.getAttribute('data-confirm'))) e.preventDefault(); });
   });

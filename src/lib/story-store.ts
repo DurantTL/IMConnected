@@ -1,4 +1,4 @@
-import { normalizeAdditionalSections, parseAdditionalSections, sectionMembershipSql } from './site';
+import { canonicalSectionKey, getSection, normalizeAdditionalSections, parseAdditionalSections, sectionMembershipSql } from './site';
 import { parseAnnouncement, announcementJson, type Announcement } from './announcement';
 import { refFromRow, type NewsletterRef } from './newsletter-issues';
 // Stories and their photos in the database. Since epic #25 step 4 this is the source of truth: publishing, editing and
@@ -302,4 +302,164 @@ export function slugsBySource(source: StorySource, status: StoryStatus): string[
 export function getStoryHash(slug: string): { hash: string | null; status: string; source: string } | undefined {
   const r = getDb().prepare('SELECT content_hash, status, source FROM stories WHERE slug = ?').get(slug) as { content_hash: string | null; status: string; source: string } | undefined;
   return r ? { hash: r.content_hash, status: r.status, source: r.source } : undefined;
+}
+
+// ---- Editor dashboard: the paged Published list (issue #140) ----
+// Read-only. Every filter is whitelisted by parsePublishedFilter() and every value is a bound parameter; the search
+// text is LIKE-escaped. The set is the live, non-draft stories (what the public site shows).
+
+export const PUBLISHED_SORTS = ['published_desc', 'published_asc', 'edited_desc', 'date_desc', 'title', 'section'] as const;
+export type PublishedSort = (typeof PUBLISHED_SORTS)[number];
+export const PUBLISHED_PER_PAGE = [25, 50, 100] as const;
+export const PUBLISHED_Q_MAX = 200;
+const PUBLISHED_PAGE_MAX = 100_000;
+
+export interface PublishedFilter {
+  q: string;
+  section: string;
+  area: string;
+  issue: number | 'none' | null;
+  /** Story date year, "2026". */
+  year: string;
+  featured: boolean;
+  openDraft: boolean;
+  /** Edited (dashboard or Studio change) since the first day of the current America/Chicago month. */
+  editedThisMonth: boolean;
+  sort: PublishedSort;
+  perPage: number;
+  page: number;
+}
+
+export interface PublishedRow {
+  slug: string;
+  title: string;
+  section: string;
+  area?: string;
+  church?: string;
+  author: string;
+  date: string;
+  featured: boolean;
+  issue: number | null;
+  editedAt: number | null;
+  publishedAt: number | null;
+  publishedBy: string | null;
+  openDraft: boolean;
+  draftId: number | null;
+}
+
+/** Wall clock in America/Chicago for an instant. */
+function chicagoParts(ms: number) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return { y: Number(p.year), mo: Number(p.month), d: Number(p.day), h: Number(p.hour) % 24, mi: Number(p.minute) };
+}
+
+/** The current America/Chicago year and the instant (ms) the current Chicago month began. */
+export function chicagoMonthStart(now = Date.now()): { year: string; startMs: number } {
+  const { y, mo } = chicagoParts(now);
+  const wall = Date.UTC(y, mo - 1, 1, 0, 0);
+  let guess = wall;
+  for (let i = 0; i < 2; i++) {
+    const p = chicagoParts(guess);
+    guess -= Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi) - wall;
+  }
+  return { year: String(y), startMs: guess };
+}
+
+/** Turn query-string parameters into a filter. Anything unknown or malformed falls back to its default. */
+export function parsePublishedFilter(params: URLSearchParams): PublishedFilter {
+  const one = (k: string) => params.get(k) ?? '';
+  const sec = getSection(canonicalSectionKey(one('section').trim()));
+  const area = sec?.areas?.some((a) => a.key === one('area')) ? one('area') : '';
+  const issueRaw = one('issue');
+  const sort = (PUBLISHED_SORTS as readonly string[]).includes(one('sort')) ? (one('sort') as PublishedSort) : 'published_desc';
+  const perPage = (PUBLISHED_PER_PAGE as readonly number[]).includes(Number(one('perPage'))) ? Number(one('perPage')) : 25;
+  const pageRaw = /^\d{1,6}$/.test(one('page')) ? Number(one('page')) : 1;
+  return {
+    // Control characters would be noise in a LIKE; the length is capped before it reaches SQL.
+    q: one('q').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, PUBLISHED_Q_MAX),
+    section: sec ? sec.key : '',
+    area,
+    issue: issueRaw === 'none' ? 'none' : /^\d{1,4}$/.test(issueRaw) && Number(issueRaw) > 0 ? Number(issueRaw) : null,
+    year: /^\d{4}$/.test(one('year')) ? one('year') : '',
+    featured: one('featured') === 'yes',
+    openDraft: one('openDraft') === 'yes',
+    editedThisMonth: one('edited') === 'month',
+    sort,
+    perPage,
+    page: Math.min(Math.max(pageRaw, 1), PUBLISHED_PAGE_MAX),
+  };
+}
+
+const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => '\\' + c);
+const PUB_LIVE = 'd.published_commit IS NOT NULL AND d.unpublished_at IS NULL';
+const PUB_AT = `COALESCE(CASE WHEN ${PUB_LIVE} THEN d.published_at END, s.published_at)`;
+const PUB_FROM = 'FROM stories s LEFT JOIN drafts d ON d.slug = s.slug LEFT JOIN users u ON u.id = d.published_by';
+const OPEN_DRAFT = "d.status IN ('new', 'in_review')";
+
+const ORDER: Record<PublishedSort, string> = {
+  published_desc: `${PUB_AT} DESC, s.slug ASC`,
+  published_asc: `${PUB_AT} ASC, s.slug ASC`,
+  edited_desc: 's.edited_at IS NULL, s.edited_at DESC, s.slug ASC',
+  date_desc: 's.date DESC, s.slug ASC',
+  title: 's.title COLLATE NOCASE ASC, s.slug ASC',
+  section: "s.section COLLATE NOCASE ASC, COALESCE(s.area, '') COLLATE NOCASE ASC, s.slug ASC",
+};
+
+function publishedWhere(f: PublishedFilter, now: number): { sql: string; args: (string | number)[] } {
+  const where = ["s.status = 'live'", 's.draft = 0'];
+  const args: (string | number)[] = [];
+  if (f.q) {
+    const like = `%${escapeLike(f.q)}%`;
+    where.push("(s.title LIKE ? ESCAPE '\\' OR s.slug LIKE ? ESCAPE '\\' OR COALESCE(s.church, '') LIKE ? ESCAPE '\\' OR s.author LIKE ? ESCAPE '\\' OR s.body LIKE ? ESCAPE '\\')");
+    args.push(like, like, like, like, like);
+  }
+  if (f.section) {
+    if (f.area) { where.push('s.section = ?', 's.area = ?'); args.push(f.section, f.area); }
+    else { where.push(sectionMembershipSql('s.')); args.push(f.section, f.section); }
+  }
+  if (f.issue === 'none') where.push('s.newsletter_issue IS NULL');
+  else if (f.issue !== null) { where.push('s.newsletter_issue = ?'); args.push(f.issue); }
+  if (f.year) { where.push('substr(s.date, 1, 4) = ?'); args.push(f.year); }
+  if (f.featured) where.push('s.featured = 1');
+  if (f.openDraft) where.push(OPEN_DRAFT);
+  if (f.editedThisMonth) { where.push('s.edited_at >= ?'); args.push(chicagoMonthStart(now).startMs); }
+  return { sql: 'WHERE ' + where.join(' AND '), args };
+}
+
+/** One page of the Published list and how many stories match all filters. The page is clamped to the last one. */
+export function listStoriesPage(f: PublishedFilter, now = Date.now()): { items: PublishedRow[]; total: number; page: number; pages: number } {
+  const db = getDb();
+  const { sql, args } = publishedWhere(f, now);
+  const total = Number((db.prepare(`SELECT COUNT(*) AS n ${PUB_FROM} ${sql}`).get(...args) as { n: number }).n);
+  const pages = Math.max(1, Math.ceil(total / f.perPage));
+  const page = Math.min(f.page, pages);
+  const rows = db.prepare(`SELECT s.slug, s.title, s.section, s.area, s.church, s.author, s.date, s.featured, s.newsletter_issue AS issue, s.edited_at,
+      ${PUB_AT} AS pub_at, CASE WHEN ${PUB_LIVE} THEN u.name END AS pub_by, CASE WHEN ${OPEN_DRAFT} THEN 1 ELSE 0 END AS open_draft, d.id AS draft_id
+    ${PUB_FROM} ${sql} ORDER BY ${ORDER[f.sort]} LIMIT ? OFFSET ?`).all(...args, f.perPage, (page - 1) * f.perPage) as Row[];
+  return {
+    total, page, pages,
+    items: rows.map((r) => ({
+      slug: String(r.slug), title: String(r.title), section: String(r.section), area: opt(r.area), church: opt(r.church), author: String(r.author), date: String(r.date),
+      featured: Number(r.featured) === 1, issue: optNum(r.issue) ?? null, editedAt: optNum(r.edited_at) ?? null, publishedAt: optNum(r.pub_at) ?? null,
+      publishedBy: opt(r.pub_by) ?? null, openDraft: Number(r.open_draft) === 1, draftId: optNum(r.draft_id) ?? null,
+    })),
+  };
+}
+
+export interface PublishedCounts { all: number; featured: number; openDraft: number; editedThisMonth: number; thisYear: number; year: string }
+
+/** The summary cards: one aggregate query over the live set. */
+export function publishedCounts(now = Date.now()): PublishedCounts {
+  const { year, startMs } = chicagoMonthStart(now);
+  const r = getDb().prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(s.featured = 1), 0) AS f, COALESCE(SUM(${OPEN_DRAFT}), 0) AS o,
+      COALESCE(SUM(s.edited_at >= ?), 0) AS e, COALESCE(SUM(substr(s.date, 1, 4) = ?), 0) AS y ${PUB_FROM} WHERE s.status = 'live' AND s.draft = 0`).get(startMs, year) as Row;
+  return { all: Number(r.n), featured: Number(r.f), openDraft: Number(r.o), editedThisMonth: Number(r.e), thisYear: Number(r.y), year };
+}
+
+/** Values for the filter menus: issues and years that at least one live story has. */
+export function publishedFacets(): { issues: number[]; years: string[] } {
+  const db = getDb();
+  const issues = (db.prepare("SELECT DISTINCT newsletter_issue AS n FROM stories WHERE status = 'live' AND draft = 0 AND newsletter_issue IS NOT NULL ORDER BY n DESC").all() as { n: number }[]).map((r) => Number(r.n));
+  const years = (db.prepare("SELECT DISTINCT substr(date, 1, 4) AS y FROM stories WHERE status = 'live' AND draft = 0 ORDER BY y DESC").all() as { y: string }[]).map((r) => String(r.y)).filter((y) => /^\d{4}$/.test(y));
+  return { issues, years };
 }
