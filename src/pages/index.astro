@@ -4,7 +4,9 @@ import StoryCard from '../components/StoryCard.astro';
 import EventSpotlight from '../components/EventSpotlight.astro';
 import { upcomingEvents } from '../lib/event-spotlight';
 import { SECTIONS, SITE, getSection } from '../lib/site';
-import { asUnavailable, getPublicStories, homepageStories } from '../lib/public-stories';
+import { asUnavailable, getPublicStories, homepageStories, HOMEPAGE_RECENT_DAYS } from '../lib/public-stories';
+import { archiveRail, ARCHIVE_LINK, ARCHIVE_LINK_LABEL } from '../lib/archive-rail';
+import { conferenceDay } from '../lib/event-spotlight';
 import { bySection } from '../lib/stories';
 
 // Rendered on the server from the stories table; the middleware caches the result.
@@ -33,6 +35,10 @@ const features = fresh(bySection(stories, 'features')).slice(0, 3);
 const columns = bySection(stories, 'columns').slice(0, 3);
 const youth = fresh(bySection(stories, 'youth')).slice(0, 3);
 const kids = bySection(stories, 'kids').slice(0, 3);
+const newsAreas = news.areas!.map((a) => ({ area: a, items: bySection(stories, 'news', a.key).slice(0, 3) }));
+// "From the archive" (issue #100): older stories, never one already shown above.
+const shownAbove = [lead, ...side, ...features, ...newsAreas.flatMap((a) => a.items), ...columns, ...youth, ...kids].filter(Boolean).map((s) => s!.id);
+const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HOMEPAGE_RECENT_DAYS, exclude: shownAbove });
 ---
 <Base current="home">
   <div class="wrap magazine-home">
@@ -81,8 +87,7 @@ const kids = bySection(stories, 'kids').slice(0, 3);
         <a class="more" href="/news/">All news →</a>
       </div>
       <div class="grid cols-4">
-        {news.areas!.map((a) => {
-          const items = bySection(stories, 'news', a.key).slice(0, 3);
+        {newsAreas.map(({ area: a, items }) => {
           return (
             <div class:list={['area-col', { 'area-empty': !items.length }]} data-sec="news">
               <h3 class="area-title"><a href={`/news/${a.key}/`}>{a.label}<span aria-hidden="true">↗</span></a></h3>
@@ -120,6 +125,16 @@ const kids = bySection(stories, 'kids').slice(0, 3);
           <a class="more" href="/kids/">More for kids →</a>
         </div>
         <div class="grid cols-3">{kids.map((s) => <StoryCard story={s} />)}</div>
+      </section>
+    )}
+
+    {archive.length > 0 && (
+      <section class="block archive-rail" aria-labelledby="archive-title">
+        <div class="block-head">
+          <div><p class="eyebrow">Past issues</p><h2 id="archive-title">From the archive</h2><p>Stories from past issues of IMConnected</p></div>
+          <a class="more" href={ARCHIVE_LINK}>{ARCHIVE_LINK_LABEL} →</a>
+        </div>
+        <div class="grid cols-4">{archive.map((s) => <StoryCard story={s} showKicker />)}</div>
       </section>
     )}
 

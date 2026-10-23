@@ -56,7 +56,7 @@ The [publication redesign guide](docs/PUBLICATION-REDESIGN.md) shows the IMConne
 
 Image uploads and flyers accept JPEG, PNG, WebP and AVIF. See [image formats and agent/Studio compatibility](docs/IMAGE-FORMATS.md) for request examples, original-byte handling and email considerations.
 
-The home page shows recent stories only: those dated within the last 90 days (`HOMEPAGE_RECENT_DAYS` in `src/lib/public-stories.ts`, counted by America/Chicago day) plus any story marked featured, whatever its date. Older stories stay on their section pages, in search and in the feeds.
+The home page shows recent stories only: those dated within the last 90 days (`HOMEPAGE_RECENT_DAYS` in `src/lib/public-stories.ts`, counted by America/Chicago day) plus any story marked featured, whatever its date. Older stories stay on their section pages, in search and in the feeds. A "From the archive" block near the foot of the page gives older stories a small, labelled place: four stories older than that window (three on phones), never one already shown above, picked by a shuffle seeded with the America/Chicago day (same four for everyone that day, photos first, spread across sections, no JavaScript), hidden when fewer than two qualify (`src/lib/archive-rail.ts`).
 
 The [community navigation guide](docs/COMMUNITY-NAVIGATION.md) covers the homepage event rail, administrator website-menu settings, separate Stories/Announcements/Events queues and customizable module quick access.
 

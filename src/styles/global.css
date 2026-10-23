@@ -700,3 +700,7 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
 .issue-step.is-next { text-align:right; margin-left:auto; }
 .issues-page :focus-visible { outline:3px solid var(--brand-text); outline-offset:3px; }
 .article-provenance a { color:inherit; text-underline-offset:3px; }
+/* Homepage "From the archive" rail (issue #100): phones show three of the four stories. */
+@media (max-width: 520px) { .archive-rail .grid > .card:nth-child(4) { display: none; } }
+/* One-line kickers keep headlines level across the four narrow columns even when a section and area label would wrap. */
+.archive-rail .card .kicker { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

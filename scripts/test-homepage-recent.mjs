@@ -43,7 +43,8 @@ try {
   for (let i = 0; i < 100; i++) { try { home = await fetch(base + '/'); break; } catch { await delay(100); } }
   check('server starts and the home page answers 200', home?.status === 200, String(home?.status));
   const html = await home.text();
-  const on = (slug, text = html) => text.includes(`href="/stories/${slug}/"`);
+  const main = html.replace(/<section class="block archive-rail"[\s\S]*?<\/section>/, '');
+  const on = (slug, text = main) => text.includes(`href="/stories/${slug}/"`);
 
   for (const slug of ['news-today', 'news-89', 'news-90', 'churches-recent', 'kids-recent']) check(`${slug} (inside the 90 days) is on the home page`, on(slug));
   for (const slug of ['news-91', 'news-400', 'schools-old', 'youth-old', 'features-old']) check(`${slug} (older, not featured) is nowhere on the home page`, !on(slug));
@@ -56,6 +57,20 @@ try {
   check('a recent section keeps its block (Kids)', /<h2>Kids<\/h2>/.test(html));
   const schools = html.match(/<h3 class="area-title"><a href="\/news\/schools\/">[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
   check('a news area with only old stories keeps its invitation', schools.includes('area-invitation') && schools.includes('Your community’s next story belongs here.') && !on('schools-old', schools));
+
+  // Issue #100: the "From the archive" rail. Older stories not already above: news-91, news-400, schools-old, youth-old, features-old (the featured 400 day story leads the hero).
+  const railOf = (text) => text.match(/<section class="block archive-rail"[\s\S]*?<\/section>/)?.[0] || '';
+  const rail = railOf(html);
+  const railSlugs = [...rail.matchAll(/class="card[^"]*" href="\/stories\/([^"/]+)\//g)].map((x) => x[1]);
+  check('the archive rail is on the home page with its heading and explanation', /<h2 id="archive-title">From the archive<\/h2>/.test(rail) && rail.includes('Stories from past issues of IMConnected'));
+  check('the archive rail shows four stories', railSlugs.length === 4, railSlugs.join());
+  check('the archive rail holds only stories older than the window', railSlugs.every((x) => ['news-91', 'news-400', 'schools-old', 'youth-old', 'features-old'].includes(x)), railSlugs.join());
+  const above = html.slice(0, html.indexOf('class="block archive-rail"')).split('href="/stories/').slice(1).map((chunk) => chunk.split('/')[0]);
+  check('the archive rail never repeats the hero story or anything shown above', !railSlugs.includes('news-featured-400') && !above.some((x) => railSlugs.includes(x)));
+  check('each archive card shows its original date', (rail.match(/class="meta">[^<]*· [A-Z][a-z]+ \d+, \d{4}</g) || []).length === 4);
+  check('the archive rail links to the archive (News for now)', rail.includes('href="/news/"'));
+  check('the same day gives the same archive rail', railOf(await (await fetch(base + '/')).text()) === rail);
+  check('the archive rail sits after the last story block and before the submit call to action', html.indexOf('class="block archive-rail"') > html.indexOf('data-sec="kids"') && html.indexOf('class="block archive-rail"') < html.indexOf('aria-label="Submit a story"'));
 
   for (const [p, slugs] of [['/news/', ['news-today', 'news-91', 'news-400', 'news-featured-400', 'schools-old']], ['/news/schools/', ['schools-old']], ['/youth/', ['youth-old']], ['/features/', ['features-old']]]) {
     const text = await (await fetch(base + p)).text();
