@@ -319,6 +319,10 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                       <label>Alt text (describe the photo for readers who can't see it)
                         <input type="text" name={`photo_${p.id}_alt`} value={p.alt} maxlength="300" autocomplete="off" />
                       </label>
+                      <label>Caption (shown under the photo, optional)
+                        <input type="text" name={`photo_${p.id}_caption`} value={p.caption} maxlength="300" autocomplete="off" aria-describedby={`caption-help-${p.id}`} data-photo-caption={p.id} />
+                      </label>
+                      <p class="admin-note" id={`caption-help-${p.id}`}>Alt text describes the picture for readers who can't see it. The caption is visible to everyone, as plain text up to 300 characters. Don't repeat the alt text here.</p>
                       {(p.path || p.url && safeImg(p.url)) && <details class="sb-focus-settings" open={i === 0}><summary>Adjust image focus</summary>
                         <div class="sb-fit" data-fit-group={p.id}>
                           <input type="hidden" name={`photo_${p.id}_fit`} value="cover" />

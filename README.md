@@ -32,7 +32,7 @@ Submissions appear under `/admin`. If the dashboard database can't be opened, `/
 
 ## Story photo layouts and the photo viewer
 
-Issue #35. A story's `photoLayout` (`src/lib/photo-layouts.ts`) is one of IMConnected Studio's story layouts, so a story published from a newsletter looks like the email. An editor picks it in the draft editor, Studio sends it to `POST /api/publish`, the AI agent may send it, and it is stored in `stories.photo_layout` / `drafts.photo_layout` (migration 016) and shown in `/stories.json`. There are no per-photo captions: the page shows alt text for screen readers, and the single "Photo: credit" line under the group.
+Issue #35. A story's `photoLayout` (`src/lib/photo-layouts.ts`) is one of IMConnected Studio's story layouts, so a story published from a newsletter looks like the email. An editor picks it in the draft editor, Studio sends it to `POST /api/publish`, the AI agent may send it, and it is stored in `stories.photo_layout` / `drafts.photo_layout` (migration 016) and shown in `/stories.json`. Per-photo captions (issue #84) are separate from alt text: alt describes the picture for screen readers, the caption is visible text under the photo (up to 300 characters, plain text, escaped), and the single "Photo: credit" line under the group is unchanged. Editors type it next to the alt text; Studio's photo `caption` and the agent's photo `caption` set it too; it shows in every layout, inline `{{photo N}}` and the click-to-enlarge viewer.
 
 | `photoLayout` | On the story page (lead photo first, then the others) |
 | --- | --- |
@@ -141,7 +141,7 @@ The first start of this version on a server whose database has not adopted the b
 The site serves the 50 newest published stories from the live database in two formats:
 
 - **`/rss.xml`**: RSS 2.0 for feed readers and services that import RSS.
-- **`/stories.json`**: for the IMConnected Studio newsletter builder. Every story has `id`, `url`, `title`, `section`, `sectionLabel`, `author`, `date` (YYYY-MM-DD), `photos`, `photoAlts` (alt text for each photo in `photos`, same order; entries may be empty), `photoLayout` and `featured`. `photoLayout` (added by issue #35, so `version` stays 1) says how the story page arranges the photos: `one`, `twoUp`, `heroGrid`, `mosaic` or `stack` (the same names as IMConnected Studio's story layouts); `one` is the original look (lead photo, the others in a row under the text) and is what every story has unless an editor or Studio chose another, so a consumer that ignores the field is unaffected. `dek`, `area`, `areaLabel`, `column`, `authorTitle`, `church`, `image`, `imageAlt` and `photoCredit` appear only when the story has them. `FeedItem` in `src/lib/feed.ts` is the definitive list. All links and photo addresses are absolute, so they work inside an email.
+- **`/stories.json`**: for the IMConnected Studio newsletter builder. Every story has `id`, `url`, `title`, `section`, `sectionLabel`, `author`, `date` (YYYY-MM-DD), `photos`, `photoAlts` (alt text for each photo in `photos`, same order; entries may be empty), `photoLayout` and `featured`. `photoCaptions` (visible captions for each photo in `photos`, same order; entries may be empty) and `imageCaption` (the lead photo's, only when it has one) were added by issue #84 (plain text, up to 300 characters: escape it yourself; `version` stays 1). `photoLayout` (added by issue #35, so `version` stays 1) says how the story page arranges the photos: `one`, `twoUp`, `heroGrid`, `mosaic` or `stack` (the same names as IMConnected Studio's story layouts); `one` is the original look (lead photo, the others in a row under the text) and is what every story has unless an editor or Studio chose another, so a consumer that ignores the field is unaffected. `dek`, `area`, `areaLabel`, `column`, `authorTitle`, `church`, `image`, `imageAlt` and `photoCredit` appear only when the story has them. `FeedItem` in `src/lib/feed.ts` is the definitive list. All links and photo addresses are absolute, so they work inside an email.
 
 `/stories.json` is the public feed of live stories. IMConnected Studio's "Import from IMConnected" button reads the authenticated, CORS-enabled `GET /api/stories` (see "Story list for Studio" below), which additionally includes drafts still waiting for an editor, so no proxy header is needed. Both lists read the database and reflect story changes without a build. See `docs/STUDIO-IMPORT.md` for the newsletter builder plan.
 
@@ -381,6 +381,8 @@ imageAlt: "Caption"
 photoCredit: "Photographer"
 photos: []               # extra gallery images
 photoAlts: []            # alt text for each of `photos`, same order (optional)
+imageCaption: ""         # visible caption under the lead photo, plain text up to 300 characters (optional, default none)
+photoCaptions: []        # visible caption for each of `photos`, same order (optional)
 photoLayout: one         # one | twoUp | heroGrid | mosaic | stack (optional, default one): how the story page arranges the photos
 storyBlocks: []          # optional structured modules; [] keeps the Markdown body below
 announcement: null      # optional {kind: event|announcement, eventDate, location, links: [{label,url}], videoUrl}

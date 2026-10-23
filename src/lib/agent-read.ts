@@ -35,6 +35,7 @@ export function agentDraftView(draft: Draft, editorTouched: boolean) {
     photos: listPhotos(draft.id).map((p) => ({
       position: p.position,
       alt: p.alt,
+      caption: p.caption,
       // Dimensions are not stored for draft photos, so width and height are left out.
       format: p.ext ?? (p.url ? (/\.([a-z0-9]+)(?:[?#].*)?$/i.exec(p.url)?.[1]?.toLowerCase() ?? null) : null),
       focalX: p.focalX,

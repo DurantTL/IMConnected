@@ -265,6 +265,12 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .card .media[data-fit=contain] img { transition: none; }
 .article .photos img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
 .article .photos figcaption { margin-top: -2px; }
+/* Photo captions (issue #84): a photo with a caption sits in its own figure; the caption is directly under its tile, so mosaic and grid layouts stay grids. */
+.photos-row { align-items: start; }
+.photos-tile, .gallery-item { margin: 0; min-width: 0; }
+.article .photo-caption { font-size: 0.85rem; line-height: 1.4; margin: 6px 0 0; color: var(--ink-3); overflow-wrap: anywhere; }
+.article .photos .photo-caption { margin-top: 6px; }
+.article > figure > .photo-caption { margin-top: 8px; }
 .prose .story-module-action a.btn { color: var(--brand-ink); text-decoration: none; }
 .article > figure > a, .gallery a { cursor: zoom-in; }
 .article > figure > a { display: block; } /* a block link around the inline image keeps the figure's height, and gives the focus ring a box to draw around */

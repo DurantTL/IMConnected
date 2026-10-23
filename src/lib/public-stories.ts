@@ -1,4 +1,4 @@
-import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
+import { storyBlockPhotos, mapStoryPhotos, type StoryBlock } from './story-blocks';
 // Where the public pages get their stories (epic #25, step 4). Server-side only.
 //
 // One source: the stories table. The built content collection is NOT a fallback any more: after the one-time adoption
@@ -50,7 +50,7 @@ export function toPublicStory(s: Story): PublicStory {
         const index = block.photoIndex !== undefined && sources[block.photoIndex] === block.url ? block.photoIndex : sources.indexOf(block.url);
         return index < 0 ? block : { ...block, url: photoUrl(s, index, block.url) };
       }),
-      photoFocus: s.photoRows.map((p) => ({ focalX: p.focalX ?? 50, focalY: p.focalY ?? 50, zoom: p.zoom ?? 1, fit: p.fit ?? 'cover', fitFill: p.fitFill ?? 'blur' })),
+      photoFocus: s.photoRows.map((p) => ({ focalX: p.focalX ?? 50, focalY: p.focalY ?? 50, zoom: p.zoom ?? 1, fit: p.fit ?? 'cover', fitFill: p.fitFill ?? 'blur', caption: p.caption ?? '' })),
       featured: s.featured,
     },
   };
@@ -140,7 +140,9 @@ export async function renderStoryBody(story: PublicStory): Promise<string> {
 export async function renderStoryContent(story: PublicStory): Promise<{ html: string; used: Set<string>; usedPhotoIndices?: Set<number> }> {
   if (story.data.storyBlocks?.length) {
     const photos = storyBlockPhotos(story.data.storyBlocks).filter((p) => p.url);
-    return { html: await renderStoryBlocksSafe(story.data.storyBlocks, { flyerUrl: story.data.announcement ? story.data.image : undefined }), used: new Set(photos.filter((p) => p.photoIndex === undefined).map((p) => p.url!)), usedPhotoIndices: new Set(photos.filter((p) => p.photoIndex !== undefined).map((p) => p.photoIndex!)) };
+    const sources = [...(story.data.image ? [story.data.image] : []), ...story.data.photos];
+    const resolveCaption = (b: StoryBlock) => { const i = b.photoIndex !== undefined && sources[b.photoIndex] === b.url ? b.photoIndex : sources.indexOf(b.url ?? ''); return i < 0 ? undefined : story.data.photoFocus?.[i]?.caption; };
+    return { html: await renderStoryBlocksSafe(story.data.storyBlocks, { flyerUrl: story.data.announcement ? story.data.image : undefined, resolveCaption }), used: new Set(photos.filter((p) => p.photoIndex === undefined).map((p) => p.url!)), usedPhotoIndices: new Set(photos.filter((p) => p.photoIndex !== undefined).map((p) => p.photoIndex!)) };
   }
   const d = story.data;
   const photos = [...(d.image ? [{ src: d.image, alt: d.imageAlt ?? '' }] : []), ...d.photos.map((src, i) => ({ src, alt: d.photoAlts[i] ?? '' }))].map((photo, i) => ({ ...photo, ...d.photoFocus?.[i] }));

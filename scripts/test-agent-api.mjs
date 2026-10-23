@@ -663,6 +663,27 @@ try {
     let g = await gget(`/api/agent/stories/${id}`);
     check('read-back returns the crops, authorTitle, photoCredit and featured', g.data.draft.authorTitle === 'Youth Director' && g.data.draft.photoCredit === 'Synthetic Photographer' && g.data.draft.featured === true && g.data.draft.photos[0].focalX === 20 && g.data.draft.photos[0].focalY === 80.5 && g.data.draft.photos[0].zoom === 2 && g.data.draft.photos[1].zoom === 1);
 
+    // photo captions (issue #84): plain text, one line, up to 300 characters; read back as data
+    {
+      const CAP_SRC = 'https://www.facebook.com/example-page/posts/9150';
+      const hostile = '<script>alert(1)</script>  Volunteers\nsorting <b>boxes</b> & "more"';
+      let cr = await gpost(base({ sourceUrl: CAP_SRC, photos: [{ data: dataUrl(PNG_A), alt: 'One', caption: hostile }, { data: dataUrl(PNG_B), alt: 'Two' }] }));
+      const cid = cr.data.id;
+      check('create with a photo caption: 201', cr.status === 201 && Number.isInteger(cid), cr.text.slice(0, 200));
+      const cph = qg('SELECT caption FROM draft_photos WHERE draft_id = ? ORDER BY position', cid);
+      check('the caption is stored on one line as typed (escaped when rendered, never HTML); a photo without one is empty', cph[0].caption === '<script>alert(1)</script> Volunteers sorting <b>boxes</b> & "more"' && cph[1].caption === '', JSON.stringify(cph));
+      const cg = await gget(`/api/agent/stories/${cid}`);
+      check('read-back returns caption per photo as JSON data', cg.status === 200 && cg.data.draft.photos[0].caption === cph[0].caption && cg.data.draft.photos[1].caption === '');
+      cr = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9151', photos: [{ data: dataUrl(PNG_A), alt: 'One', caption: 'x'.repeat(301) }] }));
+      check('a caption over 300 characters is 400 photo_caption_too_long and creates nothing', cr.status === 400 && cr.data.error === 'photo_caption_too_long' && qg("SELECT COUNT(*) c FROM drafts WHERE source_url LIKE '%9151'")[0].c === 0, cr.text.slice(0, 200));
+      cr = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9152', photos: [{ data: dataUrl(PNG_A), alt: 'One', caption: 5 }] }));
+      check('a caption that is not text is 400 bad_field', cr.status === 400 && cr.data.error === 'bad_field', cr.text.slice(0, 200));
+      cr = await gpost({ sourceUrl: CAP_SRC, title: 'Retitled, photos omitted' });
+      check('an update that omits photos leaves the captions alone', cr.status === 201 && qg('SELECT caption FROM draft_photos WHERE draft_id = ? ORDER BY position', cid)[0].caption === cph[0].caption);
+      const caps = await gget('/api/agent/sections');
+      check('capabilities describe the caption field and no longer list it as planned', caps.data.photoCaption?.field === 'caption' && caps.data.photoCaption.maxLength === 300 && !caps.data.photoCrop.planned.includes('caption'), JSON.stringify(caps.data.photoCaption));
+    }
+
     // announcement patches on a sourceUrl update (omitted photos: untouched)
     r = await gpost({ sourceUrl: SRC, announcement: { location: 'Synthetic Gym' } });
     check('update: { location } alone changes only the location', r.status === 201 && r.data.status === 'updated' && JSON.stringify(ann(id)) === JSON.stringify({ ...full, location: 'Synthetic Gym', videoUrl: 'https://www.youtube.com/watch?v=abcdefghijk' }), JSON.stringify(ann(id)));
@@ -749,7 +770,7 @@ try {
     const caps = await gget('/api/agent/sections');
     const c = caps.data;
     check('capabilities: announcement patch semantics are advertised (additive)', c.announcement?.patch?.semantics?.includes('partial merge') && c.announcement.kinds.length === 2 && !!c.reopen.endpoint);
-    check('capabilities: photo crop fields and ranges', JSON.stringify(c.photoCrop.fields) === '["focalX","focalY","zoom"]' && c.photoCrop.ranges.zoom[1] === 3 && c.photoCrop.ranges.focalX[1] === 100 && c.photoCrop.planned.includes('fit') && c.photoCrop.planned.includes('caption'));
+    check('capabilities: photo crop fields and ranges', JSON.stringify(c.photoCrop.fields) === '["focalX","focalY","zoom"]' && c.photoCrop.ranges.zoom[1] === 3 && c.photoCrop.ranges.focalX[1] === 100 && c.photoCrop.planned.includes('fit') && !c.photoCrop.planned.includes('caption'));
     check('capabilities: authorTitle, photoCredit, featured with limits', c.storyFields.authorTitle.maxLength === 120 && c.storyFields.photoCredit.maxLength === 120 && c.storyFields.featured.type === 'boolean');
     check('capabilities: marker support', c.photoMarkers.syntax === '{{photo N}}' && /bad_photo_marker/.test(c.photoMarkers.rule));
     check('the g server logs hold no token, note or upload path', !logs.g.join('\n').includes(AGENT_TOKEN) && !logs.g.join('\n').includes('uploads'));

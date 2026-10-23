@@ -32,6 +32,9 @@ const stories = defineCollection({
     photos: z.array(z.string()).default([]),
     /** Alt text for each of `photos`, in the same order (shorter or missing entries fall back to a generic description) */
     photoAlts: z.array(z.string()).default([]),
+    /** Visible caption of the lead photo and of each of `photos` (same order). Plain text up to 300 characters, shown as a figcaption; empty means none (issue #84). */
+    imageCaption: z.string().max(300).optional(),
+    photoCaptions: z.array(z.string().max(300)).default([]),
     /** How the story page arranges the photos (Studio's story layouts). Missing means one: the lead photo, the others in a row. Values live in src/lib/photo-layouts.ts. */
     photoLayout: z.enum(['one', 'twoUp', 'heroGrid', 'mosaic', 'stack']).default('one'),
     announcement: z.unknown().optional().transform((value) => normalizeAnnouncement(value)),

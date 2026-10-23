@@ -47,12 +47,14 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     let fields: ReturnType<typeof readDraftFields>['fields'] = draft;
     let focus: ReturnType<typeof readDraftFields>['photoFocus'] = new Map();
     let previewAlts = new Map<number, string>();
+    let previewCaptions = new Map<number, string>();
     if (isEditable(draft)) {
       try {
         const parsed = readDraftFields(form);
         fields = parsed.fields;
         focus = parsed.photoFocus;
         previewAlts = parsed.photoAlts;
+        previewCaptions = parsed.photoCaptions;
       } catch (err) {
         return jsonResponse(400, { ok: false, error: (err as Error).message });
       }
@@ -65,16 +67,16 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
       const photo = draftPhotos.find((p) => p.id === photoId);
       if (!photo) return undefined;
       const point = { ...photo, ...focus.get(photoId) };
-      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom, fit: point.fit, fitFill: point.fitFill };
+      return { url: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, caption: previewCaptions.get(photo.id) ?? photo.caption, focalX: point.focalX, focalY: point.focalY, zoom: point.zoom, fit: point.fit, fitFill: point.fitFill };
     } });
     else {
-      const rendered = await renderMediaMarkdown(fields.body, draftPhotos.map((photo) => ({ ...photo, src: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, ...focus.get(photo.id) })), true, bulletin ? 0 : undefined);
+      const rendered = await renderMediaMarkdown(fields.body, draftPhotos.map((photo) => ({ ...photo, src: photo.path ? `/api/admin/photos/${photo.id}` : photo.url ?? '', alt: previewAlts.get(photo.id) ?? photo.alt, caption: previewCaptions.get(photo.id) ?? photo.caption, ...focus.get(photo.id) })), true, bulletin ? 0 : undefined);
       html = rendered.html; usedPreviewPhotos = rendered.used;
     }
     if (bulletin) {
       const first = draftPhotos[0];
       const hasFirst = fields.storyBlocks?.length ? storyBlockPhotos(fields.storyBlocks).some((p) => p.photoId === first?.id) : usedPreviewPhotos.has(0);
-      if (first && !hasFirst) html = renderInlinePhoto({ src: first.path ? `/api/admin/photos/${first.id}` : first.url ?? '', alt: previewAlts.get(first.id) ?? first.alt }, true, true) + html;
+      if (first && !hasFirst) html = renderInlinePhoto({ src: first.path ? `/api/admin/photos/${first.id}` : first.url ?? '', alt: previewAlts.get(first.id) ?? first.alt, caption: previewCaptions.get(first.id) ?? first.caption }, true, true) + html;
       html = await renderAnnouncementDetails(bulletin, true) + html;
     }
     const ownHosts = [new URL(request.url).hostname];
@@ -93,7 +95,7 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     } catch (err) {
       return jsonResponse(400, { ok: false, error: (err as Error).message });
     }
-    const r = saveDraft(draft.id, version, parsed.fields, parsed.photoAlts, user.id, parsed.layout, parsed.photoFocus);
+    const r = saveDraft(draft.id, version, parsed.fields, parsed.photoAlts, user.id, parsed.layout, parsed.photoFocus, parsed.photoCaptions);
     if (!r.ok) return jsonResponse(r.reason === 'conflict' ? 409 : r.reason === 'locked' ? 423 : 400, { ok: false, conflict: r.reason === 'conflict', error: r.message });
     if (saveAuditDue(user.id, draft.id)) audit('draft.save', { userId: user.id, target: `draft:${draft.id}`, ip });
     return jsonResponse(200, { ok: true, updatedAt: r.updatedAt, savedBy: user.name, savedAt: r.updatedAt });

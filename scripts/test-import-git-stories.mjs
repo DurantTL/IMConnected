@@ -116,6 +116,16 @@ try {
   r = imp('--apply');
   check('...and a second run reports the layout story as unchanged', /same\s+zz-layout-good/.test(r.out), r.out);
 
+  // photo captions (issue #84): empty by default; imageCaption and photoCaptions are imported as plain text (a "<" is kept as typed, escaped on output)
+  write('zz-caption-good', md('Caption Good', 'image: "/images/stories/zz-hand-story/photo-1.jpg"\nimageAlt: "A synthetic picture"\nimageCaption: "A synthetic lead caption <b>kept as text</b>"\nphotos:\n  - "/images/stories/zz-hand-story/photo-1.jpg"\nphotoCaptions:\n  - "Second caption"\n'));
+  write('zz-caption-long', md('Caption Long', 'image: "/images/stories/zz-hand-story/photo-1.jpg"\nimageCaption: "' + 'c'.repeat(301) + '"\n'));
+  r = imp('--apply');
+  const capRows = (slug) => q("SELECT p.caption c FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = ? ORDER BY p.position", slug).map((x) => x.c);
+  check('captions in a story file are imported per photo; a story without any has the empty default', JSON.stringify(capRows('zz-caption-good')) === JSON.stringify(['A synthetic lead caption <b>kept as text</b>', 'Second caption']) && capRows('zz-hand-story').every((c) => c === ''), JSON.stringify(capRows('zz-caption-good')));
+  check('a caption over 300 characters is an error naming the file, nothing stored', /ERROR\s+zz-caption-long.*300/.test(r.out) && !q("SELECT 1 FROM stories WHERE slug = 'zz-caption-long'").length, r.out);
+  r = imp('--apply');
+  check('...and a second run reports the captioned story as unchanged', /same\s+zz-caption-good/.test(r.out), r.out);
+
   // story modules (migration 017): an image module may only show the story's own photos; module text is escaped like the body
   const mods = (blocks) => `storyBlocks: ${JSON.stringify(blocks)}\n`;
   const own = '/images/stories/zz-hand-story/photo-1.jpg';

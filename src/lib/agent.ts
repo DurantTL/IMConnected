@@ -18,7 +18,7 @@ export class AgentError extends Error {
   }
 }
 
-export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, author: 120, authorTitle: 120, photoCredit: 120, church: 160, alt: 300, note: 1000, url: 2000, perHour: 60, batchMaxStories: 20, batchStoriesPerHour: 300 };
+export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, author: 120, authorTitle: 120, photoCredit: 120, church: 160, alt: 300, caption: 300, note: 1000, url: 2000, perHour: 60, batchMaxStories: 20, batchStoriesPerHour: 300 };
 /** Room kept for the JSON around the photos (title, body of up to 20,000 characters, keys, quotes). */
 export const AGENT_JSON_ALLOWANCE_BYTES = 128 * 1024;
 /**
@@ -97,6 +97,8 @@ export interface AgentPhoto {
   bytes: Uint8Array;
   ext: string;
   alt: string;
+  /** Visible caption (issue #84), one line of plain text up to 300 characters; '' when none. Escaped when rendered, never HTML. */
+  caption: string;
   /** Optional crop, validated; undefined = the editor defaults (50 / 50 / 1). */
   focalX?: number;
   focalY?: number;
@@ -173,6 +175,8 @@ function parsePhoto(raw: unknown): AgentPhoto {
   const ext = sniffImage(bytes);
   if (!ext) throw new AgentError('photo_not_image', 'A photo is not a JPG, PNG, WebP or AVIF image.');
   const alt = oneLine(optional(p, 'alt')).slice(0, AGENT_LIMITS.alt);
+  const caption = oneLine(optional(p, 'caption'));
+  if (caption.length > AGENT_LIMITS.caption) throw new AgentError('photo_caption_too_long', `A photo caption is longer than ${AGENT_LIMITS.caption} characters.`);
   const crop: { focalX?: number; focalY?: number; zoom?: number } = {};
   for (const [key, lo, hi] of [['focalX', 0, 100], ['focalY', 0, 100], ['zoom', 1, 3]] as const) {
     const v = p[key];
@@ -180,7 +184,7 @@ function parsePhoto(raw: unknown): AgentPhoto {
     if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) throw new AgentError('bad_photo_crop', `Photo ${key} must be a number from ${lo} to ${hi}.`);
     crop[key] = key === 'zoom' ? Math.round(v * 100) / 100 : v;
   }
-  return { bytes: new Uint8Array(bytes), ext, alt, ...crop };
+  return { bytes: new Uint8Array(bytes), ext, alt, caption, ...crop };
 }
 
 /**

@@ -35,6 +35,10 @@ export interface FeedItem {
   photos: string[];
   /** Alt text for each of `photos`, same order; entries may be empty */
   photoAlts: string[];
+  /** Visible caption of the lead photo (issue #84); omitted when it has none. Plain text: escape it like any text. */
+  imageCaption?: string;
+  /** Visible caption of each of `photos`, same order; entries may be empty. Plain text. */
+  photoCaptions: string[];
   /** How the story page arranges the photos: one, twoUp, heroGrid, mosaic or stack (one = lead photo, others in a row) */
   photoLayout: string;
   storyBlocks?: StoryBlock[];
@@ -66,7 +70,7 @@ export interface FeedSource {
     photoLayout?: string;
     storyBlocks?: StoryBlock[];
     announcement?: Announcement | null;
-    photoFocus?: { focalX: number; focalY: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' }[];
+    photoFocus?: { focalX: number; focalY: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy'; caption?: string }[];
     featured: boolean;
   };
 }
@@ -74,6 +78,7 @@ export interface FeedSource {
 export function feedItem(story: FeedSource, site: URL): FeedItem {
   const d = story.data;
   const abs = (path: string) => new URL(path, site).href;
+  const leadCaption = d.image ? d.photoFocus?.[0]?.caption ?? '' : '';
   return {
     id: story.id,
     url: abs(storyUrl(story)),
@@ -96,8 +101,10 @@ export function feedItem(story: FeedSource, site: URL): FeedItem {
     photos: d.photos.map(abs),
     photoAlts: d.photos.map((_, i) => d.photoAlts[i] ?? ''),
     photoLayout: photoLayoutOrDefault(d.photoLayout),
+    ...(leadCaption ? { imageCaption: leadCaption } : {}),
+    photoCaptions: d.photos.map((_, i) => d.photoFocus?.[i + (d.image ? 1 : 0)]?.caption ?? ''),
     ...(d.storyBlocks?.length ? { storyBlocks: mapStoryPhotos(escapeStoryBlocks(d.storyBlocks), (b) => b.url ? { ...b, url: abs(b.url) } : b) } : {}),
-    ...(d.photoFocus?.some((p) => p.focalX !== 50 || p.focalY !== 50 || (p.zoom ?? 1) !== 1 || (p.fit ?? 'cover') !== 'cover') ? { photoFocus: d.photoFocus } : {}),
+    ...(d.photoFocus?.some((p) => p.focalX !== 50 || p.focalY !== 50 || (p.zoom ?? 1) !== 1 || (p.fit ?? 'cover') !== 'cover') ? { photoFocus: d.photoFocus.map(({ caption: _caption, ...crop }) => crop) } : {}),
     ...(d.announcement ? { announcement: d.announcement } : {}),
     featured: d.featured,
   };
