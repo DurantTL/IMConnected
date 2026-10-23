@@ -36,7 +36,7 @@ const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 // A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
 const CLIENT_TMP = path.join(SCRATCH, 'client');
 fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
-const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529, j: 4530, k: 4531 };
+const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529, j: 4530, k: 4531, l: 4532 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -58,7 +58,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [], j: [], k: [] };
+const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [], j: [], k: [], l: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -162,7 +162,8 @@ start('h', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.h), DA
 start('i', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.i), DATA_DIR: path.join(SCRATCH, 'data-i'), SITE_URL: `http://localhost:${P.i}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '25' }); // issue 90: hourly story ceiling lowered to 25 (test/ops tuning only)
 start('j', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.j), DATA_DIR: path.join(SCRATCH, 'data-j'), SITE_URL: `http://localhost:${P.j}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '10' }); // issue 90: ceiling below the batch size limit
 start('k', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.k), DATA_DIR: path.join(SCRATCH, 'data-k'), SITE_URL: `http://localhost:${P.k}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 98 newsletter issue checks, its own rate window
-for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i, P.j, P.k]) await waitFor(`http://localhost:${port}/`);
+start('l', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.l), DATA_DIR: path.join(SCRATCH, 'data-l'), SITE_URL: `http://localhost:${P.l}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 82 photo fit checks, its own rate window
+for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i, P.j, P.k, P.l]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -775,7 +776,7 @@ try {
     const caps = await gget('/api/agent/sections');
     const c = caps.data;
     check('capabilities: announcement patch semantics are advertised (additive)', c.announcement?.patch?.semantics?.includes('partial merge') && c.announcement.kinds.length === 2 && !!c.reopen.endpoint);
-    check('capabilities: photo crop fields and ranges', JSON.stringify(c.photoCrop.fields) === '["focalX","focalY","zoom"]' && c.photoCrop.ranges.zoom[1] === 3 && c.photoCrop.ranges.focalX[1] === 100 && c.photoCrop.planned.includes('fit') && !c.photoCrop.planned.includes('caption'));
+    check('capabilities: photo crop fields and ranges', JSON.stringify(c.photoCrop.fields) === '["focalX","focalY","zoom"]' && c.photoCrop.ranges.zoom[1] === 3 && c.photoCrop.ranges.focalX[1] === 100 && c.photoCrop.planned.length === 0 && c.photoFit?.fields.join() === 'fit,fitFill');
     check('capabilities: authorTitle, photoCredit, featured with limits', c.storyFields.authorTitle.maxLength === 120 && c.storyFields.photoCredit.maxLength === 120 && c.storyFields.featured.type === 'boolean');
     check('capabilities: marker support', c.photoMarkers.syntax === '{{photo N}}' && /bad_photo_marker/.test(c.photoMarkers.rule) && JSON.stringify(c.photoMarkers.options) === '["wide","full","left","right"]');
     check('the g server logs hold no token, note or upload path', !logs.g.join('\n').includes(AGENT_TOKEN) && !logs.g.join('\n').includes('uploads'));
@@ -960,6 +961,32 @@ try {
     x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(3, 1) });
     check('...then the next story is a retryable 429', x.status === 429 && !!x.headers.get('retry-after'));
     // Giving budget back for transient "unavailable" items is not exercised here: it needs a database failure mid-batch, which the end-to-end harness cannot induce.
+  }
+
+  // ================= issue 82: per-photo fit and fill, its own rate window =================
+  {
+    const L = `http://localhost:${P.l}`;
+    const LDB = path.join(SCRATCH, 'data-l', 'imconnected.db');
+    const ql = (sql, ...args) => { const db = new DatabaseSync(LDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    await fetch(L + '/admin/login'); // opens the database and applies migrations
+    const lpost = (json) => call(L, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json });
+    const lget = (url) => call(L, 'GET', url, { token: AGENT_TOKEN });
+    const FIT_SRC = 'https://www.facebook.com/example-page/posts/9160';
+    let fr = await lpost(story({ sourceUrl: FIT_SRC, photos: [{ data: dataUrl(PNG_A), alt: 'One', fit: 'contain', fitFill: 'navy' }, { data: dataUrl(PNG_B), alt: 'Two' }] }));
+    const fid = fr.data.id;
+    check('create with photo fit: 201', fr.status === 201 && Number.isInteger(fid), fr.text.slice(0, 200));
+    const fph = ql('SELECT fit, fit_fill FROM draft_photos WHERE draft_id = ? ORDER BY position', fid);
+    check('fit and fitFill are stored; omitted means cover / blur', fph[0].fit === 'contain' && fph[0].fit_fill === 'navy' && fph[1].fit === 'cover' && fph[1].fit_fill === 'blur', JSON.stringify(fph));
+    const fg = await lget(`/api/agent/stories/${fid}`);
+    check('read-back returns fit and fitFill per photo', fg.status === 200 && fg.data.draft.photos[0].fit === 'contain' && fg.data.draft.photos[0].fitFill === 'navy' && fg.data.draft.photos[1].fit === 'cover');
+    for (const [name, bad, code] of [['fit "stretch"', { fit: 'stretch' }, 'bad_photo_fit'], ['fit null', { fit: null }, 'bad_photo_fit'], ['fit number', { fit: 1 }, 'bad_photo_fit'], ['fitFill "red"', { fitFill: 'red' }, 'bad_photo_fit_fill'], ['fitFill null', { fitFill: null }, 'bad_photo_fit_fill']]) {
+      const before = ql('SELECT COUNT(*) c FROM draft_photos WHERE draft_id = ?', fid)[0].c;
+      fr = await lpost(story({ sourceUrl: FIT_SRC, photos: [{ data: dataUrl(PNG_A), ...bad }] }));
+      check(`${name} is 400 ${code} and keeps the photos`, fr.status === 400 && fr.data.error === code && ql('SELECT COUNT(*) c FROM draft_photos WHERE draft_id = ?', fid)[0].c === before, fr.text.slice(0, 200));
+    }
+    fr = await lpost(story({ sourceUrl: FIT_SRC, photos: [{ data: dataUrl(PNG_A), fit: 'contain', fitFill: 'paper' }] }));
+    const fph2 = ql('SELECT fit, fit_fill FROM draft_photos WHERE draft_id = ? ORDER BY position', fid);
+    check('an update with photos replaces them with the new fit', fr.status === 201 && fph2.length === 1 && fph2[0].fit === 'contain' && fph2[0].fit_fill === 'paper', JSON.stringify(fph2));
   }
 
   // ================= newsletter issue (issue #98) =================

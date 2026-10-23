@@ -71,11 +71,11 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
       if (!existing) db.prepare("UPDATE drafts SET published_commit='db',published_at=?,published_by=?,published_via_studio=? WHERE id=?").run(live.published_at, live.published_by, live.source === 'studio' ? 1 : 0, id);
       oldFiles = resetDraftFromStory(id, null, fields, story.photos);
       if (input.note !== undefined) db.prepare('UPDATE drafts SET agent_note=? WHERE id=?').run(parsed.note || null, id);
-      const insert = db.prepare('INSERT INTO draft_photos(draft_id,path,ext,alt,caption,position,created_at,focal_x,focal_y,zoom) VALUES(?,?,?,?,?,?,?,?,?,?)');
+      const insert = db.prepare('INSERT INTO draft_photos(draft_id,path,ext,alt,caption,position,created_at,focal_x,focal_y,zoom,fit,fit_fill) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
       for (const [i, photo] of (parsed.photos ?? []).entries()) {
         const rel = writeUpload(id, photo.bytes, photo.ext);
         written.push(rel);
-        insert.run(id, rel, photo.ext, photo.alt, photo.caption ?? '', story.photos.length + i, Date.now(), photo.focalX ?? 50, photo.focalY ?? 50, photo.zoom ?? 1);
+        insert.run(id, rel, photo.ext, photo.alt, photo.caption ?? '', story.photos.length + i, Date.now(), photo.focalX ?? 50, photo.focalY ?? 50, photo.zoom ?? 1, photo.fit ?? 'cover', photo.fitFill ?? 'blur');
       }
       db.prepare('INSERT INTO agent_reopens(request_hash,payload_hash,draft_id,created_at) VALUES(?,?,?,?)').run(input.requestHash, input.payloadHash, id, Date.now());
       audit('agent.reopen', { target: `draft:${id}`, detail: { result: 'reopened' }, ip });
