@@ -145,7 +145,7 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     else console.warn(`[submit] draft #${draftId}: confirmation email not sent (${mail.reason})`);
     // Editors who opted in, and the Discord channel, hear about it in the background: the visitor's response
     // doesn't wait on them, and nothing here can fail the submission.
-    void notifyEditorsOfSubmission({ id: draftId, title: sub.title, church: sub.church })
+    void notifyEditorsOfSubmission({ id: draftId, title: sub.title, church: sub.church, kind: sub.kind })
       .then((n) => console.log(`[submit] draft #${draftId}: editor notifications sent ${n.sent}, failed ${n.failed}`))
       .catch(() => console.warn(`[submit] draft #${draftId}: editor notifications failed`));
     void notifyDiscord(`📰 **New IMConnected ${sub.kind} submission**\n**${discordEsc(sub.title)}**\n${discordEsc(sub.church)} · ${section}\n${siteUrl()}/admin/drafts/${draftId}`).catch(() => {});

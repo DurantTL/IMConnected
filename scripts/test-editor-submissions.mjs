@@ -512,6 +512,7 @@ try {
     check('...and not under Stories', !storyTab.text.includes('Fall Potluck'));
     const page = await adminGet(`/admin/drafts/${ev.id}`, E1);
     check('the editor sees the location as inert text (no raw <img> element from the location)', page.status === 200 && page.text.includes('value="Fellowship hall <img src=x') && !outsideAttrs(page.text).includes('<img src=x'));
+    check('editors are told "New event submission: <title>" (the escaped title, no contact details)', await until(() => emails().some((m) => m.subject === `New event submission: ${EV_TITLE}`)) && !emails().filter((m) => m.subject === `New event submission: ${EV_TITLE}`).some((m) => PERSONAL.some((x) => JSON.stringify(m).includes(x))));
     check('nothing is published: no story row for it', q('SELECT COUNT(*) n FROM stories WHERE title = ?', EV_TITLE)[0].n === 0);
 
     r = await postForm(BASE, '/api/submit', form({ kind: 'event', title: 'Event no date', body: SHORT }));
