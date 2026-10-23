@@ -11,6 +11,7 @@ import { errorText } from '../../../lib/messages';
 import { siteUrl } from '../../../lib/draft-http';
 import { listIssues } from '../../../lib/newsletter-issues';
 import { driveConfig } from '../../../lib/db/gdrive.mjs';
+import { fmtChicago, msToChicagoInput, errorTextFor, MAX_FAILURES } from '../../../lib/scheduled-publish';
 import '../../../styles/story-builder.css';
 export const prerender = false;
 
@@ -41,6 +42,11 @@ const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configu
 // Only an http(s) address becomes a link (the API checks it too; this is the last line of defence).
 const originalPost = draft?.sourceUrl && /^https?:\/\//i.test(draft.sourceUrl) ? draft.sourceUrl : '';
 const hasSubmitter = !!draft && !isAgent && (draft.source !== 'editor' || !!(draft.submitterName || draft.submitterEmail || draft.submitterPhone || draft.submitterChurch));
+// Scheduled publishing (issue #124): every time is shown and entered in America/Chicago, never the viewer's own zone.
+const scheduledAt = draft && editable ? draft.publishAt : null;
+const suggestionAt = draft && editable ? draft.suggestedPublishAt : null;
+const suggestionUsable = suggestionAt !== null && suggestionAt > Date.now();
+const scheduleStopped = !!draft && draft.publishFailCount >= MAX_FAILURES;
 const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
 ---
 <Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current={draft?.announcement?.kind === 'event' ? 'events' : draft?.announcement ? 'announcements' : 'drafts'} wide>
@@ -55,7 +61,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
         <div class="studio-titlebar">
           <div class="studio-identity">
             <a class="studio-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
-            <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1><span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span>{isAgent && <span class="cms-badge">From AI agent</span>}</div>
+            <div class="studio-title-line"><h1>{draft.title || 'Untitled story'}</h1><span class={`cms-badge ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : 'warn'}`}>{STATUS_LABEL[draft.status]}</span>{isAgent && <span class="cms-badge">From AI agent</span>}{scheduledAt !== null && <span class={`cms-badge ${draft.publishError ? 'bad' : 'ok'}`}>{draft.publishError ? 'Scheduled publish failed' : `Scheduled for ${fmtChicago(scheduledAt)}`}</span>}</div>
             <span class="ed-status" id="save-status" role="status" aria-live="polite">
               {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
             </span>
@@ -428,8 +434,40 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
           </p>
           <form id="publish-form" method="post" action={`/api/admin/drafts/${draft.id}/publish`}>
             <input type="hidden" name="version" value={draft.updatedAt} />
-            <button type="submit" class="cms-btn">{draft.slug ? 'Publish changes' : 'Publish'}</button>
+            <button type="submit" class="cms-btn">{scheduledAt !== null ? 'Publish now' : draft.slug ? 'Publish changes' : 'Publish'}</button>
           </form>
+          <section class="studio-schedule" id="studio-schedule" aria-labelledby="schedule-heading" style="margin-top:16px">
+            <h3 id="schedule-heading">Publish at a set time</h3>
+            {scheduledAt !== null ? (
+              <>
+                <p class="admin-ok" role="status" id="scheduled-for"><strong>Scheduled for <time datetime={new Date(scheduledAt).toISOString()}>{fmtChicago(scheduledAt)}</time>.</strong>{draft.publishAtByName ? ` Scheduled by ${draft.publishAtByName}.` : ''} The server publishes it then, at the version saved at that moment.</p>
+                {draft.publishError && <p class="admin-error" role="alert" id="scheduled-failed"><strong>Scheduled publish failed.</strong> {errorTextFor(draft.publishError)} {scheduleStopped ? `It tried ${MAX_FAILURES} times and has stopped. Fix the problem and schedule it again, or publish it now.` : `Attempt ${draft.publishFailCount} of ${MAX_FAILURES}; it will try again shortly.`}</p>}
+                <form id="unschedule-form" method="post" action={`/api/admin/drafts/${draft.id}/unschedule`}>
+                  <input type="hidden" name="version" value={draft.updatedAt} />
+                  <button type="submit" class="cms-btn secondary">Unschedule</button>
+                </form>
+              </>
+            ) : <p class="admin-note">Choose a day and time and the server publishes this draft then. Times are Central Time (America/Chicago). You can unschedule it, or publish it now, until then.</p>}
+            {suggestionAt !== null && (
+              <div class="studio-suggestion" id="agent-suggestion">
+                <p class="admin-note"><strong>AI agent suggests publishing at <time datetime={new Date(suggestionAt).toISOString()}>{fmtChicago(suggestionAt)}</time>.</strong> {suggestionUsable ? 'This is only a suggestion; nothing happens until you schedule it.' : 'That time has passed.'}</p>
+                {suggestionUsable && suggestionAt !== scheduledAt && (
+                  <form id="suggest-form" method="post" action={`/api/admin/drafts/${draft.id}/schedule`}>
+                    <input type="hidden" name="version" value={draft.updatedAt} />
+                    <input type="hidden" name="use_suggestion" value="1" />
+                    <button type="submit" class="cms-btn secondary">Schedule for this time</button>
+                  </form>
+                )}
+              </div>
+            )}
+            <form id="schedule-form" method="post" action={`/api/admin/drafts/${draft.id}/schedule`} style="margin-top:8px">
+              <input type="hidden" name="version" value={draft.updatedAt} />
+              <label class="ed-field">Publish at (Central Time)
+                <input type="datetime-local" name="publish_at" required value={scheduledAt !== null ? msToChicagoInput(scheduledAt) : ''} min={msToChicagoInput(Date.now())} data-editor-local />
+              </label>
+              <p><button type="submit" class="cms-btn secondary">{scheduledAt !== null ? 'Change time' : 'Schedule'}</button></p>
+            </form>
+          </section>
           <details style="margin-top:12px">
             <summary>Reject this draft</summary>
             <form id="reject-form" method="post" action={`/api/admin/drafts/${draft.id}/reject`}>

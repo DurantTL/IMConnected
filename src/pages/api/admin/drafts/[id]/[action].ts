@@ -8,6 +8,7 @@ import {
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
 import { publishDraftItem, rejectDraftItem } from '../../../../../lib/bulk-actions';
+import { chicagoLocalToMs, scheduleDraft, unscheduleDraft } from '../../../../../lib/scheduled-publish';
 import { ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
 import { sniffImage } from '../../../../../lib/submission';
@@ -22,7 +23,7 @@ export const prerender = false;
 
 // Every action is a POST: the middleware checks Origin and the session before this runs.
 
-const ACTIONS = new Set(['save', 'preview', 'photos', 'publish', 'reject', 'restore']);
+const ACTIONS = new Set(['save', 'preview', 'photos', 'publish', 'reject', 'restore', 'schedule', 'unschedule']);
 
 export const POST: APIRoute = async ({ params, request, locals, clientAddress }) => {
   const user = locals.user!;
@@ -109,6 +110,17 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     const note = String(form.get('note') ?? '').slice(0, 500).trim();
     return done(rejectDraftItem(draft.id, version, user.id, note, ip), 'rejected');
   }
+
+  // Scheduled publishing (issue #124): a person's version-checked action; the server only carries it out later. The time is
+  // entered in America/Chicago, or taken from the AI agent's suggestion by an explicit click ("use_suggestion").
+  if (action === 'schedule') {
+    if (!isEditable(draft)) return refuse('closed');
+    const fromSuggestion = String(form.get('use_suggestion') ?? '') === '1';
+    if (fromSuggestion && draft.suggestedPublishAt === null) return refuse('schedule_none');
+    const at = fromSuggestion ? draft.suggestedPublishAt : chicagoLocalToMs(String(form.get('publish_at') ?? ''));
+    return done(scheduleDraft(draft.id, version, user.id, at, ip, fromSuggestion ? 'suggestion' : 'chosen'), 'scheduled');
+  }
+  if (action === 'unschedule') return done(unscheduleDraft(draft.id, version, user.id, ip), 'unscheduled');
 
   if (action === 'restore') {
     const r = restoreDraft(draft.id, version, user.id);

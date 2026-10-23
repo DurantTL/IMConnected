@@ -23,6 +23,8 @@ export const NOTICES: Record<string, string> = {
   photos_markers: 'Photos updated. Some inline photo or gallery markers changed or could not be kept; review the inline photos.',
   photo_unchanged: 'The photo is already in that place.',
   photo_replaced: 'Photo replaced. Its alt text, caption, crop and place in the story were kept.',
+  scheduled: 'Scheduled. The server will publish it at the time shown, and you can unschedule it until then.',
+  unscheduled: 'Schedule removed. Nothing will be published automatically.',
   // 'published' is shown by the draft page itself, with a link to the story.
   published: "Published. It's live now.",
   unpublished: "Story unpublished. It's off the site now.",

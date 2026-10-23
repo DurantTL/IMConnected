@@ -3,6 +3,7 @@ import Admin from '../layouts/Admin.astro';
 import { SECTIONS } from '../lib/site';
 import { SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, listDrafts, listRecentPublished, type StatusFilter } from '../lib/drafts';
 import { fmtTime, sectionLabel } from '../lib/admin-ui';
+import { fmtChicago } from '../lib/scheduled-publish';
 import { siteUrl } from '../lib/draft-http';
 import BulkBar from './BulkBar.astro';
 import { driveConfig } from '../lib/db/gdrive.mjs';
@@ -126,6 +127,7 @@ const badge = (s: string) => (s === 'published' ? 'ok' : s === 'rejected' ? 'bad
             <span>{sectionLabel(d.section)}</span>
             {d.church && <span>{d.church}</span>}
             {d.source !== 'editor' && d.source !== 'agent' && (d.emailVerified ? <span class="cms-badge ok">Email verified</span> : <span class="cms-badge warn">Email not verified</span>)}
+            {d.publishAt !== null && (d.publishError ? <span class="cms-badge bad">Scheduled publish failed</span> : <span class="cms-badge ok">Scheduled for <time datetime={new Date(d.publishAt).toISOString()}>{fmtChicago(d.publishAt)}</time></span>)}
             <span>{d.photoCount} {d.photoCount === 1 ? 'photo' : 'photos'}</span>
             <span>Received <time datetime={new Date(d.createdAt).toISOString()} data-local>{fmtTime(d.createdAt)}</time></span>
           </div>

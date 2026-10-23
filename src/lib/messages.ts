@@ -49,6 +49,10 @@ export const ERRORS = {
   load_failed: 'We could not load that story right now. Please try again.',
   not_live: 'This story is not on the site any more.',
   unpublish_failed: 'We could not unpublish right now. Please try again in a few minutes.',
+  schedule_bad: 'Choose a date and time for publishing.',
+  schedule_past: 'That time has already passed. Choose a time in the future (Central Time).',
+  schedule_far: 'Choose a time within the next year.',
+  schedule_none: 'This draft has no suggested time.',
   section_unknown: 'That story uses a section this editor does not know.',
 } as const;
 
