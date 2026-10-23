@@ -36,12 +36,12 @@ const columns = bySection(stories, 'columns').slice(0, 3);
 const youth = fresh(bySection(stories, 'youth')).slice(0, 3);
 const kids = bySection(stories, 'kids').slice(0, 3);
 const newsAreas = news.areas!.map((a) => ({ area: a, items: bySection(stories, 'news', a.key).slice(0, 3) }));
-// "From the archive" (issue #100): older stories, never one already shown above.
 // "Latest issue" (issue #115): from the same live stories as /issues/, no extra query.
 const latest = latestIssue(allStories);
 const sentOn = latest ? formatDate(new Date(`${latest.date}T00:00:00.000Z`)) : '';
 const spotlight = upcomingEvents(allStories);
-const shownAbove = [...spotlight, lead, ...side, ...features, ...newsAreas.flatMap((a) => a.items), ...columns, ...youth, ...kids].filter(Boolean).map((s) => s!.id);
+// "From the archive" (issue #100): older stories, never one already shown above.
+const shownAbove = [...spotlight, ...(latest?.stories.slice(0, PREVIEW_COUNT) ?? []), lead, ...side, ...features, ...newsAreas.flatMap((a) => a.items), ...columns, ...youth, ...kids].filter(Boolean).map((s) => s!.id);
 const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HOMEPAGE_RECENT_DAYS, exclude: shownAbove });
 ---
 <Base current="home">

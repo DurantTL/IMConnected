@@ -242,6 +242,11 @@ try {
   const h10 = await get('/');
   check('home: when issue 12 has no live story the line and module fall to the next issue (10)', lineOf(h10.text) === 'Latest issue: No. 10 · August 17, 2026' && strip(modOf(h10.text)).includes('1 story') && slugsOn(modOf(h10.text)).join() === 's-ten', lineOf(h10.text));
   await post('/api/admin/stories/unpublish', { slug: 's-ten' });
+  // An issue older than the 90-day home window: its preview must not repeat in the "From the archive" rail.
+  mut((d) => { d.prepare("UPDATE stories SET status = 'live', rev = rev + 1 WHERE slug = 's-three-a'").run(); });
+  const h3 = await get('/');
+  check('home: an old issue (3) previews its story once, never again in the archive rail', lineOf(h3.text) === 'Latest issue: No. 3 · May 4, 2026' && slugsOn(modOf(h3.text)).join() === 's-three-a' && slugsOn(h3.text).filter((sl) => sl === 's-three-a').length === 1, `${lineOf(h3.text)} ${slugsOn(h3.text).join()}`);
+  await post('/api/admin/stories/unpublish', { slug: 's-three-a' });
   const h0 = await get('/');
   check('home: with no issue holding a live story neither the line nor the module renders, and the page still answers 200', h0.status === 200 && !h0.text.includes('latest-issue') && !/Latest issue/.test(strip(homeMainText(h0.text))), `${h0.status}`);
   function homeMainText(h) { return h.match(/<main[\s\S]*<\/main>/)?.[0] ?? h; }
