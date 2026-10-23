@@ -28,7 +28,7 @@ machine-to-machine API as `POST /api/agent/stories`: bearer `AGENT_API_TOKEN`, n
 ```
 
 Each item is exactly the object `POST /api/agent/stories` takes: the same validation, escaping, photo signature
-checks, `{{photo N}}` marker check, announcement patches, and omission rules (an update changes only the keys it sends).
+checks, `{{photo N}}` marker check (the optional `wide`, `full`, `left` or `right` option, e.g. `{{photo N left}}`, is accepted; the check is on N only), announcement patches, and omission rules (an update changes only the keys it sends).
 `requestId` at the top is the **batch** id and is required (8-128 letters, digits, `_`, `-`). An item may carry its own
 `requestId` too.
 

@@ -63,7 +63,7 @@ export async function renderStoryBlocksSafe(input: StoryBlock[], options: StoryB
         const whole = !flyer && cropInput.fit === 'contain';
         const alt = b.alt || photo?.alt || '';
         const linkLabel = alt.trim() ? '' : ' aria-label="Enlarge story photo"';
-        out.push(`<figure class="story-module story-module-image${flyer ? ' story-flyer' : ''}"${attr}><a href="${escapeHtml(url)}" data-photo${linkLabel}${photoFrameHtml(whole ? cropInput : null, url, '16/9', 'display:block;overflow:hidden;border-radius:8px;')}><img src="${escapeHtml(url)}" alt="${plain(alt)}" loading="lazy" decoding="async" style="display:block;margin:0;width:100%;${flyer ? 'height:auto;object-fit:contain;' : `aspect-ratio:16/9;object-fit:cover;${crop || 'object-position:50% 50%;'}`}"></a>${captionHtml(photo?.caption ?? options.resolveCaption?.(b))}</figure>`);
+        out.push(`<figure class="story-module story-module-image${flyer ? ' story-flyer' : ''}"${attr}${b.type === 'image' && b.placement ? ` data-placement="${b.placement}"` : ''}><a href="${escapeHtml(url)}" data-photo${linkLabel}${photoFrameHtml(whole ? cropInput : null, url, '16/9', 'display:block;overflow:hidden;border-radius:8px;')}><img src="${escapeHtml(url)}" alt="${plain(alt)}" loading="lazy" decoding="async" style="display:block;margin:0;width:100%;${flyer ? 'height:auto;object-fit:contain;' : `aspect-ratio:16/9;object-fit:cover;${crop || 'object-position:50% 50%;'}`}"></a>${captionHtml(photo?.caption ?? options.resolveCaption?.(b))}</figure>`);
         break;
       }
     }

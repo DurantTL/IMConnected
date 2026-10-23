@@ -14,7 +14,7 @@ let count = 0;
 const check = (name, fn) => { fn(); count++; console.log(`PASS ${name}`); };
 try {
   const require = createRequire(import.meta.url);
-  await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts', media: 'src/lib/story-media-render.ts', excerpt: 'src/lib/excerpt.ts', search: 'src/lib/search.ts', index: 'src/lib/search-index.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri') return { id: require.resolve(id), external: true }; } }] });
+  await build({ input: { schema: 'src/lib/story-blocks.ts', render: 'src/lib/story-block-render.ts', media: 'src/lib/story-media-render.ts', excerpt: 'src/lib/excerpt.ts', search: 'src/lib/search.ts', index: 'src/lib/search-index.ts' }, output: { dir: scratch, format: 'esm' }, platform: 'node', logLevel: 'silent', plugins: [{ name: 'keep-markdown-native-binding', resolveId(id) { if (id === '@astrojs/markdown-satteri' || id === 'satteri') return { id: require.resolve(id), external: true }; } }] });
   const { walkStoryBlocks, countStoryBlocks, normalizeStoryBlocks, parseStoryBlocks, blocksToMarkdown, parseStoryVideo, photoFocusStyle, photoZoom, escapeStoryBlocks, assertOwnStoryImages, splitMarkdownIntoModules, checkStoryBlockLength, isStoryImageUrl } = await import(pathToFileURL(path.join(scratch, 'schema.js')));
   const { renderStoryBlocksSafe } = await import(pathToFileURL(path.join(scratch, 'render.js')));
   const { renderMediaMarkdown } = await import(pathToFileURL(path.join(scratch, 'media.js')));
@@ -33,6 +33,81 @@ try {
     const publicResult = await renderMediaMarkdown(marker, mediaPhotos);
     const previewResult = await renderMediaMarkdown(marker, mediaPhotos, true);
     check(`invalid marker is hidden publicly and warns safely in preview: ${marker}`, () => { assert.equal(publicResult.used.size, 0); assert.equal(publicResult.html, ''); assert.match(previewResult.html, /story-media-warning/); assert.doesNotMatch(previewResult.html, /<script/); });
+  }
+  // Size and alignment options (issue #86)
+  for (const option of ['wide', 'full', 'left', 'right']) {
+    const r = await renderMediaMarkdown(`Before.\n\n{{photo 2 ${option}}}\n\nAfter.`, mediaPhotos);
+    check(`{{photo 2 ${option}}} renders a figure with data-placement=${option}, still a link to the full image`, () => { assert.match(r.html, new RegExp(`<figure class="story-inline-photo" data-placement="${option}"><a href="/media/stories/synthetic/b.png" data-photo`)); assert.deepEqual([...r.used], [1]); });
+  }
+  check('a plain marker has no data-placement (column width, unchanged)', () => assert.doesNotMatch(inline.html, /data-placement/));
+  for (const marker of ['{{photo 1 huge}}', '{{photo 1 LEFT}}', '{{photo 1 left right}}', '{{photo 1 left', '{{photo 1  <b>}}', '{{photo 99 left}}']) {
+    const publicResult = await renderMediaMarkdown(marker, mediaPhotos);
+    const previewResult = await renderMediaMarkdown(marker, mediaPhotos, true);
+    check(`an unknown option is an invalid marker (hidden publicly, warning in preview): ${marker}`, () => { assert.equal(publicResult.used.size, 0); assert.equal(publicResult.html, ''); assert.match(previewResult.html, /story-media-warning/); assert.doesNotMatch(previewResult.html, /<b>|data-placement/); });
+  }
+  const optionCode = await renderMediaMarkdown('`{{photo 1 left}}`\n\n```text\n{{photo 2 wide}}\n```\n\n[{{photo 1 full}}](https://example.invalid/)', mediaPhotos);
+  check('markers with options inside code spans, fences and links stay literal', () => { assert.equal(optionCode.used.size, 0); assert.doesNotMatch(optionCode.html, /story-inline-photo|data-placement/); assert.match(optionCode.html, /\{\{photo 1 left\}\}/); });
+  const stripped = (await import(pathToFileURL(path.join(scratch, 'excerpt.js')))).storyExcerpt('{{photo 1 right}}\n\nSynthetic article text.');
+  check('derived text strips markers with options', () => assert.equal(stripped, 'Synthetic article text.'));
+  for (const placement of ['wide', 'full', 'left', 'right']) {
+    const html = await renderStoryBlocksSafe(normalizeStoryBlocks([{ id: 'img', type: 'image', url: '/media/stories/synthetic/a.png', alt: 'Synthetic', placement }]));
+    check(`an image module with placement ${placement} renders data-placement and keeps the link`, () => { assert.match(html, new RegExp(`class="story-module story-module-image"[^>]*data-placement="${placement}"`)); assert.match(html, /<a href="\/media\/stories\/synthetic\/a.png" data-photo/); });
+  }
+  check('image module placement is validated: unknown values and non-image modules are refused, empty means column width', () => {
+    for (const bad of ['huge', 'LEFT', '<script>', 7]) assert.throws(() => normalizeStoryBlocks([{ id: 'x', type: 'image', url: '/media/stories/synthetic/a.png', placement: bad }]), /column width, wide, full width, left or right/);
+    assert.throws(() => normalizeStoryBlocks([{ id: 'x', type: 'flyer', url: '/media/stories/synthetic/a.png', placement: 'left' }]));
+    assert.throws(() => normalizeStoryBlocks([{ id: 'x', type: 'text', text: 'Hi', placement: 'left' }]));
+    assert.equal(normalizeStoryBlocks([{ id: 'x', type: 'image', url: '/media/stories/synthetic/a.png', placement: '' }])[0].placement, undefined);
+    assert.equal(normalizeStoryBlocks([{ id: 'x', type: 'image', url: '/media/stories/synthetic/a.png' }])[0].placement, undefined);
+  });
+  check('placement is refused for images inside a section, and allowed outside (issue #86)', () => {
+    const image = { id: 'n1', type: 'image', url: '/media/stories/synthetic/a.png', placement: 'wide' };
+    assert.throws(() => normalizeStoryBlocks([{ id: 's1', type: 'section', content: [[image]] }]), /not available for photos inside a section/);
+    assert.throws(() => normalizeStoryBlocks([{ id: 's1', type: 'section', content: [[{ id: 'n2', type: 'text', text: 'Hi', placement: 'left' }]] }]), /column width, wide, full width, left or right/);
+    assert.equal(normalizeStoryBlocks([{ id: 's1', type: 'section', content: [[{ ...image, placement: undefined }]] }])[0].content[0][0].placement, undefined);
+    assert.equal(normalizeStoryBlocks([{ ...image, id: 'top' }])[0].placement, 'wide');
+  });
+  {
+    const escapedAlone = await renderMediaMarkdown('\\{{photo 1}}', mediaPhotos);
+    check('an escaped marker alone renders literally', () => { assert.equal(escapedAlone.used.size, 0); assert.doesNotMatch(escapedAlone.html, /story-inline-photo/); assert.ok(escapedAlone.html.includes('{{photo 1}}')); assert.doesNotMatch(escapedAlone.html, /\uE000/); });
+    for (const escaped of ['\\{{photo 2 left}}', '\\{\\{photo 2}}', '\\{{photo 2}}']) {
+      const mixed = await renderMediaMarkdown(`Before.\n{{photo 1}}\n${escaped}\nAfter.`, mediaPhotos);
+      check(`${escaped} next to a real marker stays literal; only the real marker uses a photo`, () => {
+        assert.deepEqual([...mixed.used], [0]); assert.equal((mixed.html.match(/class="story-inline-photo/g) ?? []).length, 1); assert.doesNotMatch(mixed.html, /data-placement/);
+        assert.ok(mixed.html.includes(escaped.replace(/\\/g, '').replace('{{photo', '{{photo'))); assert.doesNotMatch(mixed.html, /\uE000/);
+      });
+    }
+    const sentinel = await renderMediaMarkdown('{{photo 1}}\n\n\uE000{{photo 2}}', mediaPhotos);
+    check('a stored private-use character before a marker makes the line a non-marker (as the agent check and the remap read it) and is kept as written', () => { assert.deepEqual([...sentinel.used], [0]); assert.match(sentinel.html, /\uE000\{\{photo 2\}\}/); assert.doesNotMatch(sentinel.html, /IMCMEDIA/); });
+    for (const [label, md] of [['abc&#10;{{photo 2}}', '{{photo 1}}\n\nabc&#10;{{photo 2}}'], ['&NewLine;', '{{photo 1}}\n\nabc&NewLine;{{photo 2}}'], ['&#x0A; at the end', '{{photo 1}}\n\nabc&#x0A;{{photo 2}}'], ['two', '{{photo 1}}\nx&#10;{{photo 2}}\n{{photo 2}}']]) {
+      const r = await renderMediaMarkdown(md, mediaPhotos);
+      const realSecond = label === 'two';
+      check(`a character reference that decodes to a line break (${label}) never splits off a live marker, and the written lines keep their meaning`, () => { assert.deepEqual([...r.used].sort(), realSecond ? [0, 1] : [0]); assert.doesNotMatch(r.html, /undefined|IMCMEDIA/); assert.match(r.html, /\{\{photo 2\}\}/); });
+    }
+    for (const [label, md, keep] of [['[ ... ] link', '[a\n{{photo ]}}\n](https://example.com)', '{{photo ]}}'], ['[ ... ] link with a number', '{{photo 1}}\n\n[a\n{{photo 1]}}\n](https://example.com)', '{{photo 1]}}'], ['![ ... ] image', '![a\n{{photo ]}}\n](https://example.com/x.png)', '{{photo ]}}'], ['definition', '[a\n{{photo ]}}\nb]\n\n[a\n{{photo ]}}\nb]: https://x.y\n\nlast', 'last']]) {
+      for (const preview of [false, true]) {
+        const r = await renderMediaMarkdown(md, mediaPhotos, preview);
+        check(`swapping a marker-shaped line never changes how its paragraph parses (${label}${preview ? ', preview' : ''}): no placeholder, no lost text`, () => { assert.doesNotMatch(r.html, /IMCMEDIA/); assert.ok(r.html.includes(keep), r.html); if (label !== 'definition') assert.ok(r.html.includes('[a') && r.html.includes('https://example.com'), r.html); });
+      }
+    }
+    const neighbour = await renderMediaMarkdown('[a\n{{photo ]}}\n{{photo 1}}\n](https://x.y)', mediaPhotos);
+    check('a malformed bracket marker never turns off a correctly written marker in the same paragraph', () => { assert.deepEqual([...neighbour.used], [0]); assert.doesNotMatch(neighbour.html, /IMCMEDIA/); assert.ok(neighbour.html.includes('{{photo ]}}')); });
+    const many = await renderMediaMarkdown(Array.from({ length: 10 }, () => '[a\n{{photo ]}}').join('\n') + '\n](https://x.y)\n\n{{photo 1}}', mediaPhotos);
+    check('many malformed bracket markers never turn off a correctly written marker elsewhere', () => { assert.deepEqual([...many.used], [0]); assert.doesNotMatch(many.html, /IMCMEDIA/); });
+    const blankAfter = await renderMediaMarkdown('{{photo 1}}\nabc&#10;def\n\nfoo', mediaPhotos);
+    check('decoded line breaks do not move a marker onto another line or join the next paragraph', () => { assert.deepEqual([...blankAfter.used], [0]); assert.match(blankAfter.html, /<p>foo<\/p>/); assert.doesNotMatch(blankAfter.html, /undefined|IMCMEDIA/); });
+    const stored = await renderMediaMarkdown('{{photo 1}}\n\nKeep \uE000 this', mediaPhotos);
+    check('a stored private-use character in the text is kept', () => assert.match(stored.html, /Keep \uE000 this/));
+    for (const [label, md] of [['&#123;&#123;photo 2}}', '{{photo 1}}\n\n&#123;&#123;photo 2}}'], ['&lbrace;&lbrace;photo 2}}', '{{photo 1}}\n\n&lbrace;&lbrace;photo 2}}'], ['{{photo 2&#125;&#125;', '{{photo 1}}\n\n{{photo 2&#125;&#125;'], ['{{photo 2&#125;&#125; alone', '{{photo 2&#125;&#125;'], ['&#123;&#123;photo 2}} alone', '&#123;&#123;photo 2}}']]) {
+      const r = await renderMediaMarkdown(md, mediaPhotos);
+      if (label.startsWith('{{photo 2&#125;')) {
+        // Written in marker shape but malformed: like any malformed marker, nothing public and a warning in the private preview.
+        const p = await renderMediaMarkdown(md, mediaPhotos, true);
+        check(`a malformed marker-shaped line (${label}) never shows a photo; preview warns`, () => { assert.ok(!r.used.has(1), JSON.stringify([...r.used])); assert.doesNotMatch(r.html, /IMCMEDIA/); assert.match(p.html, /Media marker skipped: \{\{photo 2&amp;#125;&amp;#125;/); });
+        continue;
+      }
+      check(`a character-reference marker (${label}) stays literal; only a real marker uses a photo`, () => { assert.ok(!r.used.has(1), JSON.stringify([...r.used])); assert.match(r.html, /\{\{photo 2\}\}/); assert.doesNotMatch(r.html, /IMCMEDIA/); });
+    }
   }
   const isolated = await Promise.all([renderMediaMarkdown('{{photo 1}}', mediaPhotos), renderMediaMarkdown('{{photo 2}}', mediaPhotos)]);
   check('concurrent renderer requests do not share photo state', () => { assert.deepEqual([...isolated[0].used], [0]); assert.deepEqual([...isolated[1].used], [1]); });

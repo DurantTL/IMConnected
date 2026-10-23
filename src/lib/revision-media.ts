@@ -1,6 +1,6 @@
 import { markdownToMdast } from 'satteri';
 import { escapeHtmlInMarkdown } from './storyfile';
-import { photoMarkerIndex, galleryMarker } from './story-media';
+import { parsePhotoMarker, galleryMarker } from './story-media';
 interface Node { type: string; children?: Node[]; position?: { start: { line: number }; end: { line: number } } }
 /** Rewrite only executable marker lines; code, links and escaped examples stay literal. */
 export function restoreMediaMarkers(body: string, oldKeys: string[], currentKeys: string[]): { body: string; missing: boolean } {
@@ -18,14 +18,15 @@ export function restoreMediaMarkers(body: string, oldKeys: string[], currentKeys
     }
     for (const line of textLines) {
       if (blocked.has(line)) continue;
-      const value = raw[line]?.trim() ?? '';
+      const value = raw[line]?.trim() ?? ''; // an escaped marker (\{{photo 1}}) is a literal example: it never matches and stays untouched
       // The grammar is bounded independently of the old count: an old invalid index
       // must never become an executable marker for a newly added replacement photo.
-      const photo = photoMarkerIndex(value, 999);
+      const marker = parsePhotoMarker(value, 999);
+      const photo = marker?.index ?? null;
       const gallery = galleryMarker(value, 999);
       if (photo !== null) {
         const index = slot(photo);
-        raw[line] = index < 0 ? '{{photo missing}}' : `{{photo ${index + 1}}}`;
+        raw[line] = index < 0 ? '{{photo missing}}' : `{{photo ${index + 1}${marker?.placement ? ` ${marker.placement}` : ''}}}`;
         missing ||= index < 0;
       } else if (gallery) {
         const indices = gallery.indices.map(slot);

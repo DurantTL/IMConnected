@@ -188,8 +188,8 @@ function parsePhoto(raw: unknown): AgentPhoto {
 }
 
 /**
- * A line-based check: standalone `{{photo N}}` lines outside fenced or indented code (a backslash-escaped one counts, the
- * renderer still renders it) must point at a photo the draft will have. Not a full CommonMark parse (lazy continuations,
+ * A line-based check: standalone `{{photo N}}` lines outside fenced or indented code (an escaped one, by backslash or
+ * character reference, is a literal example and is not counted) must point at a photo the draft will have. Not a full CommonMark parse (lazy continuations,
  * setext headings and similar edge cases are not replicated); quotes, lists and inline markers are not checked.
  */
 export function assertPhotoMarkers(body: string, photoCount: number): void {
@@ -200,8 +200,8 @@ export function assertPhotoMarkers(body: string, photoCount: number): void {
     if (fenceMatch) { fence = fenceMatch[1]; continue; }
     if (/^(?: {4,}|\t)/.test(raw)) continue;
     const line = raw.trim();
-    // The renderer drops the backslash of an escaped marker and still renders it, so it is checked like any other.
-    const n = photoMarkerIndex(line.startsWith('\\{{') ? line.slice(1) : line, Infinity);
+    // Only a line that is exactly the marker counts; an escaped one is a literal example the renderer never turns into a photo.
+    const n = photoMarkerIndex(line, Infinity);
     if (n !== null && n >= photoCount) throw new AgentError('bad_photo_marker', `The marker "${line}" points to photo ${n + 1}, but the story will have ${photoCount} photo${photoCount === 1 ? '' : 's'}.`);
   }
 }

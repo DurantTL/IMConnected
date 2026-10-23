@@ -144,3 +144,7 @@ The extended story-builder browser suite checks popup labelling, focus, Escape/b
 ## Studio announcement cards
 
 Typed announcements and events now import into Studio's flyer-style event cards instead of ordinary story teasers. All three actions, event details and the video link survive email, website HTML and WordPress block export. Synthetic captures: [desktop](design/studio-announcement-desktop.png), [phone](design/studio-announcement-mobile.png). The private draft-flyer path is authenticated and isolated from public media; local fallback, quota errors, manual replacement and asynchronous transfer races have browser coverage.
+
+## Photo size and alignment (issue #86)
+
+`{{photo N wide|full|left|right}}` and image-module placement. Lists, quotes, code, rules and video blocks that sit beside a left or right photo are kept clear of it with `display:flow-root`, scoped with `:has()` to stories that actually have a floated photo, so other stories keep their spacing. Browsers without `:has()` (Firefox before 121, Safari before 15.4, Chrome before 105) skip that rule: the text still wraps, but list bullets and a quote's border can sit under the photo. That cosmetic fallback is accepted.

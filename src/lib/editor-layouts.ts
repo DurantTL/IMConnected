@@ -7,7 +7,7 @@ export function storyLayoutStructure(input: unknown): StoryBlock[] {
   let id = 0;
   return mapStoryBlocks(blocks, (b) => ({
     id: `layout-${++id}`, type: b.type,
-    ...(b.align ? { align: b.align } : {}), ...(b.spacing ? { spacing: b.spacing } : {}),
+    ...(b.align ? { align: b.align } : {}), ...(b.spacing ? { spacing: b.spacing } : {}), ...(b.type === 'image' && b.placement ? { placement: b.placement } : {}),
     ...(b.type === 'section' ? { content: b.content } : {}),
     ...(b.type === 'heading' ? { level: b.level ?? 2, text: '' } : {}),
     ...(['text', 'quote'].includes(b.type) ? { text: '' } : {}),
