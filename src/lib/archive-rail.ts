@@ -42,7 +42,8 @@ export interface ArchiveRailOptions {
 }
 
 /**
- * Picks the day's archive stories: live stories dated before the recency window, minus those already on the page, in a
+ * Picks the day's archive stories: ordinary live stories (any story with an announcement or event is excluded, so an expired
+ * one is never re-posted as current) dated before the recency window, minus those already on the page, in a
  * deterministic shuffle seeded by the day. Candidates are sorted by id first, so the input order never matters. Stories
  * with a photo come first, and a section is repeated only once every available section has been used. Returns [] when
  * fewer than ARCHIVE_RAIL_MIN stories qualify (the block is then hidden).
@@ -52,8 +53,8 @@ export function archiveRail<T extends PublicStory>(stories: T[], { today, recent
   const cutoff = new Date(Date.UTC(y, m - 1, d - recentDays)).toISOString().slice(0, 10);
   const skip = new Set(exclude);
   const pool = stories
-    .filter((s) => !skip.has(s.id) && s.data.date.toISOString().slice(0, 10) < cutoff)
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .filter((s) => !s.data.announcement && !skip.has(s.id) && s.data.date.toISOString().slice(0, 10) < cutoff)
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const next = rng(seedOf(today));
   // Fisher-Yates over the id-sorted pool.
   for (let i = pool.length - 1; i > 0; i--) {

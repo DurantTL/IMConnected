@@ -21,9 +21,9 @@ try {
   const now = Date.now();
   db.prepare("INSERT INTO app_state(key,value,updated_at) VALUES('git_adopted_at','synthetic',?)").run(now);
   let n = 0;
-  const seed = (slug, days, section, area, featured = 0) => {
-    db.prepare("INSERT INTO stories(slug,title,dek,section,area,author,date,image,image_alt,body,status,source,published_at,updated_at,featured) VALUES(?,?,?,?,?,'Synthetic Editor',?,'','','Synthetic body.','live','editor',?,?,?)")
-      .run(slug, `Synthetic ${slug}`, 'Synthetic summary.', section, area, ago(days), now + n, now + n++, featured);
+  const seed = (slug, days, section, area, featured = 0, announcement = null) => {
+    db.prepare("INSERT INTO stories(slug,title,dek,section,area,author,date,image,image_alt,body,status,source,published_at,updated_at,featured,announcement) VALUES(?,?,?,?,?,'Synthetic Editor',?,'','','Synthetic body.','live','editor',?,?,?,?)")
+      .run(slug, `Synthetic ${slug}`, 'Synthetic summary.', section, area, ago(days), now + n, now + n++, featured, announcement && JSON.stringify(announcement));
   };
   seed('news-today', 0, 'news', 'conference');
   seed('news-89', 89, 'news', 'conference');
@@ -36,6 +36,10 @@ try {
   seed('youth-old', 200, 'youth', 'youth');
   seed('features-old', 150, 'features', '');
   seed('kids-recent', 5, 'kids', '');
+  // Old-dated events: one still upcoming and one undated stay in the event spotlight; an old announcement never does. None may reach the archive rail.
+  seed('event-old-upcoming', 300, 'news', 'conference', 0, { kind: 'event', eventDate: ago(-30) });
+  seed('event-old-undated', 310, 'news', 'conference', 0, { kind: 'event' });
+  seed('announcement-old', 320, 'news', 'conference', 0, { kind: 'announcement' });
 
   server = spawn(process.execPath, ['dist/server/entry.mjs'], { env: { ...process.env, HOST: '127.0.0.1', PORT: port, DATA_DIR: scratch, SITE_URL: base, AUTH_SECRET: 'synthetic-home-recent-' + 'x'.repeat(40), RESEND_API_KEY: '', GDRIVE_SERVICE_ACCOUNT_JSON: '', GDRIVE_FOLDER_ID: '', DISCORD_WEBHOOK_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
   server.stdout.on('data', (c) => logs.push(String(c))); server.stderr.on('data', (c) => logs.push(String(c)));
@@ -67,6 +71,8 @@ try {
   check('the archive rail holds only stories older than the window', railSlugs.every((x) => ['news-91', 'news-400', 'schools-old', 'youth-old', 'features-old'].includes(x)), railSlugs.join());
   const above = html.slice(0, html.indexOf('class="block archive-rail"')).split('href="/stories/').slice(1).map((chunk) => chunk.split('/')[0]);
   check('the archive rail never repeats the hero story or anything shown above', !railSlugs.includes('news-featured-400') && !above.some((x) => railSlugs.includes(x)));
+  check('old upcoming and undated events are in the spotlight above, never in the archive rail', on('event-old-upcoming') && on('event-old-undated') && !railSlugs.some((x) => x.startsWith('event-')));
+  check('an old announcement is not in the archive rail', !railSlugs.includes('announcement-old'));
   check('each archive card shows its original date', (rail.match(/class="meta">[^<]*· [A-Z][a-z]+ \d+, \d{4}</g) || []).length === 4);
   check('the archive rail links to the archive (News for now)', rail.includes('href="/news/"'));
   check('the same day gives the same archive rail', railOf(await (await fetch(base + '/')).text()) === rail);

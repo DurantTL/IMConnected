@@ -8,11 +8,13 @@ interface Props {
   variant?: 'default' | 'lead' | 'compact' | 'text';
   showDek?: boolean;
   showKicker?: boolean;
+  /** Keep only the section label in the kicker, leaving out the area or column. */
+  hideArea?: boolean;
 }
-const { story, variant = 'default', showDek = variant !== 'compact', showKicker = true } = Astro.props;
+const { story, variant = 'default', showDek = variant !== 'compact', showKicker = true, hideArea = false } = Astro.props;
 const d = story.data;
 const section = getSection(d.section);
-const sub = d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
+const sub = hideArea ? '' : d.section === 'columns' ? d.column : areaLabel(d.section, d.area);
 const Heading = variant === 'lead' ? 'h2' : 'h3';
 ---
 <a class:list={['card', variant, { 'with-photo': !!d.image, 'without-photo': !d.image }]} href={storyUrl(story)} data-sec={d.section} data-reveal>

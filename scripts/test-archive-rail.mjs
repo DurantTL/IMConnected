@@ -36,6 +36,10 @@ check('a photo-less story from a new section still appears (sections spread firs
 check('the picks spread across sections when possible', new Set(picked.map((s) => s.data.section)).size === 4, picked.map((s) => s.data.section).join());
 check('one section alone still fills the rail', archiveRail(Array.from({ length: 6 }, (_, i) => story(`n-${i}`, 120 + i)), opts()).length === 4);
 
+const withAnnouncement = (id, days, kind) => { const x = story(id, days); x.data.announcement = { kind }; return x; };
+const announced = archiveRail([...old.slice(0, 6), withAnnouncement('old-event', 200, 'event'), withAnnouncement('old-note', 210, 'announcement')], opts({ count: 20 }));
+check('an old event and an old announcement never appear', !ids(announced).some((id) => id === 'old-event' || id === 'old-note') && announced.length === 6);
+check('only announcements qualifying leaves the block hidden', archiveRail([withAnnouncement('e1', 200, 'event'), withAnnouncement('e2', 220, 'announcement')], opts()).length === 0);
 check('three qualifying stories show three', archiveRail(old.slice(0, 3), opts()).length === 3);
 check('two qualifying stories still show', archiveRail(old.slice(0, 2), opts()).length === 2);
 check('one qualifying story hides the block', archiveRail([old[0], ...recent], opts()).length === 0);
