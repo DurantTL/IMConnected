@@ -929,16 +929,18 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
         getDb().prepare('UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, studio_overwrote_at = ? WHERE id = ?').run(now, commit, now, now, id); // the version is kept (an open editor is not interrupted); a scheduled publish in flight is stopped by its studio_overwrote_at IS NULL guard
         overwrote.push(id);
       } else {
+        // The draft mirrors the story row's key points ([] when there is no story); Studio never sends them.
+        const liveKeyPoints = keyPointsJson((getDb().prepare('SELECT key_points FROM stories WHERE slug = ?').get(st.slug) as { key_points: string } | undefined)?.key_points);
         if (cur) {
           id = cur.id;
           getDb()
             .prepare(
               "UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, story_blocks = '[]', key_points = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
             )
-            .run(now, fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.photoLayout, fields.body, keyPointsJson((getDb().prepare('SELECT key_points FROM stories WHERE slug = ?').get(st.slug) as { key_points: string } | undefined)?.key_points), commit, now, now, id); // mirrors the story row's list ([] when there is no story)
+            .run(now, fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.photoLayout, fields.body, liveKeyPoints, commit, now, now, id);
         } else {
           id = createDraft({ source: 'studio', status: 'published', fields, slug: st.slug });
-          getDb().prepare('UPDATE drafts SET published_commit = ?, published_at = ?, published_via_studio = 1 WHERE id = ?').run(commit, now, id);
+          getDb().prepare('UPDATE drafts SET published_commit = ?, published_at = ?, published_via_studio = 1, key_points = ? WHERE id = ?').run(commit, now, liveKeyPoints, id);
         }
         // Photos: only a Studio draft's own are replaced (it holds no uploads); another draft's uploaded files are never deleted.
         // A rejected draft may still hold its uploads: they are replaced and the files deleted once the commit below succeeds.
