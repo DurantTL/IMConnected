@@ -43,11 +43,12 @@ export function cacheSet(key: string, page: CachedPage, now = Date.now()): void 
 
 export const cacheSize = () => cache.size;
 
+const PAGE_NUMBER = /^[1-9]\d{0,5}$/;
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
 
 /**
- * The cache key for a public path that the server renders (home, a section, an area, a story, /stories.json,
- * /rss.xml), or null for any other path. Pure string work: the middleware calls it for every public request.
+ * The cache key for a public path that the server renders (home, a section, an area, their paged versions
+ * /<section>/page/<n> and /<section>/<area>/page/<n>, a story, /stories.json, /rss.xml), or null for any other path. Pure string work: the middleware calls it for every public request.
  * A trailing slash makes no difference; section and area must be real ones, so random URLs never fill the cache.
  */
 export function publicCacheKey(pathname: string): string | null {
@@ -55,11 +56,18 @@ export function publicCacheKey(pathname: string): string | null {
   if (path === '/' || path === '/rss.xml' || path === '/stories.json' || path === '/announcements') return path;
   const parts = path.split('/');
   if (parts.length === 3 && parts[1] === 'stories') return SLUG.test(parts[2]) ? path : null;
-  if (parts.length === 2 || parts.length === 3) {
+  if (parts.length >= 2 && parts.length <= 5) {
     const section = SECTIONS.find((s) => s.key === parts[1]);
     if (!section) return null;
+    // /<section>/, /<section>/page/<n>, /<section>/<area>, /<section>/<area>/page/<n> (issue #96); n is a canonical number.
+    const pageAt = (i: number) => parts[i] === 'page' && parts.length === i + 2 && PAGE_NUMBER.test(parts[i + 1]);
     if (parts.length === 2) return path;
-    return section.areas?.some((a) => a.key === parts[2]) ? path : null;
+    if (parts.length === 4 && pageAt(2)) return path;
+    if (parts.length === 3 || parts.length === 5) {
+      if (parts[2] === 'page' || !section.areas?.some((a) => a.key === parts[2])) return null;
+      return parts.length === 3 || pageAt(3) ? path : null;
+    }
+    return null;
   }
   return null;
 }

@@ -121,3 +121,6 @@ export function formatDate(d: Date): string {
     timeZone: 'UTC',
   });
 }
+
+// Issue #96: /<section>/page/<n>/ is a list page, so no area may be called "page" (it could never be reached).
+if (SECTIONS.some((s) => s.areas?.some((a) => a.key === 'page'))) throw new Error('An area may not be called "page": it is reserved for paging.');

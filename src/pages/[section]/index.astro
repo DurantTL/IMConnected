@@ -3,6 +3,7 @@ import SectionList from '../../components/SectionList.astro';
 import { getSection } from '../../lib/site';
 import { asUnavailable, getPublicStories } from '../../lib/public-stories';
 import { bySection } from '../../lib/stories';
+import { PAGE_SIZE, pageCount } from '../../lib/pagination';
 
 // Rendered on the server from the stories table (epic #25, step 2); the middleware caches the result.
 export const prerender = false;
@@ -15,6 +16,8 @@ try {
 } catch (err) {
   return asUnavailable(err);
 }
-const stories = bySection(all, section.key);
+const matching = bySection(all, section.key);
+const pages = pageCount(matching.length);
+const stories = matching.slice(0, PAGE_SIZE);
 ---
-<SectionList section={section} stories={stories} />
+<SectionList section={section} stories={stories} pages={pages} />

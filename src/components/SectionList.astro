@@ -1,18 +1,29 @@
 ---
 import Base from '../layouts/Base.astro';
 import StoryCard from './StoryCard.astro';
+import Pagination from './Pagination.astro';
+import { pageHref } from '../lib/pagination';
 import type { Section } from '../lib/site';
 import type { PublicStory } from '../lib/stories';
 
 interface Props {
   section: Section;
   area?: { key: string; label: string };
+  /** The stories of this page only (the route slices them). */
   stories: PublicStory[];
+  page?: number;
+  pages?: number;
 }
-const { section, area, stories } = Astro.props;
-const title = area ? `${area.label} · ${section.label}` : section.label;
+const { section, area, stories, page = 1, pages = 1 } = Astro.props;
+const baseTitle = area ? `${area.label} · ${section.label}` : section.label;
+const title = page > 1 ? `${baseTitle} — page ${page}` : baseTitle;
+const base = area ? `/${section.key}/${area.key}/` : `/${section.key}/`;
 ---
 <Base title={title} description={section.blurb} current={section.key}>
+  <Fragment slot="head">
+    {page > 1 && <link rel="prev" href={new URL(pageHref(base, page - 1), Astro.site)} />}
+    {page < pages && <link rel="next" href={new URL(pageHref(base, page + 1), Astro.site)} />}
+  </Fragment>
   <div class="wrap" data-sec={section.key}>
     <header class="page-head">
       {area ? <a class="kicker" href={`/${section.key}/`}>{section.label}</a> : <span class="kicker">IMConnected</span>}
@@ -20,9 +31,9 @@ const title = area ? `${area.label} · ${section.label}` : section.label;
       <p>{section.blurb}</p>
       {section.areas && (
         <nav class="chips" aria-label={`${section.label} areas`}>
-          <a class="chip" href={`/${section.key}/`} aria-current={!area ? 'page' : undefined}>All</a>
+          <a class="chip" href={`/${section.key}/`} aria-current={!area ? (page > 1 ? 'true' : 'page') : undefined}>All</a>
           {section.areas.map((a) => (
-            <a class="chip" href={`/${section.key}/${a.key}/`} aria-current={area?.key === a.key ? 'page' : undefined}>{a.label}</a>
+            <a class="chip" href={`/${section.key}/${a.key}/`} aria-current={area?.key === a.key ? (page > 1 ? 'true' : 'page') : undefined}>{a.label}</a>
           ))}
         </nav>
       )}
@@ -35,5 +46,6 @@ const title = area ? `${area.label} · ${section.label}` : section.label;
     ) : (
       <p class="empty-state">No stories here yet. <a href="/submit/">Submit one?</a></p>
     )}
+    <Pagination base={base} page={page} pages={pages} />
   </div>
 </Base>

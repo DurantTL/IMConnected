@@ -8,7 +8,7 @@ import { SESSION_COOKIE, readSession, touchSession, clearSessionCookie } from '.
 // Runs for every request, including while prerendering public pages at build time. For anything
 // outside /admin and /api/admin it returns immediately without touching the database or cookies. The one
 // addition (epic #25, step 2): for the few GET paths the server renders from the stories table (home, sections,
-// areas, stories, /stories.json, /rss.xml) it answers from the in-memory page cache (src/lib/public-cache.ts),
+// areas, their paged versions /<section>/page/<n>/ and /<section>/<area>/page/<n>/, stories, /stories.json, /rss.xml) it answers from the in-memory page cache (src/lib/public-cache.ts),
 // or renders once and keeps the result. That is a Map lookup keyed by a pure string check; any other path
 // goes straight to next().
 
