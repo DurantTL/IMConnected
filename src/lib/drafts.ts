@@ -925,7 +925,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
           getDb().prepare('UPDATE drafts SET publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL WHERE id = ?').run(id);
           audit('draft.unschedule', { userId: null, target: `draft:${id}`, detail: { reason: 'studio_publish', was: new Date(cur.publishAt).toISOString() } });
         }
-        getDb().prepare('UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, studio_overwrote_at = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?').run(now, commit, now, now, now, id); // the version moves, so any in-flight version check fails
+        getDb().prepare('UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, studio_overwrote_at = ? WHERE id = ?').run(now, commit, now, now, id); // the version is kept (an open editor is not interrupted); a scheduled publish in flight is stopped by its studio_overwrote_at IS NULL guard
         overwrote.push(id);
       } else {
         if (cur) {
