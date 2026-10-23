@@ -6,4 +6,5 @@ export const LIMITS = {
   bodyMax: 20000,
   maxPhotos: 6,
   maxPhotoMB: 10,
+  photoText: 300,
 };

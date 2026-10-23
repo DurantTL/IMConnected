@@ -13,9 +13,23 @@ export interface Submission {
   title: string;
   dek: string;
   body: string;
+  /** The no-JavaScript single caption field: it becomes the caption of the first photo. */
   caption: string;
   photoCredit: string;
   photos: File[];
+  /** Per photo, in the order chosen: a visible caption and alt text (issue #122). Both one line of plain text. */
+  photoTexts: { caption: string; alt: string }[];
+}
+
+export const PHOTO_TEXT_MAX = 300;
+
+/** One line of plain text: control characters removed, whitespace (including newlines) collapsed. Too long is an error, never cut. */
+function oneLine(fd: FormData, k: string, label: string): string {
+  const raw = fd.get(k);
+  if (raw === null || typeof raw !== 'string') return '';
+  const v = raw.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (v.length > PHOTO_TEXT_MAX) throw new ValidationError(`${label} is too long. Please keep it under ${PHOTO_TEXT_MAX} characters.`);
+  return v;
 }
 
 export class ValidationError extends Error {}
@@ -33,10 +47,12 @@ export function parseSubmission(fd: FormData): Submission {
     title: str(fd, 'title', LIMITS.title),
     dek: str(fd, 'dek', LIMITS.dek),
     body: String(fd.get('body') ?? '').trim(),
-    caption: str(fd, 'caption', 300),
+    caption: '',
     photoCredit: str(fd, 'photoCredit', 120),
     photos: fd.getAll('photos').filter((p): p is File => p instanceof File && p.size > 0),
+    photoTexts: [],
   };
+  s.caption = oneLine(fd, 'caption', 'The photo caption');
 
   if (!s.name || !s.email || !s.church || !s.title || !s.body) throw new ValidationError('Please fill in all required fields.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.email)) throw new ValidationError('Please enter a valid email address.');
@@ -50,6 +66,12 @@ export function parseSubmission(fd: FormData): Submission {
   for (const p of s.photos) {
     if (p.size > LIMITS.maxPhotoMB * 1024 * 1024) throw new ValidationError(`"${p.name}" is larger than ${LIMITS.maxPhotoMB} MB.`);
   }
+  // Per-photo fields caption_0..caption_5 and alt_0..alt_5 (the order the photos were chosen). A form without them (no JavaScript)
+  // has the single caption field, which captions the first photo and never becomes alt text.
+  s.photoTexts = s.photos.map((_, i) => ({
+    caption: fd.has(`caption_${i}`) ? oneLine(fd, `caption_${i}`, `The caption for photo ${i + 1}`) : i === 0 ? s.caption : '',
+    alt: oneLine(fd, `alt_${i}`, `The description for photo ${i + 1}`),
+  }));
   return s;
 }
 

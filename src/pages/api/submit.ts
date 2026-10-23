@@ -125,9 +125,8 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
         body: textToMarkdown(sub.body),
         church: sub.church,
         photoCredit: sub.photoCredit,
-        caption: sub.caption,
         submitter: { name: sub.name, email: sub.email, phone: sub.phone, church: sub.church },
-        photos,
+        photos: photos.map((p, i) => ({ ...p, ...sub.photoTexts[i] })),
       });
     } catch (err) {
       console.error('[submit] could not save the draft', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');

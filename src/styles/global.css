@@ -200,6 +200,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .form fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px 20px; margin: 0; background: var(--surface); display: grid; gap: 16px; }
 .form legend { font-family: var(--serif); font-weight: 700; font-size: 1.15rem; padding: 0 6px; }
 .field { display: grid; gap: 6px; }
+.field[hidden] { display: none; }
 .field label { font-weight: 600; font-size: 0.92rem; }
 .field .hint { font-size: 0.82rem; color: var(--ink-3); }
 .field input[type='text'], .field input[type='email'], .field input[type='tel'], .field select, .field textarea {
@@ -216,6 +217,13 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .notice.ok { background: #e3f3ea; color: #1d5a3a; }
 .previews { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
 .previews img { aspect-ratio: 1; object-fit: cover; border-radius: 6px; }
+.photo-items { display: grid; gap: 14px; margin-top: 12px; }
+.photo-items:empty { display: none; }
+.photo-item { display: grid; grid-template-columns: 96px 1fr; gap: 14px; align-items: start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.photo-item > img { width: 96px; aspect-ratio: 1; object-fit: cover; border-radius: 6px; }
+.photo-item-fields { display: grid; gap: 10px; min-width: 0; }
+.photo-item-fields .field { margin: 0; }
+@media (max-width: 520px) { .photo-item { grid-template-columns: 1fr; } .photo-item > img { width: 120px; } }
 
 /* ---------- Footer ---------- */
 .site-footer { margin-top: 72px; background: var(--surface); border-top: 1px solid var(--line); padding: 44px 0 24px; font-size: 0.92rem; color: var(--ink-2); }

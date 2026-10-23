@@ -87,12 +87,13 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
           <label for="photos">Upload photos (optional)</label>
           <input id="photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/avif" multiple />
           <span class="hint">Up to {LIMITS.maxPhotos} photos (JPG, PNG, WebP or AVIF). Large JPG/PNG photos are resized automatically; WebP and AVIF originals are kept. The first photo becomes the main image.</span>
-          <div class="previews" id="previews"></div>
+          <div class="photo-items" id="previews"></div>
         </div>
         <div class="row-2">
-          <div class="field">
+          <div class="field" id="caption-field">
             <label for="caption">Photo caption (optional)</label>
-            <input id="caption" name="caption" type="text" maxlength="300" />
+            <input id="caption" name="caption" type="text" maxlength={LIMITS.photoText} aria-describedby="caption-hint" />
+            <span class="hint" id="caption-hint">Shown under the first photo on the site.</span>
           </div>
           <div class="field">
             <label for="photoCredit">Photo credit (optional)</label>
@@ -157,16 +158,68 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
     status.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
+  const captionField = document.getElementById('caption-field');
+  const captionInput = document.getElementById('caption');
+  let urls = [];
+
+  // One small preview with a caption and an alt text field per chosen photo. Typed text is kept when the choice changes.
+  // Without JavaScript the single caption field above captions the first photo; it is hidden and not sent once per-photo fields exist.
+  function field(i, kind, label, hint, value) {
+    const wrap = document.createElement('div');
+    wrap.className = 'field';
+    const id = `${kind}_${i}`;
+    const lab = document.createElement('label');
+    lab.htmlFor = id;
+    lab.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = id;
+    input.name = id;
+    input.maxLength = LIMITS.photoText;
+    input.autocomplete = 'off';
+    input.value = value;
+    const h = document.createElement('span');
+    h.className = 'hint';
+    h.id = `${id}_hint`;
+    h.textContent = hint;
+    input.setAttribute('aria-describedby', h.id);
+    wrap.append(lab, input, h);
+    return wrap;
+  }
   photos.addEventListener('change', () => {
+    const kept = [...previews.querySelectorAll('input')].map((el) => [el.name, el.value]);
+    const old = Object.fromEntries(kept);
+    const legacy = captionInput.disabled ? '' : captionInput.value;
+    urls.forEach((u) => URL.revokeObjectURL(u));
+    urls = [];
     previews.innerHTML = '';
     const files = [...photos.files];
     if (files.length > LIMITS.maxPhotos) show(`Please choose up to ${LIMITS.maxPhotos} photos.`, 'error');
-    for (const f of files.slice(0, LIMITS.maxPhotos)) {
+    const chosen = files.slice(0, LIMITS.maxPhotos);
+    chosen.forEach((f, i) => {
+      const item = document.createElement('div');
+      item.className = 'photo-item';
       const img = document.createElement('img');
-      img.src = URL.createObjectURL(f);
-      img.alt = f.name;
-      previews.appendChild(img);
-    }
+      const u = URL.createObjectURL(f);
+      urls.push(u);
+      img.src = u;
+      img.alt = `Preview of photo ${i + 1}: ${f.name}`;
+      const fields = document.createElement('div');
+      fields.className = 'photo-item-fields';
+      const title = document.createElement('strong');
+      title.textContent = i === 0 ? 'Photo 1 (main image)' : `Photo ${i + 1}`;
+      fields.append(
+        title,
+        field(i, 'caption', 'Caption (optional)', 'Shown under the photo on the site. One line, up to 300 characters.', old[`caption_${i}`] ?? (i === 0 ? legacy : '')),
+        field(i, 'alt', 'Describe the photo for people who can\u2019t see it (optional)', 'Read aloud by screen readers; not shown on the page. Say what is in the picture, without repeating the caption.', old[`alt_${i}`] ?? ''),
+      );
+      item.append(img, fields);
+      previews.appendChild(item);
+    });
+    const per = chosen.length > 0;
+    if (!per && old.caption_0) captionInput.value = old.caption_0; // photos cleared: the single field takes the typed caption back
+    captionField.hidden = per;
+    captionInput.disabled = per;
   });
 
   // Optimize camera photos before upload; retain already-compressed WebP/AVIF originals.
