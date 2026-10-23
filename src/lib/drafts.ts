@@ -13,7 +13,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { AgentError, AgentConflict, assertPhotoMarkers, checkSuggestionFuture, refusalDetails, refusalReason, type RefusalReason } from './agent';
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
-import { getSection, isValidArea } from './site';
+import { canonicalSectionKey, getSection, isValidArea } from './site';
 import { validDate } from './storyfile';
 import { keyPointsJson, normalizeKeyPoints } from './key-points';
 import { ERRORS, type ErrorCode } from './messages';
@@ -112,6 +112,7 @@ export interface DraftListItem {
   id: number;
   status: DraftStatus;
   source: DraftSource;
+  kind: ContentKind;
   title: string;
   section: string;
   additionalSections?: string[];
@@ -120,6 +121,9 @@ export interface DraftListItem {
   author: string;
   emailVerified: boolean;
   photoCount: number;
+  /** The story date (YYYY-MM-DD) and newsletter issue number, if any. */
+  date: string;
+  newsletterIssue: number | null;
   createdAt: number;
   updatedAt: number;
   /** Scheduled publishing (issue #124): when it will go live (ms) and the last failed attempt's code, else null. */
@@ -291,35 +295,145 @@ export const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
 ];
 
 export type ContentKind = 'story' | 'announcement' | 'event';
-export function listDrafts(filter: { status: StatusFilter; section?: string; source?: DraftSource; kind?: ContentKind }): DraftListItem[] {
+
+// ---- Drafts list (issue #139): search, filters, sorting and pages, all in SQL ----
+export type DraftSort = 'updated' | 'created_desc' | 'created_asc' | 'date_desc' | 'title' | 'scheduled';
+export const DRAFT_SORTS: { value: DraftSort; label: string }[] = [
+  { value: 'updated', label: 'Recently updated' },
+  { value: 'created_desc', label: 'Newest received' },
+  { value: 'created_asc', label: 'Oldest received' },
+  { value: 'date_desc', label: 'Story date, newest first' },
+  { value: 'title', label: 'Title A to Z' },
+  { value: 'scheduled', label: 'Publish time, soonest first' },
+];
+export const PER_PAGE_CHOICES = [25, 50, 100] as const;
+export const DRAFT_SOURCES: DraftSource[] = ['form', 'agent', 'editor', 'studio'];
+export const DRAFT_QUERY_MAX = 200;
+
+export interface DraftListFilter {
+  q: string;
+  status: StatusFilter;
+  kind: ContentKind | 'all';
+  section: string;
+  source: DraftSource | '';
+  /** A newsletter issue number as digits, `none`, or '' for no filter. */
+  issue: string;
+  from: string;
+  to: string;
+  sort: DraftSort;
+  perPage: number;
+  page: number;
+}
+
+/**
+ * Turns whatever came in (query-string values, anything) into a safe filter: every value is checked against a
+ * whitelist and an unknown one falls back to the default. Nothing here is ever put into SQL text.
+ */
+export function normalizeDraftFilter(raw: { [K in keyof DraftListFilter]?: unknown } = {}, defaultKind: ContentKind | 'all' = 'all'): DraftListFilter {
+  const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+  const status = STATUS_FILTERS.some((f) => f.value === raw.status) ? (raw.status as StatusFilter) : 'open';
+  const kind = raw.kind === 'story' || raw.kind === 'announcement' || raw.kind === 'event' || raw.kind === 'all' ? raw.kind : defaultKind;
+  const sectionRaw = str(raw.section);
+  const sectionKey = sectionRaw ? (canonicalSectionKey(sectionRaw) as string) : '';
+  const section = sectionKey && getSection(sectionKey) ? sectionKey : '';
+  const source = DRAFT_SOURCES.includes(raw.source as DraftSource) ? (raw.source as DraftSource) : '';
+  const issueRaw = str(raw.issue).trim();
+  const issue = issueRaw === 'none' ? 'none' : /^[1-9]\d{0,3}$/.test(issueRaw) ? issueRaw : '';
+  const date = (v: unknown) => {
+    const t = str(v).trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(t) && validDate(t) ? t : '';
+  };
+  const sort = DRAFT_SORTS.some((o) => o.value === raw.sort) ? (raw.sort as DraftSort) : status === 'scheduled' ? 'scheduled' : 'updated';
+  const perPageNum = Number(str(raw.perPage));
+  const perPage = (PER_PAGE_CHOICES as readonly number[]).includes(perPageNum) ? perPageNum : 25;
+  const pageNum = Number(str(raw.page));
+  const page = Number.isInteger(pageNum) && pageNum >= 1 ? Math.min(pageNum, 1_000_000) : 1;
+  // eslint-disable-next-line no-control-regex
+  const q = str(raw.q).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, DRAFT_QUERY_MAX).trim();
+  return { q, status, kind, section, source, issue, from: date(raw.from), to: date(raw.to), sort, perPage, page };
+}
+
+const KIND_SQL = "CASE WHEN json_valid(d.announcement) THEN COALESCE(json_extract(d.announcement,'$.kind'),'story') ELSE 'story' END";
+const SORT_SQL: Record<DraftSort, string> = {
+  updated: 'd.updated_at DESC, d.id DESC',
+  created_desc: 'd.created_at DESC, d.id DESC',
+  created_asc: 'd.created_at ASC, d.id ASC',
+  date_desc: 'd.date DESC, d.id DESC',
+  title: 'LOWER(d.title) ASC, d.id ASC',
+  scheduled: '(d.publish_at IS NULL) ASC, d.publish_at ASC, d.id ASC',
+};
+
+function draftWhere(f: DraftListFilter): { sql: string; args: (string | number)[] } {
   const where: string[] = [];
   const args: (string | number)[] = [];
-  if (filter.kind) { where.push("CASE WHEN json_valid(d.announcement) THEN COALESCE(json_extract(d.announcement,'$.kind'),'story') ELSE 'story' END = ?"); args.push(filter.kind); }
-  if (filter.status === 'open') where.push("d.status IN ('new', 'in_review')");
-  else if (filter.status === 'scheduled') where.push("d.publish_at IS NOT NULL AND d.status IN ('new', 'in_review')");
-  else if (filter.status !== 'all') {
+  if (f.kind !== 'all') {
+    where.push(`${KIND_SQL} = ?`);
+    args.push(f.kind);
+  }
+  if (f.status === 'open') where.push("d.status IN ('new', 'in_review')");
+  else if (f.status === 'scheduled') where.push("d.publish_at IS NOT NULL AND d.status IN ('new', 'in_review')");
+  else if (f.status !== 'all') {
     where.push('d.status = ?');
-    args.push(filter.status);
+    args.push(f.status);
   }
-  if (filter.section) {
+  if (f.section) {
     where.push(sectionMembershipSql('d.'));
-    args.push(filter.section, filter.section);
+    args.push(f.section, f.section);
   }
-  if (filter.source) {
+  if (f.source) {
     where.push('d.source = ?');
-    args.push(filter.source);
+    args.push(f.source);
   }
+  if (f.issue === 'none') where.push('d.newsletter_issue IS NULL');
+  else if (f.issue) {
+    where.push('d.newsletter_issue = ?');
+    args.push(Number(f.issue));
+  }
+  if (f.from) {
+    where.push('d.date >= ?');
+    args.push(f.from);
+  }
+  if (f.to) {
+    where.push('d.date <= ?');
+    args.push(f.to);
+  }
+  if (f.q) {
+    // Title, church, author and body only. Never the submitter's name, email or phone.
+    const like = '%' + f.q.replace(/[\\%_]/g, '\\$&') + '%';
+    where.push("(d.title LIKE ? ESCAPE '\\' OR d.church LIKE ? ESCAPE '\\' OR d.submitter_church LIKE ? ESCAPE '\\' OR d.author LIKE ? ESCAPE '\\' OR d.body LIKE ? ESCAPE '\\')");
+    args.push(like, like, like, like, like);
+  }
+  return { sql: where.length ? 'WHERE ' + where.join(' AND ') : '', args };
+}
+
+export interface DraftListPage {
+  items: DraftListItem[];
+  total: number;
+  page: number;
+  pages: number;
+  perPage: number;
+  filter: DraftListFilter;
+}
+
+export function listDraftsPage(input: { [K in keyof DraftListFilter]?: unknown } = {}): DraftListPage {
+  const filter = normalizeDraftFilter(input);
+  const { sql, args } = draftWhere(filter);
+  const total = Number((getDb().prepare(`SELECT COUNT(*) AS c FROM drafts d ${sql}`).get(...args) as { c: number }).c);
+  const pages = Math.max(1, Math.ceil(total / filter.perPage));
+  const page = Math.min(filter.page, pages);
   const rows = getDb()
     .prepare(
-      `SELECT d.id, d.status, d.source, d.title, d.section, d.additional_sections, d.slug, d.church, d.author, d.submitter_church, d.email_verified, d.created_at, d.updated_at, d.publish_at, d.publish_error,
+      `SELECT d.id, d.status, d.source, d.title, d.section, d.additional_sections, d.slug, d.church, d.author, d.submitter_church, d.email_verified, d.date, d.newsletter_issue, d.created_at, d.updated_at, d.publish_at, d.publish_error,
+         ${KIND_SQL} AS kind,
          (SELECT COUNT(*) FROM draft_photos ph WHERE ph.draft_id = d.id) AS photo_count
-       FROM drafts d ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${filter.status === 'scheduled' ? 'd.publish_at ASC, d.id ASC' : 'd.created_at DESC, d.id DESC'} LIMIT 500`,
+       FROM drafts d ${sql} ORDER BY ${SORT_SQL[filter.sort]} LIMIT ? OFFSET ?`,
     )
-    .all(...args) as Row[];
-  return rows.map((r) => ({
+    .all(...args, filter.perPage, (page - 1) * filter.perPage) as Row[];
+  const items: DraftListItem[] = rows.map((r) => ({
     id: n(r.id),
     status: r.status as DraftStatus,
     source: r.source as DraftSource,
+    kind: (r.kind === 'announcement' || r.kind === 'event' ? r.kind : 'story') as ContentKind,
     title: s(r.title),
     section: s(r.section),
     additionalSections: parseAdditionalSections(r.additional_sections, s(r.section)),
@@ -328,11 +442,39 @@ export function listDrafts(filter: { status: StatusFilter; section?: string; sou
     author: s(r.author),
     emailVerified: n(r.email_verified) === 1,
     photoCount: n(r.photo_count),
+    date: s(r.date),
+    newsletterIssue: r.newsletter_issue == null ? null : n(r.newsletter_issue),
     createdAt: n(r.created_at),
     updatedAt: n(r.updated_at),
     publishAt: r.publish_at == null ? null : n(r.publish_at),
     publishError: sn(r.publish_error),
   }));
+  return { items, total, page, pages, perPage: filter.perPage, filter: { ...filter, page } };
+}
+
+export interface DraftStatusCounts {
+  open: number;
+  new: number;
+  in_review: number;
+  scheduled: number;
+  rejected: number;
+}
+
+/** Counts for the status cards: one grouped query, honouring only the content type. */
+export function countDraftsByStatus(kind: ContentKind | 'all' = 'all'): DraftStatusCounts {
+  const counts: DraftStatusCounts = { open: 0, new: 0, in_review: 0, scheduled: 0, rejected: 0 };
+  const rows = getDb()
+    .prepare(`SELECT d.status AS status, (d.publish_at IS NOT NULL) AS scheduled, COUNT(*) AS c FROM drafts d ${kind === 'all' ? '' : `WHERE ${KIND_SQL} = ?`} GROUP BY d.status, (d.publish_at IS NOT NULL)`)
+    .all(...(kind === 'all' ? [] : [kind])) as Row[];
+  for (const r of rows) {
+    const c = n(r.c);
+    if (r.status === 'new' || r.status === 'in_review') {
+      counts[r.status] += c;
+      counts.open += c;
+      if (n(r.scheduled)) counts.scheduled += c;
+    } else if (r.status === 'rejected') counts.rejected += c;
+  }
+  return counts;
 }
 
 export function listPhotos(draftId: number): DraftPhoto[] {
