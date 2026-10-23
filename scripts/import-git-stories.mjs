@@ -119,6 +119,10 @@ function readStory(file) {
   const date = d.toISOString().slice(0, 10);
   const photos = Array.isArray(fm.photos) ? fm.photos.map(String) : [];
   const photoAlts = Array.isArray(fm.photoAlts) ? fm.photoAlts.map(String) : [];
+  // Captions (issue #84): the lead's, then each gallery photo's, in photo order; plain text up to 300 characters. Absent means none.
+  const captionList = [...(str(fm.image) ? [String(fm.imageCaption ?? '')] : []), ...photos.map((_, i) => String((Array.isArray(fm.photoCaptions) ? fm.photoCaptions[i] : '') ?? ''))].map((c) => c.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim());
+  if (captionList.some((c) => c.length > 300)) throw new Error('a photo caption is longer than 300 characters');
+  const captions = captionList.some(Boolean) ? captionList : undefined;
   const image = str(fm.image) || undefined;
   const photoLayout = fm.photoLayout === undefined || fm.photoLayout === null ? 'one' : String(fm.photoLayout);
   if (!['one', 'twoUp', 'heroGrid', 'mosaic', 'stack'].includes(photoLayout)) throw new Error(`unknown photoLayout "${photoLayout.slice(0, 40)}"`);
@@ -138,7 +142,7 @@ function readStory(file) {
   return {
     slug, title, dek: str(fm.dek) || undefined, section, additionalSections: fm.additionalSections === undefined ? undefined : site.normalizeAdditionalSections(fm.additionalSections, section), area, column: str(fm.column) || undefined, author, authorTitle: str(fm.authorTitle) || undefined,
     church: str(fm.church) || undefined, date, image, imageAlt: str(fm.imageAlt) || undefined, photoCredit: str(fm.photoCredit) || undefined,
-    announcement: announcementMod.normalizeAnnouncement(fm.announcement), photos, photoAlts, photoLayout, storyBlocks, photoFocus, featured: fm.featured === true, draft: fm.draft === true, body,
+    announcement: announcementMod.normalizeAnnouncement(fm.announcement), photos, photoAlts, captions, photoLayout, storyBlocks, photoFocus, featured: fm.featured === true, draft: fm.draft === true, body,
   };
 }
 
@@ -181,7 +185,7 @@ const same = (row, s) =>
   (row.image ?? undefined) === s.image && (row.image_alt ?? undefined) === s.imageAlt && (row.photo_credit ?? undefined) === s.photoCredit &&
   row.photos === JSON.stringify(s.photos) && row.photo_alts === JSON.stringify(s.photoAlts) && row.photo_layout === s.photoLayout && (row.additional_sections ?? '[]') === JSON.stringify(s.additionalSections) && (row.announcement ?? null) === (s.announcement ? JSON.stringify(s.announcement) : null) && (row.story_blocks ?? '[]') === JSON.stringify(s.storyBlocks) && (row.featured === 1) === s.featured &&
   (row.draft === 1) === s.draft && String(row.body).replace(/\r\n?/g, '\n').trim() === s.body &&
-  db.prepare('SELECT focal_x, focal_y, zoom, fit, fit_fill FROM story_photos WHERE story_id = ? ORDER BY position').all(row.id).every((p, i) => p.focal_x === (s.photoFocus[i]?.focalX ?? 50) && p.focal_y === (s.photoFocus[i]?.focalY ?? 50) && p.zoom === (s.photoFocus[i]?.zoom ?? 1) && p.fit === (s.photoFocus[i]?.fit ?? 'cover') && p.fit_fill === (s.photoFocus[i]?.fitFill ?? 'blur'));
+  db.prepare('SELECT focal_x, focal_y, zoom, fit, fit_fill, caption FROM story_photos WHERE story_id = ? ORDER BY position').all(row.id).every((p, i) => p.focal_x === (s.photoFocus[i]?.focalX ?? 50) && p.focal_y === (s.photoFocus[i]?.focalY ?? 50) && p.zoom === (s.photoFocus[i]?.zoom ?? 1) && p.fit === (s.photoFocus[i]?.fit ?? 'cover') && p.fit_fill === (s.photoFocus[i]?.fitFill ?? 'blur') && p.caption === (s.captions?.[i] ?? ''));
 
 const tally = { created: 0, updated: 0, unchanged: 0, skipped: 0, errors: 0 };
 for (const f of files) {
@@ -236,8 +240,8 @@ for (const f of files) {
           id = Number(db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
             photos, photo_alts, featured, draft, body, status, source, published_at, updated_at, content_hash, photo_layout, story_blocks, announcement, additional_sections, slug) VALUES (${Array(cols.length + 1).fill('?').join(',')})`).run(...cols, slug).lastInsertRowid);
         }
-        const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom, fit, fit_fill) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        for (const r of rows) ins.run(id, r.position, r.kind, r.path, r.url, r.alt, r.sha256, r.bytes, s.photoFocus[r.position]?.focalX ?? 50, s.photoFocus[r.position]?.focalY ?? 50, s.photoFocus[r.position]?.zoom ?? 1, s.photoFocus[r.position]?.fit ?? 'cover', s.photoFocus[r.position]?.fitFill ?? 'blur');
+        const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom, fit, fit_fill, caption) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        for (const r of rows) ins.run(id, r.position, r.kind, r.path, r.url, r.alt, r.sha256, r.bytes, s.photoFocus[r.position]?.focalX ?? 50, s.photoFocus[r.position]?.focalY ?? 50, s.photoFocus[r.position]?.zoom ?? 1, s.photoFocus[r.position]?.fit ?? 'cover', s.photoFocus[r.position]?.fitFill ?? 'blur', s.captions?.[r.position] ?? '');
         db.exec('COMMIT');
       } catch (err) {
         try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }

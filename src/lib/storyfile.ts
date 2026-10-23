@@ -26,12 +26,13 @@ export interface PhotoMeta {
 
 /**
  * Lead image fields: a caption that starts with "Photo:" is a credit; otherwise the alt text is the
- * alt, then the caption, then the title.
+ * alt, then the title. A plain caption is shown on the page as a visible caption (issue #84), so it is never
+ * also used as the alt text.
  */
 export function leadImageFields(photo: PhotoMeta, title: string, explicitCredit = ''): { alt: string; credit: string } {
   const captionCredit = /^photo:/i.test(photo.caption) ? photo.caption.replace(/^photo:\s*/i, '').trim() : '';
   const credit = explicitCredit.trim() || captionCredit;
-  const alt = photo.alt || (credit ? '' : photo.caption) || title;
+  const alt = photo.alt || title;
   return { alt, credit };
 }
 

@@ -240,6 +240,8 @@ export async function adoptBuiltStories(): Promise<AdoptResult> {
         const point = d.photoFocus?.[i];
         if (point && (point.focalX !== 50 || point.focalY !== 50 || (point.zoom ?? 1) !== 1 || (point.fit ?? 'cover') !== 'cover' || (point.fitFill ?? 'blur') !== 'blur')) { row.focalX = point.focalX; row.focalY = point.focalY; row.zoom = point.zoom ?? 1; row.fit = point.fit ?? 'cover'; row.fitFill = point.fitFill ?? 'blur'; }
       });
+      const captions = [...(d.image ? [d.imageCaption ?? ''] : []), ...d.photos.map((_, i) => d.photoCaptions?.[i] ?? '')].map((c) => c.replace(/\s+/g, ' ').trim().slice(0, 300));
+      photoRows.forEach((row, i) => { if (captions[i]) row.caption = captions[i]; }); // only when set: an empty caption leaves the row (and so the content hash) as it always was
       await testPause(slug);
       const hold = holds.get(slug);
       let held = false;

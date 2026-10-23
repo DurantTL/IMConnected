@@ -28,7 +28,8 @@ API additionally lists waiting drafts and supplies the allowed browser CORS poli
     `/stories.json` (`id`, `url`, `title`, `dek`, `section`, `sectionLabel`,
     `area`, `areaLabel`, `column`, `author`, `authorTitle`, `church`, `date`,
     `image`, `imageAlt`, `photoCredit`, `photos`, `photoAlts`, `photoLayout`, optional
-    `photoFocus`, `featured`) plus
+    `photoFocus`, `featured`, and (issue #84) `photoCaptions` plus optional `imageCaption`: visible
+    plain-text captions, escape them) plus
     `status: "published"` and `source`. It includes stories published since the
     last site build, and leaves out unpublished ones.
   - `drafts`: the 20 newest drafts waiting for an editor (`status` `new` or
@@ -56,6 +57,7 @@ API additionally lists waiting drafts and supplies the allowed browser CORS poli
 | `photos[i].focalX`, `focalY`, `zoom` | Aligned `photoFocus[i]`; defaults 50/50/1 |
 | `photos[i].fit`, `fitFill` | Aligned `photoFocus[i].fit` (`cover`/`contain`) and `fitFill` (`blur`/`paper`/`navy`); defaults `cover`/`blur` |
 | `layout` | `photoLayout` |
+| `photos[i].caption` (new) | `imageCaption` (lead) / `photoCaptions[i-1]`; plain text, up to 300 characters. Sent back to `POST /api/publish`, a caption is stored as the photo's visible caption, except one starting with "Photo:", which remains the credit. An omitted or empty caption keeps the stored one (only the dashboard clears a caption). |
 
 - Don't copy the story body. The email should send readers to the site.
 - Retain `importedFrom`: imported live stories and waiting drafts cannot be sent

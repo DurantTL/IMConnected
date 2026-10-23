@@ -3,7 +3,7 @@
 // Progressive enhancement: without this script (or without <dialog> support) every photo is still an ordinary link to the
 // full image. The script makes the lead photo of an unlaid-out story a link as well, so every photo behaves the same.
 // Keyboard: Esc closes, Left/Right move, Home/End jump; focus is kept inside by the modal dialog and goes back to the
-// photo that was opened. Touch: swipe left/right. The dialog is labelled with the photo's own alt text.
+// photo that was opened. Touch: swipe left/right. The dialog is always labelled "Photo viewer"; its live region announces the photo's caption when it has one, else its alt text, and the position.
 //
 // Zoom (issue #83): the photo opens fitted to the screen (100%) and zooms up to 400%. Buttons (Zoom in, Zoom out, Reset), the
 // keys + - 0, Ctrl+wheel / trackpad pinch, two-finger touch pinch, and double-click / double-tap (fit <-> 200%). A zoomed photo
@@ -117,6 +117,16 @@ function init(): void {
 
   const altOf = (a: HTMLAnchorElement, i: number) => a.querySelector('img')?.getAttribute('alt')?.trim() || `Photo ${i + 1} of ${total}`;
 
+  // The photo's visible caption (issue #84), read from the figcaption it sits under; '' when it has none. Plain text only (textContent),
+  // and the credit that shares a lead caption's figcaption is left out. Shown instead of the alt text, which stays on the image.
+  const captionOf = (a: HTMLAnchorElement): string => {
+    const figcaption = a.closest('figure')?.querySelector(':scope > figcaption.photo-caption');
+    if (!figcaption) return '';
+    const copy = figcaption.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll('.photo-credit-inline').forEach((n) => n.remove());
+    return (copy.textContent ?? '').replace(/\s+/g, ' ').trim();
+  };
+
   function show(i: number): void {
     index = (i + total) % total;
     const a = links[index];
@@ -128,7 +138,7 @@ function init(): void {
     stageImg.alt = alt;
     // The live region announces each photo as it appears: its alt text and the position.
     // Two spans so a long alt text is clamped on screen without hiding the position.
-    counterAlt.textContent = alt;
+    counterAlt.textContent = captionOf(a) || alt; // the caption when there is one (visible to everyone); the alt text stays on the image
     counterPos.textContent = total > 1 ? ` (${index + 1} of ${total})` : '';
     // Warm the neighbours so the next swipe is instant.
     if (total > 1) for (const n of [index + 1, index - 1]) new Image().src = links[(n + total) % total].href;

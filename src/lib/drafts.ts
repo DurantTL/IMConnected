@@ -349,11 +349,11 @@ export function checkFieldValues(f: DraftFields): ErrorCode | null {
   return null;
 }
 
-export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null, photoFocus: Map<number, PhotoCrop> = new Map()): SaveResult {
-  return tx(() => saveDraftInTransaction(id, expected, f, photoAlts, userId, layout, photoFocus));
+export function saveDraft(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null, photoFocus: Map<number, PhotoCrop> = new Map(), photoCaptions: Map<number, string> = new Map()): SaveResult {
+  return tx(() => saveDraftInTransaction(id, expected, f, photoAlts, userId, layout, photoFocus, false, photoCaptions));
 }
 
-function saveDraftInTransaction(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null, photoFocus: Map<number, PhotoCrop> = new Map(), forceRevision = false): SaveResult {
+function saveDraftInTransaction(id: number, expected: number, f: DraftFields, photoAlts: Map<number, string>, userId: number, layout: string | null = null, photoFocus: Map<number, PhotoCrop> = new Map(), forceRevision = false, photoCaptions: Map<number, string> = new Map()): SaveResult {
   const bulletin = f.announcement === undefined ? undefined : announcementJson(f.announcement);
   const bad = checkFieldValues(f);
   if (bad) return fail('invalid', bad);
@@ -381,6 +381,9 @@ function saveDraftInTransaction(id: number, expected: number, f: DraftFields, ph
     for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
     const focus = getDb().prepare('UPDATE draft_photos SET focal_x = COALESCE(?, focal_x), focal_y = COALESCE(?, focal_y), zoom = COALESCE(?, zoom), fit = COALESCE(?, fit), fit_fill = COALESCE(?, fit_fill) WHERE id = ? AND draft_id = ?');
     for (const [pid, f] of photoFocus) focus.run(f.focalX ?? null, f.focalY ?? null, f.zoom ?? null, f.fit ?? null, f.fitFill ?? null, pid, id);
+    // Captions (issue #84): a photo missing from the map keeps its caption (an older form or client that has no caption field).
+    const cap = getDb().prepare('UPDATE draft_photos SET caption = ? WHERE id = ? AND draft_id = ?');
+    for (const [pid, caption] of photoCaptions) cap.run(caption.slice(0, 300), pid, id);
     getDb().prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(f.additionalSections === undefined ? cur.additionalSections : f.additionalSections, f.section)), id);
     if (f.newsletterIssue !== undefined) writeDraftIssue(id, f.newsletterIssue);
     const after = editorialSnapshot(id, getDraft(id)!);
@@ -413,14 +416,12 @@ export function restoreDraftRevision(id: number, expected: number, revisionId: n
     // An older revision has no issue (null); an issue deleted since is dropped rather than failing the restore.
     const snapshotIssue = normalizeRef(snapshot.fields.newsletterIssue);
     const fields = { ...snapshot.fields, body: markers.body, storyBlocks: blocks, newsletterIssue: snapshotIssue && issueExists(snapshotIssue.number) ? snapshotIssue : null };
-    const alts = new Map<number, string>(), focus = new Map<number, PhotoCrop>();
-    for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) { alts.set(match.id, p.alt); focus.set(match.id, { focalX: p.focalX, focalY: p.focalY, zoom: p.zoom, fit: p.fit ?? 'cover', fitFill: p.fitFill ?? 'blur' }); } } // a pre-027 revision restores the default fit
-    const saved = saveDraftInTransaction(id, expected, fields, alts, userId, fields.photoLayout, focus, true);
+    const alts = new Map<number, string>(), focus = new Map<number, PhotoCrop>(), captions = new Map<number, string>();
+    for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) { alts.set(match.id, p.alt); captions.set(match.id, p.caption ?? ''); focus.set(match.id, { focalX: p.focalX, focalY: p.focalY, zoom: p.zoom, fit: p.fit ?? 'cover', fitFill: p.fitFill ?? 'blur' }); } } // a pre-027 revision restores the default fit
+    const saved = saveDraftInTransaction(id, expected, fields, alts, userId, fields.photoLayout, focus, true, captions);
     if (!saved.ok) return saved;
     const position = getDb().prepare('UPDATE draft_photos SET position=? WHERE draft_id=? AND id=?');
     ordered.forEach((p, index) => position.run(index, id, p.id));
-    const caption = getDb().prepare('UPDATE draft_photos SET caption=? WHERE draft_id=? AND id=?');
-    for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) caption.run(p.caption, id, match.id); }
     const missing = removedReferences || markers.missing || snapshot.photos.some((p) => !byKey.has(p.key));
     audit('draft.revision_restore', { userId, target: `draft:${id}`, detail: { revisionId, missingMedia: missing } });
     return { ok: true, updatedAt: saved.updatedAt, warnings: missing ? ['Some older photos are no longer available. Missing module references were removed; review inline markers and the first photo or flyer before publishing.'] : [] };
@@ -868,7 +869,7 @@ export interface AgentDraftInput {
   /** null = not sent: a new draft gets the default, an updated one keeps its layout. */
   photoLayout: PhotoLayout | null;
   /** null = leave an updated draft's photos alone. */
-  photos: { bytes: Uint8Array; ext: string; alt: string; focalX?: number; focalY?: number; zoom?: number }[] | null;
+  photos: { bytes: Uint8Array; ext: string; alt: string; caption?: string; focalX?: number; focalY?: number; zoom?: number }[] | null;
   /** Optional retry key (raw) and the canonical content it covers; only sha256 hashes are stored. */
   requestId?: string | null;
   payloadKey?: string;
@@ -971,11 +972,11 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         if (input.newsletterIssue) writeDraftIssue(id, resolveAgentIssue(input.newsletterIssue));
       }
       if (input.photos) {
-        const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, caption, position, created_at, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         input.photos.forEach((p, i) => {
           const rel = writeUpload(id, p.bytes, p.ext);
           written.push(rel);
-          ins.run(id, rel, p.ext, p.alt, i, Date.now(), p.focalX ?? 50, p.focalY ?? 50, p.zoom ?? 1);
+          ins.run(id, rel, p.ext, p.alt, p.caption ?? '', i, Date.now(), p.focalX ?? 50, p.focalY ?? 50, p.zoom ?? 1);
         });
       }
       if (requestHash) db.prepare('INSERT INTO agent_requests (request_hash, payload_hash, draft_id, result, created_at) VALUES (?, ?, ?, ?, ?)').run(requestHash, payloadHash, id, status, Date.now());

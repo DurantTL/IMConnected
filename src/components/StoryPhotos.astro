@@ -4,7 +4,9 @@
 // original lead figure and gallery row (StoryPage.astro) cover everything else and are left exactly as they were.
 // Every photo is a link to the full image, so it works without JavaScript; the viewer script (src/scripts/photo-viewer.ts)
 // turns the links into click-to-enlarge. Photos have a fixed aspect ratio (cropped to fit, like the newsletter) so the
-// page does not move while they load. No captions per photo: the credit is the only line under the group.
+// page does not move while they load. Captions (issue #84): a photo with a caption sits in its own <figure> with a
+// <figcaption class="photo-caption"> directly under its tile, in every layout, so a mosaic or grid stays a grid; a photo
+// without one keeps the bare link. The caption is plain text (Astro escapes it). The credit stays the one line under the group.
 import type { PhotoPlan } from '../lib/photo-layouts';
 import { photoFocusStyle, photoFrameAttrs } from '../lib/story-blocks';
 
@@ -12,7 +14,7 @@ interface Props {
   layout: string;
   plan: PhotoPlan;
   /** Every photo, lead first. */
-  photos: { src: string; alt: string; focalX?: number; focalY?: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' }[];
+  photos: { src: string; alt: string; focalX?: number; focalY?: number; zoom?: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy'; caption?: string }[];
   credit?: string;
 }
 const { layout, plan, photos, credit } = Astro.props;
@@ -20,7 +22,14 @@ const { layout, plan, photos, credit } = Astro.props;
 <figure class={`photos photos-${layout}`} data-photo-layout={layout}>
   {plan.rows.map((row) => (
     <div class={`photos-row photos-${row.kind}`}>
-      {row.photos.map((i) => (
+      {row.photos.map((i) => photos[i].caption ? (
+        <figure class="photos-tile">
+          <a href={photos[i].src} data-photo {...(photoFrameAttrs(photos[i], photos[i].src) ?? {})}>
+            <img src={photos[i].src} alt={photos[i].alt} loading={i === 0 ? 'eager' : 'lazy'} decoding="async" style={photoFocusStyle(photos[i])} />
+          </a>
+          <figcaption class="photo-caption">{photos[i].caption}</figcaption>
+        </figure>
+      ) : (
         <a href={photos[i].src} data-photo {...(photoFrameAttrs(photos[i], photos[i].src) ?? {})}>
           <img src={photos[i].src} alt={photos[i].alt} loading={i === 0 ? 'eager' : 'lazy'} decoding="async" style={photoFocusStyle(photos[i])} />
         </a>

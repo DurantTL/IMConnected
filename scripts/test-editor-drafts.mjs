@@ -112,6 +112,7 @@ async function liveEverywhere(slug, titleText, section) {
 const allTrue = (o) => Object.values(o).every(Boolean);
 const noneTrue = (o) => Object.entries(o).filter(([k]) => k !== 'page').every(([, v]) => !v);
 const baseFields = (over = {}) => ({ title: 'Volunteers Needed for Camp Meeting', dek: 'Cooks, drivers and greeters are welcome.', section: 'news', area: 'churches', column: '', author: 'Pat Example', authorTitle: 'Communication Volunteer', church: 'Example Hills Church', date: '2026-10-19', photoCredit: 'Sam Sample', featured: '1', body: 'Camp meeting is **coming up** and we need help.\n\n> Many hands make light work.\n\n- Cooks\n- Drivers', ...over });
+const CAPTION_HOSTILE = '<script>window.__capPwned=1</script>  <b>Hello</b>\n& "quoted"';
 
 // ================= no code path calls GitHub =================
 {
@@ -199,8 +200,21 @@ let A, slugA;
   const thirdFile = path.join(DATA_DIR, 'uploads', third.path);
   await c1.form(`/api/admin/drafts/${A}/photos`, { version: version(A), op: `delete:${third.id}` });
   check('"delete" removes the photo row and its file', q('SELECT COUNT(*) n FROM draft_photos WHERE draft_id = ?', A)[0].n === 2 && !fs.existsSync(thirdFile));
-  r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields(), [`photo_${p1.id}_alt`]: 'Volunteers sorting boxes', [`photo_${p2.id}_alt`]: 'A full kitchen'});
+  r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields(), [`photo_${p1.id}_alt`]: 'Volunteers sorting boxes', [`photo_${p2.id}_alt`]: 'A full kitchen', [`photo_${p1.id}_caption`]: 'Volunteers sort boxes at the food drive.', [`photo_${p2.id}_caption`]: CAPTION_HOSTILE });
   check('alt text is saved with the draft', r.data.ok && q('SELECT alt FROM draft_photos WHERE id = ?', p1.id)[0].alt === 'Volunteers sorting boxes');
+  // per-photo captions (issue #84): saved with the draft, kept by a form that has no caption field, limited to 300 characters, in the revisions
+  check('captions are saved with the draft (one line of plain text, as typed)', q('SELECT caption FROM draft_photos WHERE id = ?', p1.id)[0].caption === 'Volunteers sort boxes at the food drive.' && q('SELECT caption FROM draft_photos WHERE id = ?', p2.id)[0].caption === CAPTION_HOSTILE.replace(/\s+/g, ' '));
+  r = await c1.get(`/admin/drafts/${A}`);
+  check('the editor has a caption field per photo next to the alt text, with help that explains the difference', r.text.includes(`name="photo_${p1.id}_caption"`) && /Alt text describes the picture[^<]*The caption is visible to everyone/.test(r.text) && r.text.includes('value="Volunteers sort boxes at the food drive."') && r.text.includes('maxlength="300"'));
+  check('a hostile caption cannot break out of the editor field (its quotes are escaped)', r.text.includes('&quot;quoted&quot;') && !r.text.includes('& "quoted"'));
+  r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields(), [`photo_${p1.id}_alt`]: 'Volunteers sorting boxes', [`photo_${p2.id}_alt`]: 'A full kitchen' });
+  check('a form with no caption fields keeps the captions', r.data.ok && q('SELECT caption FROM draft_photos WHERE id = ?', p1.id)[0].caption === 'Volunteers sort boxes at the food drive.');
+  r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields(), [`photo_${p1.id}_caption`]: 'x'.repeat(301) });
+  check('a caption over 300 characters is refused (400) and nothing is saved', r.status === 400 && !r.data.ok && q('SELECT caption FROM draft_photos WHERE id = ?', p1.id)[0].caption === 'Volunteers sort boxes at the food drive.', r.text);
+  r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields(), [`photo_${p1.id}_caption`]: 'Volunteers sort boxes at the food drive, edited.' });
+  const capRev = q('SELECT payload FROM draft_revisions WHERE draft_id = ? ORDER BY id DESC LIMIT 1', A)[0];
+  check('a caption change makes a revision, and the revision keeps the previous caption', r.data.ok && JSON.parse(capRev.payload).photos.some((ph) => ph.caption === 'Volunteers sort boxes at the food drive.'), capRev?.payload.slice(0, 300));
+  await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields(), [`photo_${p1.id}_caption`]: 'Volunteers sort boxes at the food drive.' });
 
   // upload limits
   r = await c1.form(`/api/admin/drafts/${A}/photos`, { version: version(A), op: 'upload' }, [{ bytes: Buffer.from('not an image, just text pretending to be one'), filename: 'x.png' }]);
@@ -228,6 +242,11 @@ let A, slugA;
   const sp = storyPhotos(slugA);
   const want1 = `stories/${slugA}/${sha256(PNG_A)}.png`, want2 = `stories/${slugA}/${sha256(PNG_B)}.png`;
   check('both photos are rows at stories/<slug>/<sha256>.png, lead first, with the alt texts', sp.length === 2 && sp[0].path === want1 && sp[0].kind === 'lead' && sp[0].alt === 'Volunteers sorting boxes' && sp[1].path === want2 && sp[1].kind === 'gallery' && sp[1].alt === 'A full kitchen' && sp[0].sha256 === sha256(PNG_A), JSON.stringify(sp));
+  check('publishing copies the captions onto story_photos; the hostile one stays plain text', sp[0].caption === 'Volunteers sort boxes at the food drive.' && sp[1].caption === CAPTION_HOSTILE.replace(/\s+/g, ' '), JSON.stringify(sp.map((x) => x.caption)));
+  {
+    const html = (await anon.get(`/stories/${slugA}/`)).text;
+    check('the live story page shows the captions as figcaptions and the hostile one literally', /<figcaption class="photo-caption">Volunteers sort boxes at the food drive\.(?:<span class="photo-credit-inline"> Photo: Sam Sample<\/span>)?<\/figcaption>/.test(html) && html.includes('&lt;script&gt;window.__capPwned') && !html.includes('<script>window.__capPwned'));
+  }
   check('...the photo files are byte-identical to the uploads and nothing else was written', Buffer.compare(fs.readFileSync(mediaFile(want1)), PNG_A) === 0 && Buffer.compare(fs.readFileSync(mediaFile(want2)), PNG_B) === 0 && mediaFiles().length === mediaBefore.length + 2);
   check('the story keeps its Markdown', st.body.includes('**coming up**') && st.body.includes('> Many hands make light work.') && st.body.includes('- Cooks'));
   check('the uploaded files are deleted after publishing (the photos are in the media folder)', !fs.existsSync(path.join(DATA_DIR, 'uploads', String(A))));
@@ -262,6 +281,20 @@ let A, slugA;
   check('...and its two photos kept as site images with every alt text restored', ph.length === 2 && ph[0].url === `/media/stories/${slugA}/${sha256(PNG_A)}.png` && ph[0].path === null && ph[0].alt === 'Volunteers sorting boxes' && ph[1].alt === 'A full kitchen', JSON.stringify(ph));
   r = await c1.get('/admin/published');
   check('the Published tab lists the story with Edit and Unpublish', r.status === 200 && r.text.includes('Volunteers Needed for Camp Meeting') && r.text.includes('Unpublish') && r.text.includes('>Edit<'));
+  // captions survive edit-a-live-story, a revision restore brings one back, and the preview shows unsaved captions in markers and modules (issue #84)
+  const capPhotos = q('SELECT id, caption FROM draft_photos WHERE draft_id = ? ORDER BY position', A);
+  check('edit-a-live-story loads the live captions into the draft photos', capPhotos[0].caption === 'Volunteers sort boxes at the food drive.' && capPhotos[1].caption === CAPTION_HOSTILE.replace(/\s+/g, ' '), JSON.stringify(capPhotos));
+  r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields(), [`photo_${capPhotos[0].id}_caption`]: 'Temporary caption' });
+  const origRev = q('SELECT id, payload FROM draft_revisions WHERE draft_id = ? ORDER BY id DESC LIMIT 1', A)[0];
+  check('a temporary caption saves and the revision keeps the live one', r.data.ok && JSON.parse(origRev.payload).photos[0].caption === 'Volunteers sort boxes at the food drive.');
+  r = await c1.json(`/api/admin/drafts/${A}/revisions`, { version: version(A), revisionId: origRev.id });
+  check('restoring that revision brings the caption back', r.data.ok && q('SELECT caption FROM draft_photos WHERE id = ?', capPhotos[0].id)[0].caption === 'Volunteers sort boxes at the food drive.', r.text);
+  const modBlocks = JSON.stringify([{ id: 'm1', type: 'image', photoId: capPhotos[0].id }, { id: 'm2', type: 'gallery', columns: 2, photos: [{ photoId: capPhotos[0].id }, { photoId: capPhotos[1].id }] }, { id: 'm3', type: 'flyer', photoId: capPhotos[1].id }]);
+  r = await c1.json(`/api/admin/drafts/${A}/preview`, { ...baseFields({ body: '' }), storyBlocks: modBlocks, [`photo_${capPhotos[0].id}_caption`]: 'Unsaved <i>preview</i> caption' });
+  const pvCaps = [...(r.data.doc ?? '').matchAll(/<figcaption class="photo-caption">([\s\S]*?)<\/figcaption>/g)].map((m) => m[1]);
+  check('the private preview shows captions for image, gallery and flyer modules (unsaved text, escaped)', pvCaps.length === 4 && pvCaps[0] === 'Unsaved &lt;i&gt;preview&lt;/i&gt; caption' && pvCaps[1] === pvCaps[0] && pvCaps[3].startsWith('&lt;script&gt;') && !(r.data.doc ?? '').includes('<i>preview'), JSON.stringify(pvCaps) + r.text.slice(0, 600));
+  r = await c1.json(`/api/admin/drafts/${A}/preview`, { ...baseFields({ body: 'Intro.\n\n{{photo 2}}\n\nEnd.' }), [`photo_${capPhotos[1].id}_caption`]: 'Marker preview caption' });
+  check('...and for an inline {{photo N}} marker', (r.data.doc ?? '').includes('<figcaption class="photo-caption">Marker preview caption</figcaption>'), (r.data.doc ?? '').slice(-400));
   r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields({ dek: 'Updated: sign up this Sabbath.', body: 'Camp meeting is **almost here**. Please sign up.' }) });
   check('the loaded draft saves', r.data.ok);
   check('(editing a draft does not change the live story)', story(slugA).dek === before.dek && (await getPub(`/stories/${slugA}/`)).text.includes('coming up'));
@@ -269,6 +302,7 @@ let A, slugA;
   check('publishing again overwrites the same slug', r.params.get('n') === 'published' && draftRow(A).slug === slugA && draftRow(A).status === 'published' && q('SELECT COUNT(*) n FROM stories WHERE slug = ?', slugA)[0].n === 1, r.loc);
   const st = story(slugA);
   check('...with the new text and the old photos (no new files, same rows)', st.dek === 'Updated: sign up this Sabbath.' && st.body.includes('**almost here**') && storyPhotos(slugA).length === 2 && storyPhotos(slugA)[0].path === `stories/${slugA}/${sha256(PNG_A)}.png` && mediaFiles().length === mediaBefore.length && st.image === `/media/stories/${slugA}/${sha256(PNG_A)}.png`, JSON.stringify(st).slice(0, 300));
+  check('...and the captions are kept through edit-live then publish (story_photos)', storyPhotos(slugA)[0].caption === 'Volunteers sort boxes at the food drive.' && storyPhotos(slugA)[1].caption === CAPTION_HOSTILE.replace(/\s+/g, ' '), JSON.stringify(storyPhotos(slugA).map((x) => x.caption)));
   const page = (await getPub(`/stories/${slugA}/`)).text;
   check('...and the new text is on the page at once', page.includes('almost here') && page.includes('Updated: sign up this Sabbath.') && !page.includes('coming up'));
 }

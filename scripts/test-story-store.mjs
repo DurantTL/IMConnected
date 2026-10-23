@@ -179,7 +179,7 @@ try {
   fs.mkdirSync(path.join(ROOT, 'public/images/stories/2099-01-06-zz-test-base-six'), { recursive: true });
   fs.writeFileSync(path.join(ROOT, 'public/images/stories/2099-01-06-zz-test-base-six/photo-1.jpg'), JPG);
   WORDS.forEach((w, i) => {
-    const photo = i === 5 ? `image: "/images/stories/2099-01-06-zz-test-base-six/photo-1.jpg"\nimageAlt: "A synthetic picture"\n` : '';
+    const photo = i === 5 ? `image: "/images/stories/2099-01-06-zz-test-base-six/photo-1.jpg"\nimageAlt: "A synthetic picture"\nimageCaption: "A synthetic adopted caption <b>as text</b>"\n` : '';
     fs.writeFileSync(path.join(ROOT, `src/content/stories/2099-01-0${i + 1}-zz-test-base-${w}.md`), `---\ntitle: "Zz test base ${w}"\nsection: news\narea: churches\nauthor: "Test Author"\ndate: 2099-01-0${i + 1}\n${photo}featured: false\ndraft: false\n---\nSynthetic story number ${w}, written by the test. It has a few made-up words to make a body.\n`);
   });
   build();
@@ -196,6 +196,7 @@ try {
 
   await startServer();
   const line1 = await waitForAdoption();
+  check('adoption reads imageCaption from the build into story_photos.caption (issue #84); a story without one has the empty default', q("SELECT p.caption c FROM story_photos p JOIN stories s ON s.id = p.story_id WHERE s.slug = '2099-01-06-zz-test-base-six'")[0]?.c === 'A synthetic adopted caption <b>as text</b>' && q("SELECT COUNT(*) n FROM story_photos WHERE caption <> ''")[0].n === 1);
   check('first start adopted the build and hashed and copied its photos', /adopting the build: \d+ new.* [1-9]\d* photos hashed, [1-9]\d* copied/.test(line1), line1);
   check('...and recorded git_adopted_at in app_state', !!adoptedFlag());
   const rows = q('SELECT * FROM stories ORDER BY slug');

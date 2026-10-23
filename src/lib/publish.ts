@@ -28,7 +28,7 @@ export interface PreparedStudioStory {
   photoCredit: string;
   /** How the story page arranges the photos; 'one' when Studio sent none. */
   photoLayout: PhotoLayout;
-  /** Alt text of the lead photo as the story page shows it (alt, else caption, else title). */
+  /** Alt text of the lead photo as the story page shows it (alt, else title; a visible caption is never the alt). */
   leadAlt: string;
   /** The Markdown body (with the pull quote, if any). */
   body: string;
@@ -39,7 +39,10 @@ export interface PreparedStudioStory {
 interface Photo extends PhotoCrop {
   url: string;
   alt: string;
+  /** As Studio sent it (also the credit, see leadImageFields). */
   caption: string;
+  /** The visible caption to store (issue #84): one line of plain text up to 300 characters. Undefined when Studio sent no caption, an empty one, or a "Photo:" credit line: an unchanged photo keeps the caption it has (so a Studio republish never wipes an editor's caption; only the dashboard clears one). */
+  shownCaption?: string;
 }
 
 function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: string; bytes: Buffer } } {
@@ -48,6 +51,8 @@ function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: st
   const url = typeof p.url === 'string' ? p.url.trim() : '';
   const alt = clean(p.alt).trim().slice(0, PUBLISH_LIMITS.alt);
   const caption = clean(p.caption).trim().slice(0, PUBLISH_LIMITS.caption);
+  // Studio's own captions are the credit line ("Photo: ...") or empty, so neither counts as a caption and neither clears the one an editor typed.
+  const shownCaption = !caption || /^photo:/i.test(caption) ? undefined : caption.replace(/\s+/g, ' ').trim();
   // Omission means preserve an unchanged photo's crop; explicit defaults reset it.
   const crop: PhotoCrop = {};
   for (const key of ['focalX', 'focalY', 'zoom'] as const) {
@@ -73,7 +78,7 @@ function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: st
     if (bytes.length > LIMITS.maxPhotoMB * 1024 * 1024) throw new PublishError(`A photo is larger than ${LIMITS.maxPhotoMB} MB.`, ref);
     const ext = sniffImage(bytes);
     if (!ext) throw new PublishError('A photo is not a JPG, PNG, WebP or AVIF image.', ref);
-    return { photo: { url: '', alt, caption, ...crop }, data: { ext, bytes } };
+    return { photo: { url: '', alt, caption, shownCaption, ...crop }, data: { ext, bytes } };
   }
   if (url.length > PUBLISH_LIMITS.url) throw new PublishError('A photo URL is too long.', ref);
   let parsed: URL;
@@ -83,7 +88,7 @@ function parsePhoto(raw: unknown, ref: string): { photo: Photo; data?: { ext: st
     throw new PublishError('A photo URL is not valid. Use an https:// link or a data: image.', ref);
   }
   if (parsed.protocol !== 'https:') throw new PublishError('Photo links must start with https://.', ref);
-  return { photo: { url: parsed.href, alt, caption, ...crop } };
+  return { photo: { url: parsed.href, alt, caption, shownCaption, ...crop } };
 }
 
 export function prepareStudioPublish(input: unknown) {

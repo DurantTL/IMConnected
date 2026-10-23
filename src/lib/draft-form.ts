@@ -19,7 +19,7 @@ function text(form: FormData, name: string, max: number, label: string): string 
 const line = (form: FormData, name: string, max: number, label: string) => text(form, name, max, label).replace(/\s+/g, ' ').trim();
 
 /** Throws an Error with an editor-readable message. */
-export function readDraftFields(form: FormData): { fields: DraftFields; photoAlts: Map<number, string>; layout: string | null; photoFocus: Map<number, PhotoCrop> } {
+export function readDraftFields(form: FormData): { fields: DraftFields; photoAlts: Map<number, string>; layout: string | null; photoFocus: Map<number, PhotoCrop>; photoCaptions: Map<number, string> } {
   const fields: DraftFields = {
     title: line(form, 'title', FIELD_MAX.title, 'The title'),
     dek: line(form, 'dek', FIELD_MAX.dek, 'The summary'),
@@ -108,11 +108,17 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
     const id = Number(m[1]);
     photoAlts.set(id, line(form, key, 300, 'Photo text'));
   }
+  // Captions (issue #84): visible text under a photo, one line of plain text up to 300 characters. A photo without the field keeps its caption.
+  const photoCaptions = new Map<number, string>();
+  for (const key of form.keys()) {
+    const m = /^photo_(\d{1,12})_caption$/.exec(key);
+    if (m) photoCaptions.set(Number(m[1]), line(form, key, 300, 'The photo caption'));
+  }
   // The photo layout is taken exactly as sent (no trimming), so " mosaic " is refused like the APIs refuse it. A form that does not
   // have the field at all (a page opened before this existed) means "keep what the draft has": null.
   const rawLayout = form.get('photoLayout');
   if (rawLayout !== null && typeof rawLayout !== 'string') throw new Error('The photo layout could not be read.');
-  return { fields, photoAlts, layout: rawLayout, photoFocus };
+  return { fields, photoAlts, layout: rawLayout, photoFocus, photoCaptions };
 }
 
 export const intParam = (v: unknown): number | null => {

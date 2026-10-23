@@ -30,6 +30,8 @@ const SLUG = /^[a-z0-9][a-z0-9-]{0,159}$/;
 export const validSlug = (slug: unknown): slug is string => typeof slug === 'string' && SLUG.test(slug);
 
 const oneLine = (v: string) => clean(v).replace(/\s+/g, ' ').trim();
+/** A photo caption as stored: one line of plain text, at most PUBLISH_LIMITS.caption characters (rendering escapes it). */
+export const captionText = (v: unknown): string => oneLine(typeof v === 'string' ? v : '').slice(0, PUBLISH_LIMITS.caption);
 const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 
 // ---- photos ----
@@ -245,7 +247,7 @@ export async function publishDraft(draft: Draft, photos: DraftPhoto[], version: 
     const photo = photos[index];
     return { ...block, photoId: undefined, photoIndex: index, url: stored.sources[index], alt: block.alt || photo.alt, focalX: photo.focalX ?? 50, focalY: photo.focalY ?? 50, zoom: photo.zoom ?? 1, fit: photo.fit ?? 'cover', fitFill: photo.fitFill ?? 'blur' };
   });
-  stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; row.zoom = photos[i].zoom ?? 1; row.fit = photos[i].fit ?? 'cover'; row.fitFill = photos[i].fitFill ?? 'blur'; });
+  stored.rows.forEach((row, i) => { row.focalX = photos[i].focalX ?? 50; row.focalY = photos[i].focalY ?? 50; row.zoom = photos[i].zoom ?? 1; row.fit = photos[i].fit ?? 'cover'; row.fitFill = photos[i].fitFill ?? 'blur'; row.caption = captionText(photos[i].caption); });
   const now = Date.now();
   const story: StoryInput = {
     slug, title, dek: dek || undefined, section, additionalSections: draft.additionalSections, newsletterIssue: draft.newsletterIssue ?? null, area, column: column || undefined, author, authorTitle: authorTitle || undefined, church: church || undefined,
@@ -344,7 +346,7 @@ export function loadStory(slug: string): LoadedStory | null {
     },
     photos: sources.map((url, i) => {
       const inline = storyBlockPhotos(storyBlocks ?? []).find((b) => b.url === url);
-      return { url, alt: alts[i] ?? inline?.alt ?? '', caption: '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50, zoom: s.photoRows.find((p) => p.position === i)?.zoom ?? inline?.zoom ?? 1, fit: s.photoRows.find((p) => p.position === i)?.fit ?? inline?.fit ?? 'cover', fitFill: s.photoRows.find((p) => p.position === i)?.fitFill ?? inline?.fitFill ?? 'blur' };
+      return { url, alt: alts[i] ?? inline?.alt ?? '', caption: s.photoRows.find((p) => p.position === i)?.caption ?? '', focalX: s.photoRows.find((p) => p.position === i)?.focalX ?? inline?.focalX ?? 50, focalY: s.photoRows.find((p) => p.position === i)?.focalY ?? inline?.focalY ?? 50, zoom: s.photoRows.find((p) => p.position === i)?.zoom ?? inline?.zoom ?? 1, fit: s.photoRows.find((p) => p.position === i)?.fit ?? inline?.fit ?? 'cover', fitFill: s.photoRows.find((p) => p.position === i)?.fitFill ?? inline?.fitFill ?? 'blur' };
     }),
   };
 }
@@ -399,6 +401,7 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
           row.zoom = p.photos[i].zoom ?? previous?.zoom ?? 1;
           row.fit = p.photos[i].fit ?? previous?.fit ?? 'cover';
           row.fitFill = p.photos[i].fitFill ?? previous?.fitFill ?? 'blur';
+          row.caption = p.photos[i].shownCaption ?? previous?.caption ?? '';
         });
         writeStory({
           slug: p.slug, title: p.title, dek: p.dek || undefined, section: p.section, additionalSections: p.additionalSections, area: p.area, author: p.author, date: p.date,
@@ -409,7 +412,7 @@ export async function publishStudioStories(prepared: PreparedStudioStory[]): Pro
       }
       const rec = recordStudioPublish(planned.map(({ p, stored }) => ({
         slug: p.slug, title: p.title, dek: p.dek, section: p.section, additionalSections: getStoryBySlug(p.slug, { includeUnpublished: true })?.additionalSections, area: p.area, author: p.author, date: p.date, photoCredit: p.photoCredit, photoLayout: p.photoLayout, body: p.body, announcement: getStoryBySlug(p.slug, { includeUnpublished: true })?.announcement ?? null, newsletterIssue: getStoryBySlug(p.slug, { includeUnpublished: true })?.newsletterIssue ?? null,
-        photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: p.photos[i].caption, focalX: stored.rows[i].focalX, focalY: stored.rows[i].focalY, zoom: stored.rows[i].zoom, fit: stored.rows[i].fit, fitFill: stored.rows[i].fitFill })),
+        photos: stored.sources.map((url, i) => ({ url, alt: p.photos[i].alt, caption: stored.rows[i].caption ?? '', focalX: stored.rows[i].focalX, focalY: stored.rows[i].focalY, zoom: stored.rows[i].zoom, fit: stored.rows[i].fit, fitFill: stored.rows[i].fitFill })),
       })));
       ids = rec.ids; overwrote = rec.overwrote; oldUploads = rec.oldUploads;
     });
