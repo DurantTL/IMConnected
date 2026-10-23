@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { agentAuth, agentJson } from '../../../lib/agent-api';
-import { AgentError, AGENT_LIMITS, agentRateLimited, parseAgentStory } from '../../../lib/agent';
+import { AgentConflict, AgentError, AGENT_LIMITS, agentRateLimited, normalizeSourceUrl, parseAgentStory } from '../../../lib/agent';
+import { readAgentDraftBySourceUrl } from '../../../lib/agent-read';
 import { readLimited } from '../../../lib/bearer';
 import { upsertAgentDraft } from '../../../lib/drafts';
 import { notifyEditorsOfSubmission } from '../../../lib/notify';
@@ -39,11 +40,17 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
   try {
     result = upsertAgentDraft({ ...story });
   } catch (err) {
+    if (err instanceof AgentConflict) return agentJson(err.status, { ok: false, error: err.code, ...err.details, message: String(err.details.message ?? err.message) });
+    if (err instanceof AgentError) return agentJson(400, { ok: false, error: err.code, message: err.message });
     console.error('[agent] could not save the draft', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
     return agentJson(503, { ok: false, error: 'unavailable', message: 'The story could not be saved right now. Please try again in a few minutes.' });
   }
   if (!result.ok) {
-    return agentJson(409, { ok: false, error: 'already_reviewed', id: result.id, message: 'An editor has already started on this story, so it was not changed.' });
+    return agentJson(409, { ok: false, error: 'already_reviewed', reason: result.reason, id: result.id, message: result.message });
+  }
+  if (result.status === 'replayed') {
+    // An identical retry: nothing was written, nobody is emailed again, no new audit entry.
+    return agentJson(200, { ok: true, id: result.id, status: 'replayed', originalStatus: result.originalStatus, url: `${siteUrl()}/admin/drafts/${result.id}` });
   }
 
   console.log(`[agent] draft #${result.id} ${result.status}`);
@@ -61,6 +68,30 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
   return agentJson(201, { ok: true, id: result.id, status: result.status, url: `${siteUrl()}/admin/drafts/${result.id}` });
 };
 
+// GET /api/agent/stories?sourceUrl=... reads back the agent's own draft for that original post.
+export const GET: APIRoute = ({ request }) => {
+  const denied = agentAuth(request);
+  if (denied) return denied;
+  if (agentRateLimited()) return agentJson(429, { ok: false, error: 'rate_limited', message: 'Too many requests. The limit is 60 per hour.' }, { 'Retry-After': '3600' });
+  const raw = new URL(request.url).searchParams.get('sourceUrl');
+  if (!raw) return agentJson(400, { ok: false, error: 'source_url_required', message: 'Send ?sourceUrl=<the original post link>, or GET /api/agent/stories/<id>.' });
+  let sourceUrl: string;
+  try {
+    sourceUrl = normalizeSourceUrl(raw.trim());
+  } catch (err) {
+    if (err instanceof AgentError) return agentJson(400, { ok: false, error: err.code, message: err.message });
+    throw err;
+  }
+  let draft;
+  try {
+    draft = readAgentDraftBySourceUrl(sourceUrl);
+  } catch {
+    return agentJson(503, { ok: false, error: 'unavailable', message: 'The draft could not be read right now. Please try again in a few minutes.' });
+  }
+  if (!draft) return agentJson(404, { ok: false, error: 'not_found', message: 'No draft from the agent has that sourceUrl.' });
+  return agentJson(200, { ok: true, draft });
+};
+
 export const ALL: APIRoute = () => {
-  return agentJson(405, { ok: false, error: 'method_not_allowed', message: 'Use POST.' }, { Allow: 'POST' });
+  return agentJson(405, { ok: false, error: 'method_not_allowed', message: 'Use POST, or GET with ?sourceUrl=.' }, { Allow: 'GET, POST' });
 };

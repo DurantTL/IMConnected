@@ -36,7 +36,7 @@ const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 // A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
 const CLIENT_TMP = path.join(SCRATCH, 'client');
 fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
-const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525 };
+const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -58,7 +58,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { mail: [], a: [], b: [], c: [], d: [], e: [] };
+const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -156,7 +156,8 @@ start('b', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.b), DA
 start('c', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.c), DATA_DIR: path.join(SCRATCH, 'data-c'), SITE_URL: `http://localhost:${P.c}`, AGENT_API_TOKEN: 'too-short-token' });
 start('d', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.d), DATA_DIR: path.join(SCRATCH, 'data-d'), SITE_URL: `http://localhost:${P.d}`, AGENT_API_TOKEN: AGENT_TOKEN });
 start('e', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.e), DATA_DIR: path.join(SCRATCH, 'data-e'), SITE_URL: `http://localhost:${P.e}`, AGENT_API_TOKEN: PUBLISH_TOKEN }); // the agent token reuses the publish token
-for (const port of [P.a, P.b, P.c, P.d, P.e]) await waitFor(`http://localhost:${port}/`);
+start('f', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.f), DATA_DIR: path.join(SCRATCH, 'data-f'), SITE_URL: `http://localhost:${P.f}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 80 checks, its own rate window
+for (const port of [P.a, P.b, P.c, P.d, P.e, P.f]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -224,7 +225,9 @@ try {
     check('AGENT_API_TOKEN shorter than 32 characters: 503 (even with the matching token)', r.status === 503);
 
     r = await call(BASE, 'GET', '/api/agent/stories', { token: AGENT_TOKEN });
-    check('GET on /api/agent/stories: 405', r.status === 405);
+    check('GET on /api/agent/stories without ?sourceUrl=: 400 source_url_required (read-back needs one)', r.status === 400 && r.data.error === 'source_url_required');
+    r = await call(BASE, 'PUT', '/api/agent/stories', { token: AGENT_TOKEN, json: {} });
+    check('PUT on /api/agent/stories: 405 (Allow: GET, POST)', r.status === 405 && r.headers.get('allow') === 'GET, POST');
   }
 
   // ================= the agent token must differ from the publish token =================
@@ -477,6 +480,156 @@ try {
     check('no agent request published a story (no story row has the agent source)', q("SELECT COUNT(*) c FROM stories WHERE source = 'agent'")[0].c === 0);
   }
 
+  // ================= issue 80: read-back, refusal reasons, omission rules, requestId, capabilities =================
+  {
+    const F = `http://localhost:${P.f}`;
+    const FDB = path.join(SCRATCH, 'data-f', 'imconnected.db');
+    const qf = (sql, ...args) => { const db = new DatabaseSync(FDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    const runf = (sql, ...args) => { const db = new DatabaseSync(FDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).run(...args); } finally { db.close(); } };
+    await fetch(F + '/admin/login'); // opens the database and applies migrations
+    check('migration 025 created the agent_requests receipt table', qf("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_requests'").length === 1);
+    const now0 = Date.now();
+    const uid = Number(runf("INSERT INTO users (email, name, role, status, created_at, updated_at, notify_submissions) VALUES ('editor-f@e2e-mail.com', 'F Editor', 'editor', 'active', ?, ?, 1)", now0, now0).lastInsertRowid);
+    const etoken = randomBytes(32).toString('base64url');
+    runf('INSERT INTO sessions (id, user_id, created_at, last_seen_at, expires_at, mfa_passed) VALUES (?, ?, ?, ?, ?, 1)', createHash('sha256').update(etoken).digest('hex'), uid, now0, now0, now0 + 3600_000);
+    const fpost = (json) => call(F, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json });
+    const fget = (url, token = AGENT_TOKEN) => call(F, 'GET', url, { token });
+    const SRC = 'https://www.facebook.com/example-page/posts/8001';
+    const uploadFilesF = () => { const out = []; const walk = (d) => { if (!fs.existsSync(d)) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) e.isDirectory() ? walk(path.join(d, e.name)) : out.push(path.join(d, e.name)); }; walk(path.join(SCRATCH, 'data-f', 'uploads')); return out; };
+    const mail0 = emails().length;
+    const files0 = uploadFilesF().length;
+    const storiesBefore = JSON.stringify(qf('SELECT id, rev FROM stories ORDER BY id'));
+
+    // ---- create with a requestId, then read it back ----
+    const base = story({ sourceUrl: SRC, requestId: 'create-8001-first' });
+    const c = await fpost(base);
+    const id = c.data.id;
+    check('create with requestId: 201 created', c.status === 201 && c.data.status === 'created' && Number.isInteger(id), c.text.slice(0, 200));
+    check('...editors are emailed once for the new draft', await until(() => emails().length === mail0 + 1));
+    const filesAfterCreate = uploadFilesF().length;
+    const FORBIDDEN_KEY = /email|phone|submitter|agent_?note|^note$|rejectnote|path|upload|revision/i;
+    const keysOf = (v, out = []) => { if (Array.isArray(v)) v.forEach((x) => keysOf(x, out)); else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { out.push(k); keysOf(x, out); } return out; };
+    const row = () => qf('SELECT * FROM drafts WHERE id = ?', id)[0];
+    const matchesDb = (d, r) => d.id === r.id && d.status === r.status && d.title === r.title && d.dek === r.dek && d.body === r.body && d.section === r.section && d.area === r.area && d.author === r.author && d.church === r.church && d.date === r.date && d.photoLayout === r.photo_layout && d.sourceUrl === r.source_url && d.createdAt === new Date(r.created_at).toISOString() && d.updatedAt === new Date(r.updated_at).toISOString() && JSON.stringify(d.additionalSections) === JSON.stringify(JSON.parse(r.additional_sections || '[]'));
+    let g = await fget(`/api/agent/stories/${id}`);
+    check('GET /api/agent/stories/<id> returns the stored fields', g.status === 200 && g.data.ok === true && matchesDb(g.data.draft, row()), g.text.slice(0, 300));
+    check('...editorTouched false, hasModules false, no public url or slug yet', g.data.draft.editorTouched === false && g.data.draft.hasModules === false && g.data.draft.url === null && g.data.draft.slug === null);
+    const ph = g.data.draft.photos;
+    check('...photos list position, alt, format, focal and zoom', ph.length === 2 && ph[0].position === 0 && ph[0].alt === 'Campers around a fire' && ph[0].format === 'png' && ph[1].format === 'jpg' && ph[0].focalX === 50 && ph[0].focalY === 50 && ph[0].zoom === 1);
+    check('...no contact, note, path, upload or revision keys anywhere (and no per-photo url)', !ph.some((p) => 'url' in p) && !keysOf(g.data).some((k) => FORBIDDEN_KEY.test(k) && k !== 'sourceUrl'), keysOf(g.data).join());
+    check('...and no note text, upload path or file name leaks into the response', !g.text.includes('Picked because') && !g.text.includes('uploads') && !qf('SELECT path FROM draft_photos WHERE draft_id = ?', id).some((p) => g.text.includes(p.path)));
+    const gs = await fget(`/api/agent/stories?sourceUrl=${encodeURIComponent(SRC)}`);
+    check('GET /api/agent/stories?sourceUrl= finds the same draft', gs.status === 200 && gs.data.draft.id === id && matchesDb(gs.data.draft, row()));
+    check('...a sourceUrl that is not a link is 400, a missing one is 400, an unknown one is 404', (await fget('/api/agent/stories?sourceUrl=nope')).status === 400 && (await fget('/api/agent/stories')).data.error === 'source_url_required' && (await fget('/api/agent/stories?sourceUrl=' + encodeURIComponent('https://www.facebook.com/none'))).data.error === 'not_found');
+    check('...read-back needs the agent token: 401 without or with the Studio token', (await fget(`/api/agent/stories/${id}`, null)).status === 401 && (await fget(`/api/agent/stories/${id}`, PUBLISH_TOKEN)).status === 401 && (await fget(`/api/agent/stories?sourceUrl=${encodeURIComponent(SRC)}`, null)).status === 401);
+    check('...other methods on the id route are 405', (await call(F, 'POST', `/api/agent/stories/${id}`, { token: AGENT_TOKEN, json: {} })).status === 405);
+    check('...ids that are not numbers or do not exist are 404 not_found', (await fget('/api/agent/stories/abc')).data.error === 'not_found' && (await fget('/api/agent/stories/99999')).status === 404);
+    check('...stories/reopen is still its own POST-only route (a GET is 405, not a 404 from the id route)', (await fget('/api/agent/stories/reopen')).status === 405);
+
+    // ---- other sources are invisible ----
+    const otherIds = {};
+    for (const source of ['editor', 'form']) {
+      otherIds[source] = Number(runf("INSERT INTO drafts (status, source, title, section, body, created_at, updated_at, source_url, submitter_name, submitter_email, submitter_phone) VALUES ('new', ?, ?, 'news', 'b', ?, ?, ?, 'Pat Sample', 'pat.sample@e2e-mail.com', '555-0100')", source, `${source} draft`, Date.now(), Date.now(), `https://www.facebook.com/example-page/posts/${source}`).lastInsertRowid);
+    }
+    check('a draft from the editor or the submit form is 404 by id', (await fget(`/api/agent/stories/${otherIds.editor}`)).status === 404 && (await fget(`/api/agent/stories/${otherIds.form}`)).data.error === 'not_found');
+    check('...and 404 by sourceUrl even when it has one', (await fget(`/api/agent/stories?sourceUrl=${encodeURIComponent('https://www.facebook.com/example-page/posts/form')}`)).status === 404);
+
+    // ---- requestId retry protection ----
+    const draftsBefore = qf('SELECT COUNT(*) c FROM drafts')[0].c;
+    const reordered = Object.fromEntries(Object.entries(base).reverse());
+    const rp = await fpost(reordered);
+    check('an identical retry (keys in another order) is 200 "replayed" with the same id', rp.status === 200 && rp.data.status === 'replayed' && rp.data.id === id && rp.data.originalStatus === 'created', rp.text.slice(0, 200));
+    await sleep(600);
+    check('...no new draft, no new upload file, no second email', qf('SELECT COUNT(*) c FROM drafts')[0].c === draftsBefore && uploadFilesF().length === filesAfterCreate && emails().length === mail0 + 1 && files0 + 2 === filesAfterCreate);
+    const reuse = await fpost({ ...base, title: 'A different title' });
+    check('the same requestId with a different body is 409 request_id_reused with a reason and message', reuse.status === 409 && reuse.data.error === 'request_id_reused' && reuse.data.reason === 'request_id_reused' && !!reuse.data.message && row().title === base.title);
+    check('a malformed requestId is a 400 bad_request_id', (await fpost({ ...base, requestId: 'short' })).data.error === 'bad_request_id');
+    const receipts = qf('SELECT * FROM agent_requests');
+    check('the receipt holds only hashes and the draft id, written with the draft', receipts.length === 1 && receipts[0].draft_id === id && /^[a-f0-9]{64}$/.test(receipts[0].request_hash) && /^[a-f0-9]{64}$/.test(receipts[0].payload_hash) && receipts[0].request_hash !== 'create-8001-first' && !JSON.stringify(receipts).includes('create-8001-first'));
+    // a failing receipt insert rolls the whole create back (one transaction)
+    runf("CREATE TRIGGER fail_agent_receipt BEFORE INSERT ON agent_requests BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END");
+    const filesBeforeFail = uploadFilesF().length;
+    const failed = await fpost(story({ sourceUrl: 'https://www.facebook.com/example-page/posts/8002', requestId: 'create-8002-first' }));
+    check('a failed receipt write rolls back the draft and removes its upload files', failed.status === 503 && qf('SELECT COUNT(*) c FROM drafts')[0].c === draftsBefore && uploadFilesF().length === filesBeforeFail);
+    runf('DROP TRIGGER fail_agent_receipt');
+    const noReq = await fpost(story({ sourceUrl: 'https://www.facebook.com/example-page/posts/8003', photos: [] }));
+    const noReq2 = await fpost(story({ sourceUrl: 'https://www.facebook.com/example-page/posts/8003', photos: [] }));
+    check('without a requestId behavior is unchanged: create then update', noReq.data.status === 'created' && noReq2.data.status === 'updated');
+
+    // ---- omission keeps, "" or null clears ----
+    const full = { sourceUrl: SRC, photoLayout: 'stack', additionalSections: ['news'], announcement: { kind: 'event', eventDate: '2026-12-01', location: 'Synthetic Hall' }, date: '2026-10-11' };
+    let r = await fpost(full);
+    check('an update that sends only some fields (no title, body, photos) is accepted', r.status === 201 && r.data.status === 'updated' && r.data.id === id, r.text.slice(0, 200));
+    const snap = () => { const d = row(); return { title: d.title, dek: d.dek, body: d.body, section: d.section, area: d.area, author: d.author, church: d.church, note: d.agent_note, layout: d.photo_layout, ann: d.announcement, extra: d.additional_sections, date: d.date, photos: JSON.stringify(qf('SELECT path, alt, position FROM draft_photos WHERE draft_id = ? ORDER BY position', id)) }; };
+    const s1 = snap();
+    check('...layout, additionalSections, announcement and date changed; text, section, area, note and photos kept', s1.layout === 'stack' && s1.extra === '["news"]' && JSON.parse(s1.ann).kind === 'event' && s1.date === '2026-10-11' && s1.title === base.title && s1.body.startsWith('Pathfinders') && s1.dek === base.dek && s1.section === 'youth' && s1.area === 'pathfinders' && s1.author === 'Staff Writer' && s1.church === 'Example Hills Church' && s1.note === base.note && JSON.parse(s1.photos).length === 2);
+    r = await fpost({ sourceUrl: SRC, dek: 'Only the summary changed.' });
+    const s2 = snap();
+    check('omitting everything but the dek keeps every other stored field', r.status === 201 && s2.dek === 'Only the summary changed.' && JSON.stringify({ ...s2, dek: s1.dek }) === JSON.stringify(s1));
+    r = await fpost({ sourceUrl: SRC, dek: '', author: null, church: '', note: null });
+    const s3 = snap();
+    check('explicit "" or null clears dek, author, church and the note', r.status === 201 && s3.dek === '' && s3.author === '' && s3.church === '' && s3.note === null && s3.title === s1.title && s3.body === s1.body && s3.section === 'youth' && s3.area === 'pathfinders');
+    for (const [bad, code] of [[{ title: '' }, 'title_required'], [{ title: null }, 'title_required'], [{ body: '' }, 'body_required'], [{ body: null }, 'body_required']]) {
+      r = await fpost({ sourceUrl: SRC, ...bad });
+      check(`required fields cannot be cleared: ${JSON.stringify(bad)} is 400 ${code}`, r.status === 400 && r.data.error === code && JSON.stringify(snap()) === JSON.stringify(s3));
+    }
+    r = await fpost({ sourceUrl: 'https://www.facebook.com/example-page/posts/8004', body: 'Body only.' });
+    check('a create without a title is 400 title_required and creates nothing', r.status === 400 && r.data.error === 'title_required' && qf("SELECT COUNT(*) c FROM drafts WHERE source_url = 'https://www.facebook.com/example-page/posts/8004'")[0].c === 0);
+    r = await fpost({ sourceUrl: 'https://www.facebook.com/example-page/posts/8004', title: 'Title only' });
+    check('a create without a body is 400 body_required', r.status === 400 && r.data.error === 'body_required');
+    r = await fpost({ sourceUrl: SRC, section: 'news' });
+    check('changing the section while the stored area is not valid for it is 400 bad_area (nothing changes)', r.status === 400 && r.data.error === 'bad_area' && JSON.stringify(snap()) === JSON.stringify(s3));
+    r = await fpost({ sourceUrl: SRC, area: 'nonsense' });
+    check('an area that is not valid for the stored section is 400 bad_area', r.status === 400 && r.data.error === 'bad_area' && JSON.stringify(snap()) === JSON.stringify(s3));
+    r = await fpost({ sourceUrl: SRC, section: 'news', area: 'conference' });
+    check('section and area together are applied', r.status === 201 && snap().section === 'news' && snap().area === 'conference' && snap().extra === '[]');
+    r = await fpost({ sourceUrl: SRC, section: 'youth', area: '' });
+    check('an explicit area "" clears the area when the section changes', r.status === 201 && snap().section === 'youth' && snap().area === '');
+    r = await fpost({ sourceUrl: SRC, section: 'youth', area: 'pathfinders' });
+    r = await fpost({ sourceUrl: SRC, section: 'youth', title: 'Same section keeps the area' });
+    check('an unchanged section keeps the stored area', r.status === 201 && snap().area === 'pathfinders' && snap().title === 'Same section keeps the area');
+    const s4 = snap();
+    for (const [bad, code] of [[{ photoLayout: 'bogus' }, 'bad_photo_layout'], [{ additionalSections: ['bogus'] }, 'bad_additional_sections'], [{ additionalSections: 'news' }, 'bad_additional_sections']]) {
+      r = await fpost({ sourceUrl: SRC, ...bad });
+      check(`${code} is a 400 and changes nothing`, r.status === 400 && r.data.error === code && JSON.stringify(snap()) === JSON.stringify(s4));
+    }
+    r = await fpost({ sourceUrl: SRC, photos: [{ data: dataUrl(PNG_B), alt: 'x'.repeat(400) }] });
+    check('alt text longer than 300 characters is truncated to 300', r.status === 201 && qf('SELECT alt FROM draft_photos WHERE draft_id = ?', id)[0].alt.length === 300);
+
+    // ---- an editor saves: the read-back shows the editor's version, and each refusal reason ----
+    const ver = row().updated_at;
+    const saved = await call(F, 'POST', `/api/admin/drafts/${id}/save`, { headers: { Cookie: `__Host-imc_session=${etoken}`, Origin: F, Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ version: String(ver), title: 'Edited by a person', section: 'youth', area: 'pathfinders', date: '2026-10-12', body: 'Edited body text.' }) });
+    check('an editor saves the draft', saved.status === 200 && saved.data.ok === true, saved.text.slice(0, 200));
+    g = await fget(`/api/agent/stories/${id}`);
+    check('read-back after the editor save returns the editor\'s current state', g.status === 200 && g.data.draft.title === 'Edited by a person' && g.data.draft.body === 'Edited body text.' && g.data.draft.editorTouched === true && g.data.draft.status === 'in_review' && matchesDb(g.data.draft, row()));
+    r = await fpost(story({ sourceUrl: SRC }));
+    check('refusal: in_review (with draft id and a message that does not invite a note)', r.status === 409 && r.data.error === 'already_reviewed' && r.data.reason === 'in_review' && r.data.id === id && /editor/i.test(r.data.message) && !/send a note/i.test(r.data.message));
+    runf("UPDATE drafts SET status = 'new' WHERE id = ?", id);
+    r = await fpost(story({ sourceUrl: SRC }));
+    check('refusal: editor_editing (status new but an editor has touched it)', r.status === 409 && r.data.reason === 'editor_editing' && r.data.id === id && /editor is working/i.test(r.data.message) && !/send a note/i.test(r.data.message));
+    runf("UPDATE drafts SET status = 'rejected', rejected_at = ? WHERE id = ?", Date.now(), id);
+    r = await fpost(story({ sourceUrl: SRC }));
+    check('refusal: rejected', r.status === 409 && r.data.reason === 'rejected' && r.data.id === id && r.data.message.length > 20);
+    runf("UPDATE drafts SET status = 'published', slug = 'synthetic-slug-80', published_commit = 'db', published_at = ?, rejected_at = NULL WHERE id = ?", Date.now(), id);
+    r = await fpost(story({ sourceUrl: SRC }));
+    check('refusal: published, naming the reopen endpoint and the slug', r.status === 409 && r.data.reason === 'published' && r.data.id === id && r.data.message.includes('/api/agent/stories/reopen') && r.data.message.includes('synthetic-slug-80'));
+    runf("UPDATE drafts SET unpublished_at = ? WHERE id = ?", Date.now(), id);
+    r = await fpost(story({ sourceUrl: SRC }));
+    check('refusal: published but since unpublished keeps reason published and does not point to reopen', r.status === 409 && r.data.reason === 'published' && !r.data.message.includes('/reopen') && /unpublished/i.test(r.data.message) && /editor/i.test(r.data.message));
+    runf("UPDATE drafts SET unpublished_at = NULL WHERE id = ?", id);
+    g = await fget(`/api/agent/stories/${id}`);
+    check('read-back of a published draft gives the slug and public url', g.data.draft.status === 'published' && g.data.draft.slug === 'synthetic-slug-80' && g.data.draft.url === `${F}/stories/synthetic-slug-80/`);
+    check('...and no refusal changed the stored title', row().title === 'Edited by a person' && JSON.stringify(qf('SELECT id, rev FROM stories ORDER BY id')) === storiesBefore);
+
+    // ---- capabilities ----
+    const caps = await fget('/api/agent/sections');
+    const b = caps.data.photoBudget ?? {};
+    check('capabilities list photoLayouts, photoMimeTypes and the photo budget', caps.status === 200 && JSON.stringify(caps.data.photoLayouts) === '["one","twoUp","heroGrid","mosaic","stack"]' && caps.data.photoMimeTypes.includes('image/avif') && caps.data.photoMimeTypes.length === 4 && b.maxPhotos === 6 && b.maxPhotoBytes === 10 * 1024 * 1024 && b.maxRequestBytes === 40 * 1024 * 1024);
+    check('...maxImageBytesPerRequest = floor(maxRequestBytes * 3 / 4) - jsonAllowanceBytes (about 30 MB, below 6 x 10 MB)', b.maxImageBytesPerRequest === Math.floor(b.maxRequestBytes * 3 / 4) - b.jsonAllowanceBytes && b.maxImageBytesPerRequest < b.maxPhotos * b.maxPhotoBytes && b.maxImageBytesPerRequest < 30 * 1024 * 1024);
+    check('...the existing fields are still there (additive only)', caps.data.sections.length === 5 && !!caps.data.additionalSections && !!caps.data.announcement && caps.data.reopen.endpoint === '/api/agent/stories/reopen' && Array.isArray(caps.data.photoFormats) && caps.data.limits.photos === 6);
+    check('the f server logs hold no token, note or upload path', !logs.f.join('\n').includes(AGENT_TOKEN) && !logs.f.join('\n').includes('Picked because') && !logs.f.join('\n').includes('uploads'));
+  }
+
   // ================= rate limit =================
   {
     const D = `http://localhost:${P.d}`;
@@ -491,6 +644,8 @@ try {
     check('the 61st gets 429 with Retry-After', last.status === 429 && last.headers.get('retry-after') !== null && last.data.ok === false);
     last = await call(D, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json: story() });
     check('...for the story endpoint too (one limit per token)', last.status === 429);
+    last = await call(D, 'GET', '/api/agent/stories/1', { token: AGENT_TOKEN });
+    check('...and for the read-back routes (shared window)', last.status === 429 && (await call(D, 'GET', '/api/agent/stories?sourceUrl=' + encodeURIComponent('https://example.test/x'), { token: AGENT_TOKEN })).status === 429);
     last = await call(D, 'GET', '/api/agent/sections', { token: 'x'.repeat(AGENT_TOKEN.length) });
     check('...but a wrong token still gets 401 first', last.status === 401);
   }
