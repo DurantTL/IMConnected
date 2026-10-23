@@ -156,7 +156,7 @@ try {
     }
     check('a word from a story body finds that story (every live built story with a distinctive word)', slugsOf(r).includes(C.s.slug));
     const hit = r.body.results.find((x) => x.slug === C.s.slug);
-    check('a result has url, title, section, date, author and a highlighted snippet', hit.url === `/stories/${C.s.slug}/` && hit.title === C.s.title && hit.section === C.s.section && /^\d{4}-\d{2}-\d{2}$/.test(hit.date) && hit.author && new RegExp(`<mark>${C.word}`, 'i').test(hit.snippet), JSON.stringify(hit).slice(0, 300));
+    check('a result has url, title, section, date, author and a highlighted snippet', hit.url === `/stories/${C.s.slug}/` && hit.title === C.s.title && hit.section === (C.s.section === 'columns' ? 'features' : C.s.section) && /^\d{4}-\d{2}-\d{2}$/.test(hit.date) && hit.author && new RegExp(`<mark>${C.word}`, 'i').test(hit.snippet), JSON.stringify(hit).slice(0, 300));
     check('search responses are never cached and are JSON', /no-store/.test(r.headers.get('cache-control')) && /application\/json/.test(r.headers.get('content-type')) && r.headers.get('x-content-type-options') === 'nosniff');
     check('the dashboard-unpublished story is not returned', !slugsOf(await search({ q: A.word })).includes(A.s.slug));
     check('the held story is not returned', !slugsOf(await search({ q: B.word })).includes(B.s.slug));

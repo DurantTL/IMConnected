@@ -1,6 +1,6 @@
 ---
 import SectionList from '../../../../components/SectionList.astro';
-import { getSection } from '../../../../lib/site';
+import { getSection, legacySectionPath } from '../../../../lib/site';
 import { asUnavailable, getPublicStories } from '../../../../lib/public-stories';
 import { bySection } from '../../../../lib/stories';
 import { PAGE_SIZE, pageCount, parsePageNumber } from '../../../../lib/pagination';
@@ -8,6 +8,9 @@ import { PAGE_SIZE, pageCount, parsePageNumber } from '../../../../lib/paginatio
 // Rendered on the server from the stories table, one page of PAGE_SIZE stories (issue #96); the middleware caches the result.
 export const prerender = false;
 
+// Issue #136: /columns/... moved to /features/...
+const moved = legacySectionPath(Astro.url.pathname);
+if (moved) return Astro.redirect(moved + Astro.url.search, 301);
 const section = getSection(Astro.params.section ?? '');
 const area = section?.areas?.find((a) => a.key === Astro.params.area);
 const n = parsePageNumber(Astro.params.n);

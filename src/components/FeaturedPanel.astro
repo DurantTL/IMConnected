@@ -7,7 +7,7 @@ interface Props { story?: PublicStory; /** The panel is the first thing under th
 const { story, eager = false } = Astro.props;
 const d = story?.data;
 const section = d && getSection(d.section);
-const sub = d && (d.section === 'columns' ? d.column : areaLabel(d.section, d.area));
+const sub = d && (areaLabel(d.section, d.area));
 ---
 {story && d && (
   <section class="featured-panel" aria-labelledby="featured-title" data-featured-panel>

@@ -49,7 +49,7 @@ try {
     ['news', 'schools', 'Learning together, growing together'],
     ['news', 'camp', 'Room to explore and connect'],
     ['features', null, 'The stories that bring us together'],
-    ['columns', null, 'A moment to pause and reflect'],
+    ['features', null, 'A moment to pause and reflect'],
     ['youth', 'pathfinders', 'Discovering purpose through service'],
     ['kids', null, 'Small questions, bright discoveries'],
   ];
@@ -64,7 +64,7 @@ try {
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgaPgPAAKAAX9Fl7IMAAAAAElFTkSuQmCC', 'base64');
   const sha = crypto.createHash('sha256').update(png).digest('hex');
   // Four older stories (past the 90 day home window) fill the home page "From the archive" rail; two of them have photos too.
-  const archiveFixtures = [['news', 'schools', 'An older story from a past issue', '2025-03-04'], ['features', null, 'A feature from a past issue', '2025-04-11'], ['columns', null, 'A column from a past issue', '2025-05-16'], ['youth', 'pathfinders', 'A youth story from a past issue', '2025-06-20']];
+  const archiveFixtures = [['news', 'schools', 'An older story from a past issue', '2025-03-04'], ['features', null, 'A feature from a past issue', '2025-04-11'], ['features', null, 'Another feature from a past issue', '2025-05-16'], ['youth', 'pathfinders', 'A youth story from a past issue', '2025-06-20']];
   for (const [i, [section, area, title, date]] of archiveFixtures.entries()) {
     insert.run(`synthetic-archive-${i + 1}`, title, 'Synthetic archive example for the IMConnected story magazine.', section, area, 0, 'This synthetic story is an archive fixture without real people.', Date.now() + 100 + i, Date.now() + 100 + i);
     fixtureDb.prepare('UPDATE stories SET date = ?, rev = rev + 1 WHERE slug = ?').run(date, `synthetic-archive-${i + 1}`);

@@ -98,7 +98,7 @@ function fromRow(r: Row, photoRows: StoryPhoto[]): Story {
     newsletterIssue: refFromRow(r.newsletter_issue === null || r.newsletter_issue === undefined ? r : { ...r, ...(getDb().prepare('SELECT date AS issue_date, title AS issue_title FROM newsletter_issues WHERE number = ?').get(Number(r.newsletter_issue)) as Row | undefined) }),
     keyPoints: normalizeKeyPoints(r.key_points),
     area: opt(r.area),
-    column: opt(r.story_column),
+    column: undefined, // issue #136: column names are retired
     author: String(r.author),
     authorTitle: opt(r.author_title),
     church: opt(r.church),
@@ -237,7 +237,7 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   // Module text follows the body contract (every "<" is &lt;), and an image module may only show this story's own photos.
   const blocks = escapeStoryBlocks(normalizeStoryBlocks(s.storyBlocks ?? []));
   assertOwnStoryImages(blocks, [...(s.image ? [s.image] : []), ...s.photos]);
-  const cols = [s.title, nul(s.dek), s.section, nul(s.area), nul(s.column), s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
+  const cols = [s.title, nul(s.dek), s.section, nul(s.area), '', s.author, nul(s.authorTitle), nul(s.church), s.date, nul(s.image), nul(s.imageAlt), nul(s.photoCredit),
     JSON.stringify(s.photos), JSON.stringify(s.photoAlts), s.featured ? 1 : 0, s.draft ? 1 : 0, s.body, s.status, s.source, s.draftId ?? null,
     s.publishedAt, now, s.publishedBy ?? null, s.contentHash ?? null, photoLayoutOrDefault(s.photoLayout), JSON.stringify(blocks), s.announcement === undefined ? cur?.announcement ?? null : announcementJson(s.announcement), JSON.stringify(additionalSections), issue?.number ?? null, issue?.position ?? null, JSON.stringify(keyPoints)];
   const editedAt = s.editedAt === undefined ? null : editStamp(s.editedAt);

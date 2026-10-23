@@ -38,7 +38,6 @@ const fresh = (list: typeof stories) => list.filter((s) => !used.has(s.id));
 
 const news = getSection('news')!;
 const features = fresh(bySection(stories, 'features')).slice(0, 3);
-const columns = bySection(stories, 'columns').slice(0, 3);
 const youth = fresh(bySection(stories, 'youth')).slice(0, 3);
 const kids = bySection(stories, 'kids').slice(0, 3);
 const newsAreas = news.areas!.map((a) => ({ area: a, items: bySection(stories, 'news', a.key).slice(0, 3) }));
@@ -53,7 +52,7 @@ const issuePreviews = (() => {
   return without.length >= Math.min(PREVIEW_COUNT, latest.stories.length) ? without : latest.stories.slice(0, PREVIEW_COUNT);
 })();
 // "From the archive" (issue #100): older stories, never one already shown above.
-const shownAbove = [...spotlight, ...issuePreviews, panel, lead, ...side, ...features, ...newsAreas.flatMap((a) => a.items), ...columns, ...youth, ...kids].filter(Boolean).map((s) => s!.id);
+const shownAbove = [...spotlight, ...issuePreviews, panel, lead, ...side, ...features, ...newsAreas.flatMap((a) => a.items), ...youth, ...kids].filter(Boolean).map((s) => s!.id);
 const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HOMEPAGE_RECENT_DAYS, exclude: shownAbove });
 ---
 <Base current="home">
@@ -130,16 +129,6 @@ const archive = archiveRail(allStories, { today: conferenceDay(), recentDays: HO
         })}
       </div>
     </section>
-
-    {columns.length > 0 && (
-      <section class="block voices-section" data-sec="columns">
-        <div class="block-head">
-          <div><p class="eyebrow">A moment to reflect</p><h2>Voices &amp; perspectives</h2><p>{getSection('columns')!.blurb}</p></div>
-          <a class="more" href="/columns/">All columns →</a>
-        </div>
-        <div class="grid cols-3">{columns.map((s) => <StoryCard story={s} variant="text" />)}</div>
-      </section>
-    )}
 
     {youth.length > 0 && (
       <section class="block" data-sec="youth">

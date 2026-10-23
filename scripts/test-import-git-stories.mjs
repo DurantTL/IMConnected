@@ -77,6 +77,12 @@ try {
   const f = q("SELECT * FROM stories WHERE slug = 'zz-hand-story'")[0];
   check('--force overwrites it: git text, live again, source git, edited_at cleared', /update\s+zz-hand-story.*--force/.test(r.out) && f.title === 'Hand Story Changed In Git' && f.status === 'live' && f.source === 'git' && f.edited_at === null, r.out);
 
+  // issue #136: an older file that still says section: columns is imported as features, keeping its column name
+  write('zz-old-column', md('Old Column').replace('section: news\narea: churches', 'section: columns\ncolumn: "From the Synthetic Desk"'));
+  r = imp('--apply');
+  const oc = q("SELECT section, area, story_column FROM stories WHERE slug = 'zz-old-column'")[0];
+  check('section: columns in a hand-written file is imported as features and its column name is dropped', r.code === 0 && oc?.section === 'features' && !oc.area && oc.story_column === '', r.out + JSON.stringify(oc));
+
   // refusals
   write('zz-draft-story', md('Draft Story').replace('draft: false', 'draft: true'));
   write('zz-bad-section', md('Bad Section').replace('section: news', 'section: nonsense'));

@@ -169,7 +169,7 @@ let A, slugA;
   check('"New story" creates an editor draft and opens it', r.status === 303 && A > 0 && draftRow(A).source === 'editor' && draftRow(A).status === 'in_review');
   r = await c1.get(`/admin/drafts/${A}`);
   check('the editor page loads (no-store, noindex)', r.status === 200 && /no-store/.test(r.headers.get('cache-control')) && /noindex/.test(r.headers.get('x-robots-tag')));
-  check('the editor offers the fields, toolbar, preview and photos', ['name="title"', 'name="dek"', 'name="section"', 'name="area"', 'name="column"', 'name="author"', 'name="authorTitle"', 'name="church"', 'name="date"', 'name="featured"', 'data-md="bold"', 'data-md="italic"', 'data-md="heading"', 'data-md="quote"', 'data-md="link"', 'data-md="list"', 'id="preview"', 'sandbox'].every((s) => r.text.includes(s)));
+  check('the editor offers the fields, toolbar, preview and photos', ['name="title"', 'name="dek"', 'name="section"', 'name="area"', 'name="author"', 'name="authorTitle"', 'name="church"', 'name="date"', 'name="featured"', 'data-md="bold"', 'data-md="italic"', 'data-md="heading"', 'data-md="quote"', 'data-md="link"', 'data-md="list"', 'id="preview"', 'sandbox'].every((s) => r.text.includes(s)) && !r.text.includes('name="column"') && !r.text.includes('Column name'));
   check('no submitter panel on a draft written in the editor', !r.text.includes('Submitter'));
 
   r = await c1.json(`/api/admin/drafts/${A}/save`, { version: version(A), ...baseFields() });
@@ -388,9 +388,9 @@ let H, slugH;
   const hs = story(slugH);
   check('the stored body has no raw HTML anywhere (no "<" followed by a tag)', !/<[a-zA-Z\/!?]/.test(hs.body), (hs.body.match(/<[a-zA-Z\/!?].{0,40}/) || [''])[0]);
   check('...the body is escaped (&lt;script&gt;), even inside a code fence', hs.body.includes('&lt;script>alert(1)&lt;/script>') && hs.body.includes("&lt;script>alert('in a fence')&lt;/script>"), hs.body.slice(0, 300));
-  check('...the column field is stored (columns section)', hs.section === 'columns' && hs.story_column === XSS[2]);
+  check('...an old form that sends section "columns" and a column name is stored as features with no column name (issue #136)', hs.section === 'features' && !hs.story_column, JSON.stringify([hs.section, hs.story_column]));
   const anonText = (await getPub('/stories.json')).text;
-  const hostilePages = [`/stories/${slugH}/`, '/', '/columns/', '/stories.json', '/rss.xml'];
+  const hostilePages = [`/stories/${slugH}/`, '/', '/features/', '/stories.json', '/rss.xml'];
   const pageBad = [];
   for (const u of hostilePages) {
     if (u === '/stories.json') continue; // JSON text, not markup: its strings are checked below
@@ -403,7 +403,7 @@ let H, slugH;
   check('...the story page has the escaped title', (await getPub(`/stories/${slugH}/`)).text.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
   // the title survives a round trip through the database
   r = await c1.form('/api/admin/stories/edit', { slug: slugH });
-  check('a story with escaped characters loads back into the editor intact', draftRow(H).title === XSS[0] && draftRow(H).story_column === XSS[2] && draftRow(H).status === 'in_review', JSON.stringify([r.loc, draftRow(H).title, draftRow(H).story_column, draftRow(H).status]));
+  check('a story with escaped characters loads back into the editor intact', draftRow(H).title === XSS[0] && draftRow(H).story_column === '' && draftRow(H).status === 'in_review', JSON.stringify([r.loc, draftRow(H).title, draftRow(H).story_column, draftRow(H).status]));
   await c1.form('/api/admin/stories/unpublish', { slug: slugH });
 }
 
@@ -720,6 +720,10 @@ let S;
   run("UPDATE draft_revisions SET payload = json_remove(payload, '$.fields.newsletterIssue') WHERE id = ?", rev31.id);
   r = await c1.json(`/api/admin/drafts/${D}/revisions`, { version: version(D), revisionId: rev31.id });
   check('a revision from before the field existed restores to no issue', r.status === 200 && draftRow(D).newsletter_issue === null && draftRow(D).newsletter_position === null, `${r.status} ${r.text.slice(0, 120)}`);
+  // issue #136: a revision saved while Columns existed restores as Features, with no column name and no "columns" extra
+  run("UPDATE draft_revisions SET payload = json_set(payload, '$.fields.section', 'columns', '$.fields.column', 'Old Synthetic Column', '$.fields.additionalSections', json('[\"columns\",\"kids\"]')) WHERE id = ?", rev31.id);
+  r = await c1.json(`/api/admin/drafts/${D}/revisions`, { version: version(D), revisionId: rev31.id });
+  check('a revision that says columns restores as features, with an empty column name and the "columns" extra dropped', r.status === 200 && draftRow(D).section === 'features' && draftRow(D).story_column === '' && draftRow(D).additional_sections === '["kids"]', `${r.status} ${r.text.slice(0, 120)} ${JSON.stringify([draftRow(D).section, draftRow(D).story_column, draftRow(D).additional_sections])}`);
   r = await c1.json(`/api/admin/drafts/${D}/save`, { version: version(D), ...baseFields({ title: 'Issue Tagged Story' }), ...issueFields(31, 2) });
 
   // publish

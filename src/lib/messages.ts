@@ -37,7 +37,6 @@ export const ERRORS = {
   section_required: 'Choose a section.',
   area_bad: 'Choose a category that belongs to this section.',
   date_required: 'Choose a valid date.',
-  column_only: 'A column name is only for the Columns section.',
   photos_many: 'Use up to 6 photos per story.',
   link_unsafe: 'A link in the story is not a web, email or phone link. Use https:// addresses.',
   slug_bad: 'The story address is not valid.',

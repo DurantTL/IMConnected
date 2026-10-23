@@ -49,7 +49,7 @@ try {
  }
  const future=(days)=>new Date(now+days*86400000).toISOString().slice(0,10);
  seed('synthetic-gathering','A weekend to reconnect','news',future(7));seed('synthetic-service','Small acts. Lasting connections.','news',future(14));seed('synthetic-celebration','Make room for what comes next','news',future(21));
- seed('synthetic-camp','Something good is growing here','news',null,['youth']);seed('synthetic-table','Room for everyone at the table','features');seed('synthetic-voices','Young voices, lasting faith','youth');seed('synthetic-reflection','The quiet work of showing up','columns');
+ seed('synthetic-camp','Something good is growing here','news',null,['youth']);seed('synthetic-table','Room for everyone at the table','features');seed('synthetic-voices','Young voices, lasting faith','youth');seed('synthetic-reflection','The quiet work of showing up','features');
  const draftId=Number(run("INSERT INTO drafts(status,source,title,body,section,area,author,date,created_at,updated_at,additional_sections) VALUES('in_review','editor','Synthetic cross-category story',?,'news','camp','Synthetic Editor','2026-10-22',?,?, '[\"youth\"]')",body,now,now).lastInsertRowid);
  server=spawn(process.execPath,['dist/server/entry.mjs'],{env:{...process.env,HOST:'127.0.0.1',PORT:'4885',DATA_DIR:scratch,SITE_URL:base,AUTH_SECRET:'synthetic-publication-design-'+ 'x'.repeat(40),RESEND_API_KEY:'',GDRIVE_SERVICE_ACCOUNT_JSON:'',GDRIVE_FOLDER_ID:'',DISCORD_WEBHOOK_URL:''},stdio:['ignore','pipe','pipe']});
  server.stdout.on('data',(d)=>logs.push(String(d)));server.stderr.on('data',(d)=>logs.push(String(d)));

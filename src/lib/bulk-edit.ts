@@ -4,7 +4,7 @@
 // Audit entries list field NAMES only, never values.
 import { getDraft, getDraftBySlug, isEditable, saveDraft, type DraftFields } from './drafts';
 import { editLiveStory, validSlug } from './story-publish';
-import { SECTIONS, SECTION_KEYS, getSection, isValidArea, normalizeAdditionalSections } from './site';
+import { SECTIONS, SECTION_KEYS, canonicalSectionKey, getSection, isValidArea, normalizeAdditionalSections } from './site';
 import { validDate } from './storyfile';
 import { EditorError, ERRORS } from './messages';
 import { audit } from './auth/audit';
@@ -37,7 +37,8 @@ export function parseEditChanges(form: FormData): { changes: EditChanges; error?
   const list = (k: string) => form.getAll(k).filter((v): v is string => typeof v === 'string');
   const fail = (error: string) => ({ changes: {} as EditChanges, error });
   if (ticked('section')) {
-    const [section, area = ''] = text('e_section').split('|');
+    const [rawSection, area = ''] = text('e_section').split('|');
+    const section = canonicalSectionKey(rawSection);
     if (!getSection(section) || !isValidArea(section, area || undefined)) return fail('Choose a section and category from the list.');
     changes.section = { section, area };
   }
@@ -49,7 +50,7 @@ export function parseEditChanges(form: FormData): { changes: EditChanges; error?
   }
   for (const k of ['add', 'remove'] as const) {
     if (!ticked(k)) continue;
-    const keys = list(`e_${k}`);
+    const keys = list(`e_${k}`).map((v) => canonicalSectionKey(v));
     if (!keys.length || keys.some((v) => !SECTION_KEYS.includes(v as never))) return fail(`Choose at least one section to ${k}.`);
     changes[k] = SECTION_KEYS.filter((key) => keys.includes(key));
   }
@@ -103,12 +104,11 @@ export function applyEdit(cur: EditTarget, c: EditChanges): { ok: true; patch: P
   for (const k of c.add ?? []) extras.add(k);
   for (const k of c.remove ?? []) extras.delete(k);
   const additionalSections = normalizeAdditionalSections([...extras], section);
-  const patch: Patch = { section, area, column: section === 'columns' ? cur.column ?? '' : '', additionalSections, featured: c.featured ?? cur.featured, date: c.date ?? cur.date };
+  const patch: Patch = { section, area, column: '', additionalSections, featured: c.featured ?? cur.featured, date: c.date ?? cur.date };
   const before = normalizeAdditionalSections(cur.additionalSections ?? [], cur.section);
   const changed: string[] = [];
   if (patch.section !== cur.section) changed.push('section');
   if (patch.area !== (cur.area ?? '')) changed.push('area');
-  if (patch.column !== (cur.column ?? '')) changed.push('column');
   if (JSON.stringify(before) !== JSON.stringify(additionalSections)) changed.push('additionalSections');
   if (patch.featured !== cur.featured) changed.push('featured');
   if (patch.date !== cur.date) changed.push('date');

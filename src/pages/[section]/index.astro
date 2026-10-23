@@ -1,6 +1,6 @@
 ---
 import SectionList from '../../components/SectionList.astro';
-import { getSection } from '../../lib/site';
+import { getSection, legacySectionPath } from '../../lib/site';
 import { asUnavailable, getPublicStories } from '../../lib/public-stories';
 import { bySection } from '../../lib/stories';
 import { PAGE_SIZE, pageCount } from '../../lib/pagination';
@@ -8,6 +8,9 @@ import { PAGE_SIZE, pageCount } from '../../lib/pagination';
 // Rendered on the server from the stories table (epic #25, step 2); the middleware caches the result.
 export const prerender = false;
 
+// Issue #136: /columns/... moved to /features/...
+const moved = legacySectionPath(Astro.url.pathname);
+if (moved) return Astro.redirect(moved + Astro.url.search, 301);
 const section = getSection(Astro.params.section ?? '');
 if (!section) return new Response(null, { status: 404 });
 let all: Awaited<ReturnType<typeof getPublicStories>>;

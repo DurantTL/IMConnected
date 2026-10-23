@@ -202,7 +202,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
             <select id="e_section" name="e_section">
               {pairOptions.map((o) => <option value={o.value} selected={carried(['e_section']).some((c) => c.v === o.value)}>{o.label}</option>)}
             </select>
-            <p class="admin-note">The old primary section is not kept as an additional section. A column name is cleared when a story leaves Columns.</p>
+            <p class="admin-note">The old primary section is not kept as an additional section.</p>
           </fieldset>
           <fieldset class="bulk-field">
             <legend>Category only</legend>

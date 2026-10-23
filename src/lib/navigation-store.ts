@@ -2,10 +2,13 @@ import { getDb } from './db';
 import { tx } from './drafts';
 import { audit } from './auth/audit';
 import { invalidateStories } from './public-cache';
-import { defaultNavigation, newsletterSignupHref, normalizeNavigation, type Navigation } from './site-navigation';
+import { defaultNavigation, newsletterSignupHref, normalizeNavigation, RETIRED_MENU_IDS, type Navigation } from './site-navigation';
 export function readNavigation(): Navigation {
   const r = getDb().prepare('SELECT version,items,newsletter_signup AS signup FROM site_navigation WHERE id=1').get() as { version: number; items: string; signup: string } | undefined;
-  return r ? { version: r.version, items: normalizeNavigation(JSON.parse(r.items)), newsletterSignup: r.signup || '' } : { version: 0, items: defaultNavigation(), newsletterSignup: '' };
+  if (!r) return { version: 0, items: defaultNavigation(), newsletterSignup: '' };
+  const all = normalizeNavigation(JSON.parse(r.items)); // an old saved menu with the Columns link still validates
+  const items = all.filter((i) => !RETIRED_MENU_IDS.includes(i.id));
+  return { version: r.version, items, newsletterSignup: r.signup || '', ...(items.length !== all.length ? { columnsRemoved: true } : {}) };
 }
 export function saveNavigation(items: unknown, expected: number, userId: number, ip: string, signup?: unknown): boolean {
   const normalized = normalizeNavigation(items);

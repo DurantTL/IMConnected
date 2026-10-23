@@ -46,6 +46,7 @@ const rows = Array.from({ length: NAVIGATION_LIMIT }, (_, i) => {
   <div class="cms-bar"><div><p class="sb-eyebrow">Website settings</p><h1>Make it easy to find.</h1><p class="admin-note">Edit the website menu’s labels, links and order. Uncheck a link to hide it; clear its label and address to remove it. Blank rows add new links.</p></div></div>
   {error && <p class="admin-error" role="alert">{error}</p>}
   {success && <p class="admin-ok" role="status">{success}</p>}
+  {navigation.columnsRemoved && <p class="admin-note" role="status">The Columns link was removed from the menu because Columns is now part of Features. Save the menu to remove it from this saved list for good.</p>}
   <form method="post" class="navigation-editor">
     <input type="hidden" name="version" value={navigation.version} />
     <div class="navigation-editor-actions"><button class="cms-btn" type="submit" name="action" value="save">Save website menu</button><button class="cms-btn secondary" type="submit" name="action" value="reset" formnovalidate>Restore default menu</button></div>

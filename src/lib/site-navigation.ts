@@ -1,7 +1,9 @@
 // Public navigation contract; safe to share with the browser. Section definitions remain in site.ts.
 import { SECTIONS } from './site';
 export interface NavigationItem { id: string; label: string; href: string; visible: boolean }
-export interface Navigation { version: number; items: NavigationItem[]; newsletterSignup: string }
+export interface Navigation { version: number; items: NavigationItem[]; newsletterSignup: string; /** A saved menu still had the built-in Columns link (issue #136); it is dropped from `items`. */ columnsRemoved?: boolean }
+/** Issue #136: the retired built-in Columns menu link (id `columns`); a saved menu that still has it keeps working but never shows it. */
+export const RETIRED_MENU_IDS = ['columns'];
 export const NAVIGATION_LIMIT = 12;
 export function defaultNavigation(): NavigationItem[] {
   return [{ id: 'home', label: 'Latest', href: '/', visible: true }, ...SECTIONS.map((s) => ({ id: s.key, label: s.label, href: `/${s.key}/`, visible: true })), { id: 'announcements', label: 'Announcements', href: '/announcements/', visible: true }, { id: 'issues', label: 'Issues', href: '/issues/', visible: true }];

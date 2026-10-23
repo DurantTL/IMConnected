@@ -150,7 +150,7 @@ function toDraft(r: Row): Draft {
     newsletterIssue: refFromRow(r),
     keyPoints: normalizeKeyPoints(r.key_points),
     area: s(r.area),
-    column: s(r.story_column),
+    column: '', // issue #136: column names are retired (migration 036 cleared them)
     author: s(r.author),
     authorTitle: s(r.author_title),
     church: s(r.church),
@@ -242,7 +242,7 @@ export function createDraft(opts: NewDraft): number {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
-      status, opts.source, f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body,
+      status, opts.source, f.title, f.dek, f.section, f.area, '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body,
       opts.slug ?? null, sub.name ?? null, sub.email ?? null, sub.phone ?? null, sub.church ?? null, opts.emailVerified ? 1 : 0,
       now, opts.userId ?? null, now, opts.userId ?? null, opts.sourceUrl ?? null, opts.agentNote ?? null,
     );
@@ -402,7 +402,7 @@ function saveDraftInTransaction(id: number, expected: number, f: DraftFields, ph
     const before = editorialSnapshot(id, cur);
     getDb()
       .prepare('UPDATE drafts SET title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = COALESCE(?, photo_layout), featured = ?, body = ?, story_blocks = ?, announcement = CASE WHEN ? THEN ? ELSE announcement END WHERE id = ?')
-      .run(f.title, f.dek, f.section, area, f.section === 'columns' ? f.column : '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, layout, f.featured ? 1 : 0, body, JSON.stringify(blocks), bulletin !== undefined ? 1 : 0, bulletin ?? null, id);
+      .run(f.title, f.dek, f.section, area, '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, layout, f.featured ? 1 : 0, body, JSON.stringify(blocks), bulletin !== undefined ? 1 : 0, bulletin ?? null, id);
     const upd = getDb().prepare('UPDATE draft_photos SET alt = ? WHERE id = ? AND draft_id = ?');
     for (const [pid, alt] of photoAlts) upd.run(alt, pid, id);
     const focus = getDb().prepare('UPDATE draft_photos SET focal_x = COALESCE(?, focal_x), focal_y = COALESCE(?, focal_y), zoom = COALESCE(?, zoom), fit = COALESCE(?, fit), fit_fill = COALESCE(?, fit_fill) WHERE id = ? AND draft_id = ?');
@@ -733,7 +733,7 @@ export function syncPublishedDraftFields(slug: string, draftId: number | undefin
   const now = Date.now();
   getDb()
     .prepare("UPDATE drafts SET section = ?, area = ?, story_column = ?, additional_sections = ?, featured = ?, date = ?, updated_at = MAX(?, updated_at + 1) WHERE status = 'published' AND (slug = ? OR id = ?)")
-    .run(f.section, f.area, f.column, JSON.stringify(f.additionalSections), f.featured ? 1 : 0, f.date, now, slug, draftId ?? -1);
+    .run(f.section, f.area, '', JSON.stringify(f.additionalSections), f.featured ? 1 : 0, f.date, now, slug, draftId ?? -1);
 }
 
 let lastCleanup = 0;
@@ -768,7 +768,7 @@ export function resetDraftFromStory(id: number, userId: number | null, f: DraftF
       .prepare(
         "UPDATE drafts SET status = 'in_review', rejected_at = NULL, studio_overwrote_at = NULL, title = ?, dek = ?, section = ?, area = ?, story_column = ?, author = ?, author_title = ?, church = ?, date = ?, photo_credit = ?, photo_layout = ?, featured = ?, body = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE id = ?",
       )
-      .run(f.title, f.dek, f.section, f.area, f.column, f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
+      .run(f.title, f.dek, f.section, f.area, '', f.author, f.authorTitle, f.church, f.date, f.photoCredit, f.photoLayout, f.featured ? 1 : 0, f.body, now, userId, id);
     getDb().prepare('UPDATE drafts SET announcement = ?, additional_sections = ? WHERE id = ?').run(announcementJson(f.announcement), JSON.stringify(normalizeAdditionalSections(f.additionalSections, f.section)), id);
     writeDraftIssue(id, f.newsletterIssue ?? null);
     getDb().prepare('UPDATE drafts SET key_points = ? WHERE id = ?').run(keyPointsJson(f.keyPoints ?? []), id);

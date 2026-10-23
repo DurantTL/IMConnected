@@ -22,11 +22,11 @@ API additionally lists waiting drafts and supplies the allowed browser CORS poli
   origins only; any other origin gets no CORS headers. No token or a wrong one is
   `401`; an unset or short `PUBLISH_TOKEN` on the server is `503`.
 - **Query:** `limit` (1-100, default 50) and an optional `section` key (`news`,
-  `features`, `columns`, `youth`, `kids`; `/api/publish` lists them too).
+  `features`, `youth`, `kids`; `/api/publish` lists them too). The retired key `columns` is read as `features` (issue #136).
 - **Response:** `{ ok: true, version: 1, site, generated, stories: [...], drafts: [...] }`.
   - `stories`: live stories, newest first. Each item is exactly an item of
     `/stories.json` (`id`, `url`, `title`, `dek`, `section`, `sectionLabel`,
-    `area`, `areaLabel`, `column`, `author`, `authorTitle`, `church`, `date`,
+    `area`, `areaLabel`, `column` (retired: always omitted), `author`, `authorTitle`, `church`, `date`,
     `image`, `imageAlt`, `photoCredit`, `photos`, `photoAlts`, `photoLayout`, optional
     `photoFocus`, `featured`, and (issue #84) `photoCaptions` plus optional `imageCaption`: visible
     plain-text captions, escape them) plus

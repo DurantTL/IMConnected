@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { takeSlot } from '../../lib/rate-window';
 import { clientIp } from '../../lib/request';
-import { getSection } from '../../lib/site';
+import { canonicalSectionKey, getSection } from '../../lib/site';
 import { parseQuery } from '../../lib/search';
 import { runSearch } from '../../lib/search-run';
 
@@ -37,7 +37,7 @@ const json = (status: number, body: unknown, extra?: Record<string, string>) => 
 export const GET: APIRoute = async ({ request, url, clientAddress }) => {
   try {
     if (rateLimited(clientIp(request, clientAddress))) return json(429, { ok: false, error: 'Too many searches. Please wait a few minutes and try again.' }, { 'Retry-After': '300' });
-    const section = (url.searchParams.get('section') ?? '').trim();
+    const section = canonicalSectionKey((url.searchParams.get('section') ?? '').trim());
     if (section && !getSection(section)) return json(400, { ok: false, error: 'That section does not exist.' });
     const parsed = parseQuery(url.searchParams.get('q') ?? '');
     if (!parsed.ok) return json(400, { ok: false, error: parsed.error });

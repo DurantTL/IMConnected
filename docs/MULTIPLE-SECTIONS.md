@@ -42,3 +42,7 @@ The standalone importer supports optional front matter `additionalSections: [you
 ## Verification
 
 After building, `node scripts/test-additional-sections.mjs` starts an isolated built server on localhost:4881 and uses synthetic data only. With the Playwright environment from `DESIGN_REVIEW.md`, it also exercises the actual editor checkboxes, saving, accessibility and phone layout. It checks migration defaults, invalid and duplicate inputs, omitted/empty assignments, human publication, public/area/search discovery, feeds, agent reopening, Studio compatibility, revision restore and archive import. `node scripts/test-section-adoption.mjs` separately exercises the real adoption/store code with only its database and built-content inputs redirected to synthetic fixtures, checking omitted/empty/replaced metadata and stable effective hashes without editing or rebuilding the archive. Production credentials, data, publications and external services are never used.
+
+## Columns merged into Features (issue #136)
+
+There is no `columns` section. Features covers longer stories, testimonies and regular voices; column names are retired (migration 036 emptied them and nothing reads or shows one; a `column` input is ignored). Clients that still send `section: "columns"` (or `"columns"` inside `additionalSections`, bulk edit lists, a restored revision or an archive file) are accepted and read as `features`. Migration 036 moved existing rows. `GET /api/agent/sections` no longer lists `columns`. `/columns/...` redirects (301) to `/features/...`.

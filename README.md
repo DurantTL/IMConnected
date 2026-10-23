@@ -1,6 +1,6 @@
 # IMConnected
 
-A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Columns, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission lands as a draft in the editor dashboard at `/admin`, where an editor edits and publishes it.
+A story magazine for the Iowa-Missouri Conference of Seventh-day Adventists. The design follows the layout of a union magazine site: News, Features, Youth & Pathfinders and Kids sections, plus a public **Submit a Story** form. Each submission lands as a draft in the editor dashboard at `/admin`, where an editor edits and publishes it.
 
 - **Astro 7**: the story pages, section pages, home page, `/stories.json` and `/rss.xml` are rendered on the server from the database and kept in a small in-memory cache (see Stories in the database); the other pages are prerendered to static HTML. The other server code is `/api/submit`, `/api/publish`, `/api/confirm`, `/api/stories` and `/api/studio-photo` (for Studio), `/media/*` (photos from the data folder), and the editor dashboard (`/admin*` and `/api/admin/*`).
 - **Stories live in the site's SQLite database** (epic #25). Publishing, editing and unpublishing in `/admin` (and Studio's publish button) write to it directly, so a story is live on the very next request: there is no commit, no build and no deploy. Photos are files in `DATA_DIR/media`. Accounts, sessions, drafts and the audit log live in the same file (see Editor dashboard). That file and the photos are now the only copy, so a nightly backup to Google Drive matters (see Setup, step 7). `src/content/stories/` and `public/images/stories/` are a frozen archive that the site only reads once, to adopt it (see Stories in the database).
@@ -372,9 +372,8 @@ Write stories in the dashboard (**New story** in `/admin`). The Markdown format 
 ---
 title: "Headline"
 dek: "One-sentence summary"
-section: news            # news | features | columns | youth | kids
+section: news            # news | features | youth | kids (an old "columns" is read as features)
 area: churches           # news: conference|churches|schools|camp · youth: youth|pathfinders|adventurers
-column: "From the President"   # columns only
 author: "Name"
 authorTitle: "Title"     # optional
 church: "Church name"    # optional
