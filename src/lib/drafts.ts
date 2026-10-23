@@ -823,6 +823,8 @@ export interface AgentDraftInput {
   present?: ReadonlySet<string>;
 }
 
+interface ExistingAgentRow { id: number; status: string; updated_by: number | null; slug: string | null; published_commit: string | null; unpublished_at: number | null }
+
 export type AgentUpsertResult =
   | { ok: true; id: number; status: 'created' | 'updated' | 'replayed'; originalStatus?: 'created' | 'updated' }
   | { ok: false; id: number; reason: RefusalReason; message: string };
@@ -851,11 +853,11 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         }
       }
       const existing = input.sourceUrl
-        ? (db.prepare("SELECT id, status, updated_by, slug FROM drafts WHERE source = 'agent' AND source_url = ?").get(input.sourceUrl) as { id: number; status: string; updated_by: number | null; slug: string | null } | undefined)
+        ? (db.prepare("SELECT id, status, updated_by, slug, published_commit, unpublished_at FROM drafts WHERE source = 'agent' AND source_url = ?").get(input.sourceUrl) as ExistingAgentRow | undefined)
         : undefined;
       let id: number;
       let status: 'created' | 'updated';
-      const refuse = (e: { id: number; status: string; updated_by: number | null; slug: string | null }): AgentUpsertResult => ({ ok: false, ...refusalDetails(refusalReason(e.status, e.updated_by !== null), Number(e.id), e.slug) });
+      const refuse = (e: ExistingAgentRow): AgentUpsertResult => ({ ok: false, ...refusalDetails(refusalReason(e.status, e.updated_by !== null), Number(e.id), e.slug, e.published_commit != null && e.slug != null && e.unpublished_at == null) });
       if (existing) {
         if (existing.status !== 'new' || existing.updated_by !== null) return refuse(existing);
         id = Number(existing.id);
@@ -887,7 +889,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         const r = db
           .prepare(`UPDATE drafts SET ${sets.length ? sets.join(', ') + ', ' : ''}updated_at = MAX(?, updated_at + 1) WHERE id = ? AND status = 'new' AND updated_by IS NULL`)
           .run(...args, now, id);
-        if (Number(r.changes) !== 1) return refuse({ ...(existing as { id: number; status: string; slug: string | null }), updated_by: -1 });
+        if (Number(r.changes) !== 1) return refuse(db.prepare('SELECT id, status, updated_by, slug, published_commit, unpublished_at FROM drafts WHERE id = ?').get(id) as ExistingAgentRow);
         db.prepare('UPDATE drafts SET additional_sections = ? WHERE id = ?').run(JSON.stringify(normalizeAdditionalSections(input.additionalSections === undefined ? current.additionalSections : input.additionalSections, section)), id);
         if (input.photos) {
           oldFiles = listPhotos(id).map((p) => p.path).filter((p): p is string => !!p);

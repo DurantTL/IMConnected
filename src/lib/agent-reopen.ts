@@ -42,7 +42,7 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
       const existing = getDraftBySlug(input.slug);
       if (existing && existing.status !== 'published') {
         const touched = (db.prepare('SELECT updated_by FROM drafts WHERE id=?').get(existing.id) as { updated_by: number | null }).updated_by !== null;
-        throw new AgentConflict('already_reviewed', 'This story already has an open or rejected draft. Ask an editor to review it.', 409, refusalDetails(refusalReason(existing.status, touched), existing.id, input.slug));
+        throw new AgentConflict('already_reviewed', 'This story already has an open or rejected draft. Ask an editor to review it.', 409, refusalDetails(refusalReason(existing.status, touched), existing.source === 'agent' ? existing.id : null, input.slug));
       }
       const story = loadStory(input.slug);
       if (!story) throw new AgentConflict('story_not_found', 'No public story exists at that slug.', 404);

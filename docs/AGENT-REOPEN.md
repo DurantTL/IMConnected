@@ -76,10 +76,10 @@ This is HTTP 201. An identical retry returns HTTP 200 with the same ID and `stat
 | 409 | `already_reviewed` | A draft for this story already exists and is not published; no draft is overwritten. The response also has `reason`, `id` and a `message`: `in_review`, `rejected`, `editor_editing` (status new but an editor touched it) or `open_draft_exists` (new and untouched). |
 | 409 | `request_id_reused` | That ID was used with different JSON; retry the original body or use a new ID for a distinct update. `reason` repeats the code. |
 | 409 | `module_body_conflict` | Omit `body` to preserve editor modules. `reason` repeats the code. |
-
-Every 409 carries `message` saying what to do next. The create/update route (`POST /api/agent/stories`) answers its own refusals the same way with `reason` `published`, `in_review`, `editor_editing` or `rejected`; for `published` its message points here, naming the slug.
 | 429 | `rate_limited` | Wait for `Retry-After` (shared agent rate window). |
 | 503 | `not_configured`, `unavailable` | Check configuration, or retry the identical body/ID after a transient failure. |
+
+Every 409 carries `message` saying what to do next; for `already_reviewed`, `id` is the draft's id only when that draft came from the agent, otherwise `null`. A published story that was later unpublished is refused with `reason: "published"` but a message saying it cannot be reopened. The create/update route (`POST /api/agent/stories`) answers its own refusals the same way with `reason` `published`, `in_review`, `editor_editing` or `rejected`; for `published` its message points here, naming the slug.
 
 Concurrent identical requests are serialized into one accepted mutation and replay receipts. A different request cannot overwrite the resulting In review draft, even if no editor has opened it yet. After the editor publishes it, another distinct update can reopen the latest published version with a new requestId. The original `POST /api/agent/stories` remains idempotent by sourceUrl for untouched new submissions; it does not reopen published material automatically.
 

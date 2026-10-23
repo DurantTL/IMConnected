@@ -49,6 +49,7 @@ try {
   const expandedBody = '\n  ' + '&lt;'.repeat(6000) + '\n';
   exec('UPDATE stories SET body=?,author=?,rev=rev+1 WHERE slug=?', expandedBody, 'A'.repeat(150), 'synthetic-escaped');
   for (const status of ['new', 'in_review', 'rejected']) seed(`synthetic-${status.replace('_', '-')}`, { linked: true, status });
+  seed('synthetic-form-linked', { linked: true, status: 'in_review', source: 'form' });
   seed('synthetic-unpublished', { live: 'unpublished' });
   seed('synthetic-draft-only', { draft: 1 });
   const rollbackId = seed('synthetic-rollback', { linked: true });
@@ -89,6 +90,8 @@ try {
     const expected = { new: 'open_draft_exists', in_review: 'in_review', rejected: 'rejected' }[status];
     check('409 carries reason, draft id and a next-step message: ' + status, r.data.reason === expected && r.data.id === draftFor(slug).id && typeof r.data.message === 'string' && r.data.message.length > 20);
   }
+  const formLinked = await call(request('synthetic-form-linked'));
+  check('a refused reopen of a non-agent linked draft gives the reason but no draft id', formLinked.status === 409 && formLinked.data.reason === 'in_review' && formLinked.data.id === null && !/send a note/i.test(formLinked.data.message) && !formLinked.raw.includes('@'));
   exec('UPDATE drafts SET updated_by=? WHERE slug=?', userId, 'synthetic-new');
   const touchedNew = await call(request('synthetic-new'));
   check('a new draft an editor has touched is refused as editor_editing', touchedNew.status === 409 && touchedNew.data.reason === 'editor_editing' && /editor/i.test(touchedNew.data.message));

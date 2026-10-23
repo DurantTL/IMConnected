@@ -39,12 +39,15 @@ export const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
 export type RefusalReason = 'published' | 'in_review' | 'editor_editing' | 'rejected' | 'open_draft_exists';
 
 /** The body fields every "this draft cannot be changed" 409 carries, so the agent knows what to do next. */
-export function refusalDetails(reason: RefusalReason, id: number, slug: string | null): { reason: RefusalReason; id: number; message: string } {
+export function refusalDetails(reason: RefusalReason, id: number | null, slug: string | null, live = true): { reason: RefusalReason; id: number | null; message: string } {
+  const gone = 'The agent API cannot send anything more for it; contact the communication director if something must change.';
   const messages: Record<RefusalReason, string> = {
-    published: `This story is already published. Use POST /api/agent/stories/reopen with slug ${slug ?? '<slug>'} to propose changes for review.`,
-    in_review: 'An editor is reviewing this draft, so it was not changed. Send a note to the editors instead; they can edit it.',
-    editor_editing: 'An editor is working on this draft, so it was not changed. Send a note instead; the editor will see it.',
-    rejected: 'An editor rejected this draft, so it was not changed. Ask an editor if it should be reopened.',
+    published: live
+      ? `This story is already published. Use POST /api/agent/stories/reopen with slug ${slug ?? '<slug>'} to propose changes for review.`
+      : `This story was published and later unpublished, so it cannot be reopened through the API. An editor must handle it; ${gone}`,
+    in_review: `An editor has this draft in review, so it was not changed. ${gone}`,
+    editor_editing: `An editor is working on this draft, so it was not changed. ${gone}`,
+    rejected: `An editor rejected this draft, so it was not changed. ${gone}`,
     open_draft_exists: 'A draft for this story is already waiting for review, so nothing was changed. An editor will see it.',
   };
   return { reason, id, message: messages[reason] };
