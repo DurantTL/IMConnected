@@ -34,6 +34,32 @@ try {
     const previewResult = await renderMediaMarkdown(marker, mediaPhotos, true);
     check(`invalid marker is hidden publicly and warns safely in preview: ${marker}`, () => { assert.equal(publicResult.used.size, 0); assert.equal(publicResult.html, ''); assert.match(previewResult.html, /story-media-warning/); assert.doesNotMatch(previewResult.html, /<script/); });
   }
+  // Size and alignment options (issue #86)
+  for (const option of ['wide', 'full', 'left', 'right']) {
+    const r = await renderMediaMarkdown(`Before.\n\n{{photo 2 ${option}}}\n\nAfter.`, mediaPhotos);
+    check(`{{photo 2 ${option}}} renders a figure with data-placement=${option}, still a link to the full image`, () => { assert.match(r.html, new RegExp(`<figure class="story-inline-photo" data-placement="${option}"><a href="/media/stories/synthetic/b.png" data-photo`)); assert.deepEqual([...r.used], [1]); });
+  }
+  check('a plain marker has no data-placement (column width, unchanged)', () => assert.doesNotMatch(inline.html, /data-placement/));
+  for (const marker of ['{{photo 1 huge}}', '{{photo 1 LEFT}}', '{{photo 1 left right}}', '{{photo 1 left', '{{photo 1  <b>}}', '{{photo 99 left}}']) {
+    const publicResult = await renderMediaMarkdown(marker, mediaPhotos);
+    const previewResult = await renderMediaMarkdown(marker, mediaPhotos, true);
+    check(`an unknown option is an invalid marker (hidden publicly, warning in preview): ${marker}`, () => { assert.equal(publicResult.used.size, 0); assert.equal(publicResult.html, ''); assert.match(previewResult.html, /story-media-warning/); assert.doesNotMatch(previewResult.html, /<b>|data-placement/); });
+  }
+  const optionCode = await renderMediaMarkdown('`{{photo 1 left}}`\n\n```text\n{{photo 2 wide}}\n```\n\n[{{photo 1 full}}](https://example.invalid/)', mediaPhotos);
+  check('markers with options inside code spans, fences and links stay literal', () => { assert.equal(optionCode.used.size, 0); assert.doesNotMatch(optionCode.html, /story-inline-photo|data-placement/); assert.match(optionCode.html, /\{\{photo 1 left\}\}/); });
+  const stripped = (await import(pathToFileURL(path.join(scratch, 'excerpt.js')))).storyExcerpt('{{photo 1 right}}\n\nSynthetic article text.');
+  check('derived text strips markers with options', () => assert.equal(stripped, 'Synthetic article text.'));
+  for (const placement of ['wide', 'full', 'left', 'right']) {
+    const html = await renderStoryBlocksSafe(normalizeStoryBlocks([{ id: 'img', type: 'image', url: '/media/stories/synthetic/a.png', alt: 'Synthetic', placement }]));
+    check(`an image module with placement ${placement} renders data-placement and keeps the link`, () => { assert.match(html, new RegExp(`class="story-module story-module-image"[^>]*data-placement="${placement}"`)); assert.match(html, /<a href="\/media\/stories\/synthetic\/a.png" data-photo/); });
+  }
+  check('image module placement is validated: unknown values and non-image modules are refused, empty means column width', () => {
+    for (const bad of ['huge', 'LEFT', '<script>', 7]) assert.throws(() => normalizeStoryBlocks([{ id: 'x', type: 'image', url: '/media/stories/synthetic/a.png', placement: bad }]), /column width, wide, full width, left or right/);
+    assert.throws(() => normalizeStoryBlocks([{ id: 'x', type: 'flyer', url: '/media/stories/synthetic/a.png', placement: 'left' }]));
+    assert.throws(() => normalizeStoryBlocks([{ id: 'x', type: 'text', text: 'Hi', placement: 'left' }]));
+    assert.equal(normalizeStoryBlocks([{ id: 'x', type: 'image', url: '/media/stories/synthetic/a.png', placement: '' }])[0].placement, undefined);
+    assert.equal(normalizeStoryBlocks([{ id: 'x', type: 'image', url: '/media/stories/synthetic/a.png' }])[0].placement, undefined);
+  });
   const isolated = await Promise.all([renderMediaMarkdown('{{photo 1}}', mediaPhotos), renderMediaMarkdown('{{photo 2}}', mediaPhotos)]);
   check('concurrent renderer requests do not share photo state', () => { assert.deepEqual([...isolated[0].used], [0]); assert.deepEqual([...isolated[1].used], [1]); });
   check('derived excerpts skip marker-only paragraphs and marker fragments', () => { assert.equal(storyExcerpt('{{photo 1}}\n\nSynthetic article text.'), 'Synthetic article text.'); assert.equal(storyExcerpt('Before {{photo 99}} after.'), 'Before after.'); });

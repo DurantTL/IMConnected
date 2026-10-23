@@ -25,6 +25,8 @@ export interface StoryBlock extends StoryPhotoRef {
   label?: string;
   align?: 'left' | 'center' | 'right';
   spacing?: 'compact' | 'normal' | 'relaxed';
+  /** Image modules only (issue #86): wider than the text column, page width, or floated beside the text; absent = column width. */
+  placement?: 'wide' | 'full' | 'left' | 'right';
 }
 
 export const PHOTO_FITS = ['cover', 'contain'] as const;
@@ -239,6 +241,10 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
       if (r.items !== undefined && (!Array.isArray(r.items) || r.items.length > 50)) return error('A list can have at most 50 items.');
       b.items = ((r.items ?? []) as unknown[]).map((item) => text(item, 2000, 'List item'));
       total += b.items.join('').length;
+    }
+    if (r.placement !== undefined && r.placement !== null && r.placement !== '') {
+      if (b.type !== 'image' || !['wide', 'full', 'left', 'right'].includes(r.placement as string)) return error('Choose column width, wide, full width, left or right for an image.');
+      b.placement = r.placement as StoryBlock['placement'];
     }
     if (['image', 'flyer'].includes(b.type)) { Object.assign(b, normalizePhoto(r)); total += b.alt?.length ?? 0; }
     if (b.type === 'gallery') {

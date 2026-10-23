@@ -522,6 +522,13 @@ try {
   await page.locator('#inline-photo-choice').selectOption('2');
   await page.locator('#insert-inline-photo').click();
   check('Markdown Insert photo places the chosen story-owned marker at the cursor', (await page.locator('#f-body').inputValue()).includes('{{photo 2}}'));
+  check('Insert photo offers column width, wide, full, left and right (issue #86)', JSON.stringify(await page.locator('#inline-photo-placement option').evaluateAll((o) => o.map((x) => x.value))) === JSON.stringify(['', 'wide', 'full', 'left', 'right']));
+  await page.locator('#f-body').evaluate((body) => { body.setSelectionRange(body.value.length, body.value.length); });
+  await page.locator('#inline-photo-choice').selectOption('1'); await page.locator('#inline-photo-placement').selectOption('right');
+  await page.locator('#insert-inline-photo').click();
+  check('the chosen option is written into the marker', (await page.locator('#f-body').inputValue()).includes('{{photo 1 right}}'));
+  await page.locator('#f-body').evaluate((body) => { body.value = body.value.replace('\n\n{{photo 1 right}}\n\n', ''); body.dispatchEvent(new Event('input', { bubbles: true })); });
+  await page.locator('#inline-photo-placement').selectOption('');
   await page.waitForFunction(() => document.getElementById('preview')?.contentDocument?.querySelector('.story-inline-photo img'));
   check('Markdown private preview resolves the marker through the authenticated photo endpoint', await page.frameLocator('#preview').locator('.story-inline-photo img').getAttribute('src').then((src) => /^\/api\/admin\/photos\/\d+$/.test(src)));
   const inlineSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');

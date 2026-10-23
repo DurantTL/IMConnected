@@ -749,6 +749,11 @@ try {
     const bodyBefore = bodyOf();
     r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 3}}\n\nMore.' });
     check('update: a marker past the photo count is 400 bad_photo_marker naming it', r.status === 400 && r.data.error === 'bad_photo_marker' && r.data.message.includes('{{photo 3}}') && bodyOf() === bodyBefore, r.text.slice(0, 200));
+    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 2 left}}\n\nMore text.' });
+    check('update: a marker with a size/alignment option is accepted and stored verbatim (issue #86)', r.status === 201 && bodyOf().includes('{{photo 2 left}}'), r.text.slice(0, 200));
+    const optBefore = bodyOf();
+    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 3 wide}}\n\nMore.' });
+    check('update: an optioned marker past the photo count is 400 bad_photo_marker too', r.status === 400 && r.data.error === 'bad_photo_marker' && bodyOf() === optBefore, r.text.slice(0, 200));
     r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 3}}\n\nMore.', photos: [{ data: dataUrl(PNG_A) }, { data: dataUrl(PNG_B) }, { data: dataUrl(PNG_A) }] });
     check('update: the count after the request is what matters (body and 3 new photos together)', r.status === 201 && nPhotos() === 3);
     r = await gpost({ sourceUrl: SRC, photos: [{ data: dataUrl(PNG_A) }] });
@@ -772,7 +777,7 @@ try {
     check('capabilities: announcement patch semantics are advertised (additive)', c.announcement?.patch?.semantics?.includes('partial merge') && c.announcement.kinds.length === 2 && !!c.reopen.endpoint);
     check('capabilities: photo crop fields and ranges', JSON.stringify(c.photoCrop.fields) === '["focalX","focalY","zoom"]' && c.photoCrop.ranges.zoom[1] === 3 && c.photoCrop.ranges.focalX[1] === 100 && c.photoCrop.planned.includes('fit') && !c.photoCrop.planned.includes('caption'));
     check('capabilities: authorTitle, photoCredit, featured with limits', c.storyFields.authorTitle.maxLength === 120 && c.storyFields.photoCredit.maxLength === 120 && c.storyFields.featured.type === 'boolean');
-    check('capabilities: marker support', c.photoMarkers.syntax === '{{photo N}}' && /bad_photo_marker/.test(c.photoMarkers.rule));
+    check('capabilities: marker support', c.photoMarkers.syntax === '{{photo N}}' && /bad_photo_marker/.test(c.photoMarkers.rule) && JSON.stringify(c.photoMarkers.options) === '["wide","full","left","right"]');
     check('the g server logs hold no token, note or upload path', !logs.g.join('\n').includes(AGENT_TOKEN) && !logs.g.join('\n').includes('uploads'));
   }
 

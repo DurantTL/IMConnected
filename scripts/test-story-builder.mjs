@@ -379,6 +379,14 @@ try {
   const markerSource = 'Before.\n{{photo 1}}\n{{photo 2}}\n{{gallery 1-2 columns=2}}\n\n`{{photo 1}}`\n\n```text\n{{photo 1}}\n```\n\n[{{photo 1}}](https://example.invalid/)\n\n\\{{photo 1}}';
   const remappedMarkers = m.restoreMediaMarkers(markerSource, ['gone', 'kept'], ['kept', 'replacement']);
   assert.ok(remappedMarkers.missing); assert.match(remappedMarkers.body, /^\{\{photo missing\}\}$/m); assert.match(remappedMarkers.body, /^\{\{gallery missing\}\}$/m); assert.match(remappedMarkers.body, /`\{\{photo 1\}\}`/); assert.match(remappedMarkers.body, /```text\n\{\{photo 1\}\}\n```/); assert.ok(remappedMarkers.body.endsWith('\\{{photo 1}}'));
+  { // Size and alignment options survive a revision restore (issue #86); only executable markers are rewritten
+    const src = '{{photo 2 left}}\n{{photo 1 full}}\n{{photo 1 huge}}\n\n`{{photo 2 wide}}`\n\n```text\n{{photo 2 right}}\n```\n\n[{{photo 2 wide}}](https://example.invalid/)';
+    const r = m.restoreMediaMarkers(src, ['a', 'b'], ['x', 'b', 'a']);
+    assert.match(r.body, /^\{\{photo 2 left\}\}$/m); assert.match(r.body, /^\{\{photo 3 full\}\}$/m); assert.match(r.body, /^\{\{photo 1 huge\}\}$/m, 'an invalid option is left as it was');
+    assert.match(r.body, /`\{\{photo 2 wide\}\}`/); assert.match(r.body, /```text\n\{\{photo 2 right\}\}\n```/); assert.match(r.body, /\[\{\{photo 2 wide\}\}\]/); assert.equal(r.missing, false);
+    const gone = m.restoreMediaMarkers('{{photo 1 right}}', ['gone'], ['x']);
+    assert.equal(gone.body, '{{photo missing}}'); assert.equal(gone.missing, true);
+  }
   assert.equal(m.restoreMediaMarkers('{{photo 3}}', ['gone'], ['a', 'b', 'new']).body, '{{photo missing}}', 'old invalid index cannot acquire a replacement photo');
   // Fit whole photo (issue #82): editor form -> draft -> publish -> reopen -> republish, revisions, Studio.
   {

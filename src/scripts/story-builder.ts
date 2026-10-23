@@ -13,7 +13,8 @@ if (form && blocksField) {
   document.getElementById('insert-inline-photo')?.addEventListener('click', () => {
     const choice = document.getElementById('inline-photo-choice') as HTMLSelectElement;
     if (body.readOnly || !choice.value) { status.textContent = 'Choose a story photo first.'; choice.focus(); return; }
-    const marker = `\n\n{{photo ${choice.value}}}\n\n`;
+    const placement = (document.getElementById('inline-photo-placement') as HTMLSelectElement | null)?.value;
+    const marker = `\n\n{{photo ${choice.value}${placement ? ` ${placement}` : ''}}}\n\n`;
     body.setRangeText(marker, body.selectionStart, body.selectionEnd, 'end');
     body.dispatchEvent(new Event('input', { bubbles: true })); body.focus();
   });
@@ -315,6 +316,14 @@ if (form && blocksField) {
       label.append(select); fields.append(label);
       const photo = photos.find((p) => p.id === block.photoId);
       if (photo?.src) { const img = node('img'); img.src = photo.src; img.alt = block.alt || photo.alt; img.className = 'sb-module-image'; fields.append(img); }
+      if (block.type === 'image') {
+        const sizeLabel = node('label', 'Size and alignment');
+        const size = node('select'); size.dataset.moduleField = 'placement';
+        for (const [value, text] of [['', 'Column width'], ['wide', 'Wide'], ['full', 'Full width'], ['left', 'Left, text wraps'], ['right', 'Right, text wraps']] as const) { const option = node('option', text); option.value = value; option.selected = (block.placement ?? '') === value; size.append(option); }
+        size.addEventListener('change', () => update(block, 'placement', size.value || undefined));
+        sizeLabel.append(size); fields.append(sizeLabel);
+        fields.append(node('p', 'Left and right float beside the text on screens 768px and wider; on phones every photo is full column width.', 'admin-note'));
+      }
       field(block, 'Image description (alt text)', 'alt', block.alt || '');
       if (block.type === 'flyer') fields.append(node('p', 'Leave the description empty to follow the current photo description in Photo studio.', 'admin-note'));
       fields.append(node('p', block.type === 'flyer' ? 'Flyers show the whole image so its text stays visible. Add a text summary to the story for accessibility.' : 'This photo appears here in the story text. Adjust its focal point in the Photo studio.', 'admin-note'));
