@@ -72,7 +72,7 @@ export function chunkText(blocks: string[], max = MAX_CHUNK): string[] {
     const block = /[.!?…:;]["'”’)\]]*$/.test(raw) ? raw : raw + '.';
     let cur = '';
     const push = () => { const t = cur.trim(); if (t) chunks.push(t); cur = ''; };
-    for (const sentence of block.split(/(?<=[.!?…]["'”’)\]]*)\s+/)) {
+    for (const sentence of block.replace(/([.!?…]["'”’)\]]*)\s+/g, '$1\u0000').split('\u0000')) {
       for (const piece of splitLong(sentence.trim(), max)) {
         if (cur && (cur + ' ' + piece).length > max) push();
         cur = cur ? cur + ' ' + piece : piece;
@@ -99,7 +99,11 @@ function init(): void {
   let chunks: string[] = [];
   let index = 0; // the next chunk to speak
   let voice: SpeechSynthesisVoice | undefined;
-  const keep = new Set<unknown>(); // the current utterance stays referenced or some browsers drop its events
+  // The utterance being spoken. It stays referenced (some browsers drop events of unreferenced ones), and a late
+  // end/error event from any other (cancelled or replaced) utterance is ignored.
+  let current: SpeechSynthesisUtterance | undefined;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  const clearWatchdog = () => { if (watchdog !== undefined) clearTimeout(watchdog); watchdog = undefined; };
 
   // Voices load late in some browsers: ask once now and again when the list changes.
   let voices: SpeechSynthesisVoice[] = [];
@@ -127,7 +131,7 @@ function init(): void {
     try { synth.cancel(); } catch { /* nothing to stop */ }
   };
   const stop = (message = 'Stopped.') => {
-    run++; paused = false; held = false; keep.clear();
+    run++; paused = false; held = false; current = undefined; clearWatchdog();
     cancelSpeech();
     const hadFocus = box.contains(document.activeElement);
     show('idle', message);
@@ -138,9 +142,9 @@ function init(): void {
     const u = new SpeechSynthesisUtterance(text);
     u.lang = voice?.lang || lang;
     if (voice) u.voice = voice;
-    keep.clear(); keep.add(u);
-    u.onend = () => { if (mine !== run) return; if (paused) held = true; else next(); };
-    u.onerror = (e: SpeechSynthesisErrorEvent) => { if (mine !== run || e.error === 'canceled' || e.error === 'interrupted') return; stop('Speech stopped.'); };
+    current = u;
+    u.onend = () => { if (mine !== run || u !== current) return; if (paused) held = true; else next(); };
+    u.onerror = (e: SpeechSynthesisErrorEvent) => { if (mine !== run || u !== current || e.error === 'canceled' || e.error === 'interrupted') return; stop('Speech stopped.'); };
     synth.speak(u);
   };
   const next = () => {
@@ -151,6 +155,7 @@ function init(): void {
   start.addEventListener('click', () => {
     chunks = chunkText(storyBlocks());
     if (!chunks.length) return;
+    current = undefined; clearWatchdog();
     cancelSpeech();
     run++; paused = false; held = false; index = 0;
     voice = pickVoice();
@@ -158,7 +163,10 @@ function init(): void {
     next();
     pause.focus();
   });
+  // Note: on engines where pause() ends the utterance (fires `end`), the rest of that chunk is skipped; Resume continues
+  // with the next chunk. Chunks are sentence-sized, so at most a sentence is lost.
   pause.addEventListener('click', () => {
+    clearWatchdog();
     if (paused) {
       paused = false;
       show('playing', 'Resumed.');
@@ -166,7 +174,13 @@ function init(): void {
       const mine = run, was = index;
       try { synth.resume(); } catch { /* ignore */ }
       // If the browser did not pick the speech back up, say the current chunk again.
-      setTimeout(() => { if (mine === run && !paused && !held && index === was && !synth.speaking && index > 0) { cancelSpeech(); speak(chunks[index - 1], run); } }, 400);
+      watchdog = setTimeout(() => {
+        watchdog = undefined;
+        if (mine !== run || paused || held || index !== was || synth.speaking || index === 0) return;
+        current = undefined; // the old utterance's cancel/end event must not advance the story
+        cancelSpeech();
+        speak(chunks[index - 1], run);
+      }, 400);
     } else {
       paused = true;
       try { synth.pause(); } catch { /* ignore */ }

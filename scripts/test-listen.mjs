@@ -23,6 +23,7 @@ const LONG = 'This sentence goes on with several clauses, ' + 'each one adding a
 const SHA = 'a'.repeat(64);
 // A loose list (each item is a paragraph inside the li) must still be read once.
 const BODY = `## A synthetic heading\n\nFirst synthetic paragraph about the dinner. It has two sentences.\n\n- Synthetic list item one\n\n- Synthetic list item two\n\n> Synthetic quote from nobody in particular.\n\n${LONG}\n`;
+let refTexts;
 const count = (hay, needle) => hay.split(needle).length - 1;
 
 try {
@@ -54,7 +55,7 @@ try {
     await context.route('**/*', (r) => new URL(r.request().url()).origin === base ? r.continue() : r.abort());
     await context.addInitScript((o) => {
       if (o.unsupported) { delete window.SpeechSynthesisUtterance; Object.defineProperty(window, 'speechSynthesis', { value: undefined, configurable: true }); return; }
-      window.__spoken = []; window.__calls = []; window.__hold = !!o.hold; window.__pauseEnds = !!o.pauseEnds;
+      window.__spoken = []; window.__calls = []; window.__hold = !!o.hold; window.__pauseEnds = !!o.pauseEnds; window.__noRestart = !!o.noRestart; window.__cancelEnds = !!o.cancelEnds;
       class U { constructor(text) { this.text = text; this.lang = ''; this.voice = null; } }
       window.SpeechSynthesisUtterance = U;
       const synth = {
@@ -63,9 +64,9 @@ try {
         addEventListener() {},
         speak(u) { window.__spoken.push({ text: u.text, lang: u.lang, voice: u.voice && u.voice.name, played: !this.paused }); this.cur = u; this.speaking = true; this.flush(); },
         flush() { const u = this.cur; if (u && !this.paused && !window.__hold) setTimeout(() => { if (this.cur === u && !this.paused) { this.cur = null; this.speaking = false; u.onend && u.onend({}); } }, 0); },
-        cancel() { window.__calls.push('cancel'); this.cur = null; this.speaking = false; /* stays paused, like Chrome */ },
+        cancel() { window.__calls.push('cancel'); const u = this.cur; this.cur = null; this.speaking = false; /* stays paused, like Chrome */ if (window.__cancelEnds && u) setTimeout(() => u.onend && u.onend({}), 0); },
         pause() { window.__calls.push('pause'); this.paused = true; if (window.__pauseEnds && this.cur) { const u = this.cur; this.cur = null; setTimeout(() => u.onend && u.onend({}), 0); } },
-        resume() { window.__calls.push('resume'); this.paused = false; this.flush(); },
+        resume() { window.__calls.push('resume'); this.paused = false; if (window.__noRestart && this.cur) { this.speaking = false; return; } /* engine that does not restart */ this.flush(); },
       };
       Object.defineProperty(window, 'speechSynthesis', { value: synth, configurable: true });
     }, opts);
@@ -95,6 +96,7 @@ try {
     await finished(page);
     const spoken = await page.evaluate(() => window.__spoken);
     const texts = spoken.map((s) => s.text);
+    if (!refTexts) refTexts = texts;
     const joined = texts.join(' ');
     check(`chunks start with the title then the dek (${width}px)`, texts[0] === TITLE + '.' && texts[1] === DEK);
     const at = (s) => joined.indexOf(s);
@@ -152,6 +154,36 @@ try {
   await finished(page);
   check('Resume then carries on to the end', await page.evaluate(() => window.__spoken.length > 5 && window.__spoken.every((s) => s.played)));
   await context.close();
+
+  // An engine whose resume() does not restart speech and whose cancel() fires `end`: the watchdog says the current chunk
+  // again exactly once, and no chunk is skipped or repeated otherwise.
+  ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen', { noRestart: true, cancelEnds: true }));
+  await page.evaluate(() => { window.__hold = true; });
+  await page.locator('[data-listen-start]').click();
+  await page.locator('[data-listen-pause]').click();
+  await page.evaluate(() => { window.__hold = false; });
+  await page.locator('[data-listen-pause]').click();
+  await finished(page);
+  const wd = (await page.evaluate(() => window.__spoken)).map((s) => s.text);
+  const dupes = wd.filter((t, i) => i > 0 && t === wd[i - 1]);
+  check('watchdog re-speaks the stuck chunk exactly once', dupes.length === 1 && wd.length === refTexts.length + 1 && wd[0] === wd[1]);
+  check('no chunk is skipped or read twice otherwise', wd.filter((t, i) => !(i === 1)).join('|') === refTexts.join('|'));
+  await context.close();
+
+  // Stop while the watchdog is waiting cancels it: nothing is spoken afterwards.
+  ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen', { noRestart: true, cancelEnds: true, hold: true }));
+  await page.locator('[data-listen-start]').click();
+  await page.locator('[data-listen-pause]').click();
+  await page.locator('[data-listen-pause]').click();
+  await page.locator('[data-listen-stop]').click();
+  await delay(700);
+  check('Stop clears a pending resume watchdog', (await page.evaluate(() => window.__spoken.length)) === 1);
+  await context.close();
+
+  // No client chunk may contain a regex lookbehind: Safari before 16.4 fails to parse the whole chunk.
+  const astro = path.resolve('dist/client/_astro');
+  const bad = fs.readdirSync(astro).filter((f) => f.endsWith('.js') && /\(\?<[=!]/.test(fs.readFileSync(path.join(astro, f), 'utf8')));
+  check('no client script uses a regex lookbehind' + (bad.length ? ' (' + bad.join(', ') + ')' : ''), bad.length === 0);
 
   // An event story reads its When/Where details but neither the register link nor the video helper text.
   ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-event'));
