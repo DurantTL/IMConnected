@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { agentAuth, agentJson } from '../../../../lib/agent-api';
-import { AGENT_LIMITS, agentRateLimited, takeBatchStories } from '../../../../lib/agent';
+import { AGENT_LIMITS, agentRateLimited, returnBatchStories, takeBatchStories } from '../../../../lib/agent';
 import { batchPayloadHash, countResults, findBatchReceipt, parseEnvelope, processBatchItems, storeBatchReceipt } from '../../../../lib/agent-batch';
 import { readLimited } from '../../../../lib/bearer';
 import { notifyEditorsOfBatch } from '../../../../lib/notify';
@@ -42,12 +42,17 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
 
   // The hourly story ceiling is checked for the whole batch before anything is written.
   const budget = takeBatchStories(env.stories.length);
+  if (!budget.ok && 'tooLarge' in budget) {
+    return agentJson(400, { ok: false, error: 'too_many_stories', message: `This server accepts at most ${budget.max} stories per hour in batches, so a batch of ${env.stories.length} can never fit. Send at most ${budget.max}.` });
+  }
   if (!budget.ok) {
     return agentJson(429, { ok: false, error: 'rate_limited', reason: 'batch_stories_per_hour', message: 'This batch would go over the hourly limit of stories sent in batches. Nothing was written. Retry after the delay, or send fewer stories.' }, { 'Retry-After': String(budget.retryAfter) });
   }
 
   const out = processBatchItems(env.stories);
   const counts = countResults(out.results);
+  // Stories that failed transiently (database trouble) give their budget back, so retries do not exhaust the hour.
+  returnBatchStories(out.results.filter((x) => x.error === 'unavailable').length);
   const ip = clientIp(request, clientAddress);
   for (const w of out.written) {
     console.log(`[agent] draft #${w.id} ${w.status}`);

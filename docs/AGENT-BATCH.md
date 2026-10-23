@@ -55,7 +55,7 @@ checks, `{{photo N}}` marker check, announcement patches, and omission rules (an
 
 | Status | `error` | Meaning |
 | --- | --- | --- |
-| 400 | `invalid_json`, `bad_request_id`, `stories_invalid`, `stories_empty`, `too_many_stories`, `too_large` | Bad JSON or body, a missing or malformed batch `requestId`, `stories` not a list, empty, over 20, or the request over 40 MB |
+| 400 | `too_many_stories` also when the server's hourly ceiling is below the batch size (it could never fit). Others: `invalid_json`, `bad_request_id`, `stories_invalid`, `stories_empty`, `too_many_stories`, `too_large` | Bad JSON or body, a missing or malformed batch `requestId`, `stories` not a list, empty, over 20, or the request over 40 MB |
 | 401 / 503 | `unauthorized` / `not_configured` | As for every agent route |
 | 409 | `request_id_reused` | This batch `requestId` was already used with a different body |
 | 429 | `rate_limited` | Over 60 calls per hour (shared by all agent routes), or `reason: "batch_stories_per_hour"`: the batch would exceed the story ceiling. `Retry-After` says when. |
@@ -75,7 +75,8 @@ The batch `requestId` is stored only as a SHA-256, with a hash of the batch cont
 - Retry the **identical body** with the **same** `requestId` after a timeout: you get `200` with `"replayed": true` and the original per-item results (statuses as first answered). Nothing is written, no email is sent, no audit entry is added.
 - The same `requestId` with a different body is `409 request_id_reused`. Use a new id for a new batch.
 - The receipt is written after all items have committed. If the server crashes mid-batch, there is no receipt and the retry re-processes the items. That is safe because each item is idempotent: set a **`sourceUrl`** (a second send updates the same untouched draft) and, better, a per-item **`requestId`** (an identical item is answered `replayed`). Agents should set both on every item.
-- A batch where an item failed with a temporary `unavailable` stores no receipt, so a retry tries again.
+- A batch where an item failed with a temporary `unavailable` stores **no receipt**, so a retry re-processes **every** item, not just the failed ones. Items with neither a `sourceUrl` nor a per-item `requestId` may therefore be **created twice**. Set at least one of them on every item. Stories that failed with `unavailable` give their share of the hourly story budget back.
+- Receipts hold no story-derived text: a refusal keeps its `reason` and draft `id`, and a replay shows the fixed per-reason text (for `published`, without the slug); other failures show a generic message with the original `error` code.
 - For failed items (a corrected story), put them in a **new** batch with a new `requestId`; do not edit the body of an answered batch.
 
 ## What editors see
@@ -83,7 +84,7 @@ The batch `requestId` is stored only as a SHA-256, with a hash of the batch cont
 One summary email per batch that created at least one draft ("13 new drafts from the AI agent"), to the editors who
 opted in under My account. It holds escaped titles and dashboard links only, no contact details. There are no per-item
 emails from the batch. The audit log gets an `agent.story` entry per created or updated item (as the single endpoint
-does) and one `agent.batch` entry with counts (`created`, `updated`, `replayed`, `failed`, `items`), no titles.
+does) and one `agent.batch` entry with counts (the per-item entries are `agent.story` with `batch: true` in the detail) (`created`, `updated`, `replayed`, `failed`, `items`), no titles.
 
 ## Backfill recipe
 

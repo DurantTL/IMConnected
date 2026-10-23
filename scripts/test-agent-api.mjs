@@ -36,7 +36,7 @@ const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 // A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
 const CLIENT_TMP = path.join(SCRATCH, 'client');
 fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
-const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529 };
+const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529, j: 4530 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -58,7 +58,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [] };
+const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [], j: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -160,7 +160,8 @@ start('f', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.f), DA
 start('g', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.g), DATA_DIR: path.join(SCRATCH, 'data-g'), SITE_URL: `http://localhost:${P.g}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 81 checks, its own rate window
 start('h', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.h), DATA_DIR: path.join(SCRATCH, 'data-h'), SITE_URL: `http://localhost:${P.h}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 90 batch checks, its own rate window
 start('i', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.i), DATA_DIR: path.join(SCRATCH, 'data-i'), SITE_URL: `http://localhost:${P.i}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '25' }); // issue 90: hourly story ceiling lowered to 25 (test/ops tuning only)
-for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i]) await waitFor(`http://localhost:${port}/`);
+start('j', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.j), DATA_DIR: path.join(SCRATCH, 'data-j'), SITE_URL: `http://localhost:${P.j}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '10' }); // issue 90: ceiling below the batch size limit
+for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i, P.j]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -881,6 +882,18 @@ try {
     // sections advertises the limits
     x = await call(H, 'GET', '/api/agent/sections', { token: AGENT_TOKEN });
     check('GET /api/agent/sections advertises the batch limits next to photoBudget', x.data.batch?.maxBatchStories === 20 && x.data.batch?.maxStoriesPerHour === 300 && x.data.batch?.endpoint === '/api/agent/stories/batch' && /split/.test(x.data.batch?.note || '') && x.data.photoBudget?.maxImageBytesPerRequest > 0, JSON.stringify(x.data.batch));
+
+    // a refusal with reason "published": the receipt must hold no slug or title text
+    const PUB_SRC = SRC(700);
+    r = await hpost(item(700, { title: 'Receipt Secret Title Xyzzy' }));
+    runh("UPDATE drafts SET status = 'published', slug = 'receipt-secret-slug-xyzzy', published_commit = 'db', updated_by = ? WHERE id = ?", editorId, r.data.id);
+    const pubEnv = { requestId: 'batch-0007-published', stories: [{ sourceUrl: PUB_SRC, title: 'Another Title' }, item(701)] };
+    const p1 = await bpost(pubEnv);
+    check('a batch item for a published draft is refused with reason "published" (the live message may name the slug)', p1.status === 200 && p1.data.results[0].error === 'already_reviewed' && p1.data.results[0].reason === 'published' && p1.data.results[1].status === 'created', p1.text.slice(0, 300));
+    const allRec = JSON.stringify(qh('SELECT * FROM agent_batches'));
+    check('...the receipts contain no slug, title or source text', !/xyzzy|Receipt Secret|Another Title|facebook/i.test(allRec), allRec.slice(0, 200));
+    const p2 = await bpost(pubEnv);
+    check('...a replay returns the same error and reason with the generic per-reason message (no slug)', p2.status === 200 && p2.data.replayed === true && p2.data.results[0].error === 'already_reviewed' && p2.data.results[0].reason === 'published' && !!p2.data.results[0].message && !/xyzzy/i.test(p2.text) && p2.data.results[1].status === 'created', p2.text.slice(0, 300));
   }
   {
     const I = `http://localhost:${P.i}`;
@@ -905,6 +918,21 @@ try {
     check('...and then one more story is 429', x.status === 429);
     x = await call(I, 'GET', '/api/agent/sections', { token: AGENT_TOKEN });
     check('sections reports the tuned ceiling', x.data.batch?.maxStoriesPerHour === 25);
+  }
+  {
+    // a ceiling (10) below the batch size: a batch above it can never fit, so it is a 400, not a 429
+    const J = `http://localhost:${P.j}`;
+    const JDB = path.join(SCRATCH, 'data-j', 'imconnected.db');
+    const qj = (sql, ...args) => { const db = new DatabaseSync(JDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    await fetch(J + '/admin/login');
+    const mkj = (n, count) => ({ requestId: `jceil-${String(n).padStart(4, '0')}-ceiling`, stories: Array.from({ length: count }, (_, k) => ({ title: `Small Ceiling Story ${n}-${k}`, body: 'Synthetic body.', sourceUrl: `https://www.facebook.com/example-page/posts/${n * 100 + k}` })) });
+    let x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(1, 11) });
+    check('ceiling below the batch size (10): a batch of 11 is 400 too_many_stories naming the ceiling, nothing written', x.status === 400 && x.data.error === 'too_many_stories' && /10/.test(x.data.message) && !x.headers.get('retry-after') && qj("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c === 0 && qj('SELECT COUNT(*) c FROM agent_batches')[0].c === 0, `${x.status} ${x.text.slice(0, 200)}`);
+    x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(2, 10) });
+    check('...a batch of exactly 10 passes', x.status === 200 && x.data.results.every((y) => y.status === 'created'), x.text.slice(0, 200));
+    x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(3, 1) });
+    check('...then the next story is a retryable 429', x.status === 429 && !!x.headers.get('retry-after'));
+    // Giving budget back for transient "unavailable" items is not exercised here: it needs a database failure mid-batch, which the end-to-end harness cannot induce.
   }
 
   // ================= rate limit =================

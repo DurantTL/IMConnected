@@ -293,8 +293,10 @@ export function batchStoriesPerHour(env = process.env): number {
  * Reserves `count` stories from the hourly budget. All or nothing: when the batch would not fit, nothing is
  * recorded and `retryAfter` (seconds) says when enough older stories will have aged out of the window.
  */
-export function takeBatchStories(count: number, now = Date.now()): { ok: true } | { ok: false; retryAfter: number } {
+export function takeBatchStories(count: number, now = Date.now()): { ok: true } | { ok: false; retryAfter: number } | { ok: false; tooLarge: true; max: number } {
   const max = batchStoriesPerHour();
+  // A batch bigger than the whole ceiling can never fit: say so instead of a 429 that never succeeds.
+  if (count > max) return { ok: false, tooLarge: true, max };
   let keep = 0;
   for (const t of itemHits) if (now - t < WINDOW_MS) itemHits[keep++] = t;
   itemHits.length = keep;
@@ -305,4 +307,8 @@ export function takeBatchStories(count: number, now = Date.now()): { ok: true } 
   }
   for (let i = 0; i < count; i++) itemHits.push(now);
   return { ok: true };
+}
+/** Gives back budget taken for stories that failed transiently (database trouble), so retries do not exhaust the hour. */
+export function returnBatchStories(count: number): void {
+  for (let i = 0; i < count && itemHits.length; i++) itemHits.pop();
 }

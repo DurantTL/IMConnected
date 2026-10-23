@@ -2,7 +2,7 @@
 // single endpoint uses (parseAgentStory, upsertAgentDraft) and commits in its own transaction; this file only adds the
 // envelope checks, the per-item result shape and the batch retry receipt.
 import { createHash } from 'node:crypto';
-import { AgentConflict, AgentError, AGENT_LIMITS, canonicalJson, parseAgentStory, REQUEST_ID_RE } from './agent';
+import { AgentConflict, AgentError, AGENT_LIMITS, canonicalJson, parseAgentStory, refusalDetails, REQUEST_ID_RE, type RefusalReason } from './agent';
 import { upsertAgentDraft } from './drafts';
 import { getDb } from './db';
 
@@ -53,11 +53,15 @@ export function findBatchReceipt(requestId: string, payloadHash: string): { resu
   return { results: JSON.parse(row.results) as BatchItemResult[] };
 }
 
-/** Ids, statuses and codes only. Messages are kept just for refusals, whose text is fixed and holds no story content. */
+/**
+ * Ids, statuses and codes only. A refusal gets the fixed per-reason text with no slug interpolated (the live message
+ * names the story's slug); every other failure gets a generic text, so a receipt never holds story-derived text.
+ */
 function forReceipt(r: BatchItemResult): BatchItemResult {
   const { message, ...rest } = r;
   if (r.ok) return rest;
-  return { ...rest, message: r.error === 'already_reviewed' || r.error === 'request_id_reused' ? message : GENERIC };
+  if (r.error === 'already_reviewed' && r.reason) return { ...rest, message: refusalDetails(r.reason as RefusalReason, null, null).message };
+  return { ...rest, message: r.error === 'request_id_reused' ? message : GENERIC };
 }
 
 /** Each item: parse, then upsert in its own transaction (photos of a failed item are removed by upsertAgentDraft). */
@@ -91,6 +95,7 @@ export function processBatchItems(stories: unknown[]): BatchOutcome {
 
 /** Stored after every item has committed. A transient failure stores nothing, so the retry re-processes (items are idempotent). */
 export function storeBatchReceipt(requestId: string, payloadHash: string, results: BatchItemResult[]): void {
+  // Assumes one server process per DATA_DIR: the whole batch runs synchronously after the body is read, so OR IGNORE never has to arbitrate.
   getDb().prepare('INSERT OR IGNORE INTO agent_batches (request_hash, payload_hash, results, created_at) VALUES (?, ?, ?, ?)').run(sha(requestId), payloadHash, JSON.stringify(results.map(forReceipt)), Date.now());
 }
 
