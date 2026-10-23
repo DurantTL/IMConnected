@@ -25,7 +25,7 @@ if (Astro.request.method === 'POST') {
       ordered.push({ item: { id, label, href, visible: form.has(`visible.${i}`) }, order, row: i });
     }
     const items = form.get('action') === 'reset' ? defaultNavigation() : ordered.sort((a, b) => a.order - b.order || a.row - b.row).map((r) => r.item);
-    if (!saveNavigation(items, expected, user.id, clientIp(Astro.request, Astro.clientAddress))) { Astro.response.status = 409; error = 'Someone else changed this menu. Review the current version below and apply your changes again.'; }
+    if (!saveNavigation(items, expected, user.id, clientIp(Astro.request, Astro.clientAddress), form.get('action') !== 'reset' && form.has('newsletter_signup') ? String(form.get('newsletter_signup')) : undefined)) { Astro.response.status = 409; error = 'Someone else changed this menu. Review the current version below and apply your changes again.'; }
     else success = 'Website menu saved. Public pages will use these links.';
     navigation = readNavigation();
   } catch (e) { Astro.response.status = 400; error = e instanceof Error ? e.message : 'The menu could not be saved.'; }
@@ -44,6 +44,7 @@ const rows = Array.from({ length: NAVIGATION_LIMIT }, (_, i) => {
   <form method="post" class="navigation-editor">
     <input type="hidden" name="version" value={navigation.version} />
     <div class="navigation-editor-actions"><button class="cms-btn" type="submit" name="action" value="save">Save website menu</button><button class="cms-btn secondary" type="submit" name="action" value="reset" formnovalidate>Restore default menu</button></div>
+    <div class="navigation-signup"><label for="newsletter-signup">Newsletter signup link</label><input id="newsletter-signup" type="url" name="newsletter_signup" maxlength="2048" value={navigation.newsletterSignup} placeholder="https://…" aria-describedby="newsletter-signup-help" /><p class="admin-note" id="newsletter-signup-help">A full HTTPS link to the signup page. When set, every story page ends with a “Get IMConnected in your inbox” button. Leave empty for no button. Restoring the default menu keeps this link.</p></div>
     <p class="admin-note">Up to 12 links. Use a public /page/ address or a full HTTPS link. Search and Submit a Story stay available outside this menu. These changes affect navigation, not the story sections themselves.</p>
     <ol class="navigation-rows">{rows.map((item, i) => <li class="navigation-row">
       <input type="hidden" name={`id.${i}`} value={item.id} />
@@ -67,5 +68,6 @@ const rows = Array.from({ length: NAVIGATION_LIMIT }, (_, i) => {
   });
 </script>
 <style>
+  .navigation-signup{display:grid;gap:6px;max-width:640px;margin:16px 0}.navigation-signup label{font-weight:600;font-size:.9rem}.navigation-signup input{min-height:44px;padding:9px;border:1px solid var(--line);border-radius:7px;font:inherit;color:var(--ink);background:var(--bg)}
   .navigation-editor-actions{display:flex;flex-wrap:wrap;gap:12px}.navigation-rows{padding:0;list-style:none;display:grid;gap:12px}.navigation-row{display:grid;grid-template-columns:90px minmax(120px,1fr) minmax(200px,2fr) auto auto;gap:12px;align-items:end;padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.navigation-row label{display:grid;gap:6px;font-size:.85rem;font-weight:600;min-width:0}.navigation-row input{width:100%;min-height:44px;padding:9px;border:1px solid var(--line);border-radius:7px;font:inherit;color:var(--ink);background:var(--bg)}.navigation-row .navigation-visible{display:flex;align-items:center;min-height:44px;gap:8px}.navigation-visible input{width:22px;min-height:22px;height:22px}.navigation-order{display:flex;gap:6px}.navigation-order button{min-width:44px}@media(max-width:1000px){.navigation-row{grid-template-columns:80px minmax(0,1fr)}.navigation-row label:nth-of-type(3){grid-column:1/-1}.navigation-visible{grid-column:1}.navigation-order{justify-self:end}}@media(max-width:420px){.navigation-row{padding:12px;gap:10px}}
 </style>

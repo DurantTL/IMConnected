@@ -1,7 +1,7 @@
 // Public navigation contract; safe to share with the browser. Section definitions remain in site.ts.
 import { SECTIONS } from './site';
 export interface NavigationItem { id: string; label: string; href: string; visible: boolean }
-export interface Navigation { version: number; items: NavigationItem[] }
+export interface Navigation { version: number; items: NavigationItem[]; newsletterSignup: string }
 export const NAVIGATION_LIMIT = 12;
 export function defaultNavigation(): NavigationItem[] {
   return [{ id: 'home', label: 'Latest', href: '/', visible: true }, ...SECTIONS.map((s) => ({ id: s.key, label: s.label, href: `/${s.key}/`, visible: true })), { id: 'announcements', label: 'Announcements', href: '/announcements/', visible: true }, { id: 'issues', label: 'Issues', href: '/issues/', visible: true }];
@@ -14,6 +14,15 @@ export function navigationHref(value: unknown): string {
   const href = local ? u.pathname + u.search + u.hash : u.href;
   if (href.length > 2048) throw new Error('Menu addresses must fit within 2,048 characters after URL encoding.');
   return href;
+}
+// Issue #116: the newsletter signup link is empty (none) or an absolute HTTPS address (same checks as menu links).
+export function newsletterSignupHref(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') throw new Error('Use a full HTTPS link for the newsletter signup.');
+  const v = value.trim();
+  if (!v) return '';
+  if (!/^https:\/\//i.test(v)) throw new Error('Use a full HTTPS link for the newsletter signup.');
+  try { return navigationHref(v.replace(/^https:\/\//i, 'https://')); } catch { throw new Error('Use a full HTTPS link for the newsletter signup.'); }
 }
 export function normalizeNavigation(value: unknown): NavigationItem[] {
   if (!Array.isArray(value) || !value.length || value.length > NAVIGATION_LIMIT) throw new Error(`Choose between one and ${NAVIGATION_LIMIT} menu links.`);

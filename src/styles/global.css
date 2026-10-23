@@ -746,3 +746,25 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
 .latest-issue .block-head h2 a { color: inherit; text-decoration: none; }
 .latest-issue .block-head h2 a:hover { text-decoration: underline; text-underline-offset: 4px; }
 .latest-issue-name { display: block; margin-top: 2px; font-size: .62em; font-weight: 500; color: var(--ink-2); letter-spacing: 0; overflow-wrap: anywhere; }
+
+/* ---------- Newsletter ask beside the submit call to action (issue #116) ---------- */
+.cta-pair { grid-template-columns: 1fr 1fr; align-items: start; gap: clamp(20px, 4vw, 44px); }
+.cta-pair .cta-half { display: grid; gap: 10px; align-content: start; }
+.cta-pair .cta-half .btn { justify-self: start; }
+.cta-pair .cta-half h2 { font-size: clamp(1.4rem, 2.4vw, 1.9rem); }
+@media (max-width: 700px) { .cta-pair { grid-template-columns: 1fr; } .cta-pair .cta-half .btn { justify-self: stretch; } }
+.share [data-print][hidden] { display: none; }
+
+/* ---------- Print (issue #116): the story alone, black on white ---------- */
+@media print {
+  @page { margin: 18mm 16mm; }
+  html, body, body:not(.admin) { background: #fff !important; color: #000 !important; }
+  .skip, .site-header, .site-footer, .nav, #mobile-nav, .article-breadcrumb, .article-reading, .share, .newsletter-ask, .cta, .article ~ .block,
+  .archive-rail, [class*="archive-rail"], .viewer, .viewer-controls, .photos-carousel-bar { display: none !important; }
+  .wrap, .article { max-width: none !important; width: auto !important; margin: 0 !important; padding: 0 !important; }
+  .article h1, .article .dek, .article .byline, .article .prose, .article .prose * , .article figcaption, .photo-caption, .article-categories a { color: #000 !important; background: none !important; }
+  .article a { color: #000 !important; text-decoration: underline; }
+  .article figure, .gallery-item, .article img { break-inside: avoid; page-break-inside: avoid; }
+  .article img { max-width: 100% !important; height: auto; box-shadow: none !important; }
+  .prose { font-size: 11.5pt; line-height: 1.5; orphans: 3; widows: 3; }
+}
