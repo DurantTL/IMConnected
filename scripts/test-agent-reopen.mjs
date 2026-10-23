@@ -51,6 +51,7 @@ try {
   seed('synthetic-noarea');
   exec("UPDATE stories SET area='',rev=rev+1 WHERE slug='synthetic-noarea'");
   seed('synthetic-patch-misc', { count: 2 });
+  exec("UPDATE story_photos SET caption = CASE position WHEN 0 THEN 'Original lead caption' ELSE 'Original gallery caption' END WHERE story_id = (SELECT id FROM stories WHERE slug = 'synthetic-patch-misc')");
   // Issue #98: stories that already sit in a (synthetic) newsletter issue, and ones without.
   exec("INSERT INTO newsletter_issues(number,date,title,created_at,updated_at) VALUES(5,'2026-08-10','Synthetic Summer',1,1)");
   for (const slug of ['synthetic-issue-keep', 'synthetic-issue-clear', 'synthetic-issue-conflict']) { seed(slug); exec('UPDATE stories SET newsletter_issue=5,newsletter_position=2,rev=rev+1 WHERE slug=?', slug); }
@@ -214,12 +215,14 @@ try {
   check('reopen: a marker past existing + appended photos is 400 bad_photo_marker naming it, no draft', r81.status === 400 && r81.data.error === 'bad_photo_marker' && r81.data.message.includes('{{photo 4}}') && !draftFor('synthetic-patch-misc'));
   r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { body: 'Intro.\n\n{{photo 3}}\n\nEnd.' } }));
   check('reopen: ...and also without any appended photos', r81.status === 400 && r81.data.error === 'bad_photo_marker');
-  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { authorTitle: 'Pastor <b>Synthetic</b>', photoCredit: '', featured: false, body: 'Intro.\n\n{{photo 4}}\n\n```\n{{photo 9}}\n```' }, photos: [{ data: PHOTO, alt: 'Cropped', focalX: 10, focalY: 90, zoom: 2.5 }, { data: PHOTO, alt: 'Plain' }] }));
+  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { authorTitle: 'Pastor <b>Synthetic</b>', photoCredit: '', featured: false, body: 'Intro.\n\n{{photo 4}}\n\n```\n{{photo 9}}\n```' }, photos: [{ data: PHOTO, alt: 'Cropped', caption: 'Appended <b>caption</b>', focalX: 10, focalY: 90, zoom: 2.5 }, { data: PHOTO, alt: 'Plain' }] }));
   const misc = draftFor('synthetic-patch-misc'), miscPhotos = misc ? draftPhotos(misc.id) : [];
   check('reopen: valid marker, fenced markers, crops and author fields are accepted', r81.status === 201 && !!misc && misc.status === 'in_review', r81.raw.slice(0, 200));
   check('reopen: authorTitle stored as typed ("<" kept, like author), photoCredit cleared by "", featured turned off, omitted fields kept', misc.author_title === 'Pastor <b>Synthetic</b>' && misc.photo_credit === '' && misc.featured === 0 && misc.title === 'Synthetic published title' && misc.author === 'Synthetic Author');
   check('reopen: appended photos keep their crops (defaults 50 / 50 / 1 when omitted); the originals keep theirs', miscPhotos.length === 4 && miscPhotos[0].focal_x === 23 && miscPhotos[1].zoom === 1.8 && miscPhotos[2].focal_x === 10 && miscPhotos[2].focal_y === 90 && miscPhotos[2].zoom === 2.5 && miscPhotos[3].focal_x === 50 && miscPhotos[3].focal_y === 50 && miscPhotos[3].zoom === 1);
+  check('reopen: existing photos keep their captions, an appended photo stores its caption as plain text, an omitted one is empty (issue #84)', JSON.stringify(miscPhotos.map((x) => x.caption)) === JSON.stringify(['Original lead caption', 'Original gallery caption', 'Appended <b>caption</b>', '']), JSON.stringify(miscPhotos.map((x) => x.caption)));
   const miscRead = await call81({}, { method: 'GET', endpoint: `/api/agent/stories/${misc.id}` });
+  check('reopen: read-back returns the captions', JSON.stringify(miscRead.data.draft.photos.map((x) => x.caption)) === JSON.stringify(['Original lead caption', 'Original gallery caption', 'Appended <b>caption</b>', '']));
   check('reopen: read-back shows authorTitle, photoCredit, featured and the crops', miscRead.status === 200 && miscRead.data.draft.authorTitle === 'Pastor <b>Synthetic</b>' && miscRead.data.draft.photoCredit === '' && miscRead.data.draft.featured === false && miscRead.data.draft.photos[2].zoom === 2.5);
 
   const youth = await call81(reopenReq('synthetic-patch-youth', { changes: { section: 'youth' } }));

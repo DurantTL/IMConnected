@@ -3,7 +3,7 @@
 // Progressive enhancement: without this script (or without <dialog> support) every photo is still an ordinary link to the
 // full image. The script makes the lead photo of an unlaid-out story a link as well, so every photo behaves the same.
 // Keyboard: Esc closes, Left/Right move, Home/End jump; focus is kept inside by the modal dialog and goes back to the
-// photo that was opened. Touch: swipe left/right. The dialog is labelled with the photo's caption when it has one, else its own alt text.
+// photo that was opened. Touch: swipe left/right. The dialog is always labelled "Photo viewer"; its live region announces the photo's caption when it has one, else its alt text, and the position.
 //
 // Zoom (issue #83): the photo opens fitted to the screen (100%) and zooms up to 400%. Buttons (Zoom in, Zoom out, Reset), the
 // keys + - 0, Ctrl+wheel / trackpad pinch, two-finger touch pinch, and double-click / double-tap (fit <-> 200%). A zoomed photo

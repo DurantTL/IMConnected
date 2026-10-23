@@ -267,7 +267,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .article .photos figcaption { margin-top: -2px; }
 /* Photo captions (issue #84): a photo with a caption sits in its own figure; the caption is directly under its tile, so mosaic and grid layouts stay grids. */
 .photos-row { align-items: start; }
-.photos-tile, .gallery-item { margin: 0; min-width: 0; }
+.article .photos-tile, .article .gallery-item { margin: 0; min-width: 0; } /* beats .article figure { margin: 28px 0 } so captioned and uncaptioned tiles share a top */
 .article .photo-caption { font-size: 0.85rem; line-height: 1.4; margin: 6px 0 0; color: var(--ink-3); overflow-wrap: anywhere; }
 .article .photos .photo-caption { margin-top: 6px; }
 .article > figure > .photo-caption { margin-top: 8px; }

@@ -28,7 +28,7 @@ export interface PreparedStudioStory {
   photoCredit: string;
   /** How the story page arranges the photos; 'one' when Studio sent none. */
   photoLayout: PhotoLayout;
-  /** Alt text of the lead photo as the story page shows it (alt, else caption, else title). */
+  /** Alt text of the lead photo as the story page shows it (alt, else title; a visible caption is never the alt). */
   leadAlt: string;
   /** The Markdown body (with the pull quote, if any). */
   body: string;
@@ -39,7 +39,7 @@ export interface PreparedStudioStory {
 interface Photo extends PhotoCrop {
   url: string;
   alt: string;
-  /** As Studio sent it (also the lead's alt fallback and credit, see leadImageFields). */
+  /** As Studio sent it (also the credit, see leadImageFields). */
   caption: string;
   /** The visible caption to store (issue #84): one line of plain text up to 300 characters. Undefined when Studio sent no caption, an empty one, or a "Photo:" credit line: an unchanged photo keeps the caption it has (so a Studio republish never wipes an editor's caption; only the dashboard clears one). */
   shownCaption?: string;

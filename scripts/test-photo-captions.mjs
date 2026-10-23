@@ -5,8 +5,12 @@
 //   * the story page: a <figcaption class="photo-caption"> under its own photo in every layout, in the lead figure, in the gallery
 //     and inline ({{photo N}}); plain text only (a hostile caption shows literally, never as markup); no figcaption at all for an empty caption
 //   * /stories.json and GET /api/stories: additive imageCaption / photoCaptions, version unchanged, photoFocus carries no caption
-//   * the adoption/import path: a story with no captions has the empty default
-//   * (optional, needs Playwright) in a real browser: captions are visible, nothing overflows at 390/768/1280 px, the photo viewer shows the
+//   * the lead's alt text falls back to the title, never to a visible caption (a screen reader must not hear it twice)
+//   * image, gallery and flyer modules show their photos' captions (found by photo order, never copied into the module JSON)
+//   * (adoption, import, the dashboard, revisions, reopen and the agent API are covered in test-story-store, test-import-git-stories,
+//     test-editor-drafts, test-agent-reopen and test-agent-api)
+//   * (needs Playwright; fails without it unless ALLOW_SKIP=1) in a real browser: tiles in one row or gallery line share a top whether or not
+//     they have a caption; captions are visible, nothing overflows at 390/768/1280 px, the photo viewer shows the
 //     caption (as text, never markup), and an axe scan (AXE_JS) has no violation.
 // Synthetic data only: made-up tokens, generated pictures. Nothing is written into the repository.
 //
@@ -41,7 +45,7 @@ const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 
 let fails = 0;
 const check = (name, ok, extra = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  ' + String(extra).slice(0, 700)}`); if (!ok) fails++; };
-const skip = (name, why) => console.log(`SKIP  ${name} (${why})`);
+const skip = (name, why) => { if (process.env.ALLOW_SKIP === '1') console.log(`SKIP  ${name} (${why})`); else check(`${name} can run (set ALLOW_SKIP=1 to skip)`, false, why); };
 const info = (line) => console.log(`INFO  ${line}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const q = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
@@ -58,6 +62,7 @@ async function startServer() {
   for (let i = 0; i < 80; i++) { try { await fetch(BASE + '/submit/'); return; } catch { await sleep(250); } }
   throw new Error('the server did not start:\n' + serverLog.join('\n'));
 }
+async function stopServer() { if (!server || server.exitCode !== null) return; const done = new Promise((r) => server.once('exit', r)); server.kill(); await done; }
 const cleanup = async () => { server?.kill(); if (!process.env.KEEP) fs.rmSync(SCRATCH, { recursive: true, force: true }); };
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => cleanup().finally(() => process.exit(sig === 'SIGINT' ? 130 : 143)));
 
@@ -101,9 +106,11 @@ try {
     story('none1', 'Zz captions none plain', [photo(0, 'Plain no caption alt'), photo(1, 'Plain no caption second')]),
     story('long', 'Zz captions long', [photo(0, 'Long alt', LONG)]),
     story('credit', 'Zz captions credit', [photo(0, 'Credit alt', 'Photo: Synthetic Photographer')]),
+    story('altfb', 'Zz captions alt fallback', [photo(0, '', 'A visible caption only')]),
+    story('mods', 'Zz captions modules', [photo(0, 'Module lead alt', 'Mod cap 0'), photo(1, 'Module second alt', 'Mod cap 1'), photo(2, 'Module third alt', 'Mod cap 2')]),
     story('inline', 'Zz captions inline', [photo(0, 'Inline lead alt', 'Inline lead caption'), photo(1, 'Inline second alt', 'Inline photo two caption')], { body: 'Intro paragraph.\n\n{{photo 2}}\n\nClosing paragraph.' }),
   ]);
-  check('Studio publish accepts photos with captions', res.status === 200 && res.data.stories?.length === 8, res.text.slice(0, 300));
+  check('Studio publish accepts photos with captions', res.status === 200 && res.data.stories?.length === 10, res.text.slice(0, 300));
   const slug = (ref) => slugOf(res, ref);
 
   // ---- storage ----
@@ -139,6 +146,25 @@ try {
   check('a "Photo:" caption shows as the photo credit, not a caption', !/photo-caption/.test(credit.replace(/<style[\s\S]*?<\/style>/g, '')) && credit.includes('Synthetic Photographer'));
   const inline = await page('inline');
   check('an inline {{photo 2}} photo has its caption as a figcaption inside its figure', /<figure class="story-inline-photo">[\s\S]*?<\/a><figcaption class="photo-caption">Inline photo two caption<\/figcaption><\/figure>/.test(inline), figcaptions(inline).join('|'));
+
+  // ---- accessibility: a visible caption is never also the alt text ----
+  const altfb = await page('altfb');
+  check('a lead photo with a caption and no alt text gets the story title as alt, so the caption is not read twice', q('SELECT image_alt a FROM stories WHERE slug = ?', slug('altfb'))[0].a === 'Zz captions alt fallback' && /alt="Zz captions alt fallback"/.test(altfb) && figcaptions(altfb).includes('A visible caption only') && !/alt="A visible caption only"/.test(altfb));
+
+  // ---- modules: image, gallery and flyer modules show the photos' captions (the module JSON never stores them) ----
+  {
+    const ph = q('SELECT image, photos FROM stories WHERE slug = ?', slug('mods'))[0];
+    const [g1, g2] = JSON.parse(ph.photos);
+    const blocks = [{ id: 'i1', type: 'image', url: ph.image, photoIndex: 0, alt: 'Module image alt' }, { id: 'g1', type: 'gallery', columns: 2, photos: [{ url: g1, photoIndex: 1 }, { url: g2, photoIndex: 2 }] }, { id: 'f1', type: 'flyer', url: g2, photoIndex: 2 }];
+    await stopServer();
+    const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000');
+    db.prepare('UPDATE stories SET story_blocks = ?, rev = rev + 1 WHERE slug = ?').run(JSON.stringify(blocks), slug('mods'));
+    db.close();
+    await startServer();
+    const html = await page('mods');
+    check('image, gallery and flyer modules each show their photo\'s caption as a figcaption', JSON.stringify(figcaptions(html)) === JSON.stringify(['Mod cap 0', 'Mod cap 1', 'Mod cap 2', 'Mod cap 2']), JSON.stringify(figcaptions(html)));
+    check('...and the module JSON holds no caption text', !q('SELECT story_blocks b FROM stories WHERE slug = ?', slug('mods'))[0].b.includes('Mod cap'));
+  }
 
   // ---- feeds ----
   const feed = await call('GET', '/stories.json');
@@ -194,6 +220,22 @@ try {
     check('the hostile caption was not executed or parsed as markup in the browser', await p.evaluate(() => window.__pwned === undefined && !document.querySelector('figcaption.photo-caption img, figcaption.photo-caption script, figcaption.photo-caption a, figcaption.photo-caption strong')));
     const tiles = await p.evaluate(() => [...document.querySelectorAll('.photos-row')].map((row) => [...row.children].map((c) => Math.round(c.getBoundingClientRect().width))));
     check('a pair row keeps two equal-width tiles with and without a caption', tiles.every((r) => r.length < 2 || Math.abs(r[0] - r[1]) <= 1), JSON.stringify(tiles));
+
+    // tiles with and without a caption start at the same height (a margin on the figure used to push captioned ones down)
+    const tops = [];
+    for (const w of [390, 1280]) {
+      await p.setViewportSize({ width: w, height: 900 });
+      for (const [name, sl, sel] of [['mosaic', mosaic2, '.photos-row'], ['gallery', slug('one'), '.gallery']]) {
+        await p.goto(`${BASE}/stories/${sl}/`, { waitUntil: 'load' });
+        const rowsTops = await p.evaluate((s) => [...document.querySelectorAll(s)].map((row) => { const kids = [...row.children].map((c) => Math.round(c.getBoundingClientRect().top)); const mixed = row.querySelector(':scope > figure') && row.querySelector(':scope > a'); return { kids, mixed: !!mixed }; }), sel);
+        for (const row of rowsTops) if (new Set(row.kids).size > 1 && !(w === 390 && name === 'gallery')) tops.push(`${name}@${w}: ${JSON.stringify(row)}`);
+        if (name === 'mosaic' && !rowsTops.some((r) => r.mixed)) tops.push(`mosaic@${w}: no row mixes captioned and uncaptioned tiles`);
+        if (name === 'gallery' && w === 1280 && !rowsTops.some((r) => r.mixed)) tops.push('gallery@1280: no row mixes captioned and uncaptioned items');
+      }
+    }
+    check('tile tops are equal in a row or gallery line that mixes captioned and uncaptioned tiles', tops.length === 0, tops.join('; '));
+    await p.setViewportSize({ width: 1280, height: 900 });
+    await p.goto(`${BASE}/stories/${mosaic2}/`, { waitUntil: 'load' });
 
     // the viewer: opens on the second photo (hostile caption) and shows it as text
     await p.locator('.photos a[data-photo]').nth(1).click();
