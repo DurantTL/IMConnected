@@ -59,7 +59,7 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   const canHover = matchMedia('(any-hover: hover)');
   spotlight.addEventListener('pointerenter', (event) => { if (canHover.matches && (event.pointerType === 'mouse' || event.pointerType === 'pen')) { hovered = true; schedule(); } });
   spotlight.addEventListener('pointerleave', () => { hovered = false; schedule(); });
-  // Focus on any control holds rotation (a touch or screen-reader activation is not :focus-visible, but the reader is
+  // Focus on any control except Pause/Resume holds rotation (a touch or screen-reader activation is not :focus-visible, but the reader is
   // still using it). Only the scrollable track itself needs :focus-visible, so a plain tap on it does not hold rotation.
   // The Pause/Resume button never holds rotation: a reader who just chose Resume (Android focuses a tapped button) expects motion.
   spotlight.addEventListener('focusin', (event) => { focused = event.target !== toggle && (event.target !== track || track.matches(':focus-visible')); schedule(); });
@@ -67,6 +67,11 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   // A finger pauses rotation only while it is down. The browser cancels the pointer for any pan, vertical page scrolling
   // included, and the track may still be animating a scroll of its own, so a swipe is judged by finger movement: a mostly
   // horizontal drag counts as the reader choosing events themselves and stops automatic advance until Resume is pressed.
+  // Browsers that send touch pointers without Touch Events still pause while a finger is down.
+  if (!('ontouchstart' in window)) {
+    track.addEventListener('pointerdown', (event) => { if (event.pointerType === 'touch') { touching = true; schedule(); } });
+    for (const type of ['pointerup', 'pointercancel']) track.addEventListener(type, (event) => { if ((event as PointerEvent).pointerType === 'touch' && touching) { touching = false; schedule(); } });
+  }
   track.addEventListener('touchstart', (event) => { touching = true; startX = event.touches[0].clientX; startY = event.touches[0].clientY; schedule(); }, { passive: true });
   track.addEventListener('touchmove', (event) => {
     if (!requested || event.touches.length !== 1) return;

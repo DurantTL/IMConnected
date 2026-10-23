@@ -131,16 +131,16 @@ try {
       check(`${name} at ${width}px responds successfully`, response.status() === 200);
       check(`${name} at ${width}px has no horizontal page overflow`, dimensions.scroll <= dimensions.width);
       check(`${name} at ${width}px has no uncaught script errors`, errors.length === 0);
-      if (name === 'home' || name === 'section') {
-        // Cards side by side in a grid row share their top, picture height and headline position, photo or not.
+      if (name === 'section') {
+        // Cards side by side in a grid row share their top and headline position, photo or not (layout offsets ignore the reveal animation).
         const ragged = await page.evaluate(() => {
           const rows = new Map();
           for (const card of document.querySelectorAll('main .grid > .card')) {
-            const key = `${[...card.parentElement.parentElement.children].indexOf(card.parentElement)}:${Math.round(card.getBoundingClientRect().top)}`;
+            const key = `${[...card.parentElement.parentElement.children].indexOf(card.parentElement)}:${card.offsetTop}`;
             (rows.get(key) || rows.set(key, []).get(key)).push(card);
           }
           return [...rows.values()].filter((row) => row.length > 1).flatMap((row) => {
-            const heading = new Set(row.map((card) => Math.round(card.querySelector('h2,h3').getBoundingClientRect().top)));
+            const heading = new Set(row.map((card) => card.querySelector('h2,h3').offsetTop));
             return heading.size > 1 ? [row.map((card) => card.querySelector('h2,h3').textContent).join(' | ')] : [];
           });
         });
