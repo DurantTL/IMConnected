@@ -186,19 +186,36 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
     wrap.append(lab, input, h);
     return wrap;
   }
+  // Typed text follows the same file (name, size, last-modified), not the slot, so re-picking keeps it with the right photo.
+  const fileKey = (f) => `${f.name}|${f.size}|${f.lastModified}`;
+  const typed = new Map(); // fileKey -> { caption, alt }
+  let chosenKeys = [];
+  function remember() {
+    chosenKeys.forEach((k, i) => {
+      const c = document.getElementById(`caption_${i}`);
+      const a = document.getElementById(`alt_${i}`);
+      if (c && a) typed.set(k, { caption: c.value, alt: a.value });
+    });
+  }
   photos.addEventListener('change', () => {
-    const kept = [...previews.querySelectorAll('input')].map((el) => [el.name, el.value]);
-    const old = Object.fromEntries(kept);
+    remember();
     const legacy = captionInput.disabled ? '' : captionInput.value;
     urls.forEach((u) => URL.revokeObjectURL(u));
     urls = [];
     previews.innerHTML = '';
-    const files = [...photos.files];
+    const files = [...photos.files].filter((f) => f.size > 0); // empty files are never sent, so they must not take a slot
     if (files.length > LIMITS.maxPhotos) show(`Please choose up to ${LIMITS.maxPhotos} photos.`, 'error');
     const chosen = files.slice(0, LIMITS.maxPhotos);
+    const firstKey = chosen[0] ? fileKey(chosen[0]) : '';
+    const prevFirst = chosenKeys[0];
+    chosenKeys = chosen.map(fileKey);
+    if (legacy && firstKey && !typed.has(firstKey)) typed.set(firstKey, { caption: legacy, alt: '' });
     chosen.forEach((f, i) => {
-      const item = document.createElement('div');
+      const old = typed.get(chosenKeys[i]) || { caption: '', alt: '' };
+      const item = document.createElement('fieldset');
       item.className = 'photo-item';
+      const legend = document.createElement('legend');
+      legend.textContent = i === 0 ? 'Photo 1 (main image)' : `Photo ${i + 1}`;
       const img = document.createElement('img');
       const u = URL.createObjectURL(f);
       urls.push(u);
@@ -206,18 +223,15 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
       img.alt = `Preview of photo ${i + 1}: ${f.name}`;
       const fields = document.createElement('div');
       fields.className = 'photo-item-fields';
-      const title = document.createElement('strong');
-      title.textContent = i === 0 ? 'Photo 1 (main image)' : `Photo ${i + 1}`;
       fields.append(
-        title,
-        field(i, 'caption', 'Caption (optional)', 'Shown under the photo on the site. One line, up to 300 characters.', old[`caption_${i}`] ?? (i === 0 ? legacy : '')),
-        field(i, 'alt', 'Describe the photo for people who can\u2019t see it (optional)', 'Read aloud by screen readers; not shown on the page. Say what is in the picture, without repeating the caption.', old[`alt_${i}`] ?? ''),
+        field(i, 'caption', 'Caption (optional)', 'Shown under the photo on the site. One line, up to 300 characters.', old.caption),
+        field(i, 'alt', 'Describe the photo for people who can\u2019t see it (optional)', 'Read aloud by screen readers. If the photo has no caption, this may also appear under it.', old.alt),
       );
-      item.append(img, fields);
+      item.append(legend, img, fields);
       previews.appendChild(item);
     });
     const per = chosen.length > 0;
-    if (!per && old.caption_0) captionInput.value = old.caption_0; // photos cleared: the single field takes the typed caption back
+    if (!per && prevFirst && typed.get(prevFirst)?.caption && !captionInput.value) captionInput.value = typed.get(prevFirst).caption; // photos cleared: the single field takes the first photo's caption back
     captionField.hidden = per;
     captionInput.disabled = per;
   });

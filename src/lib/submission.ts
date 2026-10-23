@@ -21,14 +21,12 @@ export interface Submission {
   photoTexts: { caption: string; alt: string }[];
 }
 
-export const PHOTO_TEXT_MAX = 300;
-
 /** One line of plain text: control characters removed, whitespace (including newlines) collapsed. Too long is an error, never cut. */
 function oneLine(fd: FormData, k: string, label: string): string {
   const raw = fd.get(k);
   if (raw === null || typeof raw !== 'string') return '';
   const v = raw.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (v.length > PHOTO_TEXT_MAX) throw new ValidationError(`${label} is too long. Please keep it under ${PHOTO_TEXT_MAX} characters.`);
+  if (v.length > LIMITS.photoText) throw new ValidationError(`${label} is too long. Please keep it to ${LIMITS.photoText} characters or fewer.`);
   return v;
 }
 
