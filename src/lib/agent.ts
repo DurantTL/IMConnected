@@ -130,6 +130,8 @@ export interface AgentStory {
   newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
   /** Issue #117: undefined = not sent (keeps the stored list); [] = clear (also what null becomes). */
   keyPoints?: string[];
+  /** Issue #124: the agent's suggested publish time (ms since the epoch). undefined = not sent (keeps the stored one); null = clear. Advice only. */
+  suggestedPublishAt?: number | null;
   area: string;
   author: string;
   church: string;
@@ -218,6 +220,29 @@ export function assertPhotoMarkers(body: string, photoCount: number): void {
     const n = photoMarkerIndex(line, Infinity);
     if (n !== null && n >= photoCount) throw new AgentError('bad_photo_marker', `The marker "${line}" points to photo ${n + 1}, but the story will have ${photoCount} photo${photoCount === 1 ? '' : 's'}.`);
   }
+}
+
+/**
+ * `suggestedPublishAt` (issue #124): an ISO 8601 date-time WITH an offset (Z or +/-hh:mm), or null to clear. Format only here; the
+ * future rule is checkSuggestionFuture. Returns ms. Anything else is 400 bad_publish_at. It is a suggestion shown to editors; the agent can never schedule or publish.
+ */
+export function parseSuggestedPublishAt(v: unknown): number | null {
+  if (v === null) return null;
+  const bad = (m: string) => new AgentError('bad_publish_at', `suggestedPublishAt ${m}`);
+  if (typeof v !== 'string') throw bad('must be an ISO 8601 date-time with an offset like "2026-11-02T08:00:00-06:00", or null.');
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/.exec(v.trim());
+  if (!m) throw bad('must be an ISO 8601 date-time with an offset like "2026-11-02T08:00:00-06:00", or null.');
+  const ms = Date.parse(v.trim());
+  // Date.parse rolls an impossible day (Feb 30) over instead of refusing it: require the calendar day to survive.
+  const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (!Number.isFinite(ms) || day.getUTCMonth() !== Number(m[2]) - 1 || day.getUTCDate() !== Number(m[3]) || Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6] ?? 0) > 59) throw bad('is not a real date and time.');
+  return ms;
+}
+
+/** The "future, within a year" rule, applied where a NEW request is written (after any requestId receipt lookup), so an identical retry of an accepted request still acknowledges after the time has passed. */
+export function checkSuggestionFuture(ms: number, now = Date.now()): void {
+  if (ms <= now) throw new AgentError('bad_publish_at', 'suggestedPublishAt must be in the future.');
+  if (ms > now + 366 * 24 * 3600_000) throw new AgentError('bad_publish_at', 'suggestedPublishAt must be within the next year.');
 }
 
 /** `{ number, date, title?, position? }` (issue #98). Throws 400 bad_newsletter_issue; null is returned for null (clear). */
@@ -313,8 +338,9 @@ export function parseAgentStory(input: unknown): AgentStory {
   const newsletterIssue = o.newsletterIssue === undefined ? undefined : parseAgentIssue(o.newsletterIssue);
   let keyPoints: string[] | undefined;
   if (o.keyPoints !== undefined) { try { keyPoints = validateKeyPoints(o.keyPoints); } catch (e) { throw new AgentError('bad_key_points', (e as Error).message); } }
+  const suggestedPublishAt = o.suggestedPublishAt === undefined ? undefined : parseSuggestedPublishAt(o.suggestedPublishAt);
   const { requestId: _ignored, ...content } = o;
-  return { additionalSections, newsletterIssue, keyPoints, announcement, announcementPatch, authorTitle, photoCredit, featured: o.featured as boolean | undefined, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
+  return { additionalSections, newsletterIssue, keyPoints, suggestedPublishAt, announcement, announcementPatch, authorTitle, photoCredit, featured: o.featured as boolean | undefined, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
 }
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----

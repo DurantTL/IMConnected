@@ -23,6 +23,8 @@ export function agentDraftView(draft: Draft, editorTouched: boolean) {
     area: draft.area,
     additionalSections: draft.additionalSections ?? [],
     keyPoints: draft.keyPoints ?? [],
+    /** Issue #124: the agent's own suggestion, echoed back as ISO 8601 (UTC), or null. It is never a schedule: only a person schedules. */
+    suggestedPublishAt: draft.suggestedPublishAt == null ? null : new Date(draft.suggestedPublishAt).toISOString(),
     newsletterIssue: draft.newsletterIssue?.date === undefined ? null : { number: draft.newsletterIssue.number, date: draft.newsletterIssue.date, title: draft.newsletterIssue.title ?? '', position: draft.newsletterIssue.position },
     author: draft.author,
     authorTitle: draft.authorTitle,

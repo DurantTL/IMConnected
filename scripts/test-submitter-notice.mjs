@@ -195,7 +195,7 @@ try {
   const ins = mdb.prepare("INSERT INTO drafts (status, source, title, slug, published_commit, published_at, email_verified, submitter_email, created_at, updated_at) VALUES (?, 'form', ?, ?, ?, ?, 1, 'old@example.test', 1, 1)");
   const P = Number(ins.run('published', 'Old published', 'old-published', 'db', 12345).lastInsertRowid);
   const W = Number(ins.run('in_review', 'Old waiting', null, null, null).lastInsertRowid);
-  const applied = runMigrations(mdb, all);
+  const applied = runMigrations(mdb, all.filter((m) => m.name < '035')); // later migrations have their own checks
   const get = (id) => mdb.prepare('SELECT submitter_notified_at v FROM drafts WHERE id = ?').get(id).v;
   check('migration 034 applies on top of 033', applied.join() === '034_submitter_notified.sql', applied.join());
   check('the backfill marks an already published draft (with its publish time) and leaves an unpublished one open', get(P) === 12345 && get(W) === null, `${get(P)} ${get(W)}`);

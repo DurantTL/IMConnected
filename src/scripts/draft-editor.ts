@@ -149,7 +149,7 @@ if (form) {
   });
 
   // Photo, publish, reject and restore are ordinary form posts; save pending edits first.
-  for (const other of document.querySelectorAll<HTMLFormElement>('#photo-form, #publish-form, #reject-form')) {
+  for (const other of document.querySelectorAll<HTMLFormElement>('#photo-form, #publish-form, #reject-form, #schedule-form, #suggest-form, #unschedule-form')) {
     let resubmitting = false;
     other.addEventListener('submit', (e) => {
       if (resubmitting) return;

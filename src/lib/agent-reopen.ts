@@ -3,12 +3,12 @@ import { getDb } from './db';
 import { mergeAgentAnnouncement, resolveAgentIssue, createDraft, getDraftBySlug, resetDraftFromStory, tx, writeUpload, removeUploadFiles } from './drafts';
 import { loadStory, validSlug } from './story-publish';
 import { getSection, isValidArea } from './site';
-import { AgentError, assertPhotoMarkers, AgentConflict, REQUEST_ID_RE, parseAgentStory, refusalDetails, refusalReason } from './agent';
+import { AgentError, checkSuggestionFuture, assertPhotoMarkers, AgentConflict, REQUEST_ID_RE, parseAgentStory, refusalDetails, refusalReason } from './agent';
 import { LIMITS } from './limits';
 import { audit } from './auth/audit';
 
 const hash = (v: string) => createHash('sha256').update(v).digest('hex');
-const FIELDS = ['title', 'dek', 'body', 'section', 'area', 'author', 'church', 'date', 'photoLayout', 'announcement', 'additionalSections', 'authorTitle', 'photoCredit', 'featured', 'newsletterIssue', 'keyPoints'] as const;
+const FIELDS = ['title', 'dek', 'body', 'section', 'area', 'author', 'church', 'date', 'photoLayout', 'announcement', 'additionalSections', 'authorTitle', 'photoCredit', 'featured', 'newsletterIssue', 'keyPoints', 'suggestedPublishAt'] as const;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 export interface ReopenRequest { slug: string; requestHash: string; payloadHash: string; changes: Record<string, unknown>; photos?: unknown[]; note?: string }
 /** RequestId is opaque; retry the identical JSON body. Receipts retain hashes only. */
@@ -19,7 +19,7 @@ export function parseAgentReopen(value: unknown, raw: string): ReopenRequest {
   if (typeof value.requestId !== 'string' || !REQUEST_ID_RE.test(value.requestId)) throw new AgentError('bad_request_id', 'requestId must contain 8–128 letters, digits, underscores or hyphens.');
   const changes = value.changes === undefined ? {} : value.changes;
   if (!object(changes) || Object.keys(changes).some((k) => !(FIELDS as readonly string[]).includes(k))) throw new AgentError('bad_field', 'changes must contain only supported editorial fields.');
-  for (const [key, v] of Object.entries(changes)) if (key !== 'announcement' && key !== 'additionalSections' && key !== 'featured' && key !== 'newsletterIssue' && key !== 'keyPoints' && typeof v !== 'string') throw new AgentError('bad_field', `"${key}" must be text.`);
+  for (const [key, v] of Object.entries(changes)) if (key !== 'announcement' && key !== 'additionalSections' && key !== 'featured' && key !== 'newsletterIssue' && key !== 'keyPoints' && !(key === 'suggestedPublishAt' && v === null) && typeof v !== 'string') throw new AgentError('bad_field', `"${key}" must be text.`);
   if (value.photos !== undefined && !Array.isArray(value.photos)) throw new AgentError('photos_invalid', 'photos must be a list of new images to append.');
   if (value.note !== undefined && typeof value.note !== 'string') throw new AgentError('bad_field', 'note must be text.');
   return { slug: value.slug, requestHash: hash(value.requestId), payloadHash: hash(raw), changes, photos: value.photos as unknown[] | undefined, note: value.note as string | undefined };
@@ -58,6 +58,7 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
       }
       const parsed = parseAgentStory({ title: 'Reopened story', body: 'Existing published body is preserved.', section: story.fields.section, area: story.fields.area,
         ...changes, ...(input.photos !== undefined ? { photos: input.photos } : {}), note: input.note });
+      if (parsed.suggestedPublishAt != null) checkSuggestionFuture(parsed.suggestedPublishAt); // after the receipt lookup above: a replay never reaches this
       if (story.photos.length + (parsed.photos?.length ?? 0) > LIMITS.maxPhotos) throw new AgentError('too_many_photos', `The existing and new photos together must not exceed ${LIMITS.maxPhotos}.`);
       const fields = { ...story.fields };
       for (const key of FIELDS) if (Object.hasOwn(changes, key)) {
@@ -65,12 +66,14 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
         if (key === 'announcement') Object.assign(fields, { announcement: parsed.announcementPatch ? mergeAgentAnnouncement(story.fields.announcement ?? null, parsed.announcementPatch) : parsed.announcement ?? null });
         else if (key === 'newsletterIssue') Object.assign(fields, { newsletterIssue: resolveAgentIssue(parsed.newsletterIssue ?? null) });
         else if (key === 'keyPoints') Object.assign(fields, { keyPoints: parsed.keyPoints ?? [] });
+        else if (key === 'suggestedPublishAt') continue; // not a story field: written to the draft row below
         else Object.assign(fields, { [key]: key === 'date' ? parsed.date || fields.date : parsed[key] });
       }
       if (Object.hasOwn(changes, 'body')) assertPhotoMarkers(fields.body, story.photos.length + (parsed.photos?.length ?? 0));
       const id = existing?.id ?? createDraft({ source: 'agent', status: 'in_review', fields, slug: input.slug });
       if (!existing) db.prepare("UPDATE drafts SET published_commit='db',published_at=?,published_by=?,published_via_studio=? WHERE id=?").run(live.published_at, live.published_by, live.source === 'studio' ? 1 : 0, id);
       oldFiles = resetDraftFromStory(id, null, fields, story.photos);
+      if (Object.hasOwn(changes, 'suggestedPublishAt')) db.prepare('UPDATE drafts SET suggested_publish_at=? WHERE id=?').run(parsed.suggestedPublishAt ?? null, id);
       if (input.note !== undefined) db.prepare('UPDATE drafts SET agent_note=? WHERE id=?').run(parsed.note || null, id);
       const insert = db.prepare('INSERT INTO draft_photos(draft_id,path,ext,alt,caption,position,created_at,focal_x,focal_y,zoom,fit,fit_fill) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
       for (const [i, photo] of (parsed.photos ?? []).entries()) {

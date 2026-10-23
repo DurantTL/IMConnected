@@ -5,13 +5,15 @@ import { fileURLToPath } from 'node:url';
 
 // Nightly backups must start when the server starts, not on the first request that needs the database. The Node
 // adapter's server entry is the one module the standalone server always loads, so this plugin adds an import of
-// src/lib/backup-start.ts to it (that module only sets an unref'd timer, and only when Google Drive is configured).
+// src/lib/backup-start.ts to it (that module only sets an unref'd timer, and only when Google Drive is configured). The same plugin adds
+// src/lib/schedule-start.ts, which starts the scheduled-publish timer (issue #124).
 const backupStart = fileURLToPath(new URL('./src/lib/backup-start.ts', import.meta.url));
+const scheduleStart = fileURLToPath(new URL('./src/lib/schedule-start.ts', import.meta.url));
 const backupStartPlugin = {
   name: 'backup-start',
   enforce: /** @type {const} */ ('post'),
   transform(/** @type {string} */ code, /** @type {string} */ id) {
-    if (/@astrojs[\\/]node[\\/]dist[\\/]server\.js$/.test(id.split('?')[0])) return { code: `${code}\nimport ${JSON.stringify(backupStart)};\n`, map: null };
+    if (/@astrojs[\\/]node[\\/]dist[\\/]server\.js$/.test(id.split('?')[0])) return { code: `${code}\nimport ${JSON.stringify(backupStart)};\nimport ${JSON.stringify(scheduleStart)};\n`, map: null };
   },
 };
 

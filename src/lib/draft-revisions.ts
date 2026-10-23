@@ -7,7 +7,9 @@ import { normalizeRef } from './newsletter-issues';
 import { normalizeKeyPoints } from './key-points';
 export interface RevisionPhoto { id: number; key: string; alt: string; caption: string; focalX: number; focalY: number; zoom: number; fit?: PhotoFit; fitFill?: PhotoFitFill }
 export interface EditorialSnapshot { fields: DraftFields; photos: RevisionPhoto[] }
-/** Explicit editorial whitelist. Never spread Draft: it contains private submission/account data. */
+/** Explicit editorial whitelist. Never spread Draft: it contains private submission/account data.
+ * Scheduled publishing (issue #124) is deliberately absent: publish_at, publish_at_by and suggested_publish_at are actions and
+ * advice, not editorial state, so restoring a revision never schedules, unschedules or reschedules anything. */
 export function editorialSnapshot(id: number, f: DraftFields): EditorialSnapshot {
   const fields: DraftFields = {
     title: f.title, dek: f.dek, section: f.section, additionalSections: normalizeAdditionalSections(f.additionalSections, f.section), area: f.area, column: f.column, author: f.author, authorTitle: f.authorTitle,

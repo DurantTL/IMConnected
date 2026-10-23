@@ -10,7 +10,7 @@ import { issueExists, normalizeRef, refFromRow, resolveIssueInput, type Newslett
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
-import { AgentError, AgentConflict, assertPhotoMarkers, refusalDetails, refusalReason, type RefusalReason } from './agent';
+import { AgentError, AgentConflict, assertPhotoMarkers, checkSuggestionFuture, refusalDetails, refusalReason, type RefusalReason } from './agent';
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
@@ -82,6 +82,14 @@ export interface Draft extends DraftFields {
   unpublishedAt: number | null;
   /** True when this draft's story is live on the site (published and not unpublished since). */
   live: boolean;
+  /** Scheduled publishing (issue #124): when the server will publish it (ms), who scheduled it, and the last failed attempt. null = not scheduled. */
+  publishAt: number | null;
+  publishAtBy: number | null;
+  publishAtByName: string | null;
+  publishFailCount: number;
+  publishError: string | null;
+  /** The AI agent's suggested time (ms). Advice only; a person schedules. */
+  suggestedPublishAt: number | null;
 }
 
 export interface DraftPhoto {
@@ -114,6 +122,9 @@ export interface DraftListItem {
   photoCount: number;
   createdAt: number;
   updatedAt: number;
+  /** Scheduled publishing (issue #124): when it will go live (ms) and the last failed attempt's code, else null. */
+  publishAt: number | null;
+  publishError: string | null;
 }
 
 type Row = Record<string, unknown>;
@@ -124,8 +135,8 @@ const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0));
 /** Shown as the publisher of a story that Studio published. */
 export const STUDIO_NAME = 'IMConnected Studio';
 
-const DRAFT_SELECT = `SELECT d.*, u.name AS updated_by_name, p.name AS published_by_name, ni.date AS issue_date, ni.title AS issue_title
-  FROM drafts d LEFT JOIN users u ON u.id = d.updated_by LEFT JOIN users p ON p.id = d.published_by LEFT JOIN newsletter_issues ni ON ni.number = d.newsletter_issue`;
+const DRAFT_SELECT = `SELECT d.*, u.name AS updated_by_name, p.name AS published_by_name, ni.date AS issue_date, ni.title AS issue_title, sb.name AS publish_at_by_name
+  FROM drafts d LEFT JOIN users u ON u.id = d.updated_by LEFT JOIN users p ON p.id = d.published_by LEFT JOIN users sb ON sb.id = d.publish_at_by LEFT JOIN newsletter_issues ni ON ni.number = d.newsletter_issue`;
 
 function toDraft(r: Row): Draft {
   return {
@@ -170,6 +181,12 @@ function toDraft(r: Row): Draft {
     studioOverwroteAt: r.studio_overwrote_at == null ? null : n(r.studio_overwrote_at),
     unpublishedAt: r.unpublished_at == null ? null : n(r.unpublished_at),
     live: r.published_commit != null && r.slug != null && r.unpublished_at == null,
+    publishAt: r.publish_at == null ? null : n(r.publish_at),
+    publishAtBy: r.publish_at_by == null ? null : n(r.publish_at_by),
+    publishAtByName: sn(r.publish_at_by_name),
+    publishFailCount: n(r.publish_fail_count),
+    publishError: sn(r.publish_error),
+    suggestedPublishAt: r.suggested_publish_at == null ? null : n(r.suggested_publish_at),
   };
 }
 
@@ -262,11 +279,12 @@ export function listUnpublishedSlugs(): Set<string> {
   return new Set((getDb().prepare('SELECT slug FROM drafts WHERE slug IS NOT NULL AND unpublished_at IS NOT NULL').all() as { slug: string }[]).map((r) => r.slug));
 }
 
-export type StatusFilter = DraftStatus | 'open' | 'all';
+export type StatusFilter = DraftStatus | 'open' | 'all' | 'scheduled';
 export const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'open', label: 'New and in review' },
   { value: 'new', label: 'New' },
   { value: 'in_review', label: 'In review' },
+  { value: 'scheduled', label: 'Scheduled' },
   { value: 'rejected', label: 'Rejected' },
   { value: 'published', label: 'Published' },
   { value: 'all', label: 'All' },
@@ -278,6 +296,7 @@ export function listDrafts(filter: { status: StatusFilter; section?: string; sou
   const args: (string | number)[] = [];
   if (filter.kind) { where.push("CASE WHEN json_valid(d.announcement) THEN COALESCE(json_extract(d.announcement,'$.kind'),'story') ELSE 'story' END = ?"); args.push(filter.kind); }
   if (filter.status === 'open') where.push("d.status IN ('new', 'in_review')");
+  else if (filter.status === 'scheduled') where.push("d.publish_at IS NOT NULL AND d.status IN ('new', 'in_review')");
   else if (filter.status !== 'all') {
     where.push('d.status = ?');
     args.push(filter.status);
@@ -292,9 +311,9 @@ export function listDrafts(filter: { status: StatusFilter; section?: string; sou
   }
   const rows = getDb()
     .prepare(
-      `SELECT d.id, d.status, d.source, d.title, d.section, d.additional_sections, d.slug, d.church, d.author, d.submitter_church, d.email_verified, d.created_at, d.updated_at,
+      `SELECT d.id, d.status, d.source, d.title, d.section, d.additional_sections, d.slug, d.church, d.author, d.submitter_church, d.email_verified, d.created_at, d.updated_at, d.publish_at, d.publish_error,
          (SELECT COUNT(*) FROM draft_photos ph WHERE ph.draft_id = d.id) AS photo_count
-       FROM drafts d ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY d.created_at DESC, d.id DESC LIMIT 500`,
+       FROM drafts d ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${filter.status === 'scheduled' ? 'd.publish_at ASC, d.id ASC' : 'd.created_at DESC, d.id DESC'} LIMIT 500`,
     )
     .all(...args) as Row[];
   return rows.map((r) => ({
@@ -311,6 +330,8 @@ export function listDrafts(filter: { status: StatusFilter; section?: string; sou
     photoCount: n(r.photo_count),
     createdAt: n(r.created_at),
     updatedAt: n(r.updated_at),
+    publishAt: r.publish_at == null ? null : n(r.publish_at),
+    publishError: sn(r.publish_error),
   }));
 }
 
@@ -330,7 +351,7 @@ export const isEditable = (d: Pick<Draft, 'status'>) => d.status === 'new' || d.
  * Take the optimistic lock: succeeds only when the draft's updated_at is still `expected`, and moves it
  * forward (always strictly, even within one millisecond). Call inside tx().
  */
-function takeVersion(id: number, expected: number, userId: number, extra = ''): number | null {
+export function takeVersion(id: number, expected: number, userId: number, extra = ''): number | null {
   // `extra` is a fixed SQL fragment with no bound values.
   const next = Math.max(Date.now(), expected + 1);
   const r = getDb()
@@ -340,7 +361,7 @@ function takeVersion(id: number, expected: number, userId: number, extra = ''): 
 }
 
 export type Failure = { ok: false; reason: 'conflict' | 'locked' | 'invalid'; code: ErrorCode; message: string };
-const fail = (reason: Failure['reason'], code: ErrorCode): Failure => ({ ok: false, reason, code, message: ERRORS[code] });
+export const fail = (reason: Failure['reason'], code: ErrorCode): Failure => ({ ok: false, reason, code, message: ERRORS[code] });
 export type SaveResult = { ok: true; updatedAt: number } | Failure;
 
 const CONFLICT = fail('conflict', 'conflict');
@@ -615,7 +636,7 @@ export function rejectDraft(id: number, expected: number, userId: number, note: 
   return tx((): OpResult => {
     const now = Date.now();
     const r = getDb()
-      .prepare("UPDATE drafts SET status = 'rejected', reject_note = ?, rejected_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
+      .prepare("UPDATE drafts SET publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, status = 'rejected', reject_note = ?, rejected_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
       .run(note || null, now, Math.max(now, expected + 1), userId, id, expected);
     return Number(r.changes) === 1 ? { ok: true, updatedAt: Math.max(now, expected + 1) } : lockFailure(id);
   });
@@ -642,16 +663,26 @@ export const DB_PUBLISH_MARKER = 'db';
  * version forward. Call inside the same transaction that writes the story, so both happen or neither does.
  * Throws only on a database error; a lost race is returned as a Failure.
  */
-export function publishDraftRow(id: number, expected: number, info: { slug: string; userId: number }): { ok: true; updatedAt: number; firstPublish: boolean } | Failure {
+export function publishDraftRow(id: number, expected: number, info: { slug: string; userId: number }, scheduled?: { now: number }): { ok: true; updatedAt: number; firstPublish: boolean } | Failure {
   const now = Date.now();
   const next = Math.max(now, expected + 1);
   try {
     // issue #121: every draft records its first publish here, in the publish transaction, whether or not an email will be sent.
     const firstPublish = (getDb().prepare('SELECT submitter_notified_at FROM drafts WHERE id = ?').get(id) as { submitter_notified_at: number | null } | undefined)?.submitter_notified_at == null;
     const r = getDb()
-      .prepare("UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')")
-      .run(now, info.slug, DB_PUBLISH_MARKER, now, info.userId, next, info.userId, id, expected);
-    return Number(r.changes) === 1 ? { ok: true, updatedAt: next, firstPublish } : (lockFailure(id) as Failure);
+      .prepare("UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', slug = ?, published_commit = ?, published_at = ?, published_by = ?, updated_at = ?, updated_by = ?, rejected_at = NULL, unpublished_at = NULL, studio_overwrote_at = NULL, published_via_studio = 0 WHERE id = ? AND updated_at = ? AND status IN ('new', 'in_review')" + (scheduled ? ' AND publish_at IS NOT NULL AND publish_at <= ? AND studio_overwrote_at IS NULL AND EXISTS (SELECT 1 FROM users WHERE users.id = drafts.publish_at_by AND users.status = \'active\')' : ''))
+      .run(now, info.slug, DB_PUBLISH_MARKER, now, info.userId, next, info.userId, id, expected, ...(scheduled ? [scheduled.now] : []));
+    if (Number(r.changes) === 1) return { ok: true, updatedAt: next, firstPublish };
+    if (scheduled) {
+      // The scheduler's guard (issue #124): said no, so find out why, inside this same transaction.
+      const cur = getDb().prepare("SELECT status, publish_at, studio_overwrote_at, (SELECT status FROM users WHERE users.id = drafts.publish_at_by) AS owner_status FROM drafts WHERE id = ?").get(id) as { status: string; publish_at: number | null; studio_overwrote_at: number | null; owner_status: string | null } | undefined;
+      if (cur && (cur.status === 'new' || cur.status === 'in_review')) {
+        if (cur.studio_overwrote_at !== null) return fail('conflict', 'schedule_studio_overwrote');
+        if (cur.publish_at === null || cur.publish_at > scheduled.now) return fail('conflict', 'schedule_not_due');
+        if (cur.owner_status !== 'active') return fail('conflict', 'schedule_owner_inactive');
+      }
+    }
+    return lockFailure(id) as Failure;
   } catch (err) {
     if (/UNIQUE/i.test(err instanceof Error ? err.message : '')) return fail('conflict', 'slug_taken');
     throw err;
@@ -683,6 +714,11 @@ export function retireUploads(draftId: number, published: Map<number, string>): 
 /** After an unpublish the story's draft goes back to in review, keeping its slug so publishing again restores it. */
 export function markUnpublished(slug: string, userId: number): void {
   const now = Date.now();
+  // A schedule must not republish a story a person just took down (issue #124).
+  for (const r of getDb().prepare('SELECT id, publish_at FROM drafts WHERE slug = ? AND publish_at IS NOT NULL').all(slug) as { id: number; publish_at: number }[]) {
+    getDb().prepare('UPDATE drafts SET publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL WHERE id = ?').run(r.id);
+    audit('draft.unschedule', { userId, target: `draft:${r.id}`, detail: { reason: 'unpublished', was: new Date(r.publish_at).toISOString() } });
+  }
   getDb()
     .prepare("UPDATE drafts SET status = CASE WHEN status = 'published' THEN 'in_review' ELSE status END, unpublished_at = ?, updated_at = MAX(?, updated_at + 1), updated_by = ? WHERE slug = ?")
     .run(now, now, userId, slug);
@@ -885,7 +921,12 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
       let id: number;
       if (cur && isEditable(cur)) {
         id = cur.id;
-        getDb().prepare('UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, studio_overwrote_at = ? WHERE id = ?').run(now, commit, now, now, id);
+        // Studio's version is live now: a schedule would later overwrite it with this draft's older text. Clear it (issue #124).
+        if (cur.publishAt !== null) {
+          getDb().prepare('UPDATE drafts SET publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL WHERE id = ?').run(id);
+          audit('draft.unschedule', { userId: null, target: `draft:${id}`, detail: { reason: 'studio_publish', was: new Date(cur.publishAt).toISOString() } });
+        }
+        getDb().prepare('UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, studio_overwrote_at = ? WHERE id = ?').run(now, commit, now, now, id); // the version is kept (an open editor is not interrupted); a scheduled publish in flight is stopped by its studio_overwrote_at IS NULL guard
         overwrote.push(id);
       } else {
         // The draft mirrors the story row's key points ([] when there is no story); Studio never sends them.
@@ -894,7 +935,7 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
           id = cur.id;
           getDb()
             .prepare(
-              "UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, story_blocks = '[]', key_points = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
+              "UPDATE drafts SET submitter_notified_at = COALESCE(submitter_notified_at, ?), publish_at = NULL, publish_at_by = NULL, publish_claimed_at = NULL, publish_fail_count = 0, publish_error = NULL, publish_error_at = NULL, suggested_publish_at = NULL, status = 'published', title = ?, dek = ?, section = ?, area = ?, story_column = '', author = ?, author_title = '', church = '', date = ?, photo_credit = ?, photo_layout = ?, featured = 0, body = ?, story_blocks = '[]', key_points = ?, published_commit = ?, published_at = ?, published_by = NULL, published_via_studio = 1, unpublished_at = NULL, rejected_at = NULL, studio_overwrote_at = NULL, updated_at = MAX(?, updated_at + 1), updated_by = NULL WHERE id = ?",
             )
             .run(now, fields.title, fields.dek, fields.section, fields.area, fields.author, fields.date, fields.photoCredit, fields.photoLayout, fields.body, liveKeyPoints, commit, now, now, id);
         } else {
@@ -946,6 +987,8 @@ export interface AgentDraftInput {
   newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
   /** undefined = not sent (keeps the stored list); [] = clear. Already validated by parseAgentStory. */
   keyPoints?: string[];
+  /** Issue #124: ms since the epoch; undefined = not sent (keeps the stored one), null = clear. Advice only. */
+  suggestedPublishAt?: number | null;
   area: string;
   author: string;
   church: string;
@@ -993,6 +1036,8 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
           return { ok: true, id: Number(receipt.draft_id), status: 'replayed', originalStatus: receipt.result as 'created' | 'updated' };
         }
       }
+      // Issue #124: the "in the future" rule applies only to a new request; an identical retry (a receipt above) is acknowledged even if the time has since passed.
+      if (input.suggestedPublishAt != null) checkSuggestionFuture(input.suggestedPublishAt);
       const existing = input.sourceUrl
         ? (db.prepare("SELECT id, status, updated_by, slug, published_commit, unpublished_at FROM drafts WHERE source = 'agent' AND source_url = ?").get(input.sourceUrl) as ExistingAgentRow | undefined)
         : undefined;
@@ -1016,6 +1061,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         if (sent('authorTitle')) set('author_title', input.authorTitle ?? '');
         if (sent('photoCredit')) set('photo_credit', input.photoCredit ?? '');
         if (input.featured !== undefined) set('featured', input.featured ? 1 : 0);
+        if (input.suggestedPublishAt !== undefined) set('suggested_publish_at', input.suggestedPublishAt);
         if (sent('note')) set('agent_note', input.note || null);
         const section = sent('section') ? input.section : current.section;
         if (sent('section')) set('section', section);
@@ -1058,6 +1104,7 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
           agentNote: input.note || null,
         });
         if (input.newsletterIssue) writeDraftIssue(id, resolveAgentIssue(input.newsletterIssue));
+        if (input.suggestedPublishAt != null) db.prepare('UPDATE drafts SET suggested_publish_at = ? WHERE id = ?').run(input.suggestedPublishAt, id);
       }
       if (input.photos) {
         const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, caption, position, created_at, focal_x, focal_y, zoom, fit, fit_fill) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
