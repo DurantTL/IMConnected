@@ -334,6 +334,7 @@ try {
     check('fit and fill are stored, the saved zoom is untouched, and the editor reopens with them on', stored.fit === 'contain' && stored.fit_fill === 'navy' && stored.zoom === 1.8 && await fitBox.isChecked() && await page.getByRole('radio', { name: 'Navy', exact: true }).isChecked() && await page.locator(`[name="photo_${photo.id}_zoom"]`).isDisabled() && await frame.getAttribute('data-fit') === 'contain');
     if (shots) { await page.evaluate(() => scrollTo(0, 0)); await page.screenshot({ path: path.join(shots, 'story-photo-fit-whole.png'), fullPage: true }); }
     await fitBox.uncheck();
+    check('unticking without a reload brings the crop back: the preview is object-fit cover and the pan and zoom controls are enabled again', await frame.evaluate((el) => getComputedStyle(el.querySelector('img')).objectFit === 'cover' && el.querySelector('img').style.objectFit === '') && await page.locator(`[name="photo_${photo.id}_zoom"], [data-reset-crop="${photo.id}"]`).evaluateAll((els) => els.length === 2 && els.every((el) => !el.disabled)) && await frame.getAttribute('data-fit') === null);
     const fitOff = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
     await page.locator('#save-btn').click();
     check('turning it off and saving restores the crop', (await fitOff).status() === 200 && db.prepare('SELECT zoom, fit FROM draft_photos WHERE id=?').get(photo.id).fit === 'cover');

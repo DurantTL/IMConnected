@@ -646,7 +646,7 @@ if (form && blocksField) {
     // The crop's inline pan and zoom are dropped while the whole photo is shown and restored from the saved values when it is switched off.
     for (const img of document.querySelectorAll<HTMLElement>(`[data-focus-preview="${id}"]`)) {
       if (whole) { img.style.objectPosition = ''; img.style.scale = ''; img.style.transformOrigin = ''; }
-      else { img.style.objectPosition = `${photo.focalX}% ${photo.focalY}%`; img.style.scale = photo.zoom === 1 ? '' : String(photo.zoom); img.style.transformOrigin = `${photo.focalX}% ${photo.focalY}%`; }
+      else { img.style.objectFit = ''; img.style.objectPosition = `${photo.focalX}% ${photo.focalY}%`; img.style.scale = photo.zoom === 1 ? '' : String(photo.zoom); img.style.transformOrigin = `${photo.focalX}% ${photo.focalY}%`; }
     }
     const note = document.querySelector(`[data-pan-note="${id}"]`);
     if (note) note.textContent = whole ? 'The whole photo is shown, so there is nothing to pan.' : 'Drag the crop to move the image. Arrow keys pan; Shift moves faster.';
@@ -666,7 +666,7 @@ if (form && blocksField) {
     if (!photo) continue;
     let start: { x: number; y: number; focalX: number; focalY: number; overflowX: number; overflowY: number } | undefined;
     surface.addEventListener('pointerdown', (event) => {
-      if (!editable || event.button !== 0 || !image.naturalWidth || !image.naturalHeight) return;
+      if (!editable || photo.fit === 'contain' || event.button !== 0 || !image.naturalWidth || !image.naturalHeight) return;
       const rect = surface.getBoundingClientRect();
       const cover = Math.max(rect.width / image.naturalWidth, rect.height / image.naturalHeight) * photo.zoom;
       start = { x: event.clientX, y: event.clientY, focalX: photo.focalX, focalY: photo.focalY,

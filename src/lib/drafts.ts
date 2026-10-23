@@ -400,7 +400,7 @@ export function restoreDraftRevision(id: number, expected: number, revisionId: n
     const markers = snapshot.fields.storyBlocks?.length ? { body: snapshot.fields.body, missing: false } : restoreMediaMarkers(snapshot.fields.body, snapshot.photos.map((p) => p.key), ordered.map((p) => p.key));
     const fields = { ...snapshot.fields, body: markers.body, storyBlocks: blocks };
     const alts = new Map<number, string>(), focus = new Map<number, PhotoCrop>();
-    for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) { alts.set(match.id, p.alt); focus.set(match.id, { focalX: p.focalX, focalY: p.focalY, zoom: p.zoom, fit: p.fit, fitFill: p.fitFill }); } }
+    for (const p of snapshot.photos) { const match = byKey.get(p.key); if (match) { alts.set(match.id, p.alt); focus.set(match.id, { focalX: p.focalX, focalY: p.focalY, zoom: p.zoom, fit: p.fit ?? 'cover', fitFill: p.fitFill ?? 'blur' }); } } // a pre-027 revision restores the default fit
     const saved = saveDraftInTransaction(id, expected, fields, alts, userId, fields.photoLayout, focus, true);
     if (!saved.ok) return saved;
     const position = getDb().prepare('UPDATE draft_photos SET position=? WHERE draft_id=? AND id=?');

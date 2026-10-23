@@ -179,7 +179,10 @@ export const isFitWhole = (crop?: PhotoCrop | null): boolean => crop?.fit === 'c
 export function photoFrameAttrs(crop: PhotoCrop | null | undefined, src: string, aspect?: string): { 'data-fit': 'contain'; 'data-fit-fill': PhotoFitFill; style: string } | null {
   if (!isFitWhole(crop)) return null;
   const fill = photoFitFill(crop?.fitFill);
-  const css = fill === 'blur' ? `--fit-src:url("${src.replace(/[^A-Za-z0-9\-._~:/?#@!$&*+,;=%]/g, (c) => encodeURIComponent(c))}");` : '';
+  let css = '';
+  if (fill === 'blur') {
+    try { css = `--fit-src:url("${src.replace(/[^A-Za-z0-9\-._~:/?#@!$&*+,;=%]/gu, (c) => encodeURIComponent(c))}");`; } catch { css = ''; } // an unencodable address means no blur
+  }
   return { 'data-fit': 'contain', 'data-fit-fill': fill, style: `${css}${aspect ? `aspect-ratio:${aspect};` : ''}` };
 }
 /** The same attributes as an escaped HTML string, for the string renderers. */

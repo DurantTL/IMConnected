@@ -56,6 +56,8 @@ try {
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-store.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-blocks.ts'))};`,
           `export * from ${JSON.stringify(path.join(root, 'src/lib/story-block-render.ts'))};`,
+          `export { renderInlinePhoto } from ${JSON.stringify(path.join(root, 'src/lib/story-media-render.ts'))};`,
+          `export { restrictPreviewImages } from ${JSON.stringify(path.join(root, 'src/lib/markdown.ts'))};`,
         ].join('\n');
       },
     }],
@@ -411,6 +413,19 @@ try {
     assert.equal(JSON.parse(db.prepare('SELECT payload FROM draft_revisions WHERE id=?').get(fitRevision).payload).photos[0].fit, 'contain', 'the revision whitelist records fit');
     assert.equal(m.restoreDraftRevision(fid, m.getDraft(fid).updatedAt, fitRevision, user).ok, true);
     assert.deepEqual([m.listPhotos(fid)[0].fit, m.listPhotos(fid)[0].fitFill], ['contain', 'navy'], 'restoring a revision keeps fit and fill');
+    // A revision from before migration 027 has no fit: restoring it gives the defaults (only the editor form preserves on omission).
+    const oldPayload = JSON.parse(db.prepare('SELECT payload FROM draft_revisions WHERE id=?').get(fitRevision).payload);
+    for (const p of oldPayload.photos) { delete p.fit; delete p.fitFill; }
+    db.prepare('UPDATE draft_revisions SET payload=? WHERE id=?').run(JSON.stringify(oldPayload), fitRevision);
+    assert.equal(m.restoreDraftRevision(fid, m.getDraft(fid).updatedAt, fitRevision, user).ok, true);
+    assert.deepEqual([m.listPhotos(fid)[0].fit, m.listPhotos(fid)[0].fitFill], ['cover', 'blur'], 'restoring a pre-027 revision defaults to cover and blur');
+    // The private preview's blur background obeys the same allow-list as <img src>.
+    const own = m.restrictPreviewImages(m.renderInlinePhoto({ src: 'https://own.invalid/a.png', alt: 'x', fit: 'contain', fitFill: 'blur' }, true), ['own.invalid']);
+    assert.ok(!/--fit-src/.test(own) && !/<img/.test(own), 'a refused preview image leaves no --fit-src');
+    const okPreview = m.restrictPreviewImages(m.renderInlinePhoto({ src: '/api/admin/photos/3', alt: 'x', fit: 'contain', fitFill: 'blur' }, true), ['own.invalid']);
+    assert.ok(/--fit-src:url\(/.test(okPreview) && /<img/.test(okPreview), 'an allowed preview image keeps its blur');
+    const forged = m.restrictPreviewImages('<a data-fit="contain" style="--fit-src:url(&quot;/admin/secret.png&quot;);"><img src="/api/admin/photos/3" alt=""></a>', []);
+    assert.ok(!/--fit-src/.test(forged) && /<img/.test(forged), 'a --fit-src outside the allow-list is dropped');
     // Studio publish: with and without the fields.
     const sa = { url: pngData(52), alt: 'Synthetic fit A', caption: '' };
     const s1 = await sendStudio(studioRequest([sa], 'Synthetic Studio fit'));
