@@ -1,8 +1,7 @@
 import type { APIRoute } from 'astro';
-import { unpublishLive, validSlug } from '../../../../lib/story-publish';
-import { EditorError } from '../../../../lib/messages';
+import { validSlug } from '../../../../lib/story-publish';
+import { unpublishStoryItem } from '../../../../lib/bulk-actions';
 import { readFormLimited, redirectTo } from '../../../../lib/draft-http';
-import { audit } from '../../../../lib/auth/audit';
 import { clientIp } from '../../../../lib/request';
 
 export const prerender = false;
@@ -16,18 +15,6 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
   const slugValue = form && form !== 'too_big' ? form.get('slug') : null;
   const slug = typeof slugValue === 'string' ? slugValue : '';
   if (!validSlug(slug)) return redirectTo(back, { e: 'slug_bad' });
-  try {
-    const out = unpublishLive(slug, user.id);
-    if (!out) return redirectTo(back, { e: 'story_missing' });
-    try {
-      audit('draft.unpublish', { userId: user.id, target: `story:${slug}`, detail: { slug }, ip: clientIp(request, clientAddress) });
-    } catch {
-      /* the audit entry is a convenience */
-    }
-    return redirectTo(back, { n: 'unpublished' });
-  } catch (err) {
-    if (err instanceof EditorError) return redirectTo(back, { e: err.code });
-    console.error('[drafts] unpublish failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
-    return redirectTo(back, { e: 'unpublish_failed' });
-  }
+  const out = unpublishStoryItem(slug, user.id, clientIp(request, clientAddress));
+  return out.ok ? redirectTo(back, { n: 'unpublished' }) : redirectTo(back, { e: out.code });
 };

@@ -5,6 +5,7 @@ import { listStories, LIST_MAX } from '../../lib/story-store';
 import { noticeText, fmtTime, sectionLabel } from '../../lib/admin-ui';
 import { errorText } from '../../lib/messages';
 import { siteUrl } from '../../lib/draft-http';
+import BulkBar from '../../components/BulkBar.astro';
 export const prerender = false;
 
 interface Row { slug: string; title: string; section: string; area?: string; date: string; draftId?: number; by?: string | null; at?: number | null }
@@ -45,9 +46,16 @@ const base = siteUrl();
   {list.length === 0 && !loadFailed ? (
     <p class="admin-note">No published stories yet.</p>
   ) : (
+    <>
+    <BulkBar action="unpublish" label="Unpublish selected" noun="stories" />
     <ul class="cms-list">
       {list.map((r) => (
         <li class="cms-item">
+          <div class="bulk-row">
+          <label class="bulk-pick">
+            <input class="bulk-item" type="checkbox" name="slug" value={r.slug} form="bulk-form" aria-label={r.title || r.slug} />
+          </label>
+          <div class="bulk-body">
           <a class="title" href={`${base}/stories/${r.slug}/`} rel="noopener">{r.title || r.slug}</a>
           <div class="cms-meta">
             <span>{sectionLabel(r.section, r.area)}</span>
@@ -64,9 +72,12 @@ const base = siteUrl();
               <button class="cms-btn danger" type="submit">Unpublish</button>
             </form>
           </div>
+          </div>
+          </div>
         </li>
       ))}
     </ul>
+    </>
   )}
 </Admin>
 <script is:inline>

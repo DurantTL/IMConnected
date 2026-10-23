@@ -1,0 +1,168 @@
+---
+// Bulk publish and unpublish (issue #88): a confirmation step and a result page, both server-rendered, so everything
+// works without JavaScript. Each item goes through the SAME functions as the single actions, one at a time; a failure
+// never rolls back the others. The middleware has already checked the session, 2FA state and Origin. Any signed-in
+// editor or administrator may use it, exactly like the single Publish and Unpublish buttons.
+import Admin from '../../layouts/Admin.astro';
+import { getDraft } from '../../lib/drafts';
+import { getStoryBySlug } from '../../lib/story-store';
+import { validSlug } from '../../lib/story-publish';
+import { intParam } from '../../lib/draft-form';
+import { BULK_MAX, bulkReason, publishDraftItem, unpublishStoryItem } from '../../lib/bulk-actions';
+import { readFormLimited } from '../../lib/draft-http';
+import { clientIp } from '../../lib/request';
+import { driveConfig } from '../../lib/db/gdrive.mjs';
+export const prerender = false;
+
+if (Astro.request.method !== 'POST') return Astro.redirect('/admin', 302);
+
+interface Item { key: string; title: string; version: number; missing: boolean; ok?: boolean; reason?: string; slug?: string }
+const user = Astro.locals.user!;
+const form = await readFormLimited(Astro.request, 256 * 1024);
+const fail = (status: number, message: string) => { Astro.response.status = status; return message; };
+let problem = '';
+let action: 'publish' | 'unpublish' = 'publish';
+let step: 'confirm' | 'run' = 'confirm';
+const items: Item[] = [];
+if (!form || form === 'too_big') {
+  problem = fail(form === 'too_big' ? 413 : 400, 'The form could not be read. Go back to the list and try again.');
+} else {
+  action = form.get('action') === 'unpublish' ? 'unpublish' : 'publish';
+  step = form.get('step') === 'run' ? 'run' : 'confirm';
+  const seen = new Set<string>();
+  if (action === 'publish') {
+    for (const raw of form.getAll('id')) {
+      const id = intParam(raw);
+      if (id === null || seen.has(String(id))) continue;
+      seen.add(String(id));
+      const version = intParam(form.get(`v_${id}`)) ?? -1;
+      items.push({ key: String(id), title: '', version, missing: false });
+    }
+  } else {
+    for (const raw of form.getAll('slug')) {
+      if (typeof raw !== 'string' || !validSlug(raw) || seen.has(raw)) continue;
+      seen.add(raw);
+      items.push({ key: raw, title: '', version: 0, missing: false });
+    }
+  }
+  if (items.length === 0) problem = fail(400, `Nothing was selected. Tick at least one ${action === 'publish' ? 'draft' : 'story'} and try again.`);
+  else if (items.length > BULK_MAX) problem = fail(400, `You selected ${items.length} items, but at most ${BULK_MAX} can be ${action === 'publish' ? 'published' : 'unpublished'} at once. Go back and select fewer.`);
+}
+
+const back = action === 'publish' ? '/admin' : '/admin/published';
+const verb = action === 'publish' ? 'Publish' : 'Unpublish';
+const past = action === 'publish' ? 'published' : 'unpublished';
+const ip = clientIp(Astro.request, Astro.clientAddress);
+
+// Titles come from the stored draft or story, never contact details.
+const titleOf = (item: Item) => {
+  if (action === 'publish') return getDraft(Number(item.key))?.title || 'Untitled story';
+  return getStoryBySlug(item.key, { includeUnpublished: true })?.title || item.key;
+};
+
+let done = false;
+if (!problem && step === 'run') {
+  // One at a time, in the order shown. A failure is recorded and the next item still runs.
+  for (const item of items) {
+    item.title = titleOf(item);
+    try {
+      const out = action === 'publish' ? await publishDraftItem(Number(item.key), item.version, user.id, ip) : unpublishStoryItem(item.key, user.id, ip);
+      if (out.ok) { item.ok = true; item.slug = out.slug; if (out.title) item.title = out.title; } else { item.ok = false; item.reason = bulkReason(out.code); }
+    } catch (err) {
+      console.error('[bulk] item failed', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+      item.ok = false; item.reason = 'Something went wrong. Please try again.';
+    }
+  }
+  done = true;
+} else if (!problem) {
+  for (const item of items) {
+    item.title = titleOf(item);
+    item.missing = action === 'publish' ? !getDraft(Number(item.key)) : !getStoryBySlug(item.key, { includeUnpublished: true });
+  }
+}
+
+const okCount = items.filter((i) => i.ok).length;
+const failed = items.filter((i) => i.ok === false);
+// Retry: a failed item is offered again. A draft that failed on a version conflict is offered at its CURRENT version, but only
+// after the person confirms again on the next page, with a link to review it first.
+const retryVersion = (i: Item) => (action === 'publish' && i.reason?.startsWith('Version conflict') ? getDraft(Number(i.key))?.updatedAt ?? i.version : i.version);
+const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
+const title = problem ? 'Bulk action' : done ? `${verb} result` : `Confirm ${action}`;
+---
+<Admin title={title} current={action === 'publish' ? 'drafts' : 'published'} wide>
+  {problem ? (
+    <>
+      <h1 id="bulk-heading" tabindex="-1">Bulk {action} not done</h1>
+      <p class="admin-error" role="alert">{problem}</p>
+      <p><a class="cms-btn secondary" href={back}>Back to the list</a></p>
+    </>
+  ) : done ? (
+    <>
+      <h1 id="bulk-heading" tabindex="-1">{okCount} of {items.length} {past}</h1>
+      <p class={failed.length ? 'admin-error' : 'admin-ok'} role="status">
+        {okCount} {okCount === 1 ? 'item was' : 'items were'} {past}.{failed.length > 0 ? ` ${failed.length} could not be ${past}. They are selected below so you can try again.` : ' Everything went through.'}
+      </p>
+      {failed.length > 0 ? (
+        <form method="post" action="/admin/bulk">
+          <input type="hidden" name="action" value={action} />
+          <ul class="cms-list bulk-results">
+            {items.map((i) => (
+              <li class="cms-item">
+                <div class="bulk-row">
+                  {i.ok ? <span class="bulk-pick" aria-hidden="true"></span> : (
+                    <label class="bulk-pick">
+                      <input type="checkbox" name={action === 'publish' ? 'id' : 'slug'} value={i.key} checked aria-label={`Try again: ${i.title}`} />
+                      {action === 'publish' && <input type="hidden" name={`v_${i.key}`} value={retryVersion(i)} />}
+                    </label>
+                  )}
+                  <div class="bulk-body">
+                    <span class="title">{i.title}</span>
+                    <div class="cms-meta"><span class={`cms-badge ${i.ok ? 'ok' : 'bad'}`}>{i.ok ? (action === 'publish' ? 'Published' : 'Unpublished') : 'Failed'}</span></div>
+                    {i.ok === false && <p class="bulk-reason">{i.reason}</p>}
+                    {i.ok === false && action === 'publish' && getDraft(Number(i.key)) && <a href={`/admin/drafts/${i.key}`}>Open this draft</a>}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <button class="cms-btn" type="submit">Review the {failed.length} selected to try again</button>
+          <a class="cms-btn secondary" href={back}>Back to the list</a>
+        </form>
+      ) : (
+        <>
+          <ul class="cms-list bulk-results">
+            {items.map((i) => (
+              <li class="cms-item"><span class="title">{i.title}</span><div class="cms-meta"><span class="cms-badge ok">{action === 'publish' ? 'Published' : 'Unpublished'}</span></div></li>
+            ))}
+          </ul>
+          <a class="cms-btn secondary" href={back}>Back to the list</a>
+        </>
+      )}
+    </>
+  ) : (
+    <>
+      <h1 id="bulk-heading" tabindex="-1">{verb} {items.length} {items.length === 1 ? (action === 'publish' ? 'draft' : 'story') : (action === 'publish' ? 'drafts' : 'stories')}?</h1>
+      {action === 'publish' && backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
+      <p class="admin-note">{action === 'publish' ? 'These stories go live on the public site at once, one after another.' : 'These stories are hidden from the public site at once. Their drafts return to In review.'} Nothing happens until you confirm.</p>
+      <ol class="bulk-titles">
+        {items.map((i) => <li>{i.title}{i.missing && <> <span class="cms-badge bad">No longer exists</span></>}</li>)}
+      </ol>
+      <form method="post" action="/admin/bulk">
+        <input type="hidden" name="action" value={action} />
+        <input type="hidden" name="step" value="run" />
+        {items.map((i) => (
+          <>
+            <input type="hidden" name={action === 'publish' ? 'id' : 'slug'} value={i.key} />
+            {action === 'publish' && <input type="hidden" name={`v_${i.key}`} value={i.version} />}
+          </>
+        ))}
+        <button class={`cms-btn${action === 'unpublish' ? ' danger' : ''}`} type="submit">Yes, {action} {items.length === 1 ? 'this' : `these ${items.length}`}</button>
+        <a class="cms-btn secondary" href={back}>Cancel</a>
+      </form>
+    </>
+  )}
+</Admin>
+<script is:inline>
+  var h = document.getElementById('bulk-heading');
+  if (h) h.focus();
+</script>

@@ -131,6 +131,21 @@ const nav = [
   .cms-home li { display: grid; gap: 2px; overflow-wrap: anywhere; }
   @media (min-width: 760px) { .cms-home { grid-template-columns: 1fr 1fr; } }
 
+  /* Bulk publish / unpublish (issue #88) */
+  .bulk-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 12px; margin: 0 0 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+  .bulk-bar p { margin: 0; }
+  .bulk-all { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 600; cursor: pointer; }
+  .bulk-all input, .bulk-pick input { width: 22px; height: 22px; margin: 0; flex: none; }
+  .bulk-count { font-weight: 700; }
+  .bulk-help { flex: 1 1 100%; font-size: .85rem; color: var(--ink-2); }
+  .bulk-row { display: flex; align-items: flex-start; gap: 4px; }
+  .bulk-pick { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 44px; min-height: 44px; cursor: pointer; }
+  .bulk-body { display: grid; gap: 6px; min-width: 0; flex: 1; }
+  .bulk-results { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 10px; }
+  .cms-btn + .cms-btn { margin-left: 8px; }
+  .bulk-reason { margin: 0; color: #8a1f11; font-weight: 600; }
+  .bulk-titles { margin: 0 0 16px; padding-left: 1.2em; display: grid; gap: 6px; overflow-wrap: anywhere; }
+
   .ed { display: grid; gap: 20px; }
   .ed-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-width: 0; }
   .ed-card h2 { margin: 0 0 12px; font-size: 1.1rem; }
