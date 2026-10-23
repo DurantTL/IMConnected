@@ -5,6 +5,7 @@ const { events } = Astro.props as { events: PublicStory[] };
 ---
 {events.length > 0 && <section class="event-spotlight" aria-labelledby="spotlight-heading" data-event-spotlight>
   <div class="spotlight-heading"><div><p class="eyebrow">Gather. Connect. Belong.</p><h2 id="spotlight-heading">Coming together.</h2></div><div class="spotlight-controls"><a href="/announcements/">All announcements &amp; events <span aria-hidden="true">↗</span></a><div data-slider-controls hidden><button type="button" class="icon-btn" data-slide-step="-1" aria-label="Previous event">←</button><button type="button" class="icon-btn" data-slide-step="1" aria-label="Next event">→</button></div></div></div>
+  <div class="spotlight-playback" data-slider-playback hidden><button type="button" data-slide-play>Pause auto-advance</button><span data-rotation-state></span></div>
   <ul class="spotlight-track" tabindex="0" aria-label="Upcoming events. Scroll horizontally to explore." data-event-track>{events.map((event, i) => {
     const d = event.data, a = d.announcement!;
     return <li class="spotlight-slide" data-event-slide>
@@ -13,8 +14,7 @@ const { events } = Astro.props as { events: PublicStory[] };
     </li>;
   })}</ul>
   <div class="spotlight-navigation" data-slider-navigation hidden>
-    <div class="spotlight-choices" aria-label="Choose an event">{events.map((event, i) => <button type="button" data-slide-to={i} aria-label={`Show event ${i + 1}: ${event.data.title}`}><span class="sr-only">Event </span>{String(i + 1).padStart(2, '0')}</button>)}</div>
-    <div class="spotlight-playback"><button type="button" data-slide-play aria-pressed="true">Pause auto-advance</button><span data-rotation-state></span></div>
+    <div class="spotlight-choices" role="group" aria-label="Choose an event">{events.map((event, i) => <button type="button" data-slide-to={i} aria-label={`Event ${String(i + 1).padStart(2, '0')}: ${event.data.title}`}>{String(i + 1).padStart(2, '0')}</button>)}</div>
     <p class="spotlight-status" data-event-status role="status" aria-live="off" hidden></p>
   </div>
 </section>}

@@ -29,8 +29,8 @@ The full-width event stage gives the flyer and invitation room above the news. A
 
 Only published upcoming Events appear, at most six, ordered by the conference's America/Chicago calendar day. The lead flyer stays uncropped. Announcements retain their own board and editor queue.
 
-- Two or more events advance every seven seconds and wrap to the first event. Manual Previous/Next, numbered choices, keyboard arrows and native scrolling remain available.
-- Pause persists until Resume is explicitly selected. Touching the track also pauses rotation. Hover, focus inside the spotlight, an offscreen spotlight and hidden tabs suspend automatic movement; leaving those conditions can resume it unless the reader paused.
+- Two or more events advance every seven seconds and wrap to the first event. Manual Previous/Next (which wrap, so they are never disabled), numbered choices, keyboard arrows and native scrolling remain available.
+- The Pause / Resume button comes before the event links in the Tab order; its label changes between "Pause auto-advance" and "Resume auto-advance". Pause persists until Resume is explicitly selected. A finger on the track pauses rotation only while it is down; a swipe counts as the reader taking over and stops automatic advance until Resume is pressed. Hover, focus inside the spotlight, an offscreen spotlight and hidden tabs suspend automatic movement; leaving those conditions can resume it unless the reader paused.
 - Reduced motion disables automatic movement and makes manual jumps instant. Turning reduced motion off does not restart a rotation the preference stopped.
 - Automatic changes never move keyboard focus or make repeated live-region announcements. Manual/paused position feedback remains available. Returning through the browser's page lifecycle reschedules rotation only when eligible.
 - With one event, the event remains readable without automatic controls. With no upcoming events, the stage is absent. Without JavaScript, all event cards and links remain readable through native scrolling.

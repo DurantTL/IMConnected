@@ -100,7 +100,7 @@
 .sb-pane-heading { display:flex; align-items:center; gap:9px; margin-bottom:16px; }
 .sb-pane-heading h3,.sb-pane-heading strong { font:750 .85rem var(--sans); margin:0; }
 .sb-pane-heading p { font-size:.68rem; color:var(--ink-2); margin:3px 0 0; }
-.sb-step { width:28px; height:28px; flex-shrink:0; border:1px solid var(--line); border-radius:8px; display:grid; place-items:center; color:var(--brand); background:var(--surface); font-size:.65rem; font-weight:750; }
+.sb-step { width:28px; height:28px; flex-shrink:0; border:1px solid var(--line); border-radius:8px; display:grid; place-items:center; color:var(--brand-text); background:var(--surface); font-size:.65rem; font-weight:750; }
 .sb-count { margin-left:auto; font-size:.7rem; color:var(--ink-2); }
 .sb-drag-help { font-size:.7rem; color:var(--ink-2); line-height:1.5; margin:0 0 14px; }
 .editor-studio .sb-outline ol { gap:7px; }
@@ -185,7 +185,6 @@
  .editor-studio .ed-photo:has(.sb-photo-preview) { padding:14px; }
  .studio-review-summary { grid-template-columns:minmax(0,1fr); }
 }
-@media(prefers-color-scheme:dark) { .editor-studio .ed-preview { background:#18292d; } .studio-review-action { background:var(--brand); color:var(--brand-ink); } .sb-private { background:#18382e; color:#a9d9ba; } }
 
 /* A composed canvas between the module library and the selected module inspector. */
 .editor-studio .sb-modules { display:block; min-height:0; }
@@ -196,7 +195,7 @@
 .sb-library-search { display:grid; gap:6px; font-size:.74rem; font-weight:650; }
 .sb-library-search input { box-sizing:border-box; width:100%; min-width:0; min-height:42px; font:inherit; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); }
 .sb-library-feedback { display:flex; align-items:center; justify-content:space-between; gap:6px; margin:8px 0; min-height:28px; font-size:.68rem; color:var(--ink-2); }
-.sb-library-feedback button { min-height:32px; background:transparent; border:0; color:var(--brand); font:inherit; text-decoration:underline; cursor:pointer; }
+.sb-library-feedback button { min-height:32px; background:transparent; border:0; color:var(--brand-text); font:inherit; text-decoration:underline; cursor:pointer; }
 .editor-studio .sb-library-heading { margin:18px 0 8px; }
 .sb-starters { display:grid; gap:6px; }
 .sb-starters button { min-width:0; min-height:52px; padding:10px; border:1px solid var(--line); border-radius:8px; font:650 .74rem var(--sans); text-align:left; background:var(--surface); color:var(--ink); cursor:pointer; }

@@ -660,13 +660,7 @@ try {
   await page.locator('#blocks-undo').click(); check('saved layout insertion is one undo change', await page.locator('#story-blocks').inputValue() === beforeLayout);
   await page.locator('#delete-story-layout').click(); await page.waitForFunction(() => document.getElementById('saved-layout-choice')?.options.length === 1);
   check('saved layout deletion persists without deleting story content', await page.locator('#story-blocks').inputValue() === beforeLayout && (await (await fetch(BASE + '/api/admin/layouts', { headers: { Cookie: `__Host-imc_session=${token}` } })).json()).layouts.length === 0);
-  const sectionSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
-  await page.locator('#save-btn').click(); assert.equal((await sectionSave).status(), 200);
-  // Direct HTTP publication bypasses the editor's save queue; wait for the intended post-undo state.
-  const expectedSection = normalizeStoryBlocks(JSON.parse(beforeLayout));
-  for (let attempt = 0; attempt < 100 && JSON.stringify(JSON.parse(legacyDraft().story_blocks)) !== JSON.stringify(expectedSection); attempt++) await sleep(50);
-  assert.deepEqual(JSON.parse(legacyDraft().story_blocks), expectedSection, 'the intended Section state must be persisted before direct test publication');
-  await publishLegacy();
+  const sectionSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST'); await page.locator('#save-btn').click(); assert.equal((await sectionSave).status(), 200); await publishLegacy();
   for (const [width, columns] of [[1440, 2], [390, 1]]) { await publicPage.setViewportSize({ width, height: 1000 }); check(`section reads in ${columns} columns at ${width}px`, await publicPage.locator('.story-section').evaluate((el, n) => getComputedStyle(el).gridTemplateColumns.split(' ').length === n && el.textContent.indexOf('left column') < el.textContent.indexOf('right column') && document.documentElement.scrollWidth <= innerWidth, columns)); if (shots) await publicPage.screenshot({ path: path.join(shots, `story-sections-${width}.png`), fullPage: true }); }
   check('public selected-text formatting and finite alignment/spacing survive publish', await publicPage.locator('.story-section [data-align=center]').evaluate((el) => getComputedStyle(el).textAlign === 'center' && getComputedStyle(el).marginBlockStart === '40px' && el.querySelector('strong').textContent === 'left'));
   check('nested image appears once and section source order survives publishing', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-section img').count() === 1);

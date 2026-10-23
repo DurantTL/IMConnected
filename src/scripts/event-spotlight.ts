@@ -12,15 +12,17 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   if (slides.length < 2) continue;
   controls.hidden = false;
   spotlight.querySelector<HTMLElement>('[data-slider-navigation]')!.hidden = false;
+  spotlight.querySelector<HTMLElement>('[data-slider-playback]')!.hidden = false;
+  spotlight.dataset.enhanced = 'true'; // the native scrollbar stays visible until the arrows and numbers exist
   status.hidden = false;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  let requested = !reduced.matches, hovered = false, focused = false, visible = false;
+  let requested = !reduced.matches, hovered = false, focused = false, visible = false, touching = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const interval = 7000;
   const active = () => slides.reduce((best, slide, index) =>
     Math.abs(slide.getBoundingClientRect().left - track.getBoundingClientRect().left) <
     Math.abs(slides[best].getBoundingClientRect().left - track.getBoundingClientRect().left) ? index : best, 0);
-  const canRotate = () => requested && !reduced.matches && !hovered && !focused && visible && !document.hidden;
+  const canRotate = () => requested && !reduced.matches && !hovered && !focused && !touching && visible && !document.hidden;
   const clear = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined; };
   const schedule = () => {
     clear();
@@ -29,14 +31,11 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
     status.setAttribute('aria-live', rotating ? 'off' : 'polite');
     toggle.disabled = reduced.matches;
     toggle.textContent = reduced.matches ? 'Automatic advance off' : requested ? 'Pause auto-advance' : 'Resume auto-advance';
-    toggle.setAttribute('aria-pressed', String(requested && !reduced.matches));
     rotation.textContent = reduced.matches ? 'Reduced motion: use the arrows to explore.' : !requested ? 'Automatic advance paused.' : rotating ? 'Next event in 7 seconds.' : 'Paused while you explore.';
     if (rotating) timer = setTimeout(() => { go((active() + 1) % slides.length); schedule(); }, interval);
   };
   const update = () => {
     const index = active();
-    previous.disabled = index === 0;
-    next.disabled = index === slides.length - 1;
     const text = `Event ${index + 1} of ${slides.length}`;
     if (status.textContent !== text) status.textContent = text;
     choices.forEach((choice, at) => {
@@ -45,7 +44,8 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
     });
   };
   const go = (index: number) => track.scrollTo({ left: slides[index].offsetLeft - slides[0].offsetLeft, behavior: reduced.matches ? 'instant' : 'smooth' });
-  const move = (delta: number) => { go(Math.max(0, Math.min(slides.length - 1, active() + delta))); schedule(); };
+  // Previous and next wrap, like automatic advance, so neither button ever becomes disabled and drops keyboard focus.
+  const move = (delta: number) => { go((active() + delta + slides.length) % slides.length); schedule(); };
   previous.addEventListener('click', () => move(-1));
   next.addEventListener('click', () => move(1));
   choices.forEach((choice, index) => choice.addEventListener('click', () => { go(index); schedule(); }));
@@ -57,8 +57,12 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   spotlight.addEventListener('pointerenter', (event) => { if (event.pointerType === 'mouse' || event.pointerType === 'pen') { hovered = true; schedule(); } });
   spotlight.addEventListener('pointerleave', () => { hovered = false; schedule(); });
   spotlight.addEventListener('focusin', () => { focused = true; schedule(); });
-  spotlight.addEventListener('focusout', (event) => { focused = event.relatedTarget instanceof Node && spotlight.contains(event.relatedTarget); schedule(); });
-  track.addEventListener('pointerdown', () => { requested = false; schedule(); });
+  spotlight.addEventListener('focusout', (event) => { focused = touching || (event.relatedTarget instanceof Node && spotlight.contains(event.relatedTarget)); schedule(); });
+  // A touch pauses rotation only while the finger is down. A swipe (the browser takes over the gesture and cancels the
+  // pointer) counts as the reader choosing events themselves, so automatic advance stops until Resume is pressed.
+  track.addEventListener('pointerdown', () => { touching = true; schedule(); });
+  track.addEventListener('pointerup', () => { touching = false; schedule(); });
+  track.addEventListener('pointercancel', () => { touching = false; requested = false; schedule(); });
   track.addEventListener('scroll', update, { passive: true });
   new ResizeObserver(update).observe(track);
   document.addEventListener('visibilitychange', schedule);

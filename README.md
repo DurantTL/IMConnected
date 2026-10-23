@@ -52,7 +52,7 @@ Tests: `SCRATCH=/tmp/imc-photo-layouts node scripts/test-photo-layouts.mjs` afte
 
 Stories can belong to multiple sections: choose a primary Section/Category and check Additional sections in Story settings. A News → Camp story can also appear in Youth & Pathfinders without duplicating its article. See [multiple sections and API contracts](docs/MULTIPLE-SECTIONS.md).
 
-The [publication redesign guide](docs/PUBLICATION-REDESIGN.md) shows the IMConnected wordmark, newsletter colors, automatically advancing event spotlight, article layouts and current synthetic screenshots. Stories can appear in [multiple sections](docs/MULTIPLE-SECTIONS.md), such as News / Camp and Youth.
+The [publication redesign guide](docs/PUBLICATION-REDESIGN.md) shows the IMConnected wordmark, newsletter colors, automatically advancing event spotlight, article layouts and current synthetic screenshots.
 
 Image uploads and flyers accept JPEG, PNG, WebP and AVIF. See [image formats and agent/Studio compatibility](docs/IMAGE-FORMATS.md) for request examples, original-byte handling and email considerations.
 
