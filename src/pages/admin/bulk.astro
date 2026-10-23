@@ -8,29 +8,40 @@ import { getDraft } from '../../lib/drafts';
 import { getStoryBySlug } from '../../lib/story-store';
 import { validSlug } from '../../lib/story-publish';
 import { intParam } from '../../lib/draft-form';
-import { BULK_MAX, bulkReason, publishDraftItem, unpublishStoryItem } from '../../lib/bulk-actions';
+import { BULK_MAX, bulkReason, publishDraftItem, rejectDraftItem, unpublishStoryItem } from '../../lib/bulk-actions';
+import { EDIT_FORM_KEYS, describeChanges, editDraftItem, editStoryItem, parseEditChanges, type EditChanges } from '../../lib/bulk-edit';
+import { SECTIONS } from '../../lib/site';
 import { readFormLimited } from '../../lib/draft-http';
 import { clientIp } from '../../lib/request';
 import { driveConfig } from '../../lib/db/gdrive.mjs';
 export const prerender = false;
 
+const draftBased = (a: string) => a === 'publish' || a === 'reject' || a === 'edit';
+const isEdit = (a: string) => a === 'edit' || a === 'editstory';
+
 if (Astro.request.method !== 'POST') return Astro.redirect('/admin', 302);
 
-interface Item { key: string; title: string; version: number; missing: boolean; ok?: boolean; code?: string; reason?: string; slug?: string }
+interface Item { key: string; title: string; version: number; missing: boolean; ok?: boolean; code?: string; reason?: string; slug?: string; note?: string }
+type Action = 'publish' | 'unpublish' | 'reject' | 'edit' | 'editstory';
 const user = Astro.locals.user!;
 const form = await readFormLimited(Astro.request, 256 * 1024);
 const fail = (status: number, message: string) => { Astro.response.status = status; return message; };
 let problem = '';
-let action: 'publish' | 'unpublish' = 'publish';
-let step: 'confirm' | 'run' = 'confirm';
+let action: Action = 'publish';
+let step: 'fields' | 'confirm' | 'run' = 'confirm';
+let changes: EditChanges = {};
+let fieldsError = '';
+let note = '';
 const items: Item[] = [];
 if (!form || form === 'too_big') {
   problem = fail(form === 'too_big' ? 413 : 400, 'The form could not be read. Go back to the list and try again.');
 } else {
-  action = form.get('action') === 'unpublish' ? 'unpublish' : 'publish';
-  step = form.get('step') === 'run' ? 'run' : 'confirm';
+  const asked = form.get('action');
+  action = asked === 'unpublish' || asked === 'reject' || asked === 'edit' || asked === 'editstory' ? asked : 'publish';
+  step = form.get('step') === 'run' ? 'run' : form.get('step') === 'confirm' ? 'confirm' : isEdit(action) ? 'fields' : 'confirm';
+  note = String(form.get('note') ?? '').slice(0, 500).trim();
   const seen = new Set<string>();
-  if (action === 'publish') {
+  if (draftBased(action)) {
     for (const raw of form.getAll('id')) {
       const id = intParam(raw);
       if (id === null || seen.has(String(id))) continue;
@@ -45,18 +56,26 @@ if (!form || form === 'too_big') {
       items.push({ key: raw, title: '', version: 0, missing: false });
     }
   }
-  if (items.length === 0) problem = fail(400, `Nothing was selected. Tick at least one ${action === 'publish' ? 'draft' : 'story'} and try again.`);
-  else if (items.length > BULK_MAX) problem = fail(400, `You selected ${items.length} items, but at most ${BULK_MAX} can be ${action === 'publish' ? 'published' : 'unpublished'} at once. Go back and select fewer.`);
+  if (items.length === 0) problem = fail(400, `Nothing was selected. Tick at least one ${draftBased(action) ? 'draft' : 'story'} and try again.`);
+  else if (items.length > BULK_MAX) problem = fail(400, `You selected ${items.length} items, but at most ${BULK_MAX} can be ${action === 'unpublish' ? 'unpublished' : action === 'reject' ? 'rejected' : action === 'publish' ? 'published' : 'edited'} at once. Go back and select fewer.`);
+  if (!problem && isEdit(action) && step !== 'fields') {
+    const parsed = parseEditChanges(form);
+    changes = parsed.changes;
+    if (parsed.error) { step = 'fields'; fieldsError = parsed.error; Astro.response.status = 400; }
+  }
 }
 
-const back = action === 'publish' ? '/admin' : '/admin/published';
-const verb = action === 'publish' ? 'Publish' : 'Unpublish';
-const past = action === 'publish' ? 'published' : 'unpublished';
+const back = draftBased(action) ? '/admin' : '/admin/published';
+const verb = { publish: 'Publish', unpublish: 'Unpublish', reject: 'Reject', edit: 'Edit', editstory: 'Edit' }[action];
+const past = { publish: 'published', unpublish: 'unpublished', reject: 'rejected', edit: 'updated', editstory: 'updated' }[action];
+const badgeOk = { publish: 'Published', unpublish: 'Unpublished', reject: 'Rejected', edit: 'Updated', editstory: 'Updated' }[action];
+const nounOne = draftBased(action) ? 'draft' : 'story';
+const nounMany = draftBased(action) ? 'drafts' : 'stories';
 const ip = clientIp(Astro.request, Astro.clientAddress);
 
 // Titles come from the stored draft or story, never contact details.
 const titleOf = (item: Item) => {
-  if (action === 'publish') return getDraft(Number(item.key))?.title || 'Untitled story';
+  if (draftBased(action)) return getDraft(Number(item.key))?.title || 'Untitled story';
   return getStoryBySlug(item.key, { includeUnpublished: true })?.title || item.key;
 };
 
@@ -66,6 +85,16 @@ if (!problem && step === 'run') {
   for (const item of items) {
     item.title = titleOf(item);
     try {
+      if (action === 'reject') {
+        const r = rejectDraftItem(Number(item.key), item.version, user.id, note, ip);
+        if (r.ok) item.ok = true; else { item.ok = false; item.code = r.code; item.reason = bulkReason(r.code, 'rejected'); }
+        continue;
+      }
+      if (isEdit(action)) {
+        const r = action === 'edit' ? editDraftItem(Number(item.key), item.version, changes, user.id, ip) : editStoryItem(item.key, changes, user.id, ip);
+        if (r.ok) { item.ok = true; item.slug = r.slug; item.title = r.title; item.note = r.changed.length ? `Changed: ${r.changed.join(', ')}` : 'Already matched, nothing needed changing.'; } else { item.ok = false; item.code = r.code; item.reason = r.reason; }
+        continue;
+      }
       const out = action === 'publish' ? await publishDraftItem(Number(item.key), item.version, user.id, ip) : unpublishStoryItem(item.key, user.id, ip, true);
       if (out.ok) { item.ok = true; item.slug = out.slug; if (out.title) item.title = out.title; } else { item.ok = false; item.code = out.code; item.reason = bulkReason(out.code); }
     } catch (err) {
@@ -77,7 +106,7 @@ if (!problem && step === 'run') {
 } else if (!problem) {
   for (const item of items) {
     item.title = titleOf(item);
-    item.missing = action === 'publish' ? !getDraft(Number(item.key)) : !getStoryBySlug(item.key, { includeUnpublished: true });
+    item.missing = draftBased(action) ? !getDraft(Number(item.key)) : !getStoryBySlug(item.key, { includeUnpublished: true });
   }
 }
 
@@ -88,12 +117,15 @@ const failed = items.filter((i) => i.ok === false);
 const canRetry = (i: Item) => i.ok === false && i.code !== 'conflict';
 const retryable = items.filter(canRetry);
 const backupsOff = Astro.locals.user?.role === 'admin' && !driveConfig().configured;
-const title = problem ? 'Bulk action' : done ? `${verb} result` : `Confirm ${action}`;
+const title = problem ? 'Bulk action' : done ? `${verb} result` : step === 'fields' ? 'Choose fields to edit' : `Confirm ${action === 'editstory' ? 'edit' : action}`;
+const carried = (keys: string[]) => (form && form !== 'too_big' ? keys.flatMap((k) => form.getAll(k).map((v) => ({ k, v: String(v) }))) : []);
+const areaOptions = SECTIONS.flatMap((s) => (s.areas ?? []).map((a) => ({ key: a.key, label: `${s.label} / ${a.label}` })));
+const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ value: `${s.key}|${a.key}`, label: `${s.label} / ${a.label}` })) : [{ value: `${s.key}|`, label: s.label }]));
 ---
-<Admin title={title} current={action === 'publish' ? 'drafts' : 'published'} wide>
+<Admin title={title} current={draftBased(action) ? 'drafts' : 'published'} wide>
   {problem ? (
     <>
-      <h1 id="bulk-heading" tabindex="-1">Bulk {action} not done</h1>
+      <h1 id="bulk-heading" tabindex="-1">Bulk {action === 'editstory' ? 'edit' : action} not done</h1>
       <p class="admin-error" role="alert">{problem}</p>
       <p><a class="cms-btn secondary" href={back}>Back to the list</a></p>
     </>
@@ -106,22 +138,26 @@ const title = problem ? 'Bulk action' : done ? `${verb} result` : `Confirm ${act
       {failed.length > 0 ? (
         <form method="post" action="/admin/bulk">
           <input type="hidden" name="action" value={action} />
+          <input type="hidden" name="step" value="confirm" />
+          {carried(EDIT_FORM_KEYS).map((c) => <input type="hidden" name={c.k} value={c.v} />)}
+          {action === 'reject' && note && <input type="hidden" name="note" value={note} />}
           <ul class="cms-list bulk-results">
             {items.map((i) => (
               <li class="cms-item">
                 <div class="bulk-row">
                   {!canRetry(i) ? <span class="bulk-pick" aria-hidden="true"></span> : (
                     <label class="bulk-pick">
-                      <input type="checkbox" name={action === 'publish' ? 'id' : 'slug'} value={i.key} checked aria-label={`Try again: ${i.title}`} />
-                      {action === 'publish' && <input type="hidden" name={`v_${i.key}`} value={i.version} />}
+                      <input type="checkbox" name={draftBased(action) ? 'id' : 'slug'} value={i.key} checked aria-label={`Try again: ${i.title}`} />
+                      {draftBased(action) && <input type="hidden" name={`v_${i.key}`} value={i.version} />}
                     </label>
                   )}
                   <div class="bulk-body">
                     <span class="title">{i.title}</span>
-                    <div class="cms-meta"><span class={`cms-badge ${i.ok ? 'ok' : 'bad'}`}>{i.ok ? (action === 'publish' ? 'Published' : 'Unpublished') : 'Failed'}</span></div>
+                    <div class="cms-meta"><span class={`cms-badge ${i.ok ? 'ok' : 'bad'}`}>{i.ok ? badgeOk : 'Failed'}</span></div>
+                    {i.ok && i.note && <p class="admin-note">{i.note}</p>}
                     {i.ok === false && <p class="bulk-reason">{i.reason}</p>}
-                    {i.code === 'conflict' && <p class="admin-note">This draft changed since you loaded the list. Open it, review the changes, then publish it from the editor.</p>}
-                    {i.ok === false && action === 'publish' && getDraft(Number(i.key)) && <a href={`/admin/drafts/${i.key}`}>Open this draft</a>}
+                    {i.code === 'conflict' && <p class="admin-note">This draft changed since you loaded the list. Open it, review the changes, then {action === 'publish' ? 'publish it from the editor' : 'redo the change'}.</p>}
+                    {i.ok === false && draftBased(action) && getDraft(Number(i.key)) && <a href={`/admin/drafts/${i.key}`}>Open this draft</a>}
                   </div>
                 </div>
               </li>
@@ -134,31 +170,113 @@ const title = problem ? 'Bulk action' : done ? `${verb} result` : `Confirm ${act
         <>
           <ul class="cms-list bulk-results">
             {items.map((i) => (
-              <li class="cms-item"><span class="title">{i.title}</span><div class="cms-meta"><span class="cms-badge ok">{action === 'publish' ? 'Published' : 'Unpublished'}</span></div></li>
+              <li class="cms-item"><span class="title">{i.title}</span><div class="cms-meta"><span class="cms-badge ok">{badgeOk}</span></div>{i.note && <p class="admin-note">{i.note}</p>}</li>
             ))}
           </ul>
           <a class="cms-btn secondary" href={back}>Back to the list</a>
         </>
       )}
     </>
+  ) : step === 'fields' ? (
+    <>
+      <h1 id="bulk-heading" tabindex="-1">Edit fields on {items.length} {items.length === 1 ? nounOne : nounMany}</h1>
+      {fieldsError && <p class="admin-error" role="alert">{fieldsError}</p>}
+      <p class="admin-note">Tick only the fields you want to change. Every field you leave unticked stays exactly as it is on each {nounOne}. You will see what will change before anything is saved.</p>
+      <ol class="bulk-titles">
+        {items.map((i) => <li>{i.title}{i.missing && <> <span class="cms-badge bad">No longer exists</span></>}</li>)}
+      </ol>
+      <form method="post" action="/admin/bulk">
+        <input type="hidden" name="action" value={action} />
+        <input type="hidden" name="step" value="confirm" />
+        {items.map((i) => (
+          <>
+            <input type="hidden" name={draftBased(action) ? 'id' : 'slug'} value={i.key} />
+            {draftBased(action) && <input type="hidden" name={`v_${i.key}`} value={i.version} />}
+          </>
+        ))}
+        <div class="bulk-fields">
+          <fieldset class="bulk-field">
+            <legend>Section and category</legend>
+            <label><input type="checkbox" name="tick_section" value="1" checked={carried(['tick_section']).length > 0} /> Change the primary section and category</label>
+            <label for="e_section">New section and category</label>
+            <select id="e_section" name="e_section">
+              {pairOptions.map((o) => <option value={o.value} selected={carried(['e_section']).some((c) => c.v === o.value)}>{o.label}</option>)}
+            </select>
+            <p class="admin-note">The old primary section is not kept as an additional section. A column name is cleared when a story leaves Columns.</p>
+          </fieldset>
+          <fieldset class="bulk-field">
+            <legend>Category only</legend>
+            <label><input type="checkbox" name="tick_area" value="1" checked={carried(['tick_area']).length > 0} /> Change the category, keep each section</label>
+            <label for="e_area">Category</label>
+            <select id="e_area" name="e_area">
+              {areaOptions.map((o) => <option value={o.key} selected={carried(['e_area']).some((c) => c.v === o.key)}>{o.label}</option>)}
+            </select>
+            <p class="admin-note">An item whose section does not have this category is skipped, with a reason. Use this on its own, not together with the section above.</p>
+          </fieldset>
+          <fieldset class="bulk-field">
+            <legend>Additional sections</legend>
+            <label><input type="checkbox" name="tick_add" value="1" checked={carried(['tick_add']).length > 0} /> Add these sections</label>
+            <fieldset class="bulk-field bulk-sub"><legend>Sections to add</legend>
+              {SECTIONS.map((sec) => <label><input type="checkbox" name="e_add" value={sec.key} checked={carried(['e_add']).some((c) => c.v === sec.key)} /> {sec.label}</label>)}
+            </fieldset>
+            <label><input type="checkbox" name="tick_remove" value="1" checked={carried(['tick_remove']).length > 0} /> Remove these sections</label>
+            <fieldset class="bulk-field bulk-sub"><legend>Sections to remove</legend>
+              {SECTIONS.map((sec) => <label><input type="checkbox" name="e_remove" value={sec.key} checked={carried(['e_remove']).some((c) => c.v === sec.key)} /> {sec.label}</label>)}
+            </fieldset>
+            <p class="admin-note">A story's own primary section is never listed as an additional one.</p>
+          </fieldset>
+          <fieldset class="bulk-field">
+            <legend>Featured</legend>
+            <label><input type="checkbox" name="tick_featured" value="1" checked={carried(['tick_featured']).length > 0} /> Change featured</label>
+            <fieldset class="bulk-field bulk-sub"><legend>New featured setting</legend>
+              <label><input type="radio" name="e_featured" value="on" checked={!carried(['e_featured']).some((c) => c.v === 'off')} /> Featured on</label>
+              <label><input type="radio" name="e_featured" value="off" checked={carried(['e_featured']).some((c) => c.v === 'off')} /> Featured off</label>
+            </fieldset>
+          </fieldset>
+          <fieldset class="bulk-field">
+            <legend>Date</legend>
+            <label><input type="checkbox" name="tick_date" value="1" checked={carried(['tick_date']).length > 0} /> Change the date</label>
+            <label for="e_date">New date</label>
+            <input id="e_date" type="date" name="e_date" value={carried(['e_date'])[0]?.v ?? ''} />
+          </fieldset>
+        </div>
+        <button class="cms-btn" type="submit">Review the changes</button>
+        <a class="cms-btn secondary" href={back}>Cancel</a>
+      </form>
+    </>
   ) : (
     <>
-      <h1 id="bulk-heading" tabindex="-1">{verb} {items.length} {items.length === 1 ? (action === 'publish' ? 'draft' : 'story') : (action === 'publish' ? 'drafts' : 'stories')}?</h1>
+      <h1 id="bulk-heading" tabindex="-1">{verb} {items.length} {items.length === 1 ? nounOne : nounMany}?</h1>
+      {isEdit(action) && (
+        <>
+          <p class="admin-note">These fields will change on every {nounOne} below, and nothing else will:</p>
+          <ul class="bulk-changes" id="bulk-changes">{describeChanges(changes).map((line) => <li>{line}</li>)}</ul>
+          <p class="admin-note">{action === 'edit' ? 'Drafts are saved the same way as in the editor: a New draft moves to In review, so the AI agent can no longer update it, and each draft keeps a revision of what it was before.' : 'These changes show on the public site at once. A story that has an open draft is skipped, so edit it in that draft.'} Nothing happens until you confirm.</p>
+        </>
+      )}
       {action === 'publish' && backupsOff && <p class="admin-error" role="alert" id="backups-notice"><strong>Backups to Google Drive are not set up.</strong> Published stories now live only in this server's database, so there is no other copy. You can still publish. <a href="/admin/backups">See how to set up backups</a>.</p>}
-      <p class="admin-note">{action === 'publish' ? 'These stories go live on the public site at once, one after another.' : 'These stories are hidden from the public site at once. Their drafts return to In review.'} Nothing happens until you confirm.</p>
+      {!isEdit(action) && <p class="admin-note">{action === 'publish' ? 'These stories go live on the public site at once, one after another.' : action === 'reject' ? 'These drafts are rejected one after another. Their photos are kept for 30 days and a rejected draft can be restored.' : 'These stories are hidden from the public site at once. Their drafts return to In review.'} Nothing happens until you confirm.</p>}
       <ol class="bulk-titles">
         {items.map((i) => <li>{i.title}{i.missing && <> <span class="cms-badge bad">No longer exists</span></>}</li>)}
       </ol>
       <form method="post" action="/admin/bulk">
         <input type="hidden" name="action" value={action} />
         <input type="hidden" name="step" value="run" />
+        {carried(EDIT_FORM_KEYS).map((c) => <input type="hidden" name={c.k} value={c.v} />)}
+        {action === 'reject' && (
+          <p>
+            <label for="bulk-note"><strong>Reason (optional)</strong></label><br />
+            <textarea id="bulk-note" name="note" rows="3" maxlength="500" style="width:100%;max-width:40rem">{note}</textarea><br />
+            <span class="admin-note">An internal note kept on each draft, up to 500 characters. It is never shown to the submitter or the public.</span>
+          </p>
+        )}
         {items.map((i) => (
           <>
-            <input type="hidden" name={action === 'publish' ? 'id' : 'slug'} value={i.key} />
-            {action === 'publish' && <input type="hidden" name={`v_${i.key}`} value={i.version} />}
+            <input type="hidden" name={draftBased(action) ? 'id' : 'slug'} value={i.key} />
+            {draftBased(action) && <input type="hidden" name={`v_${i.key}`} value={i.version} />}
           </>
         ))}
-        <button class={`cms-btn${action === 'unpublish' ? ' danger' : ''}`} type="submit">Yes, {action} {items.length === 1 ? 'this' : `these ${items.length}`}</button>
+        <button class={`cms-btn${action === 'unpublish' || action === 'reject' ? ' danger' : ''}`} type="submit">Yes, {action === 'editstory' ? 'edit' : action} {items.length === 1 ? 'this' : `these ${items.length}`}</button>
         <a class="cms-btn secondary" href={back}>Cancel</a>
       </form>
     </>

@@ -590,6 +590,18 @@ export function markUnpublished(slug: string, userId: number): void {
     .run(now, now, userId, slug);
 }
 
+/**
+ * A person's bulk edit of a live story's metadata (issue #89): keep the linked, closed (published) draft in step, so a later
+ * Unpublish returns it to review with the edited section, category, featured flag and date instead of stale ones. Call inside
+ * the transaction that wrote the story. Open drafts are never touched (the bulk edit refuses those stories).
+ */
+export function syncPublishedDraftFields(slug: string, draftId: number | undefined, f: { section: string; area: string; column: string; additionalSections: string[]; featured: boolean; date: string }): void {
+  const now = Date.now();
+  getDb()
+    .prepare("UPDATE drafts SET section = ?, area = ?, story_column = ?, additional_sections = ?, featured = ?, date = ?, updated_at = MAX(?, updated_at + 1) WHERE status = 'published' AND (slug = ? OR id = ?)")
+    .run(f.section, f.area, f.column, JSON.stringify(f.additionalSections), f.featured ? 1 : 0, f.date, now, slug, draftId ?? -1);
+}
+
 let lastCleanup = 0;
 /**
  * Deletes the photos of drafts rejected more than 30 days ago (the draft text stays). Cheap and

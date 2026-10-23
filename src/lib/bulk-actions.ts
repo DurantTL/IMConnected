@@ -1,7 +1,7 @@
 // Per-item publish and unpublish, shared by the single-item routes and the bulk action (issue #88). The bulk page
 // calls these one story at a time, so every rule of the single path (version check, validation, slug reservation, one
 // transaction, audit entry, cache invalidation) applies to each item, and a failure never rolls back the others.
-import { getDraft, isEditable, listPhotos, retireUploads } from './drafts';
+import { getDraft, isEditable, listPhotos, rejectDraft, retireUploads, type OpResult } from './drafts';
 import { publishDraft, unpublishLive, validSlug } from './story-publish';
 import { EditorError, ERRORS, type ErrorCode } from './messages';
 import { getStoryBySlug } from './story-store';
@@ -64,7 +64,14 @@ export function unpublishStoryItem(slug: string, userId: number, ip: string, req
 }
 
 /** Plain-language reason for a failed item in the bulk result. */
-export function bulkReason(code: ErrorCode): string {
-  if (code === 'conflict') return 'Version conflict: this draft was changed after the list loaded, so nothing was published. Open it to review the changes.';
+export function bulkReason(code: ErrorCode, did = 'published'): string {
+  if (code === 'conflict') return `Version conflict: this draft was changed after the list loaded, so nothing was ${did}. Open it to review the changes.`;
   return ERRORS[code];
+}
+
+/** Reject one new or in-review draft at the version the person was looking at (issue #89). Shared by the single route and the bulk action. */
+export function rejectDraftItem(draftId: number, version: number, userId: number, note: string, ip: string): OpResult {
+  const r = rejectDraft(draftId, version, userId, note);
+  if (r.ok) audit('draft.reject', { userId, target: `draft:${draftId}`, ip });
+  return r;
 }

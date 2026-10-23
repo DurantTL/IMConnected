@@ -22,7 +22,7 @@ import { renderMarkdownSafe } from './markdown';
 import { getDb } from './db';
 import { invalidateStories } from './public-cache';
 import { mediaDir, resolveMediaFile } from './media';
-import { getDraftBySlug, markUnpublished, publishDraftRow, recordStudioPublish, tx, uploadFile, removeUploadFiles, type Draft, type DraftFields, type DraftPhoto } from './drafts';
+import { getDraftBySlug, markUnpublished, syncPublishedDraftFields, publishDraftRow, recordStudioPublish, tx, uploadFile, removeUploadFiles, type Draft, type DraftFields, type DraftPhoto } from './drafts';
 import { photoLayoutOrDefault } from './photo-layouts';
 import { getStoryBySlug, storyExists, unpublishStory as hideStory, writeStory, type Story, type StoryInput, type StoryPhoto } from './story-store';
 
@@ -293,6 +293,33 @@ export function unpublishLive(slug: string, userId: number): { title: string } |
   });
   invalidateStories();
   return { title: row.title };
+}
+
+/**
+ * Change a few fields of one live story through the story writer (bulk edit, issue #89): one transaction, `rev` bumped,
+ * `edited_at` set (a person's edit), search entry rewritten, caches invalidated. `compute` sees the stored story inside the
+ * transaction and returns only the fields to change (or null for "nothing to change"); it may throw an EditorError to refuse.
+ * Returns null when there is no such story.
+ */
+export function editLiveStory(slug: string, compute: (story: Story) => Partial<StoryInput> | null): { title: string; changed: boolean } | null {
+  if (!validSlug(slug)) throw new EditorError('slug_bad');
+  let out: { title: string; changed: boolean } | null = null;
+  tx(() => {
+    const row = getStoryBySlug(slug, { includeUnpublished: true });
+    if (!row) return;
+    const patch = compute(row);
+    out = { title: row.title, changed: !!patch };
+    if (!patch) return;
+    const now = Date.now();
+    // contentHash is cleared like every dashboard write; editedAt makes the one-time import leave the story alone.
+    const next = { ...row, ...patch, contentHash: undefined, editedAt: now };
+    writeStory(next, now);
+    // The closed draft linked to this story keeps the same metadata, so unpublishing and publishing again cannot revert the edit.
+    syncPublishedDraftFields(slug, row.draftId, { section: next.section, area: next.area ?? '', column: next.column ?? '', additionalSections: next.additionalSections ?? [], featured: next.featured, date: next.date });
+  });
+  const result = out as { title: string; changed: boolean } | null;
+  if (result?.changed) invalidateStories();
+  return result;
 }
 
 export interface LoadedStory {

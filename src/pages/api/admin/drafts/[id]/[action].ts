@@ -3,11 +3,11 @@ import { renderAnnouncementDetails } from '../../../../../lib/announcement-rende
 import { renderInlinePhoto } from '../../../../../lib/story-media-render';
 import type { APIRoute } from 'astro';
 import {
-  addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, photoCount, rejectDraft, restoreDraft,
+  addUploadedPhotos, changePhoto, getDraft, isEditable, listPhotos, photoCount, restoreDraft,
   saveAuditDue, saveDraft, writeUpload, removeUploadFiles, type OpResult,
 } from '../../../../../lib/drafts';
 import { readDraftFields, intParam } from '../../../../../lib/draft-form';
-import { publishDraftItem } from '../../../../../lib/bulk-actions';
+import { publishDraftItem, rejectDraftItem } from '../../../../../lib/bulk-actions';
 import { ERRORS, type ErrorCode } from '../../../../../lib/messages';
 import { LIMITS } from '../../../../../lib/limits';
 import { sniffImage } from '../../../../../lib/submission';
@@ -105,9 +105,7 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
 
   if (action === 'reject') {
     const note = String(form.get('note') ?? '').slice(0, 500).trim();
-    const r = rejectDraft(draft.id, version, user.id, note);
-    if (r.ok) audit('draft.reject', { userId: user.id, target: `draft:${draft.id}`, ip });
-    return done(r, 'rejected');
+    return done(rejectDraftItem(draft.id, version, user.id, note, ip), 'rejected');
   }
 
   if (action === 'restore') {
