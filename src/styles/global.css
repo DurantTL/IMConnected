@@ -352,7 +352,6 @@ body:not(.admin) .card.lead:hover h2 { text-decoration:underline; text-decoratio
 body:not(.admin) .card.default { background:var(--surface); border:1px solid var(--line); border-radius:4px; overflow:hidden; gap:0; }
 body:not(.admin) .card.default .media { border-radius:0; }
 body:not(.admin) .card.default .card-copy { padding:22px; }
-body:not(.admin) .card.default.without-photo { border-top:3px solid var(--sec,var(--brand-text)); min-height:230px; }
 body:not(.admin) .hero-side { display:flex; flex-direction:column; gap:20px; padding:18px 0 4px; border-top:3px solid var(--brand); }
 body:not(.admin) .latest-heading h2 { font:600 1.5rem/1.2 var(--serif); letter-spacing:-.025em; margin:4px 0 0; }
 body:not(.admin) .latest-heading .eyebrow { margin:0; font-size:.6rem; }

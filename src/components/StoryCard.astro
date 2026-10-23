@@ -21,6 +21,9 @@ const Heading = variant === 'lead' ? 'h2' : 'h3';
         <img src={d.image} alt={d.imageAlt ?? ''} loading={variant === 'lead' ? 'eager' : 'lazy'} style={photoFocusStyle(d.photoFocus?.[0])} />
     </div>
   )}
+  {variant === 'default' && !d.image && (
+    <div class="media" aria-hidden="true"><div class="placeholder"><span>{section?.label}</span></div></div>
+  )}
   <div class="card-copy">
     {showKicker && <span class="kicker">{section?.label}{sub && <><span class="sep">/</span>{sub}</>}</span>}
     <Heading>{d.title}</Heading>

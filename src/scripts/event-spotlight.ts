@@ -61,12 +61,12 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   spotlight.addEventListener('pointerleave', () => { hovered = false; schedule(); });
   // Focus on any control holds rotation (a touch or screen-reader activation is not :focus-visible, but the reader is
   // still using it). Only the scrollable track itself needs :focus-visible, so a plain tap on it does not hold rotation.
-  spotlight.addEventListener('focusin', (event) => { focused = event.target !== track || track.matches(':focus-visible'); schedule(); });
+  // The Pause/Resume button never holds rotation: a reader who just chose Resume (Android focuses a tapped button) expects motion.
+  spotlight.addEventListener('focusin', (event) => { focused = event.target !== toggle && (event.target !== track || track.matches(':focus-visible')); schedule(); });
   spotlight.addEventListener('focusout', (event) => { if (!(event.relatedTarget instanceof Node && spotlight.contains(event.relatedTarget))) focused = false; schedule(); });
   // A finger pauses rotation only while it is down. The browser cancels the pointer for any pan, vertical page scrolling
   // included, and the track may still be animating a scroll of its own, so a swipe is judged by finger movement: a mostly
   // horizontal drag counts as the reader choosing events themselves and stops automatic advance until Resume is pressed.
-  track.addEventListener('pointerdown', (event) => { if (event.pointerType !== 'touch') return; touching = true; schedule(); });
   track.addEventListener('touchstart', (event) => { touching = true; startX = event.touches[0].clientX; startY = event.touches[0].clientY; schedule(); }, { passive: true });
   track.addEventListener('touchmove', (event) => {
     if (!requested || event.touches.length !== 1) return;
