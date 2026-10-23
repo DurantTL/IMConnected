@@ -209,7 +209,7 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
     const firstKey = chosen[0] ? fileKey(chosen[0]) : '';
     const prevFirst = chosenKeys[0];
     chosenKeys = chosen.map(fileKey);
-    if (legacy && firstKey && !typed.has(firstKey)) typed.set(firstKey, { caption: legacy, alt: '' });
+    if (legacy && firstKey && !typed.get(firstKey)?.caption) typed.set(firstKey, { caption: legacy, alt: typed.get(firstKey)?.alt || '' });
     chosen.forEach((f, i) => {
       const old = typed.get(chosenKeys[i]) || { caption: '', alt: '' };
       const item = document.createElement('fieldset');
@@ -224,14 +224,14 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
       const fields = document.createElement('div');
       fields.className = 'photo-item-fields';
       fields.append(
-        field(i, 'caption', 'Caption (optional)', 'Shown under the photo on the site. One line, up to 300 characters.', old.caption),
+        field(i, 'caption', 'Caption (optional)', `Shown under the photo on the site. One line, up to ${LIMITS.photoText} characters.`, old.caption),
         field(i, 'alt', 'Describe the photo for people who can\u2019t see it (optional)', 'Read aloud by screen readers. If the photo has no caption, this may also appear under it.', old.alt),
       );
       item.append(legend, img, fields);
       previews.appendChild(item);
     });
     const per = chosen.length > 0;
-    if (!per && prevFirst && typed.get(prevFirst)?.caption && !captionInput.value) captionInput.value = typed.get(prevFirst).caption; // photos cleared: the single field takes the first photo's caption back
+    if (!per && prevFirst && typed.get(prevFirst)?.caption) captionInput.value = typed.get(prevFirst).caption; // photos cleared: the single field takes the first photo's (latest) caption back
     captionField.hidden = per;
     captionInput.disabled = per;
   });
@@ -258,7 +258,7 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if ((photos.files?.length || 0) > LIMITS.maxPhotos) return show(`Please choose up to ${LIMITS.maxPhotos} photos.`, 'error');
+    if ([...(photos.files || [])].filter((f) => f.size > 0).length > LIMITS.maxPhotos) return show(`Please choose up to ${LIMITS.maxPhotos} photos.`, 'error');
     btn.disabled = true;
     btn.textContent = 'Sending…';
     try {

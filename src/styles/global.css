@@ -217,7 +217,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .notice.ok { background: #e3f3ea; color: #1d5a3a; }
 .photo-items { display: grid; gap: 14px; margin-top: 12px; }
 .photo-items:empty { display: none; }
-.form fieldset.photo-item { margin: 0; min-width: 0; display: grid; grid-template-columns: 96px 1fr; gap: 14px; align-items: start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper, var(--surface)); }
+.form fieldset.photo-item { margin: 0; min-width: 0; display: grid; grid-template-columns: 96px 1fr; gap: 14px; align-items: start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .photo-item > legend { padding: 0 6px; font-weight: 700; }
 .photo-item > img { width: 96px; aspect-ratio: 1; object-fit: cover; border-radius: 6px; }
 .photo-item-fields { display: grid; gap: 10px; min-width: 0; }
