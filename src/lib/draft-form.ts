@@ -6,6 +6,7 @@ import { FIELD_MAX, type DraftFields } from './drafts';
 import { clean } from './storyfile';
 import { OWN_PHOTO_ERROR, checkStoryBlockLength, parseStoryBlocks, storyBlocksToMarkdown, photoZoom, photoFit, photoFitFill, type PhotoCrop } from './story-blocks';
 import { DEFAULT_PHOTO_LAYOUT } from './photo-layouts';
+import { validIssueNumber, validPosition } from './newsletter-issues';
 
 function text(form: FormData, name: string, max: number, label: string): string {
   const v = form.get(name);
@@ -35,6 +36,19 @@ export function readDraftFields(form: FormData): { fields: DraftFields; photoAlt
     body: text(form, 'body', FIELD_MAX.body, 'The story text'),
   };
   if (form.has('additionalSectionsPresent')) fields.additionalSections = normalizeAdditionalSections(form.getAll('additionalSections'), fields.section);
+  // The Settings tab's Newsletter issue picker. A form without the marker (an older page) keeps what the draft has.
+  if (form.has('newsletterIssuePresent')) {
+    const rawIssue = String(form.get('newsletterIssue') ?? '').trim();
+    if (!rawIssue) fields.newsletterIssue = null;
+    else {
+      const number = /^\d{1,4}$/.test(rawIssue) ? Number(rawIssue) : NaN;
+      if (!validIssueNumber(number)) throw new Error('Choose one of the listed newsletter issues.');
+      const rawPosition = String(form.get('newsletterPosition') ?? '').trim();
+      const position = rawPosition ? (/^\d{1,4}$/.test(rawPosition) ? Number(rawPosition) : NaN) : null;
+      if (position !== null && !validPosition(position)) throw new Error('The position in the issue must be a whole number from 1 to 999.');
+      fields.newsletterIssue = { number, position };
+    }
+  }
   if (form.has('announcementKind')) {
     const kind = line(form, 'announcementKind', 20, 'Content type');
     if (kind === 'story') fields.announcement = null;

@@ -51,6 +51,7 @@ function draftAsFeedSource(slugOrId: string, d: Draft, photos: DraftPhoto[]): Fe
       dek: d.dek || undefined,
       section: d.section,
       additionalSections: d.additionalSections,
+      newsletterIssue: d.newsletterIssue?.date === undefined ? undefined : { number: d.newsletterIssue.number, date: d.newsletterIssue.date, title: d.newsletterIssue.title ?? '', position: d.newsletterIssue.position },
       area: d.area || undefined,
       column: d.column || undefined,
       author: d.author,

@@ -8,6 +8,7 @@ export const ERRORS = {
   draft_gone: 'That draft no longer exists.',
   bad_date: 'The date is not valid.',
   bad_layout: 'That photo layout is not one of the choices.',
+  bad_issue: 'That newsletter issue does not exist. Reload the page; an administrator can add issues.',
   bad_section: 'That section does not exist.',
   block_image_url: "Image modules can only use this story's own photos.",
   photo_gone: 'That photo is no longer on this draft.',

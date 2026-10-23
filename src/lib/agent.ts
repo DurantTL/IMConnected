@@ -1,4 +1,5 @@
 import { normalizeAdditionalSections } from './site';
+import { validIssueDate, validIssueNumber, validPosition } from './newsletter-issues';
 import { normalizeAnnouncement, type Announcement } from './announcement';
 import { photoMarkerIndex } from './story-media';
 // Validates a request from the AI agent (POST /api/agent/stories) into a story draft.
@@ -119,6 +120,8 @@ export interface AgentStory {
   /** '' when the agent sent none: the editor picks it. */
   section: string;
   additionalSections?: string[];
+  /** undefined = not sent; null = clear the draft's issue and position; an object = set it (the issue row is created or checked when the draft is written). */
+  newsletterIssue?: { number: number; date: string; title: string; position: number | null } | null;
   area: string;
   author: string;
   church: string;
@@ -199,6 +202,25 @@ export function assertPhotoMarkers(body: string, photoCount: number): void {
   }
 }
 
+/** `{ number, date, title?, position? }` (issue #98). Throws 400 bad_newsletter_issue; null is returned for null (clear). */
+export function parseAgentIssue(v: unknown): { number: number; date: string; title: string; position: number | null } | null {
+  if (v === null) return null;
+  const bad = (m: string) => new AgentError('bad_newsletter_issue', `newsletterIssue ${m}`);
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw bad('must be an object like {"number":12,"date":"2026-09-14"} or null.');
+  const o = v as Record<string, unknown>;
+  if (Object.keys(o).some((k) => !['number', 'date', 'title', 'position'].includes(k))) throw bad('may only contain number, date, title and position.');
+  if (!validIssueNumber(o.number)) throw bad('number must be a whole number from 1 to 9999.');
+  if (!validIssueDate(o.date)) throw bad('date must be a real day like 2026-09-14 that is not in the future.');
+  let title = '';
+  if (o.title !== undefined && o.title !== null) {
+    if (typeof o.title !== 'string') throw bad('title must be text.');
+    title = oneLine(clean(o.title));
+    if (title.length > 200) throw bad('title is longer than 200 characters.');
+  }
+  if (o.position !== undefined && o.position !== null && !validPosition(o.position)) throw bad('position must be a whole number from 1 to 999.');
+  return { number: o.number, date: o.date, title, position: o.position === undefined ? null : (o.position as number | null) };
+}
+
 /** Throws AgentError (HTTP 400) with a stable `code`. */
 export function parseAgentStory(input: unknown): AgentStory {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AgentError('invalid_json', 'The request body must be a JSON object.');
@@ -270,8 +292,9 @@ export function parseAgentStory(input: unknown): AgentStory {
       announcementPatch = patch;
     } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
   }
+  const newsletterIssue = o.newsletterIssue === undefined ? undefined : parseAgentIssue(o.newsletterIssue);
   const { requestId: _ignored, ...content } = o;
-  return { additionalSections, announcement, announcementPatch, authorTitle, photoCredit, featured: o.featured as boolean | undefined, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
+  return { additionalSections, newsletterIssue, announcement, announcementPatch, authorTitle, photoCredit, featured: o.featured as boolean | undefined, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
 }
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----
