@@ -367,10 +367,13 @@ try {
   // focus stays on the control that was used; at an edge it moves to the other direction
   for (const [name, prefix] of [['Move photo 1 down', 'down:'], ['Move photo 2 down', 'up:']]) {
     const was = page.url();
+    const movedId = (await page.getByRole('button', { name }).getAttribute('value')).split(':')[1];
     await page.getByRole('button', { name }).click();
     await page.waitForURL((u) => u.href !== was);
     await page.waitForFunction(() => document.activeElement?.matches('button[value^="up:"], button[value^="down:"]'));
-    check(`after "${name}" focus is on the ${prefix === 'down:' ? 'same Down' : 'other (Up), because Down is now disabled'} button`, await page.evaluate((x) => document.activeElement.value.startsWith(x), prefix));
+    check(`after "${name}" focus is on the moved photo's ${prefix === 'down:' ? 'same Down' : 'other (Up), because Down is now disabled'} button`, await page.evaluate(([x, idv]) => document.activeElement.value.startsWith(x) && !!document.activeElement.closest(`li[data-photo-item="${idv}"]`), [prefix, movedId]));
+    await page.waitForFunction(() => (document.querySelector('#photo-reorder-live')?.textContent ?? '').trim() !== '');
+    check(`after "${name}" the move is announced once: the live region holds the message and the visible notice no longer has role=status`, await page.evaluate(() => { const live = document.querySelector('#photo-reorder-live').textContent.trim(); const notice = [...document.querySelectorAll('.admin-ok')].find((n) => n.textContent.trim() === live); return !!live && !!notice && !notice.hasAttribute('role'); }));
   }
 
   // accessibility, touch targets, sideways scroll
