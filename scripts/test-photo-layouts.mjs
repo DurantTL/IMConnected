@@ -557,7 +557,7 @@ try {
           await page.getByRole('button', { name: 'Next photo' }).click();
           await page.getByRole('button', { name: 'Next photo' }).click();
           await page.waitForTimeout(900);
-          check(`carousel @${w}: at the last photo Next is aria-disabled but keeps focus (focus is still on a carousel button)`, (await page.getByRole('button', { name: 'Next photo' }).getAttribute('aria-disabled')) === 'true' && await page.evaluate(() => document.activeElement?.closest('.photos-carousel-bar') !== null && document.activeElement?.tagName === 'BUTTON'));
+          check(`carousel @${w}: at the last photo Next is aria-disabled but keeps focus (focus is still on Next)`, (await page.getByRole('button', { name: 'Next photo' }).getAttribute('aria-disabled')) === 'true' && await page.evaluate(() => document.activeElement?.closest('.photos-carousel-bar') !== null && document.activeElement?.getAttribute('aria-label') === 'Next photo'));
           await page.getByRole('button', { name: 'Previous photo' }).click();
           check(`carousel @${w}: Previous returns to "3 of 4"`, (await count.textContent()) === '3 of 4');
           // a swipe/scroll by the reader updates the counter

@@ -65,8 +65,11 @@ function init(): void {
     prev.addEventListener('click', () => { if (index > 0) go(index - 1); });
     next.addEventListener('click', () => { if (index < total - 1) go(index + 1); });
     track.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowLeft') { e.preventDefault(); go(index - 1, true); }
-      else if (e.key === 'ArrowRight') { e.preventDefault(); go(index + 1, true); }
+      // Step from the photo that has focus, not the remembered index: Tab can land on another slide during the scroll lock.
+      const cur = slides.findIndex((s) => s.contains(e.target as Node));
+      const base = cur >= 0 ? cur : index;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); go(base - 1, true); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); go(base + 1, true); }
     });
     let t: ReturnType<typeof setTimeout> | undefined;
     track.addEventListener('scroll', () => {
