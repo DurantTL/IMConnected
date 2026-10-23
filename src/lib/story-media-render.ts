@@ -74,15 +74,11 @@ const mediaPlugin: NonNullable<SatteriMarkdownProcessorOptions['mdastPlugins']>[
 // like \{{photo 1}}, a character reference like &#123;&#123;photo 1}}, or a &#10; that splits a line) stays a literal example
 // (AGENTS.md: escaped examples stay inert). The media plugin has no source positions, so the live lines are found here, with
 // positions, and swapped for a placeholder built from a random per-render nonce; the plugin accepts only those placeholders.
-interface MdNode { type: string; children?: MdNode[]; position?: { start: { line: number }; end: { line: number } } }
-function markLiveMarkers(md: string, authored: string): { source: string; token: RegExp; markers: string[] } {
-  const nonce = crypto.randomUUID().replace(/-/g, '');
-  const raw = md.split('\n');
-  // `authored` is the body as written, line for line with `md` (escapeHtmlInMarkdown only turns < into &lt;).
-  const written = authored.replace(/\r\n?/g, '\n').split('\n');
-  const markers: string[] = [];
-  const tree = markdownToMdast(md, { position: true }) as MdNode;
-  for (const paragraph of tree.children ?? []) {
+interface MdNode { type: string; value?: string; children?: MdNode[]; position?: { start: { line: number }; end: { line: number } } }
+/** Lines (0-based) that are a whole, text-only line of a top-level paragraph, with that line's text from the source. */
+function paragraphLines(md: string): Map<number, string> {
+  const raw = md.split('\n'), out = new Map<number, string>();
+  for (const paragraph of (markdownToMdast(md, { position: true }) as MdNode).children ?? []) {
     if (paragraph.type !== 'paragraph' || !paragraph.position) continue;
     const blocked = new Set<number>();
     for (const child of paragraph.children ?? []) {
@@ -90,21 +86,43 @@ function markLiveMarkers(md: string, authored: string): { source: string; token:
       for (let line = child.position.start.line - 1; line < child.position.end.line; line++) blocked.add(line);
     }
     for (let line = paragraph.position.start.line - 1; line < paragraph.position.end.line && line < raw.length; line++) {
-      const text = written[line]?.trim() ?? '';
-      if (blocked.has(line) || !isMediaMarkerLine(text)) continue;
-      raw[line] = `IMCMEDIA${nonce}N${markers.length}`;
-      markers.push(text);
+      if (!blocked.has(line)) out.set(line, raw[line]);
     }
   }
-  return { source: raw.join('\n'), token: new RegExp(`^IMCMEDIA${nonce}N(\\d+)$`), markers };
+  return out;
+}
+function markLiveMarkers(md: string, authored: string, nonce: string): { source: string; markers: string[] } {
+  const raw = md.split('\n');
+  // `authored` is the body as written, line for line with `md` (escapeHtmlInMarkdown only turns < into &lt;).
+  const written = authored.replace(/\r\n?/g, '\n').split('\n');
+  let live = [...paragraphLines(md).keys()].filter((line) => isMediaMarkerLine(written[line] ?? ''));
+  // Swapping a line can change how Markdown reads its paragraph (a malformed marker line holding a `]` can stop pairing with a `[`),
+  // so the swapped source is parsed again and any placeholder that is no longer a whole paragraph line is put back as written.
+  for (let round = 0; round < 8; round++) {
+    const lines = [...raw];
+    live.forEach((line, k) => { lines[line] = `IMCMEDIA${nonce}N${k}`; });
+    const placed = paragraphLines(lines.join('\n'));
+    const kept = live.filter((line, k) => placed.get(line)?.trim() === `IMCMEDIA${nonce}N${k}`);
+    if (kept.length === live.length) return { source: lines.join('\n'), markers: live.map((line) => written[line].trim()) };
+    live = kept;
+  }
+  return { source: md, markers: [] };
 }
 let processor: ReturnType<typeof createSatteriMarkdownProcessor> | undefined;
 export async function renderMediaMarkdown(body: string, photos: InlineStoryPhoto[], preview = false, flyerIndex?: number): Promise<{ html: string; used: Set<number>; warnings: string[] }> {
   if (!/^\s*\{\{\s*(?:photo|gallery)\b/m.test(body)) return { html: (await renderMarkdownSafe(body)).html, used: new Set(), warnings: [] };
   const renderer = await (processor ??= createSatteriMarkdownProcessor({ mdastPlugins: [mediaPlugin] }));
-  const { source, token, markers } = markLiveMarkers(escapeHtmlInMarkdown(body), body);
-  const state: MediaState = { photos, preview, flyerIndex, used: new Set(), warnings: [], token, markers };
-  const { code } = await renderer.render(source, { frontmatter: { __imcMedia: state } });
+  const md = escapeHtmlInMarkdown(body);
+  const nonce = crypto.randomUUID().replace(/-/g, '');
+  const token = new RegExp(`^IMCMEDIA${nonce}N(\\d+)$`);
+  const { source, markers } = markLiveMarkers(md, body, nonce);
+  let state: MediaState = { photos, preview, flyerIndex, used: new Set(), warnings: [], token, markers };
+  let { code } = await renderer.render(source, { frontmatter: { __imcMedia: state } });
+  if (code.includes(`IMCMEDIA${nonce}`)) {
+    // Should not happen after the re-parse above; never show a placeholder; render the body as written with no live markers.
+    state = { photos, preview, flyerIndex, used: new Set(), warnings: [], token, markers: [] };
+    ({ code } = await renderer.render(md, { frontmatter: { __imcMedia: state } }));
+  }
   // Match the existing Markdown URL guard, including user-authored links/images.
   const { html } = checkMarkdownLinks(code);
   return { html, used: state.used, warnings: state.warnings };

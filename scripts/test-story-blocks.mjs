@@ -84,6 +84,12 @@ try {
       const realSecond = label === 'two';
       check(`a character reference that decodes to a line break (${label}) never splits off a live marker, and the written lines keep their meaning`, () => { assert.deepEqual([...r.used].sort(), realSecond ? [0, 1] : [0]); assert.doesNotMatch(r.html, /undefined|IMCMEDIA/); assert.match(r.html, /\{\{photo 2\}\}/); });
     }
+    for (const [label, md, keep] of [['[ ... ] link', '[a\n{{photo ]}}\n](https://example.com)', '{{photo ]}}'], ['[ ... ] link with a number', '{{photo 1}}\n\n[a\n{{photo 1]}}\n](https://example.com)', '{{photo 1]}}'], ['![ ... ] image', '![a\n{{photo ]}}\n](https://example.com/x.png)', '{{photo ]}}'], ['definition', '[a\n{{photo ]}}\nb]\n\n[a\n{{photo ]}}\nb]: https://x.y\n\nlast', 'last']]) {
+      for (const preview of [false, true]) {
+        const r = await renderMediaMarkdown(md, mediaPhotos, preview);
+        check(`swapping a marker-shaped line never changes how its paragraph parses (${label}${preview ? ', preview' : ''}): no placeholder, no lost text`, () => { assert.doesNotMatch(r.html, /IMCMEDIA/); assert.ok(r.html.includes(keep) || r.html.includes('Media marker skipped'), r.html); });
+      }
+    }
     const blankAfter = await renderMediaMarkdown('{{photo 1}}\nabc&#10;def\n\nfoo', mediaPhotos);
     check('decoded line breaks do not move a marker onto another line or join the next paragraph', () => { assert.deepEqual([...blankAfter.used], [0]); assert.match(blankAfter.html, /<p>foo<\/p>/); assert.doesNotMatch(blankAfter.html, /undefined|IMCMEDIA/); });
     const stored = await renderMediaMarkdown('{{photo 1}}\n\nKeep \uE000 this', mediaPhotos);
