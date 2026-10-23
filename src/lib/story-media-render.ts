@@ -62,28 +62,37 @@ const mediaPlugin: NonNullable<SatteriMarkdownProcessorOptions['mdastPlugins']>[
     },
   };
 };
-// A backslash-escaped marker line (\{{photo 1}}, \{\{photo 1}}) is a literal example, never a photo (AGENTS.md: escaped examples stay inert).
-// The media plugin has no source positions, so such paragraph text lines are found with positions first and prefixed with a private-use
-// sentinel (which also stops them matching the marker grammar); the sentinel is stripped from the output, leaving the literal text.
+// A marker line is live only when its source text is exactly the marker. A line that becomes a marker only after Markdown decodes it
+// (a backslash escape like \{{photo 1}} or {\{photo 1}}, a character reference like &#123;&#123;photo 1}}) is a literal example, never
+// a photo (AGENTS.md: escaped examples stay inert), which is also how the agent marker check and the revision remap read lines.
+// The media plugin has no source positions, so such paragraph lines are found with positions first and prefixed with a private-use
+// sentinel, which stops them matching the marker grammar; the sentinel is stripped from the output, leaving the literal text.
 const SENTINEL = '\uE000';
-interface MdNode { type: string; children?: MdNode[]; position?: { start: { line: number }; end: { line: number } } }
-function neutralizeEscapedMarkers(md: string): string {
+interface MdNode { type: string; value?: string; children?: MdNode[]; position?: { start: { line: number }; end: { line: number } } }
+// `authored` is the body as written, line for line with `md` (escapeHtmlInMarkdown only turns < into &lt;), so the site's own
+// escaping never makes a line look author-escaped.
+function neutralizeEscapedMarkers(md: string, authored: string): string {
   const raw = md.replace(/\r\n?/g, '\n').split('\n');
+  const written = authored.replace(/\r\n?/g, '\n').split('\n');
   const tree = markdownToMdast(md, { position: true }) as MdNode;
   for (const paragraph of tree.children ?? []) {
     if (paragraph.type !== 'paragraph') continue;
-    const textLines = new Set<number>(), blocked = new Set<number>();
+    const decoded = new Map<number, string>(), blocked = new Set<number>();
     for (const child of paragraph.children ?? []) {
       if (!child.position) continue;
-      const target = child.type === 'text' ? textLines : blocked;
-      for (let line = child.position.start.line - 1; line < child.position.end.line; line++) target.add(line);
+      if (child.type !== 'text') {
+        for (let line = child.position.start.line - 1; line < child.position.end.line; line++) blocked.add(line);
+        continue;
+      }
+      (child.value ?? '').split('\n').forEach((part, i) => {
+        const line = child.position!.start.line - 1 + i;
+        decoded.set(line, (decoded.get(line) ?? '') + part);
+      });
     }
-    for (const line of textLines) {
+    for (const [line, text] of decoded) {
       if (blocked.has(line)) continue;
-      const trimmed = raw[line]?.trim() ?? '';
-      if (!trimmed.includes('\\')) continue;
-      const unescaped = trimmed.replace(/\\([!-/:-@[-`{-~])/g, '$1');
-      if (isMediaMarkerLine(unescaped)) raw[line] = SENTINEL + unescaped;
+      const value = text.trim(), source = written[line]?.trim() ?? '';
+      if (value !== source && isMediaMarkerLine(value)) raw[line] = SENTINEL + raw[line];
     }
   }
   return raw.join('\n');
@@ -93,7 +102,7 @@ export async function renderMediaMarkdown(body: string, photos: InlineStoryPhoto
   const state: MediaState = { photos, preview, flyerIndex, used: new Set(), warnings: [] };
   if (!/^\s*\{\{\s*(?:photo|gallery)\b/m.test(body)) return { html: (await renderMarkdownSafe(body)).html, used: state.used, warnings: [] };
   const renderer = await (processor ??= createSatteriMarkdownProcessor({ mdastPlugins: [mediaPlugin] }));
-  const source = neutralizeEscapedMarkers(escapeHtmlInMarkdown(body.replaceAll(SENTINEL, '')));
+  const source = neutralizeEscapedMarkers(escapeHtmlInMarkdown(body), body);
   const { code: rendered } = await renderer.render(source, { frontmatter: { __imcMedia: state } });
   const code = rendered.replaceAll(SENTINEL, '');
   // Match the existing Markdown URL guard, including user-authored links/images.

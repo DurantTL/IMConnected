@@ -77,8 +77,12 @@ try {
         assert.ok(mixed.html.includes(escaped.replace(/\\/g, '').replace('{{photo', '{{photo'))); assert.doesNotMatch(mixed.html, /\uE000/);
       });
     }
-    const sentinel = await renderMediaMarkdown('{{photo 1}}\n\uE000{{photo 2}}', mediaPhotos);
-    check('the private-use sentinel is stripped from the source first, so it can neither hide a marker nor leak into the output', () => { assert.deepEqual([...sentinel.used], [0, 1]); assert.doesNotMatch(sentinel.html, /\uE000/); });
+    const sentinel = await renderMediaMarkdown('{{photo 1}}\n\n\uE000{{photo 2}}', mediaPhotos);
+    check('a stored private-use character before a marker makes the line a non-marker (as the agent check and the remap read it), and the sentinel never leaks into the output', () => { assert.deepEqual([...sentinel.used], [0]); assert.doesNotMatch(sentinel.html, /\uE000/); });
+    for (const [label, md] of [['&#123;&#123;photo 2}}', '{{photo 1}}\n\n&#123;&#123;photo 2}}'], ['&lbrace;&lbrace;photo 2}}', '{{photo 1}}\n\n&lbrace;&lbrace;photo 2}}'], ['{{photo 2&#125;&#125;', '{{photo 1}}\n\n{{photo 2&#125;&#125;'], ['{{photo 2&#125;&#125; alone', '{{photo 2&#125;&#125;'], ['&#123;&#123;photo 2}} alone', '&#123;&#123;photo 2}}']]) {
+      const r = await renderMediaMarkdown(md, mediaPhotos);
+      check(`a character-reference marker (${label}) stays literal; only a real marker uses a photo`, () => { assert.ok(!r.used.has(1), JSON.stringify([...r.used])); assert.match(r.html, /\{\{photo 2\}\}/); assert.doesNotMatch(r.html, /\uE000/); });
+    }
   }
   const isolated = await Promise.all([renderMediaMarkdown('{{photo 1}}', mediaPhotos), renderMediaMarkdown('{{photo 2}}', mediaPhotos)]);
   check('concurrent renderer requests do not share photo state', () => { assert.deepEqual([...isolated[0].used], [0]); assert.deepEqual([...isolated[1].used], [1]); });
