@@ -1,5 +1,6 @@
 import { normalizeAdditionalSections } from './site';
 import { normalizeAnnouncement, type Announcement } from './announcement';
+import { photoMarkerIndex } from './story-media';
 // Validates a request from the AI agent (POST /api/agent/stories) into a story draft.
 // The agent's text gets the same treatment as a dashboard draft: control characters removed, every "<" in the
 // body written as &lt; (escapeHtmlInMarkdown), and nothing is ever fetched: photos must be data: images.
@@ -16,7 +17,7 @@ export class AgentError extends Error {
   }
 }
 
-export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, author: 120, church: 160, alt: 300, note: 1000, url: 2000, perHour: 60 };
+export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, author: 120, authorTitle: 120, photoCredit: 120, church: 160, alt: 300, note: 1000, url: 2000, perHour: 60 };
 /** Room kept for the JSON around the photos (title, body of up to 20,000 characters, keys, quotes). */
 export const AGENT_JSON_ALLOWANCE_BYTES = 128 * 1024;
 /**
@@ -95,10 +96,22 @@ export interface AgentPhoto {
   bytes: Uint8Array;
   ext: string;
   alt: string;
+  /** Optional crop, validated; undefined = the editor defaults (50 / 50 / 1). */
+  focalX?: number;
+  focalY?: number;
+  zoom?: number;
 }
 
 export interface AgentStory {
+  /** null = remove the announcement. An object is never here: it is `announcementPatch` (merged where the draft is known). */
   announcement?: Announcement | null;
+  /** A partial announcement object (see mergeAnnouncement); create needs `kind`, an update/reopen merges it into the stored one. */
+  announcementPatch?: Record<string, unknown>;
+  /** '' = not sent or cleared (see `present`). */
+  authorTitle: string;
+  photoCredit: string;
+  /** undefined = not sent. */
+  featured?: boolean;
   title: string;
   dek: string;
   /** Safe Markdown. */
@@ -157,7 +170,33 @@ function parsePhoto(raw: unknown): AgentPhoto {
   const ext = sniffImage(bytes);
   if (!ext) throw new AgentError('photo_not_image', 'A photo is not a JPG, PNG, WebP or AVIF image.');
   const alt = oneLine(optional(p, 'alt')).slice(0, AGENT_LIMITS.alt);
-  return { bytes: new Uint8Array(bytes), ext, alt };
+  const crop: { focalX?: number; focalY?: number; zoom?: number } = {};
+  for (const [key, lo, hi] of [['focalX', 0, 100], ['focalY', 0, 100], ['zoom', 1, 3]] as const) {
+    const v = p[key];
+    if (v === undefined) continue;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) throw new AgentError('bad_photo_crop', `Photo ${key} must be a number from ${lo} to ${hi}.`);
+    crop[key] = key === 'zoom' ? Math.round(v * 100) / 100 : v;
+  }
+  return { bytes: new Uint8Array(bytes), ext, alt, ...crop };
+}
+
+/**
+ * A line-based check: standalone `{{photo N}}` lines outside fenced or indented code (a backslash-escaped one counts, the
+ * renderer still renders it) must point at a photo the draft will have. Not a full CommonMark parse (lazy continuations,
+ * setext headings and similar edge cases are not replicated); quotes, lists and inline markers are not checked.
+ */
+export function assertPhotoMarkers(body: string, photoCount: number): void {
+  let fence: string | null = null;
+  for (const raw of body.split('\n')) {
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(raw);
+    if (fence) { if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) fence = null; continue; }
+    if (fenceMatch) { fence = fenceMatch[1]; continue; }
+    if (/^(?: {4,}|\t)/.test(raw)) continue;
+    const line = raw.trim();
+    // The renderer drops the backslash of an escaped marker and still renders it, so it is checked like any other.
+    const n = photoMarkerIndex(line.startsWith('\\{{') ? line.slice(1) : line, Infinity);
+    if (n !== null && n >= photoCount) throw new AgentError('bad_photo_marker', `The marker "${line}" points to photo ${n + 1}, but the story will have ${photoCount} photo${photoCount === 1 ? '' : 's'}.`);
+  }
 }
 
 /** Throws AgentError (HTTP 400) with a stable `code`. */
@@ -172,6 +211,8 @@ export function parseAgentStory(input: unknown): AgentStory {
   const bodyRaw = optional(o, 'body').trim();
   const author = oneLine(optional(o, 'author'));
   const church = oneLine(optional(o, 'church'));
+  const authorTitle = oneLine(optional(o, 'authorTitle'));
+  const photoCredit = oneLine(optional(o, 'photoCredit'));
   const section = optional(o, 'section').trim();
   const area = optional(o, 'area').trim();
   const date = optional(o, 'date').trim();
@@ -186,6 +227,9 @@ export function parseAgentStory(input: unknown): AgentStory {
   if (bodyRaw.length > LIMITS.bodyMax) throw new AgentError('body_too_long', `The body is longer than ${LIMITS.bodyMax} characters.`);
   if (author.length > AGENT_LIMITS.author) throw new AgentError('author_too_long', 'The author is too long.');
   if (church.length > AGENT_LIMITS.church) throw new AgentError('church_too_long', 'The church is too long.');
+  if (authorTitle.length > AGENT_LIMITS.authorTitle) throw new AgentError('author_title_too_long', `The author title is longer than ${AGENT_LIMITS.authorTitle} characters.`);
+  if (photoCredit.length > AGENT_LIMITS.photoCredit) throw new AgentError('photo_credit_too_long', `The photo credit is longer than ${AGENT_LIMITS.photoCredit} characters.`);
+  if (o.featured !== undefined && typeof o.featured !== 'boolean') throw new AgentError('bad_field', '"featured" must be true or false.');
   if (note.length > AGENT_LIMITS.note) throw new AgentError('note_too_long', `The note is longer than ${AGENT_LIMITS.note} characters.`);
 
   // A missing section is allowed (the editor picks it); a wrong one is not.
@@ -215,11 +259,19 @@ export function parseAgentStory(input: unknown): AgentStory {
   let additionalSections: string[] | undefined;
   if (o.additionalSections !== undefined) { try { additionalSections = normalizeAdditionalSections(o.additionalSections, section); } catch (e) { throw new AgentError('bad_additional_sections', (e as Error).message); } }
   let announcement: Announcement | null | undefined;
-  if (o.announcement !== undefined) {
-    try { announcement = normalizeAnnouncement(o.announcement); } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
+  let announcementPatch: Record<string, unknown> | undefined;
+  if (o.announcement === null) announcement = null;
+  else if (o.announcement !== undefined) {
+    // Validate the fields now (with a stand-in kind when the patch has none); the real merge happens against the stored value.
+    try {
+      if (!o.announcement || typeof o.announcement !== 'object' || Array.isArray(o.announcement)) throw new Error('Announcement must be an object or null.');
+      const patch = o.announcement as Record<string, unknown>;
+      normalizeAnnouncement({ kind: 'event', ...patch });
+      announcementPatch = patch;
+    } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
   }
   const { requestId: _ignored, ...content } = o;
-  return { additionalSections, announcement, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
+  return { additionalSections, announcement, announcementPatch, authorTitle, photoCredit, featured: o.featured as boolean | undefined, title, dek, body: escapeHtmlInMarkdown(bodyRaw), section, area, author, church, date, sourceUrl, note, photoLayout, photos, requestId, payloadKey: canonicalJson(content), present };
 }
 
 // ---- 60 requests per hour per token (the agent has one token, so one counter) ----

@@ -268,7 +268,7 @@ try {
   const without = m.parseAgentStory({ ...agentBase, photos: undefined });
   assert.equal(m.upsertAgentDraft(without).ok, true); assert.equal(m.getDraft(aid).announcement.kind, 'event');
   assert.equal(m.upsertAgentDraft({ ...without, announcement: null }).ok, true); assert.equal(m.getDraft(aid).announcement, null);
-  m.upsertAgentDraft({ ...without, announcement: ainput.announcement });
+  m.upsertAgentDraft({ ...without, announcementPatch: ainput.announcementPatch });
   for (const bad of [{ kind: 'other' }, { kind: 'event', eventDate: '2026-02-30' }, { kind: 'event', links: [{ label: 'Bad', url: 'javascript:alert(1)' }] }, { kind: 'announcement', videoUrl: 'https://youtube.com.evil.invalid/embed/abcdefghijk' }, { kind: 'event', links: Array.from({ length: 4 }, () => ({ label: 'Link', url: 'https://example.invalid/' })) }]) assert.throws(() => m.parseAgentStory({ ...agentBase, announcement: bad }), (e) => e.code === 'bad_announcement');
   const ap = m.listPhotos(aid)[0];
   const ablocks = [{ id: 'summary', type: 'text', text: agentBase.body }, { id: 'flyer', type: 'flyer', photoId: ap.id }, { id: 'video', type: 'video', label: 'Synthetic video <title>', url: 'https://vimeo.com/12345678' }, { id: 'link', type: 'button', label: 'Register', url: 'https://example.invalid/register' }];

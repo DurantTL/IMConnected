@@ -2,14 +2,14 @@ import { normalizeAdditionalSections, parseAdditionalSections, sectionMembership
 import { editorialSnapshot, recordDraftRevision, readDraftRevision } from './draft-revisions';
 import { restoreMediaMarkers } from './revision-media';
 import { audit } from './auth/audit';
-import { parseAnnouncement, announcementJson, type Announcement } from './announcement';
+import { parseAnnouncement, announcementJson, mergeAnnouncement, type Announcement } from './announcement';
 import { storyBlockPhotos, mapStoryPhotos } from './story-blocks';
 // Story drafts: the rows in `drafts` / `draft_photos` and the uploaded photo files under DATA_DIR/uploads/.
 // Submitter contact fields live here for signed-in editors to read. They are never logged or committed.
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
-import { AgentError, AgentConflict, refusalDetails, refusalReason, type RefusalReason } from './agent';
+import { AgentError, AgentConflict, assertPhotoMarkers, refusalDetails, refusalReason, type RefusalReason } from './agent';
 import { getDb } from './db';
 import { dataDir } from './db/db-core.mjs';
 import { getSection, isValidArea } from './site';
@@ -797,8 +797,19 @@ export function recordStudioPublish(stories: StudioStory[], commit: string = DB_
   return { ids, overwrote, oldUploads };
 }
 
+/** Merge an agent's partial announcement into the stored one; an invalid result is a typed 400. */
+export function mergeAgentAnnouncement(current: Announcement | null, patch: Record<string, unknown>): Announcement {
+  try { return mergeAnnouncement(current, patch); } catch (e) { throw new AgentError('bad_announcement', (e as Error).message); }
+}
+
 export interface AgentDraftInput {
   announcement?: Announcement | null;
+  /** A partial announcement merged into the stored one (create: must carry `kind`). */
+  announcementPatch?: Record<string, unknown>;
+  authorTitle?: string;
+  photoCredit?: string;
+  /** undefined = not sent. */
+  featured?: boolean;
   title: string;
   dek: string;
   /** Already safe Markdown. */
@@ -815,7 +826,7 @@ export interface AgentDraftInput {
   /** null = not sent: a new draft gets the default, an updated one keeps its layout. */
   photoLayout: PhotoLayout | null;
   /** null = leave an updated draft's photos alone. */
-  photos: { bytes: Uint8Array; ext: string; alt: string }[] | null;
+  photos: { bytes: Uint8Array; ext: string; alt: string; focalX?: number; focalY?: number; zoom?: number }[] | null;
   /** Optional retry key (raw) and the canonical content it covers; only sha256 hashes are stored. */
   requestId?: string | null;
   payloadKey?: string;
@@ -872,6 +883,9 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         if (sent('dek')) set('dek', input.dek);
         if (sent('author')) set('author', input.author);
         if (sent('church')) set('church', input.church);
+        if (sent('authorTitle')) set('author_title', input.authorTitle ?? '');
+        if (sent('photoCredit')) set('photo_credit', input.photoCredit ?? '');
+        if (input.featured !== undefined) set('featured', input.featured ? 1 : 0);
         if (sent('note')) set('agent_note', input.note || null);
         const section = sent('section') ? input.section : current.section;
         if (sent('section')) set('section', section);
@@ -884,6 +898,8 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         if (area !== current.area) set('area', area);
         if (input.photoLayout !== null) set('photo_layout', input.photoLayout);
         if (input.announcement !== undefined) set('announcement', announcementJson(input.announcement));
+        else if (input.announcementPatch) set('announcement', announcementJson(mergeAgentAnnouncement(current.announcement ?? null, input.announcementPatch)));
+        if (sent('body') || input.photos) assertPhotoMarkers(sent('body') ? input.body : current.body, input.photos ? input.photos.length : listPhotos(id).length);
         if (input.date) set('date', input.date);
         const now = Date.now();
         const r = db
@@ -900,20 +916,22 @@ export function upsertAgentDraft(input: AgentDraftInput): AgentUpsertResult {
         if (!input.title) throw new AgentError('title_required', 'A story needs a title.');
         if (!input.body) throw new AgentError('body_required', 'A story needs body text.');
         if (input.area && !input.section) throw new AgentError('bad_area', 'Send a section together with an area.');
+        assertPhotoMarkers(input.body, input.photos?.length ?? 0);
+        const announcement = input.announcement !== undefined ? input.announcement : input.announcementPatch ? mergeAgentAnnouncement(null, input.announcementPatch) : undefined;
         id = createDraft({
           source: 'agent',
           status: 'new',
-          fields: { additionalSections: input.additionalSections, announcement: input.announcement, title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
+          fields: { additionalSections: input.additionalSections, announcement, authorTitle: input.authorTitle ?? '', photoCredit: input.photoCredit ?? '', featured: input.featured === true, title: input.title, dek: input.dek, section: input.section, area: input.area, author: input.author, church: input.church, body: input.body, ...(input.photoLayout ? { photoLayout: input.photoLayout } : {}), ...(input.date ? { date: input.date } : {}) },
           sourceUrl: input.sourceUrl,
           agentNote: input.note || null,
         });
       }
       if (input.photos) {
-        const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+        const ins = db.prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at, focal_x, focal_y, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         input.photos.forEach((p, i) => {
           const rel = writeUpload(id, p.bytes, p.ext);
           written.push(rel);
-          ins.run(id, rel, p.ext, p.alt, i, Date.now());
+          ins.run(id, rel, p.ext, p.alt, i, Date.now(), p.focalX ?? 50, p.focalY ?? 50, p.zoom ?? 1);
         });
       }
       if (requestHash) db.prepare('INSERT INTO agent_requests (request_hash, payload_hash, draft_id, result, created_at) VALUES (?, ?, ?, ?, ?)').run(requestHash, payloadHash, id, status, Date.now());
