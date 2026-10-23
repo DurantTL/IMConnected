@@ -758,12 +758,18 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
 body:not(.admin) .cta-pair .cta-half h2 { font-size: clamp(1.4rem, 2.4vw, 1.9rem); }
 @media (max-width: 700px) { .cta-pair { grid-template-columns: 1fr; } .cta-pair .cta-half .btn { justify-self: stretch; } }
 .share [data-print][hidden] { display: none; }
+/* Listen to this story (issue #118): shown by src/scripts/listen.ts only when the browser can speak. */
+.listen { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 0; }
+.listen[hidden], .listen [hidden] { display: none; }
+.listen button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; font: 600 0.86rem/1.4 var(--sans); padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.listen button:hover { color: var(--ink); }
+.listen-status { font-size: 0.85rem; color: var(--ink-3); min-width: 0; overflow-wrap: anywhere; }
 
 /* ---------- Print (issue #116): the story alone, black on white ---------- */
 @media print {
   @page { margin: 18mm 16mm; }
   html, body, body:not(.admin) { background: #fff !important; color: #000 !important; }
-  .skip, .site-header, .site-footer, .nav, #mobile-nav, .article-breadcrumb, .article-reading, .share, .newsletter-ask, .cta, .article ~ .block,
+  .skip, .site-header, .site-footer, .nav, #mobile-nav, .article-breadcrumb, .article-reading, .share, .listen, .newsletter-ask, .cta, .article ~ .block,
   .archive-rail, [class*="archive-rail"], .viewer, .viewer-controls, .photos-carousel-bar { display: none !important; }
   .wrap, .article { max-width: none !important; width: auto !important; margin: 0 !important; padding: 0 !important; }
   .article h1, .article .dek, .article .byline, .article .key-points, .article .key-points *, .article .prose, .article .prose * , .article figcaption, .photo-caption, .article-categories a { color: #000 !important; background: none !important; }

@@ -80,6 +80,12 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
       </div>
       {issue && <p class="article-provenance">Originally published in <a href={`/issues/${issue.number}/`}>IMConnected Issue #{issue.number}</a> · <time datetime={issue.date}>{formatDate(new Date(`${issue.date}T00:00:00.000Z`))}</time></p>}
       <p class="article-reading"><span>{readingMinutes} min read</span><a href="#article-body">Read the story <span aria-hidden="true">↓</span></a></p>
+      <div class="listen" data-listen role="group" aria-label="Listen" hidden>
+        <button type="button" data-listen-start>Listen to this story</button>
+        <button type="button" data-listen-pause hidden>Pause</button>
+        <button type="button" data-listen-stop hidden aria-label="Stop listening">Stop</button>
+        <span class="listen-status" data-listen-status role="status" aria-live="polite"></span>
+      </div>
       </header>
 
       {keyPoints.length > 0 && (
@@ -173,6 +179,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
   import '../scripts/photo-viewer';
   import '../scripts/photo-carousel';
   import '../scripts/story-video';
+  import '../scripts/listen';
 
   document.querySelectorAll<HTMLButtonElement>('[data-print]').forEach((b) => { b.hidden = false; b.addEventListener('click', () => { eagerImages(); window.print(); }); });
   const eagerImages = () => document.querySelectorAll<HTMLImageElement>('.article img[loading="lazy"]').forEach((i) => { i.loading = 'eager'; });
