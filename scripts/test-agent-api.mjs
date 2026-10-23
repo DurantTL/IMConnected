@@ -629,7 +629,7 @@ try {
     // ---- capabilities ----
     const caps = await fget('/api/agent/sections');
     const b = caps.data.photoBudget ?? {};
-    check('capabilities list photoLayouts, photoMimeTypes and the photo budget', caps.status === 200 && JSON.stringify(caps.data.photoLayouts) === '["one","twoUp","heroGrid","mosaic","stack"]' && caps.data.photoMimeTypes.includes('image/avif') && caps.data.photoMimeTypes.length === 4 && b.maxPhotos === 6 && b.maxPhotoBytes === 10 * 1024 * 1024 && b.maxRequestBytes === 40 * 1024 * 1024);
+    check('capabilities list photoLayouts, photoMimeTypes and the photo budget', caps.status === 200 && JSON.stringify(caps.data.photoLayouts) === '["one","twoUp","heroGrid","mosaic","stack","carousel","threeUp"]' && caps.data.photoMimeTypes.includes('image/avif') && caps.data.photoMimeTypes.length === 4 && b.maxPhotos === 6 && b.maxPhotoBytes === 10 * 1024 * 1024 && b.maxRequestBytes === 40 * 1024 * 1024);
     check('...maxImageBytesPerRequest = floor(maxRequestBytes * 3 / 4) - jsonAllowanceBytes (about 30 MB, below 6 x 10 MB)', b.maxImageBytesPerRequest === Math.floor(b.maxRequestBytes * 3 / 4) - b.jsonAllowanceBytes && b.maxImageBytesPerRequest < b.maxPhotos * b.maxPhotoBytes && b.maxImageBytesPerRequest < 30 * 1024 * 1024);
     check('...the existing fields are still there (additive only)', caps.data.sections.length === 5 && !!caps.data.additionalSections && !!caps.data.announcement && caps.data.reopen.endpoint === '/api/agent/stories/reopen' && Array.isArray(caps.data.photoFormats) && caps.data.limits.photos === 6);
     check('the f server logs hold no token, note or upload path', !logs.f.join('\n').includes(AGENT_TOKEN) && !logs.f.join('\n').includes('Picked because') && !logs.f.join('\n').includes('uploads'));

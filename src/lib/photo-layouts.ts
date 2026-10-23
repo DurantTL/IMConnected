@@ -8,6 +8,8 @@ export const PHOTO_LAYOUTS = [
   { value: 'heroGrid', label: 'Hero + grid', hint: 'One large photo, then the next two side by side.' },
   { value: 'mosaic', label: 'Mosaic', hint: 'All photos in rows of two.' },
   { value: 'stack', label: 'Stack', hint: 'All photos one under another.' },
+  { value: 'carousel', label: 'Carousel', hint: 'One photo at a time with arrows and swipe; never plays by itself.' },
+  { value: 'threeUp', label: 'Three up', hint: 'An even grid of three photos across (two on small screens).' },
 ] as const;
 
 export type PhotoLayout = (typeof PHOTO_LAYOUTS)[number]['value'];
@@ -26,9 +28,12 @@ export function photoLayoutOrDefault(v: unknown): PhotoLayout {
   return isPhotoLayout(v) ? v : DEFAULT_PHOTO_LAYOUT;
 }
 
-/** One row of a laid-out set of photos: `hero` and `wide` are one photo across the full width, `pair` is two side by side. */
+/**
+ * One row of a laid-out set of photos: `hero` and `wide` are one photo across the full width, `pair` is two side by side,
+ * `triple` is an even three-column grid that wraps (all of its photos, however many), `carousel` is every photo in one strip.
+ */
 export interface PhotoRow {
-  kind: 'hero' | 'wide' | 'pair';
+  kind: 'hero' | 'wide' | 'pair' | 'triple' | 'carousel';
   /** Indexes into the story's photo list (lead first). */
   photos: number[];
 }
@@ -65,5 +70,10 @@ export function planPhotos(layout: PhotoLayout, count: number): PhotoPlan {
       return { mode: 'layout', rows: pairsFrom(0, count), rest: [] };
     case 'stack':
       return { mode: 'layout', rows: range(0, count).map((i) => ({ kind: 'wide' as const, photos: [i] })), rest: [] };
+    case 'carousel':
+      return { mode: 'layout', rows: [{ kind: 'carousel', photos: range(0, count) }], rest: [] };
+    case 'threeUp':
+      // Two photos would leave an empty third of the row, so they are a pair; three or more share one wrapping grid.
+      return { mode: 'layout', rows: count === 2 ? [{ kind: 'pair', photos: [0, 1] }] : [{ kind: 'triple', photos: range(0, count) }], rest: [] };
   }
 }

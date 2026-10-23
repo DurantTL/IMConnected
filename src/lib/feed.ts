@@ -39,7 +39,7 @@ export interface FeedItem {
   imageCaption?: string;
   /** Visible caption of each of `photos`, same order; entries may be empty. Plain text. */
   photoCaptions: string[];
-  /** How the story page arranges the photos: one, twoUp, heroGrid, mosaic or stack (one = lead photo, others in a row) */
+  /** How the story page arranges the photos: one, twoUp, heroGrid, mosaic, stack, carousel or threeUp (one = lead photo, others in a row) */
   photoLayout: string;
   storyBlocks?: StoryBlock[];
   announcement?: Announcement | null;

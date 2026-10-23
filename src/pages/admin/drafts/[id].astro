@@ -377,7 +377,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <label class="ed-layout">
                     <input type="radio" name="photoLayout" value={l.value} checked={l.value === draft.photoLayout} />
                     <span class={`lay-mini lay-${l.value}`} aria-hidden="true">
-                      {Array.from({ length: { one: 1, twoUp: 2, heroGrid: 3, mosaic: 4, stack: 3 }[l.value] }, () => <i></i>)}
+                      {Array.from({ length: { one: 1, twoUp: 2, heroGrid: 3, mosaic: 4, stack: 3, carousel: 3, threeUp: 3 }[l.value] }, () => <i></i>)}
                     </span>
                     <span class="lay-name">{l.label}</span>
                     <span class="lay-hint">{l.hint}</span>

@@ -125,7 +125,7 @@ function readStory(file) {
   const captions = captionList.some(Boolean) ? captionList : undefined;
   const image = str(fm.image) || undefined;
   const photoLayout = fm.photoLayout === undefined || fm.photoLayout === null ? 'one' : String(fm.photoLayout);
-  if (!['one', 'twoUp', 'heroGrid', 'mosaic', 'stack'].includes(photoLayout)) throw new Error(`unknown photoLayout "${photoLayout.slice(0, 40)}"`);
+  if (!['one', 'twoUp', 'heroGrid', 'mosaic', 'stack', 'carousel', 'threeUp'].includes(photoLayout)) throw new Error(`unknown photoLayout "${photoLayout.slice(0, 40)}"`);
   // Same as the dashboard: every "<" becomes &lt; so no tag, comment or autolink can be stored.
   const storyBlocks = blockMod.escapeStoryBlocks(blockMod.normalizeStoryBlocks(fm.storyBlocks));
   // An image module can only show one of this story's own photos (its lead image or gallery), never another address.
