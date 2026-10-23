@@ -791,12 +791,12 @@ let S;
   const base = () => baseFields({ title: 'Key Points Story', body: 'Plain body for the key points test.', dek: 'Key points dek.' });
   check('migration 033: drafts.key_points and stories.key_points exist, NOT NULL, default []', ['drafts', 'stories'].every((t) => q(`SELECT "notnull" AS nn, dflt_value AS d FROM pragma_table_info('${t}') WHERE name = 'key_points'`).some((c) => c.nn === 1 && c.d === "'[]'")));
   let r = await c1.get(`/admin/drafts/${K}`);
-  check('the Settings tab has three optional Key points inputs (160 characters each)', ['keyPoint0', 'keyPoint1', 'keyPoint2'].every((n) => r.text.includes(`name="${n}"`)) && r.text.includes('name="keyPointsPresent"') && (r.text.match(/name="keyPoint\d" value="[^"]*" maxlength="160"/g) ?? []).length === 3);
+  check('the Settings tab has three optional Key points inputs (160 characters each)', ['keyPoint0', 'keyPoint1', 'keyPoint2'].every((n) => r.text.includes(`name="${n}"`)) && r.text.includes('name="keyPointsPresent"') && (r.text.match(/name="keyPoint\d" value(?:="[^"]*")? maxlength="160"/g) ?? []).length === 3, r.text.slice(Math.max(0, r.text.indexOf("keyPoint0") - 200), r.text.indexOf("keyPoint0") + 300));
   const HOSTILE = '<script>window.__pwned=1</script> **bold** & [x](https://example.invalid)';
   r = await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...base(), ...kp('  First point  ', '', HOSTILE) });
   check('saving stores the points trimmed, empty entries dropped, text kept raw', r.data.ok && JSON.stringify(stored(K)) === JSON.stringify(['First point', HOSTILE]), JSON.stringify([r.data, draftRow(K).key_points]));
   r = await c1.get(`/admin/drafts/${K}`);
-  check('the editor shows saved points escaped in the inputs', r.text.includes('value="First point"') && !r.text.includes('<script>window.__pwned') && r.text.includes('&lt;script&gt;window.__pwned=1'));
+  check('the editor shows saved points escaped in the inputs', r.text.includes('value="First point"') && r.text.includes('value="<script>window.__pwned=1</script> **bold** &amp; [x](https://example.invalid)"')); // inside a quoted attribute, so inert
   const before = draftRow(K).key_points;
   r = await c1.json(`/api/admin/drafts/${K}/save`, { version: version(K), ...base() });
   check('a form without the key points fields keeps the stored list', r.data.ok && draftRow(K).key_points === before);

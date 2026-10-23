@@ -36,7 +36,7 @@ const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 // A throwaway copy of the built photos, so tests can add symlinks and odd files without touching dist/.
 const CLIENT_TMP = path.join(SCRATCH, 'client');
 fs.cpSync(path.join(ROOT, 'dist/client/images'), path.join(CLIENT_TMP, 'images'), { recursive: true });
-const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529, j: 4530, k: 4531, l: 4532 };
+const P = { mail: 4511, a: 4521, b: 4522, c: 4523, d: 4524, e: 4525, f: 4526, g: 4527, h: 4528, i: 4529, j: 4530, k: 4531, l: 4532, m: 4533 };
 const BASE = `http://localhost:${P.a}`;
 const AGENT_TOKEN = 'e2e-made-up-agent-token-' + 'a'.repeat(24);
 const PUBLISH_TOKEN = 'e2e-made-up-publish-token-' + 'p'.repeat(24);
@@ -58,7 +58,7 @@ const run = (sql, ...args) => { const db = new DatabaseSync(DB_FILE); db.exec('P
 
 // ---- processes ----
 const procs = [];
-const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [], j: [], k: [], l: [] };
+const logs = { mail: [], a: [], b: [], c: [], d: [], e: [], f: [], g: [], h: [], i: [], j: [], k: [], l: [], m: [] };
 function start(name, cmd, args, env) {
   const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   const sink = (d) => logs[name].push(...String(d).split('\n').filter(Boolean));
@@ -163,7 +163,8 @@ start('i', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.i), DA
 start('j', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.j), DATA_DIR: path.join(SCRATCH, 'data-j'), SITE_URL: `http://localhost:${P.j}`, AGENT_API_TOKEN: AGENT_TOKEN, AGENT_BATCH_ITEMS_PER_HOUR: '10' }); // issue 90: ceiling below the batch size limit
 start('k', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.k), DATA_DIR: path.join(SCRATCH, 'data-k'), SITE_URL: `http://localhost:${P.k}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 98 newsletter issue checks, its own rate window
 start('l', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.l), DATA_DIR: path.join(SCRATCH, 'data-l'), SITE_URL: `http://localhost:${P.l}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 82 photo fit checks, its own rate window
-for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i, P.j, P.k, P.l]) await waitFor(`http://localhost:${port}/`);
+start('m', 'node', ['dist/server/entry.mjs'], { ...common, PORT: String(P.m), DATA_DIR: path.join(SCRATCH, 'data-m'), SITE_URL: `http://localhost:${P.m}`, AGENT_API_TOKEN: AGENT_TOKEN }); // issue 117 key points checks, its own rate window
+for (const port of [P.a, P.b, P.c, P.d, P.e, P.f, P.g, P.h, P.i, P.j, P.k, P.l, P.m]) await waitFor(`http://localhost:${port}/`);
 
 try {
   // ---- helpers ----
@@ -1066,6 +1067,56 @@ try {
     const body = (await read(id2)).text;
     check('read-back carries no contacts', !/@e2e-mail|submitter/i.test(body));
     check('the agent cannot publish: creating issues changed nothing public', qk('SELECT COUNT(*) c FROM stories')[0].c === storiesBefore && qk('SELECT COUNT(*) c FROM stories WHERE newsletter_issue IS NOT NULL')[0].c === 0 && !(await call(K, 'GET', '/stories.json')).text.includes('Synthetic Issue Story'));
+  }
+
+  // ================= key points (issue #117) =================
+  {
+    const M = `http://localhost:${P.m}`;
+    const MDB = path.join(SCRATCH, 'data-m', 'imconnected.db');
+    const qm = (sql, ...args) => { const db = new DatabaseSync(MDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
+    await fetch(M + '/admin/login');
+    const post = (json) => call(M, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json });
+    const read = (id) => call(M, 'GET', `/api/agent/stories/${id}`, { token: AGENT_TOKEN });
+    const mk = (n, over = {}) => ({ title: `Synthetic Key Points Story ${n}`, body: 'Synthetic body for a key points story.', sourceUrl: `https://www.facebook.com/example-page/posts/117${n}`, ...over });
+    const kpRow = (id) => JSON.parse(qm('SELECT key_points k FROM drafts WHERE id = ?', id)[0].k);
+    let r = await call(M, 'GET', '/api/agent/sections', { token: AGENT_TOKEN });
+    check('GET /api/agent/sections documents keyPoints (limits, semantics) and lists it for reopen', r.status === 200 && r.data.keyPoints?.field === 'keyPoints' && r.data.keyPoints.maxItems === 3 && r.data.keyPoints.maxLength === 160 && /bad_key_points/.test(r.data.keyPoints.semantics) && r.data.reopen.changesFields.includes('keyPoints'), r.text.slice(0, 300));
+
+    r = await post(mk(1, { keyPoints: ['  Synthetic first point  ', '', '<script>alert(1)</script> **plain** & text'] }));
+    const id1 = r.data.id;
+    check('create with keyPoints stores them trimmed, empties dropped, raw (not Markdown or HTML)', r.status === 201 && JSON.stringify(kpRow(id1)) === JSON.stringify(['Synthetic first point', '<script>alert(1)</script> **plain** & text']), r.text.slice(0, 200));
+    let v = (await read(id1)).data;
+    check('...read-back returns keyPoints', JSON.stringify(v.draft?.keyPoints) === JSON.stringify(['Synthetic first point', '<script>alert(1)</script> **plain** & text']), JSON.stringify(v).slice(0, 300));
+    r = await post(mk(1, { dek: 'A summary added by an update.' }));
+    check('an update that omits keyPoints keeps them', r.status === 201 && kpRow(id1).length === 2, `${r.status} ${r.text.slice(0, 160)}`);
+    r = await post(mk(1, { keyPoints: ['Replaced point'] }));
+    check('an update with keyPoints replaces the list', r.status === 201 && JSON.stringify(kpRow(id1)) === JSON.stringify(['Replaced point']));
+    r = await post(mk(1, { keyPoints: null }));
+    check('keyPoints: null clears them', r.status === 201 && kpRow(id1).length === 0);
+    r = await post(mk(1, { keyPoints: ['Back again'] }));
+    r = await post(mk(1, { keyPoints: [] }));
+    check('keyPoints: [] clears them', r.status === 201 && kpRow(id1).length === 0);
+    r = await post(mk(2));
+    check('a new draft without keyPoints has none', r.status === 201 && kpRow(r.data.id).length === 0 && (await read(r.data.id)).data.draft.keyPoints.length === 0);
+
+    const draftsBefore = qm('SELECT COUNT(*) c FROM drafts')[0].c;
+    for (const [label, value] of [['four points', ['a', 'b', 'c', 'd']], ['a point over 160 characters', ['x'.repeat(161)]], ['a non-text point', ['ok', 5]], ['not a list', 'one point'], ['an object', { a: 1 }]]) {
+      r = await post(mk(3, { keyPoints: value }));
+      check(`invalid keyPoints (${label}) is 400 bad_key_points`, r.status === 400 && r.data.error === 'bad_key_points', `${r.status} ${r.text.slice(0, 200)}`);
+    }
+    check('...and nothing was created', qm('SELECT COUNT(*) c FROM drafts')[0].c === draftsBefore);
+    r = await post(mk(1, { keyPoints: ['a', 'b', 'c', 'd'] }));
+    check('an invalid update leaves the stored list alone', r.status === 400 && r.data.error === 'bad_key_points' && kpRow(id1).length === 0);
+    r = await post(mk(4, { keyPoints: ['a', '', '  ', 'b', 'c'] }));
+    check('empty entries do not count toward the limit of three', r.status === 201 && JSON.stringify(kpRow(r.data.id)) === JSON.stringify(['a', 'b', 'c']), r.text.slice(0, 200));
+
+    r = await call(M, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: { requestId: 'issue117-batch-0001', stories: [
+      mk(5, { keyPoints: ['Batch point'] }),
+      mk(6, { keyPoints: ['1', '2', '3', '4'] }),
+      mk(7),
+    ] } });
+    const res = r.data.results ?? [];
+    check('batch items accept keyPoints; an invalid list fails that item alone with bad_key_points', r.status === 200 && res[0]?.ok && JSON.stringify(kpRow(res[0].id)) === JSON.stringify(['Batch point']) && res[1]?.error === 'bad_key_points' && res[2]?.ok && kpRow(res[2].id).length === 0, `${r.status} ${r.text.slice(0, 400)}`);
   }
 
   // ================= rate limit =================
