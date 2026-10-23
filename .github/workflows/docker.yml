@@ -1,13 +1,12 @@
 name: Build & publish image
 
-# Every merge to main builds a new image. Stories are published in the dashboard and live in the database, so there are
-# no content commits any more; a hand-committed story file or photo (the frozen archive) does not build an image.
+# The image is built once a day (not on every merge), so a day of merges ships as one image and uses one build's worth
+# of Actions minutes. The daily run skips the build when main has not changed since the last deployed image. To ship at
+# once after the last merge of the day, run this workflow by hand (Actions → Build & publish image → Run workflow).
+# Stories are published in the dashboard and live in the database, so story content never needs an image.
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'src/content/stories/**'
-      - 'public/images/stories/**'
+  schedule:
+    - cron: '43 7 * * *' # 07:43 UTC daily (2:43 a.m. Central in summer, 1:43 a.m. in winter)
   pull_request:
     branches: [main]
     paths-ignore:
@@ -40,6 +39,8 @@ jobs:
 
       # Publish only from main, and only while this commit is still main's newest. A manual
       # run on another branch, or a re-run of an old main run, must not replace :latest.
+      # The daily run also skips when the deploy branch already points at this commit (nothing new
+      # was merged since the last image); a manual run always builds.
       - name: Decide whether to publish
         id: target
         run: |
@@ -47,6 +48,11 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" != pull_request ] && [ "$GITHUB_REF" = refs/heads/main ] \
             && [ "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA" ]; then
             publish=true
+          fi
+          if [ "$publish" = true ] && [ "$GITHUB_EVENT_NAME" = schedule ] \
+            && [ "$(git ls-remote origin refs/heads/deploy | cut -f1)" = "$GITHUB_SHA" ]; then
+            echo "main has not changed since the last deployed image; nothing to build."
+            publish=false
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
