@@ -16,7 +16,7 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
   spotlight.dataset.enhanced = 'true'; // the native scrollbar stays visible until the arrows and numbers exist
   status.hidden = false;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  let requested = !reduced.matches, hovered = false, focused = false, visible = false, touching = false;
+  let requested = !reduced.matches, hovered = false, focused = false, visible = false, touching = false, startLeft = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const interval = 7000;
   const active = () => slides.reduce((best, slide, index) =>
@@ -54,15 +54,23 @@ for (const spotlight of document.querySelectorAll<HTMLElement>('[data-event-spot
     if (event.target !== track || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); move(event.key === 'ArrowRight' ? 1 : -1); }
   });
-  spotlight.addEventListener('pointerenter', (event) => { if (event.pointerType === 'mouse' || event.pointerType === 'pen') { hovered = true; schedule(); } });
+  // Devices without hover (phones) can report a sticky mouse pointer after a touch; it must not hold rotation.
+  const canHover = matchMedia('(hover: hover)');
+  spotlight.addEventListener('pointerenter', (event) => { if (canHover.matches && (event.pointerType === 'mouse' || event.pointerType === 'pen')) { hovered = true; schedule(); } });
   spotlight.addEventListener('pointerleave', () => { hovered = false; schedule(); });
-  spotlight.addEventListener('focusin', () => { focused = true; schedule(); });
-  spotlight.addEventListener('focusout', (event) => { focused = touching || (event.relatedTarget instanceof Node && spotlight.contains(event.relatedTarget)); schedule(); });
-  // A touch pauses rotation only while the finger is down. A swipe (the browser takes over the gesture and cancels the
-  // pointer) counts as the reader choosing events themselves, so automatic advance stops until Resume is pressed.
-  track.addEventListener('pointerdown', () => { touching = true; schedule(); });
-  track.addEventListener('pointerup', () => { touching = false; schedule(); });
-  track.addEventListener('pointercancel', () => { touching = false; requested = false; schedule(); });
+  // Only keyboard (focus-visible) focus holds rotation; a tap that merely focuses the scrollable track does not.
+  spotlight.addEventListener('focusin', () => { focused = spotlight.querySelector(':focus-visible') !== null; schedule(); });
+  spotlight.addEventListener('focusout', (event) => { if (!(event.relatedTarget instanceof Node && spotlight.contains(event.relatedTarget))) focused = false; schedule(); });
+  // A finger pauses rotation only while it is down (touch only, so a mouse press released elsewhere cannot stick).
+  // The browser cancels the pointer for any pan, vertical page scrolling included, so a swipe is judged by the track's
+  // horizontal scroll position: moving it counts as the reader choosing events themselves and stops automatic advance
+  // until Resume is pressed. Touch events end the gesture even after the pointer was cancelled.
+  track.addEventListener('pointerdown', (event) => { if (event.pointerType !== 'touch') return; touching = true; startLeft = track.scrollLeft; schedule(); });
+  track.addEventListener('pointerup', (event) => { if (event.pointerType !== 'touch') return; touching = false; schedule(); });
+  const release = () => { if (!touching) return; touching = false; schedule(); };
+  track.addEventListener('touchend', release, { passive: true });
+  track.addEventListener('touchcancel', release, { passive: true });
+  track.addEventListener('scroll', () => { if (touching && requested && Math.abs(track.scrollLeft - startLeft) > 4) { requested = false; schedule(); } }, { passive: true });
   track.addEventListener('scroll', update, { passive: true });
   new ResizeObserver(update).observe(track);
   document.addEventListener('visibilitychange', schedule);
