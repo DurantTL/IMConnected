@@ -841,6 +841,7 @@ let S;
     const rsText = await rs.text();
     check('Studio /api/publish over the live story (same address) succeeds', rs.status === 200 && rsText.includes(slug), rsText.slice(0, 200));
     check('...and leaves the story key points unchanged', JSON.stringify(JSON.parse(story(slug).key_points)) === JSON.stringify(['Camp opens June 9.', 'Register by May 31.', HOSTILE]) && story(slug).body.includes('Studio rewrote'));
+    check('...and the published draft mirrors the live key points', JSON.stringify(stored(K)) === JSON.stringify(['Camp opens June 9.', 'Register by May 31.', HOSTILE]), draftRow(K).key_points);
   }
 
   // edit the live story: the points load into the draft, survive a republish, and clearing works
