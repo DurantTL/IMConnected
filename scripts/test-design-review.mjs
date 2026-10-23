@@ -3,6 +3,7 @@
 // npm run build
 // [PLAYWRIGHT_ROOT=<folder>] [CHROMIUM_PATH=<browser>] [CHROMIUM_NO_SANDBOX=1] [AXE_JS=<axe.min.js>] node scripts/test-design-review.mjs
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -58,6 +59,17 @@ try {
   for (const [i, [section, area, title]] of fixtures.entries()) {
     insert.run(`synthetic-design-${i + 1}`, title, 'Synthetic design example for the IMConnected story magazine.', section, area, Number(i === 0),
       'This synthetic church story is a design fixture. It demonstrates the reading layout, section navigation and story search without using real people or submissions.\n\n## A shared story\n\nEvery community has a story to share. This example contains no report of a real event.', now, now);
+  }
+  // Two news stories get a photo, so section rows mix photo and no-photo cards (their headlines must still line up).
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgaPgPAAKAAX9Fl7IMAAAAAElFTkSuQmCC', 'base64');
+  const sha = crypto.createHash('sha256').update(png).digest('hex');
+  for (const n of [2, 3]) {
+    const slug = `synthetic-design-${n}`, rel = `stories/${slug}/${sha}.png`;
+    fs.mkdirSync(path.join(scratch, 'media', 'stories', slug), { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'media', rel), png);
+    const { id } = fixtureDb.prepare('SELECT id FROM stories WHERE slug = ?').get(slug);
+    fixtureDb.prepare('UPDATE stories SET image = ?, image_alt = ?, rev = rev + 1 WHERE id = ?').run('/media/' + rel, 'Synthetic colour block', id);
+    fixtureDb.prepare("INSERT INTO story_photos (story_id,position,kind,path,url,alt,sha256,bytes) VALUES (?,0,'lead',?,NULL,'Synthetic colour block',?,?)").run(id, rel, sha, png.length);
   }
 } finally {
   fixtureDb.close();
@@ -119,6 +131,22 @@ try {
       check(`${name} at ${width}px responds successfully`, response.status() === 200);
       check(`${name} at ${width}px has no horizontal page overflow`, dimensions.scroll <= dimensions.width);
       check(`${name} at ${width}px has no uncaught script errors`, errors.length === 0);
+      if (name === 'section') {
+        // Cards side by side in a grid row share their top and headline position, photo or not (layout offsets ignore the reveal animation).
+        const ragged = await page.evaluate(() => {
+          const rows = new Map();
+          for (const card of document.querySelectorAll('main .grid > .card')) {
+            const key = `${[...card.parentElement.parentElement.children].indexOf(card.parentElement)}:${card.offsetTop}`;
+            (rows.get(key) || rows.set(key, []).get(key)).push(card);
+          }
+          return [...rows.values()].filter((row) => row.length > 1).flatMap((row) => {
+            const heading = new Set(row.map((card) => card.querySelector('h2,h3').offsetTop));
+            return heading.size > 1 ? [row.map((card) => card.querySelector('h2,h3').textContent).join(' | ')] : [];
+          });
+        });
+        if (ragged.length) console.log('ragged rows:', ragged);
+        check(`${name} at ${width}px lines up headlines across each card row`, ragged.length === 0);
+      }
       if (width === 1440 && ['home', 'section', 'story', 'submit', 'search'].includes(name)) {
         const current = await page.evaluate(() => ({
           latest: document.querySelector('.nav a[href="/"]')?.getAttribute('aria-current') ?? null,

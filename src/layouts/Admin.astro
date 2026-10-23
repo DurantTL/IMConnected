@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import BrandMark from '../components/BrandMark.astro';
 import { SITE } from '../lib/site';
 import { countOpenDrafts } from '../lib/drafts';
 
@@ -41,7 +42,7 @@ const nav = [
   <body class="admin">
     <a class="skip" href="#main">Skip to content</a>
     <header class="admin-bar">
-      <a class="admin-brand" href="/admin"><span class="admin-brand-kicker">Editorial workspace</span>{SITE.name}</a>
+      <a class="admin-brand" href="/admin"><BrandMark /><span class="admin-brand-kicker">Editorial workspace</span></a>
       {user && (
         <nav aria-label="Editor navigation">
           {Astro.locals.session?.mfaPassed && nav.map((n) => (
@@ -60,14 +61,14 @@ const nav = [
 <style is:global>
   .admin { background: var(--bg); }
   .admin-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 16px var(--gutter); background: var(--surface); color: var(--ink); border-bottom: 1px solid var(--line); }
-  .admin-brand { display: grid; gap: 4px; font-family: var(--serif); font-weight: 700; font-size: 1.35rem; line-height: 1.15; color: var(--brand); text-decoration: none; min-height: 44px; align-content: center; }
+  .admin-brand { display: grid; gap: 4px; font-family: var(--serif); font-weight: 700; font-size: 1.35rem; line-height: 1.15; color: var(--brand-text); text-decoration: none; min-height: 44px; align-content: center; }
   .admin-brand .admin-brand-kicker { font-family: var(--sans); font-weight: 700; font-size: .65rem; color: var(--ink-2); text-transform: uppercase; letter-spacing: .12em; }
   .admin-bar nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: auto; }
   .admin-bar nav a, .admin-bar nav button { justify-content: center; color: var(--ink-2); font: 600 .88rem var(--sans); background: none; border: 1px solid transparent; padding: 10px 12px; cursor: pointer; text-decoration: none; border-radius: 9px; }
-  .admin-bar nav a:hover, .admin-bar nav button:hover { color: var(--brand); background: var(--surface-2); }
-  .admin-bar nav a[aria-current] { color: var(--brand); background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand) 18%, var(--surface)); }
+  .admin-bar nav a:hover, .admin-bar nav button:hover { color: var(--brand-text); background: var(--surface-2); }
+  .admin-bar nav a[aria-current] { color: var(--brand-text); background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand) 18%, var(--surface)); }
   .admin-public-link { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; font-size: .85rem; font-weight: 600; text-decoration: none; color: var(--ink-2); }
-  .admin-public-link:hover { color: var(--brand); border-color: var(--brand); }
+  .admin-public-link:hover { color: var(--brand-text); border-color: var(--brand); }
   .admin-bar form { margin: 0; }
   .nav-count { display: inline-block; margin-left: 6px; min-width: 1.5em; padding: 0 6px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); font-size: .75rem; font-weight: 700; text-align: center; line-height: 1.5; }
   .notify-check { display: flex !important; gap: 10px; align-items: center; min-height: 44px; }
@@ -110,7 +111,7 @@ const nav = [
   .admin-bar nav a, .admin-bar nav button { display: inline-flex; align-items: center; min-height: 44px; }
   .cms-filters select, .ed select, .ed input[type=text], .ed input[type=date], .ed textarea, .ed-photo input[type=text], .ed input[type=file] { font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); max-width: 100%; }
   .cms-btn { display: inline-block; min-height: 44px; padding: 10px 16px; font: inherit; font-weight: 600; line-height: 1.2; border: 1px solid var(--brand); border-radius: 8px; background: var(--brand); color: var(--brand-ink); text-decoration: none; cursor: pointer; }
-  .cms-btn.secondary { background: none; color: var(--brand); }
+  .cms-btn.secondary { background: none; color: var(--brand-text); }
   .cms-btn.danger { background: none; color: #8a1f11; border-color: #8a1f11; }
   .cms-btn:disabled { opacity: .5; cursor: default; }
   .cms-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }

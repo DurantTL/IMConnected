@@ -88,7 +88,7 @@ try {
   const page=await context.newPage(),errors=[];page.on('pageerror',(e)=>errors.push(String(e)));page.setDefaultTimeout(12000);
   await page.goto(BASE+'/');await page.locator('[data-event-track]').waitFor();
   check('homepage rail shows exactly the current public upcoming events',await page.locator('[data-event-slide]').count()===3&&await page.locator('[data-event-slide]').first().innerText().then((s)=>s.includes('Synthetic community gathering'))&&!await page.locator('[data-event-track]').innerText().then((s)=>/expired|hidden|draft-only|public announcement/.test(s)));
-  check('slider begins with correct boundary controls',await page.getByRole('button',{name:'Previous event',exact:true}).isDisabled()&&!await page.getByRole('button',{name:'Next event',exact:true}).isDisabled());
+  check('slider arrows wrap, so neither is ever disabled (keyboard focus is never lost at either end)',!await page.getByRole('button',{name:'Previous event',exact:true}).isDisabled()&&!await page.getByRole('button',{name:'Next event',exact:true}).isDisabled());
   await page.getByRole('button',{name:'Next event',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-event-status]')?.textContent==='Event 2 of 3');
   check('Next deliberately advances the event rail',await page.locator('[data-event-status]').innerText()==='Event 2 of 3');
   await page.locator('[data-event-track]').focus();await page.keyboard.press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('[data-event-status]')?.textContent==='Event 1 of 3');

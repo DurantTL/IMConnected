@@ -1,4 +1,5 @@
 ---
+import BrandMark from './BrandMark.astro';
 import { SECTIONS, SITE } from '../lib/site';
 const year = new Date().getFullYear();
 ---
@@ -8,7 +9,7 @@ const year = new Date().getFullYear();
     <div class="cols">
       <div>
         <a class="brand" href="/">
-          <span class="brand-name">IM<span>Connected</span></span>
+          <BrandMark />
         </a>
         <p class="footer-intro">{SITE.tagline}. A publication of the <a href={SITE.publisherUrl}>{SITE.publisher}</a>.</p>
       </div>
