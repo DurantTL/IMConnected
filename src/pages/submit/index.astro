@@ -7,7 +7,7 @@ const submittable = SECTIONS.filter((s) => s.submittable);
 const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY || '';
 const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]));
 ---
-<Base title="Submit a Story" description="Share news and stories from your church, school or club with IMConnected.">
+<Base title="Submit a Story" description="Share news, stories, announcements and events from your church, school or club with IMConnected.">
   <div class="wrap">
     <header class="page-head">
       <span class="kicker">Share your story</span>
@@ -25,6 +25,15 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
 
     <form class="form" id="submit-form" method="post" action="/api/submit" enctype="multipart/form-data">
       <div id="form-status" role="status" aria-live="polite"></div>
+
+      <fieldset>
+        <legend>What are you sending?</legend>
+        <div class="type-choice">
+          <label><input type="radio" name="kind" value="story" checked /><span>Story<small>News or a story to tell</small></span></label>
+          <label><input type="radio" name="kind" value="announcement" /><span>Announcement<small>A notice for the community</small></span></label>
+          <label><input type="radio" name="kind" value="event" /><span>Event<small>Something coming up, with a date</small></span></label>
+        </div>
+      </fieldset>
 
       <fieldset>
         <legend>About you</legend>
@@ -74,10 +83,21 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
           <label for="dek">One-sentence summary (optional)</label>
           <input id="dek" name="dek" type="text" maxlength={LIMITS.dek} />
         </div>
+        <div class="row-2" id="event-fields" data-types="event">
+          <div class="field">
+            <label for="eventDate">Event date (events only) <span data-event-star hidden>*</span></label>
+            <input id="eventDate" name="eventDate" type="date" />
+          </div>
+          <div class="field">
+            <label for="location">Location (optional, events only)</label>
+            <input id="location" name="location" type="text" maxlength="200" placeholder="e.g. Fellowship hall, 123 Example Street" />
+          </div>
+        </div>
         <div class="field">
-          <label for="body">Story *</label>
-          <textarea id="body" name="body" required minlength={LIMITS.bodyMin} maxlength={LIMITS.bodyMax}></textarea>
-          <span class="hint">Aim for 300–800 words. Separate paragraphs with a blank line. Include quotes if you have them.</span>
+          <label for="body" id="body-label">Story *</label>
+          <textarea id="body" name="body" required maxlength={LIMITS.bodyMax}></textarea>
+          <span class="hint" id="body-hint">Aim for 300–800 words. Separate paragraphs with a blank line. Include quotes if you have them.</span>
+          <span class="hint" data-types="announcement event">Have a flyer? Upload it as the first photo below. It is shown whole, never cropped. (Announcements and events only.)</span>
         </div>
       </fieldset>
 
@@ -148,6 +168,30 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
   sectionSel.addEventListener('change', syncAreas);
   syncAreas();
 
+  // "What are you sending?": every field is in the page without JavaScript (the server ignores what does not apply);
+  // here the type-specific ones are shown or hidden and the wording follows the choice.
+  const TYPE_COPY = {
+    story: { label: 'Story *', min: LIMITS.bodyMin, hint: 'Aim for 300–800 words. Separate paragraphs with a blank line. Include quotes if you have them.', button: 'Send my story' },
+    announcement: { label: 'Announcement *', min: LIMITS.bodyMinNotice, hint: 'Say what people need to know, in a few sentences (at least ' + LIMITS.bodyMinNotice + ' characters). Include who it is for and how to respond.', button: 'Send my announcement' },
+    event: { label: 'Event details *', min: LIMITS.bodyMinNotice, hint: 'Say what the event is, who it is for, the time and how to take part (at least ' + LIMITS.bodyMinNotice + ' characters).', button: 'Send my event' },
+  };
+  const bodyEl = document.getElementById('body');
+  const eventDate = document.getElementById('eventDate');
+  let currentType = 'story';
+  function syncType() {
+    currentType = (form.querySelector('input[name="kind"]:checked') || {}).value || 'story';
+    const copy = TYPE_COPY[currentType];
+    document.getElementById('body-label').textContent = copy.label;
+    document.getElementById('body-hint').textContent = copy.hint;
+    bodyEl.minLength = copy.min;
+    eventDate.required = currentType === 'event';
+    for (const el of form.querySelectorAll('[data-types]')) el.hidden = !el.dataset.types.split(' ').includes(currentType);
+    for (const el of form.querySelectorAll('[data-event-star]')) el.hidden = currentType !== 'event';
+    btn.textContent = copy.button;
+  }
+  for (const r of form.querySelectorAll('input[name="kind"]')) r.addEventListener('change', syncType);
+  syncType();
+
   function show(msg, kind) {
     status.innerHTML = '';
     const p = document.createElement('p');
@@ -208,12 +252,12 @@ const areaMap = Object.fromEntries(submittable.map((s) => [s.key, s.areas ?? []]
       const res = await fetch(form.action, { method: 'POST', body: fd, headers: { Accept: 'application/json' } });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Something went wrong. Please try again.');
-      location.href = '/submit/thanks/';
+      location.href = currentType === 'story' ? '/submit/thanks/' : '/submit/thanks/?type=' + currentType;
     } catch (err) {
       show(err.message, 'error');
       if (window.turnstile) window.turnstile.reset(); // tokens are single-use
       btn.disabled = false;
-      btn.textContent = 'Send my story';
+      btn.textContent = TYPE_COPY[currentType].button;
     }
   });
 </script>

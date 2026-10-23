@@ -791,6 +791,8 @@ export interface SubmissionInput {
   church: string;
   photoCredit: string;
   caption: string;
+  /** Set for a public announcement or event; links and video stay editor-only. */
+  announcement?: Announcement | null;
   submitter: { name: string; email: string; phone: string; church: string };
   /** Validated image bytes with their sniffed extension. */
   photos: { bytes: Uint8Array; ext: string }[];
@@ -807,7 +809,7 @@ export function createSubmissionDraft(sub: SubmissionInput): number {
       const id = createDraft({
         source: 'form',
         status: 'new',
-        fields: { title: sub.title, dek: sub.dek, section: sub.section, area: sub.area ?? '', author: sub.submitter.name, church: sub.church, photoCredit: sub.photoCredit, body: sub.body },
+        fields: { title: sub.title, dek: sub.dek, section: sub.section, area: sub.area ?? '', author: sub.submitter.name, church: sub.church, photoCredit: sub.photoCredit, body: sub.body, ...(sub.announcement ? { announcement: sub.announcement } : {}) },
         submitter: sub.submitter,
       });
       const ins = getDb().prepare('INSERT INTO draft_photos (draft_id, path, ext, alt, position, created_at) VALUES (?, ?, ?, ?, ?, ?)');

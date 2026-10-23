@@ -202,7 +202,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .field { display: grid; gap: 6px; }
 .field label { font-weight: 600; font-size: 0.92rem; }
 .field .hint { font-size: 0.82rem; color: var(--ink-3); }
-.field input[type='text'], .field input[type='email'], .field input[type='tel'], .field select, .field textarea {
+.field input[type='text'], .field input[type='email'], .field input[type='tel'], .field input[type='date'], .field select, .field textarea {
   font: inherit; font-size: 1rem; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 11px 12px; width: 100%; }
 .field textarea { min-height: 260px; resize: vertical; line-height: 1.55; }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 30%, transparent); }
@@ -794,3 +794,13 @@ body:not(.admin) .cta-pair .cta-half h2 { font-size: clamp(1.4rem, 2.4vw, 1.9rem
 .featured-link:focus-visible { outline: 3px solid var(--brand); outline-offset: 3px; }
 .featured-link.without-photo { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 860px) { .featured-link { grid-template-columns: minmax(0, 1fr); } .featured-copy { padding: 22px 20px; } }
+
+/* Submit form: "What are you sending?" type chooser (issue #123) */
+.type-choice { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.type-choice label { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--bg); cursor: pointer; font-weight: 600; min-height: 44px; }
+.type-choice label:has(input:checked) { border-color: var(--brand); background: var(--brand-soft); }
+.type-choice label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.type-choice input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+.type-choice small { display: block; font-weight: 400; font-size: 0.82rem; color: var(--ink-3); }
+@media (max-width: 620px) { .type-choice { grid-template-columns: 1fr; } }
+.form [hidden] { display: none !important; }

@@ -4,13 +4,22 @@ import Base from '../../layouts/Base.astro';
 <Base title="Thank you" noindex>
   <div class="wrap">
     <header class="page-head">
-      <span class="kicker">Story received</span>
+      <span class="kicker" id="thanks-kicker">Story received</span>
       <h1>Thank you for sharing!</h1>
       <p>
-        Your story has been sent to our editors. We review every submission and may reach out by email with questions.
+        <span id="thanks-what">Your story</span> has been sent to our editors. We review every submission and may reach out by email with questions.
         Once it’s approved, it will appear on IMConnected.
       </p>
     </header>
     <p><a class="btn" href="/">Back to stories</a> <a class="btn ghost" href="/submit/">Submit another</a></p>
   </div>
 </Base>
+<script is:inline>
+  // The form passes ?type=announcement|event so the thanks wording matches; without it the page reads as before.
+  const type = new URLSearchParams(location.search).get('type');
+  const what = { announcement: ['Announcement received', 'Your announcement'], event: ['Event received', 'Your event'] }[type];
+  if (Array.isArray(what)) {
+    document.getElementById('thanks-kicker').textContent = what[0];
+    document.getElementById('thanks-what').textContent = what[1];
+  }
+</script>
