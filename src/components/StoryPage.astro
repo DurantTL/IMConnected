@@ -122,7 +122,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
         <a href={`https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`} target="_blank" rel="noopener">Facebook</a>
         <a href={`mailto:?subject=${enc(d.title)}&body=${enc(url)}`}>Email</a>
         <button type="button" data-copy={url}>Copy link</button>
-        <button type="button" data-print hidden>Print</button>
+        <button type="button" data-print hidden>Print this story</button>
       </div>
     </article>
 
@@ -137,7 +137,7 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
     )}
 
     {newsletterSignup && (
-      <section class="cta cta-pair newsletter-ask" aria-label="Newsletter and sharing">
+      <section class="cta cta-pair newsletter-ask" aria-label="Newsletter and story submissions">
         <div class="cta-half">
           <h2>Get IMConnected in your inbox</h2>
           <p>Stories from churches, schools and clubs across the conference, delivered to you.</p>
@@ -166,7 +166,9 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
   import '../scripts/photo-carousel';
   import '../scripts/story-video';
 
-  document.querySelectorAll<HTMLButtonElement>('[data-print]').forEach((b) => { b.hidden = false; b.addEventListener('click', () => window.print()); });
+  document.querySelectorAll<HTMLButtonElement>('[data-print]').forEach((b) => { b.hidden = false; b.addEventListener('click', () => { eagerImages(); window.print(); }); });
+  const eagerImages = () => document.querySelectorAll<HTMLImageElement>('.article img[loading="lazy"]').forEach((i) => { i.loading = 'eager'; });
+  window.addEventListener('beforeprint', eagerImages);
 
   document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((b) =>
     b.addEventListener('click', async () => {

@@ -156,12 +156,12 @@ try {
   // ================= newsletter signup link and Print button (issue #116) =================
   const story0 = await get('/stories/s-pos1/');
   check('no signup link by default: the story page keeps only the submit call to action', !story0.text.includes('Get IMConnected in your inbox') && !story0.text.includes('newsletter-ask') && story0.text.includes('href="/submit/"') && JSON.parse((await get('/api/navigation')).text).newsletterSignup === '');
-  check('the Print button is rendered hidden (script unhides it) and the print stylesheet ships', /<button type="button" data-print hidden>Print<\/button>/.test(story0.text) && story0.text.includes('data-print'), '');
+  check('the Print button is rendered hidden (script unhides it) and the print stylesheet ships', /<button type="button" data-print hidden>Print this story<\/button>/.test(story0.text) && story0.text.includes('data-print'), '');
   const navNow = JSON.parse((await get('/api/navigation')).text);
   const navForm = (version, signup, extra = {}) => { const f = { version, action: 'save', ...extra }; if (signup !== undefined) f.newsletter_signup = signup; navNow.items.forEach((it, i) => { f[`id.${i}`] = it.id; f[`order.${i}`] = i + 1; f[`label.${i}`] = it.label; f[`href.${i}`] = it.href; if (it.visible) f[`visible.${i}`] = 'on'; }); return f; };
   for (const bad of ['http://example.invalid/signup', '/signup', '//example.invalid/signup', 'javascript:alert(1)', 'ftp://example.invalid/', 'https://user:pw@example.invalid/']) {
     const rb = await post('/admin/navigation', navForm(navNow.version, bad));
-    check('non-HTTPS or unsafe signup link refused: ' + bad, rb.status === 400 && JSON.parse((await get('/api/navigation')).text).version === navNow.version, String(rb.status));
+    check('non-HTTPS or unsafe signup link refused (field refilled, aria-invalid, inline error): ' + bad, rb.status === 400 && rb.text.includes('aria-invalid="true"') && rb.text.includes('id="newsletter-signup-error"') && rb.text.includes('Use a full HTTPS link for the newsletter signup.') && rb.text.includes('aria-describedby="newsletter-signup-error newsletter-signup-help"') && JSON.parse((await get('/api/navigation')).text).version === navNow.version, String(rb.status));
   }
   const SIGNUP = 'https://signup.example.invalid/join?list=synthetic';
   r = await post('/admin/navigation', navForm(navNow.version, SIGNUP));
