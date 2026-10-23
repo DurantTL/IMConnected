@@ -818,7 +818,7 @@ let S;
   const slug = draftRow(K).slug;
   check('publishing carries the key points to the story row', r.params.get('n') === 'published' && JSON.stringify(JSON.parse(story(slug).key_points)) === JSON.stringify(['Camp opens June 9.', 'Register by May 31.', HOSTILE]), r.loc);
   const page = (await getPub(`/stories/${slug}/`)).text;
-  const box = /<aside class="key-points"[^>]*>([\s\S]*?)<\/aside>/.exec(page)?.[1] ?? '';
+  const box = /<section class="key-points"[^>]*>([\s\S]*?)<\/section>/.exec(page)?.[1] ?? '';
   check('the story page shows a "Key points" box: a heading and a real <ul> with one <li> per point', /<h2[^>]*>Key points<\/h2>\s*<ul>/.test(box) && (box.match(/<li>/g) ?? []).length === 3 && box.includes('<li>Camp opens June 9.</li>'), box);
   check('...after the dek and before the body', page.indexOf('Key points dek.') > 0 && page.indexOf('Key points dek.') < page.indexOf('class="key-points"') && page.indexOf('class="key-points"') < page.indexOf('id="article-body"'));
   check('...hostile text is escaped, never HTML or Markdown', box.includes('&lt;script&gt;window.__pwned=1&lt;/script&gt; **bold** &amp; [x](https://example.invalid)') && !/<script>window\.__pwned/.test(page) && !box.includes('<strong>'), box);
@@ -834,6 +834,14 @@ let S;
   }
   const otherSlug = q("SELECT slug FROM stories WHERE slug <> ? AND status = 'live' AND key_points = '[]' LIMIT 1", slug)[0]?.slug;
   check('a story without key points renders no box and its feed entry has []', !!otherSlug && !(await getPub(`/stories/${otherSlug}/`)).text.includes('class="key-points"') && JSON.stringify(feed.stories.find((x) => x.id === otherSlug)?.keyPoints) === '[]');
+
+  // Studio's /api/publish over a live story with key points leaves them alone (issue #117)
+  if (PUBLISH_TOKEN) {
+    const rs = await fetch(BASE + '/api/publish', { method: 'POST', headers: { Authorization: `Bearer ${PUBLISH_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ newsletter: { name: 'KP Issue', issueDate: story(slug).date }, stories: [{ ref: 'kp', title: 'Key Points Story', section: 'news', area: 'churches', author: 'Studio Author', body: 'Studio rewrote the body.', photos: [] }] }) });
+    const rsText = await rs.text();
+    check('Studio /api/publish over the live story (same address) succeeds', rs.status === 200 && rsText.includes(slug), rsText.slice(0, 200));
+    check('...and leaves the story key points unchanged', JSON.stringify(JSON.parse(story(slug).key_points)) === JSON.stringify(['Camp opens June 9.', 'Register by May 31.', HOSTILE]) && story(slug).body.includes('Studio rewrote'));
+  }
 
   // edit the live story: the points load into the draft, survive a republish, and clearing works
   r = await c1.form('/api/admin/stories/edit', { slug });
