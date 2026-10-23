@@ -1,0 +1,45 @@
+---
+import Base from '../../layouts/Base.astro';
+import StoryCard from '../../components/StoryCard.astro';
+import { asUnavailable, getPublicStories } from '../../lib/public-stories';
+import { groupByIssue, issueHref, neighbours, parseIssueNumber } from '../../lib/issue-pages';
+import { formatDate } from '../../lib/site';
+
+// Issue #99: one newsletter issue's live stories in newsletter order. Unknown, empty (no live story) and malformed numbers are 404s.
+export const prerender = false;
+
+const n = parseIssueNumber(Astro.params.n);
+if (n === null) return new Response(null, { status: 404 });
+let all: Awaited<ReturnType<typeof getPublicStories>>;
+try {
+  all = await getPublicStories();
+} catch (err) {
+  return asUnavailable(err);
+}
+const groups = groupByIssue(all);
+const issue = groups.find((g) => g.number === n);
+if (!issue) return new Response(null, { status: 404 });
+const { older, newer } = neighbours(groups, n);
+const sent = formatDate(new Date(`${issue.date}T00:00:00.000Z`));
+const count = `${issue.stories.length} ${issue.stories.length === 1 ? 'story' : 'stories'}`;
+const label = (g: { number: number; title: string }) => `Issue #${g.number}${g.title ? ` · ${g.title}` : ''}`;
+---
+<Base title={`IMConnected Issue #${n}${issue.title ? `: ${issue.title}` : ''}`} description={`${count} from IMConnected Issue #${n}, sent ${sent}${issue.title ? `: ${issue.title}` : ''}.`} current="issues">
+  <div class="wrap issues-page">
+    <header class="page-head">
+      <span class="kicker">IMConnected Issue #{n} · Sent <time datetime={issue.date}>{sent}</time></span>
+      <h1>{issue.title || `Issue #${n}`}</h1>
+      <p>{count} from this issue of the IMConnected newsletter, in the order we sent them. <a href="/issues/">All issues</a></p>
+    </header>
+    <h2 class="sr-only">Stories in this issue</h2>
+    <div class="grid cols-3">
+      {issue.stories.map((s) => <StoryCard story={s} />)}
+    </div>
+    {(older || newer) && (
+      <nav class="issue-steps" aria-label="Other issues">
+        {older ? <a class="issue-step" href={issueHref(older.number)} rel="prev"><span>Previous issue</span><strong>{label(older)}</strong></a> : <span></span>}
+        {newer ? <a class="issue-step is-next" href={issueHref(newer.number)} rel="next"><span>Next issue</span><strong>{label(newer)}</strong></a> : <span></span>}
+      </nav>
+    )}
+  </div>
+</Base>

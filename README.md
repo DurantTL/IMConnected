@@ -257,6 +257,8 @@ Video modules and announcement `videoUrl` links open a responsive popup player w
 
 The public `/announcements/` page lists published announcements/events, with type filters and full-aspect flyer cards. Choose Announcement or Event in Story settings to add a full-height flyer (first photo), optional date/location, up to three labelled link buttons and a YouTube/Vimeo video. The module library includes Flyer and Video for placement within any story. Readers explicitly load video players; private preview stays link-only. See [the agent request examples and editor workflow](docs/AGENT-ANNOUNCEMENTS.md). Migration019 stores additive typed metadata in the existing SQLite database; older form, agent and Studio clients preserve it when omitted.
 
+The public `/issues/` page lists the IMConnected newsletter issues that have at least one live story, newest first, with the issue number, the day it was sent, its optional title, the story count and the first three stories. `/issues/<n>/` shows one issue's live stories in newsletter order (`newsletterIssue.position`, then date order for stories without a position), with links to the previous and next listed issue; unknown or empty issues are a 404. A story's "Originally published in IMConnected Issue #N" line links there. Test: `scripts/test-issues-browser.mjs`.
+
 ## AI agent API
 
 The communication director's AI agent finds stories on the conference's Facebook pages and writes them up. It sends them here; **they always land as drafts for a person to review and are never published by the agent.**

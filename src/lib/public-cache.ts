@@ -4,6 +4,7 @@
 // write functions call it, so an edited, published or unpublished story shows on the next request.
 // No Astro or database imports here: story-store.ts imports this file.
 import { SECTIONS } from './site';
+import { parseIssueNumber } from './issue-pages';
 
 export const MAX_ENTRIES = 300;
 export const TTL_MS = 10 * 60 * 1000;
@@ -53,7 +54,9 @@ const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
  */
 export function publicCacheKey(pathname: string): string | null {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
-  if (path === '/' || path === '/rss.xml' || path === '/stories.json' || path === '/announcements') return path;
+  if (path === '/' || path === '/rss.xml' || path === '/stories.json' || path === '/announcements' || path === '/issues') return path;
+  // /issues/<n> (issue #99): canonical numbers only, so random URLs never fill the cache.
+  if (path.startsWith('/issues/')) return path.split('/').length === 3 && parseIssueNumber(path.slice(8)) !== null ? path : null;
   const parts = path.split('/');
   if (parts.length === 3 && parts[1] === 'stories') return SLUG.test(parts[2]) ? path : null;
   if (parts.length >= 2 && parts.length <= 5) {

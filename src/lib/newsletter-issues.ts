@@ -113,7 +113,8 @@ export function updateIssue(number: number, expected: number, f: { date: string;
     audit('issue.update', { userId, target: `issue:${number}`, detail: { dateChanged: cur.date !== date, titleChanged: cur.title !== title } });
     return { ok: true, updatedAt: next };
   });
-  if (result.ok) invalidateStories(); // pages, listings and /stories.json show the issue's date and title
+  // Story pages, listings, /stories.json and the /issues/ pages show the issue's date and title (issues #98, #99).
+  if (result.ok) invalidateStories();
   return result;
 }
 
@@ -133,3 +134,4 @@ export function deleteIssue(number: number, expected: number, userId: number): I
   if (result.ok) invalidateStories();
   return result;
 }
+
