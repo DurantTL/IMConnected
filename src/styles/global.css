@@ -261,17 +261,18 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 @media (max-width: 399px) { .photos-triple { grid-template-columns: minmax(0, 1fr); } }
 /* Carousel (issue #85): a scroll-snap strip. Without JavaScript it is a plain horizontal strip with a visible scrollbar;
    photo-carousel.ts adds the buttons and counter. Never autoplays; smooth scrolling only without reduced motion. */
-.photos-carousel { display: block; position: relative; }
+.photos-strip { display: block; position: relative; }
 .photos-track { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; align-items: flex-start; padding-bottom: 12px; scrollbar-width: auto; }
 .photos-slide { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; }
-.photos-carousel a { aspect-ratio: 16 / 9; }
-.photos-carousel.is-enhanced .photos-track { scrollbar-width: none; padding-bottom: 0; }
-.photos-carousel.is-enhanced .photos-track::-webkit-scrollbar { display: none; }
-@media (prefers-reduced-motion: no-preference) { .photos-carousel.is-enhanced .photos-track { scroll-behavior: smooth; } }
+.photos-strip a { aspect-ratio: 16 / 9; }
+.photos-strip a:focus-visible { outline-offset: -3px; } /* the track clips overflow, so the ring is drawn inside the photo (as .spotlight-flyer) */
+.photos-strip.is-enhanced .photos-track { scrollbar-width: none; padding-bottom: 0; }
+.photos-strip.is-enhanced .photos-track::-webkit-scrollbar { display: none; }
+@media (prefers-reduced-motion: no-preference) { .photos-strip.is-enhanced .photos-track { scroll-behavior: smooth; } }
 .photos-carousel-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
 .photos-carousel-bar button { min-width: 44px; min-height: 44px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 1.4rem; line-height: 1; cursor: pointer; }
-.photos-carousel-bar button:hover:not(:disabled) { border-color: var(--ink-2); }
-.photos-carousel-bar button:disabled { opacity: .4; cursor: default; }
+.photos-carousel-bar button:hover:not([aria-disabled="true"]) { border-color: var(--ink-2); }
+.photos-carousel-bar button[aria-disabled="true"] { opacity: .4; cursor: default; }
 .photos-carousel-count { margin: 0; font-size: 0.9rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 /* Fit whole photo (issue #82): the frame shows the entire image over a fill. Pan and zoom are ignored. Same rules as INLINE_MEDIA_CSS. */
 [data-fit=contain]{position:relative;isolation:isolate;overflow:hidden}[data-fit=contain][data-fit-fill=paper]{background:var(--bg,#F8F7F5)}

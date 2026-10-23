@@ -202,7 +202,12 @@ const EXPECT = {
   let invalidZoom = false;
   try { db.prepare('UPDATE story_photos SET zoom = .99').run(); } catch { invalidZoom = true; }
   check('published photo zoom is constrained to 100–300% by the database', invalidZoom && db.prepare('PRAGMA foreign_key_check').all().length === 0);
-  const fitMigration = runMigrations(db, all);
+  const fitMigration = runMigrations(db, all.filter((m) => m.name < '030'));
+  const shape = (t) => JSON.stringify({ cols: db.prepare(`PRAGMA table_info(${t})`).all().filter((c) => c.name === 'photo_layout').map((c) => [c.notnull, c.dflt_value, c.type]), idx: db.prepare(`PRAGMA index_list(${t})`).all().map((i) => [i.name, i.unique, i.partial]).sort() });
+  db.prepare("UPDATE stories SET photo_layout = 'mosaic', rev = rev + 1 WHERE slug = '2026-10-01-old-story'").run();
+  db.prepare("UPDATE drafts SET photo_layout = 'heroGrid'").run();
+  const before = { s: shape('stories'), d: shape('drafts') };
+  const mig030 = runMigrations(db, all);
   check('migration 027 adds fit (cover) and fit_fill (blur) to draft and published photos without touching existing crops', fitMigration.some((n) => n.startsWith('027_')) && ['draft_photos', 'story_photos'].every((table) => {
     const photo = db.prepare(`SELECT focal_x, focal_y, zoom, fit, fit_fill FROM ${table}`).get();
     return photo.focal_x === 17 && photo.focal_y === 83 && photo.zoom === 1 && photo.fit === 'cover' && photo.fit_fill === 'blur';
@@ -212,7 +217,10 @@ const EXPECT = {
     try { db.prepare(`UPDATE ${table} SET ${col} = ?${table === 'story_photos' ? '' : ''}`).run(val); } catch { badFit++; }
   }
   check('the database itself refuses an unknown fit or fit_fill, and zoom keeps its 1–3 constraint', badFit === 4 && db.prepare('PRAGMA foreign_key_check').all().length === 0);
-  check('migration 030 applied on top, and the existing story and draft still read one', fitMigration.some((n) => n.startsWith('030_')) && db.prepare("SELECT photo_layout p FROM stories WHERE slug = '2026-10-01-old-story'").get().p === 'one' && db.prepare('SELECT photo_layout p FROM drafts').get().p === 'one');
+  check('migration 030 applied on top, and non-default layouts (mosaic on a story, heroGrid on a draft) survive it', mig030.some((n) => n.startsWith('030_')) && db.prepare("SELECT photo_layout p FROM stories WHERE slug = '2026-10-01-old-story'").get().p === 'mosaic' && db.prepare('SELECT photo_layout p FROM drafts').get().p === 'heroGrid');
+  let guardLeft = false;
+  try { db.prepare("UPDATE stories SET title = title").run(); } catch { guardLeft = true; }
+  check('migration 030 keeps the rev guard (a non-bumping UPDATE of stories is still refused), NOT NULL, default one and the index list', guardLeft && db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'stories_guard_old_writers'").get() !== undefined && shape('stories') === before.s && shape('drafts') === before.d && JSON.parse(before.s).cols[0][0] === 1 && JSON.parse(before.s).cols[0][1] === "'one'", `${before.s} / ${shape('stories')}`);
   let widened = 0;
   for (const table of ['stories', 'drafts']) {
     for (const v of ['carousel', 'threeUp']) { try { db.prepare(`UPDATE ${table} SET photo_layout = ?${table === 'stories' ? ', rev = rev + 1' : ''}`).run(v); widened += db.prepare(`SELECT COUNT(*) n FROM ${table} WHERE photo_layout = ?`).get(v).n; } catch { /* counted below */ } }
@@ -297,7 +305,7 @@ try {
       continue;
     }
     if (!fig || fig[1] !== L) { bad.push(`${label}: no ${L} figure`); continue; }
-    const kinds = [...fig[2].matchAll(/class="photos-row photos-(hero|wide|pair|triple|carousel)"/g)].map((m) => m[1]).join(',');
+    const kinds = [...fig[2].matchAll(/class="photos-row photos-(hero|wide|pair|triple|strip)"/g)].map((m) => (m[1] === 'strip' ? 'carousel' : m[1])).join(',');
     const links = [...fig[2].matchAll(/<a href="(\/media\/[^"]+)" data-photo[^>]*>\s*<img ([^>]*)>/g)];
     if (kinds !== rows) bad.push(`${label}: rows ${kinds}, wanted ${rows}`);
     if (links.length + galleryLinks !== n) bad.push(`${label}: ${links.length} laid out + ${galleryLinks} in the row under the text, wanted ${n} in all`);
@@ -541,7 +549,7 @@ try {
           const meta = await region.evaluate((el) => ({ role: el.getAttribute('role'), label: el.getAttribute('aria-label'), slides: el.querySelectorAll('[data-carousel-slide]').length, snap: getComputedStyle(el.querySelector('[data-carousel-track]')).scrollSnapType, links: el.querySelectorAll('a[data-photo][href^="/media/"]').length, btns: [...el.querySelectorAll('button')].map((b) => b.getAttribute('aria-label')) }));
           check(`carousel @${w}: a labelled region of 4 slides with scroll-snap, a link to every full image, and named Previous/Next buttons`, meta.role === 'region' && !!meta.label && meta.slides === 4 && /x mandatory/.test(meta.snap) && meta.links === 4 && meta.btns.join() === 'Previous photo,Next photo', JSON.stringify(meta));
           const count = page.locator('.photos-carousel-count');
-          check(`carousel @${w}: the counter starts at "1 of 4" and is a polite live region`, (await count.textContent()) === '1 of 4' && (await count.getAttribute('aria-live')) === 'polite' && (await page.getByRole('button', { name: 'Previous photo' }).isDisabled()));
+          check(`carousel @${w}: the counter starts at "1 of 4" and is a polite live region`, (await count.textContent()) === '1 of 4' && (await count.getAttribute('aria-live')) === 'polite' && (await page.getByRole('button', { name: 'Previous photo' }).getAttribute('aria-disabled')) === 'true');
           await page.getByRole('button', { name: 'Next photo' }).click();
           await page.waitForTimeout(900);
           const afterNext = await page.evaluate(() => { const t = document.querySelector('[data-carousel-track]'); return { left: t.scrollLeft, w: t.clientWidth, text: document.querySelector('.photos-carousel-count').textContent }; });
@@ -549,7 +557,7 @@ try {
           await page.getByRole('button', { name: 'Next photo' }).click();
           await page.getByRole('button', { name: 'Next photo' }).click();
           await page.waitForTimeout(900);
-          check(`carousel @${w}: at the last photo Next is disabled; Previous steps back`, await page.getByRole('button', { name: 'Next photo' }).isDisabled());
+          check(`carousel @${w}: at the last photo Next is aria-disabled but keeps focus (focus is still on a carousel button)`, (await page.getByRole('button', { name: 'Next photo' }).getAttribute('aria-disabled')) === 'true' && await page.evaluate(() => document.activeElement?.closest('.photos-carousel-bar') !== null && document.activeElement?.tagName === 'BUTTON'));
           await page.getByRole('button', { name: 'Previous photo' }).click();
           check(`carousel @${w}: Previous returns to "3 of 4"`, (await count.textContent()) === '3 of 4');
           // a swipe/scroll by the reader updates the counter
@@ -574,12 +582,16 @@ try {
           await page.locator('dialog.viewer').waitFor({ state: 'visible' });
           check('carousel: clicking a photo opens the viewer at "1 of 4"', /\(1 of 4\)$/.test(await page.locator('.viewer-count').textContent()));
           await page.keyboard.press('Escape');
-          // arrow keys on the focused strip move one photo
-          await page.locator('[data-carousel-track]').evaluate((t) => t.setAttribute('tabindex', '0'));
-          await page.locator('[data-carousel-track]').focus();
+          // keyboard: Tab to the first slide link (a real page has no tabindex on the track); its focus ring is drawn inside the track
+          await page.goto(`${BASE}/stories/${published.get('carousel/4')}/`);
+          for (let i = 0; i < 40 && !(await page.evaluate(() => document.activeElement?.matches('.photos-slide a'))); i++) await page.keyboard.press('Tab');
+          const ring = await page.evaluate(() => { const a = document.activeElement; const t = document.querySelector('[data-carousel-track]'); const r = a.getBoundingClientRect(); const tr = t.getBoundingClientRect(); const cs = getComputedStyle(a); const off = parseFloat(cs.outlineOffset); const w = parseFloat(cs.outlineWidth); return { style: cs.outlineStyle, off, w, inside: r.left >= tr.left - 0.5 && r.right <= tr.right + 0.5 && r.top >= tr.top - 0.5 && r.bottom <= tr.bottom + 0.5 }; });
+          check('carousel: the focused slide link has a visible focus ring drawn inside the track (not clipped)', ring.style !== 'none' && ring.w > 0 && ring.off < 0 && ring.inside, JSON.stringify(ring));
           await page.keyboard.press('ArrowRight');
           await page.waitForFunction(() => document.querySelector('.photos-carousel-count').textContent === '2 of 4');
-          check('carousel: the Right arrow key on the strip moves to the next photo', true);
+          await page.waitForTimeout(900);
+          const moved = await page.evaluate(() => { const a = document.activeElement; const t = document.querySelector('[data-carousel-track]'); const r = a.getBoundingClientRect(); const tr = t.getBoundingClientRect(); return { slide: a.closest('.photos-slide')?.getAttribute('aria-label'), visible: r.left >= tr.left - 1 && r.right <= tr.right + 1 }; });
+          check('carousel: the Right arrow key on a slide link moves to the next photo and focus follows it onto the visible link', moved.slide === 'Photo 2 of 4' && moved.visible, JSON.stringify(moved));
           await ctx.close();
         }
         // reduced motion: no smooth scrolling
@@ -593,12 +605,14 @@ try {
         }
         // no JavaScript: a horizontally scrollable strip, every photo a link, no dead buttons, scrollbar visible
         {
-          const ctx = await browser.newContext({ viewport: { width: 390, height: 900 }, javaScriptEnabled: false });
+          // Playwright's headless Chromium hides scrollbars by default; a separate launch keeps them, so "visible scrollbar" is real
+          const sbBrowser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, ignoreDefaultArgs: ['--hide-scrollbars'], args: process.env.CHROMIUM_NO_SANDBOX === '1' || process.getuid?.() === 0 ? ['--no-sandbox'] : [] });
+          const ctx = await sbBrowser.newContext({ viewport: { width: 390, height: 900 }, javaScriptEnabled: false });
           const page = await ctx.newPage();
           await page.goto(`${BASE}/stories/${published.get('carousel/4')}/`);
           const m = await page.evaluate(() => { const t = document.querySelector('[data-carousel-track]'); return { scrolls: t.scrollWidth > t.clientWidth + 100, overflowX: getComputedStyle(t).overflowX, buttons: document.querySelectorAll('[data-carousel] button').length, links: t.querySelectorAll('a[data-photo]').length, scrollbarH: t.offsetHeight - t.clientHeight, page: document.documentElement.scrollWidth <= document.documentElement.clientWidth }; });
-          check('carousel without JavaScript: a horizontally scrollable strip of four linked photos, no buttons, no page scroll', m.scrolls && m.overflowX === 'auto' && m.buttons === 0 && m.links === 4 && m.page, JSON.stringify(m));
-          await ctx.close();
+          check('carousel without JavaScript: a horizontally scrollable strip of four linked photos, no buttons, no page scroll', m.scrolls && m.scrollbarH > 0 && m.overflowX === 'auto' && m.buttons === 0 && m.links === 4 && m.page, JSON.stringify(m));
+          await ctx.close(); await sbBrowser.close();
         }
         // captions: tiles in a carousel and a threeUp grid share a top whether or not they have a caption
         {

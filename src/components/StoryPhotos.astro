@@ -23,7 +23,7 @@ const { layout, plan, photos, credit } = Astro.props;
 <figure class={`photos photos-${layout}`} data-photo-layout={layout}>
   {plan.rows.map((row) => (
     row.kind === 'carousel' ? (
-      <div class="photos-row photos-carousel" role="region" aria-roledescription="carousel" aria-label="Story photos" data-carousel>
+      <div class="photos-row photos-strip" role="region" aria-roledescription="carousel" aria-label="Story photos" data-carousel>
         <div class="photos-track" data-carousel-track>
           {row.photos.map((i, n) => (
             <div class="photos-slide" data-carousel-slide role="group" aria-roledescription="slide" aria-label={`Photo ${n + 1} of ${row.photos.length}`}>

@@ -30,14 +30,14 @@ function init(): void {
     count.setAttribute('aria-live', 'polite');
     count.setAttribute('aria-atomic', 'true');
     bar.append(prev, count, next);
-    root.append(bar);
 
     let index = 0;
     let lockUntil = 0; // while a button- or key-driven scroll is animating, scroll events must not move the counter back
+    // aria-disabled (not disabled) keeps a focused button focusable when the reader reaches either end.
     const render = () => {
       count.textContent = `${index + 1} of ${total}`;
-      prev.disabled = index === 0;
-      next.disabled = index === total - 1;
+      prev.setAttribute('aria-disabled', String(index === 0));
+      next.setAttribute('aria-disabled', String(index === total - 1));
     };
     const offset = (s: HTMLElement) => s.offsetLeft - track.offsetLeft;
     const nearest = () => {
@@ -49,19 +49,24 @@ function init(): void {
       });
       return best;
     };
-    const go = (i: number) => {
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const go = (i: number, focusSlide = false) => {
       index = Math.max(0, Math.min(total - 1, i));
       lockUntil = Date.now() + 700;
+      clearTimeout(settle);
+      settle = setTimeout(() => { const n = nearest(); if (n !== index) { index = n; render(); } }, 720); // never leave the counter stale after the lock ends
       const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
       track.scrollTo({ left: offset(slides[index]), behavior: reduce ? 'auto' : 'smooth' });
       render();
+      if (focusSlide) slides[index].querySelector<HTMLElement>('a')?.focus({ preventScroll: true }); // focus follows the photo that scrolled into view
     };
-    render();
-    prev.addEventListener('click', () => go(index - 1));
-    next.addEventListener('click', () => go(index + 1));
+    render(); // before the bar is in the page, so nothing is announced on load
+    root.append(bar);
+    prev.addEventListener('click', () => { if (index > 0) go(index - 1); });
+    next.addEventListener('click', () => { if (index < total - 1) go(index + 1); });
     track.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowLeft') { e.preventDefault(); go(index - 1); }
-      else if (e.key === 'ArrowRight') { e.preventDefault(); go(index + 1); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); go(index - 1, true); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); go(index + 1, true); }
     });
     let t: ReturnType<typeof setTimeout> | undefined;
     track.addEventListener('scroll', () => {

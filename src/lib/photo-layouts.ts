@@ -50,7 +50,7 @@ const range = (from: number, to: number) => Array.from({ length: Math.max(0, to 
 
 /**
  * Which photo goes where for `count` photos (the lead plus the others). Fewer photos than a layout needs degrade
- * gracefully: with a single photo every layout is the plain look, and a layout never leaves a gap.
+ * gracefully: with a single photo every layout is the plain look, and a layout never loses a photo (threeUp with 4 or 5 photos ends on a short last row, which is intended).
  */
 export function planPhotos(layout: PhotoLayout, count: number): PhotoPlan {
   if (layout === 'one' || count < 2) return { mode: 'plain', rows: [], rest: [] };
