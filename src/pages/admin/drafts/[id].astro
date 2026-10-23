@@ -284,7 +284,7 @@ const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) |
                   <button type="button" data-md="link" aria-label="Link">Link</button>
                   <button type="button" data-md="list" aria-label="List">• List</button>
                   <label>Story photo<select id="inline-photo-choice" data-editor-local aria-label="Story photo to insert"><option value="">Choose a photo</option>{photos.map((p, i) => <option value={i + 1}>Photo {i + 1}{p.alt ? ` — ${p.alt}` : ''}</option>)}</select></label>
-                  <label>Size and alignment<select id="inline-photo-placement" data-editor-local aria-label="Size and alignment of the inserted photo"><option value="">Column width</option><option value="wide">Wide</option><option value="full">Full width</option><option value="left">Left, text wraps</option><option value="right">Right, text wraps</option></select></label>
+                  <label>Size and alignment<select id="inline-photo-placement" data-editor-local disabled={photos.length === 0} aria-label="Size and alignment of the inserted photo"><option value="">Column width</option><option value="wide">Wide</option><option value="full">Full width</option><option value="left">Left, text wraps</option><option value="right">Right, text wraps</option></select></label>
                   <button type="button" id="insert-inline-photo" disabled={!photos.length}>Insert photo</button>
                 </div>
                 <div class="ed-toolbar" role="group" aria-label="Insert photo gallery">

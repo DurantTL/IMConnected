@@ -60,6 +60,12 @@ try {
     assert.equal(normalizeStoryBlocks([{ id: 'x', type: 'image', url: '/media/stories/synthetic/a.png', placement: '' }])[0].placement, undefined);
     assert.equal(normalizeStoryBlocks([{ id: 'x', type: 'image', url: '/media/stories/synthetic/a.png' }])[0].placement, undefined);
   });
+  check('placement is refused for images inside a section, and allowed outside (issue #86)', () => {
+    const image = { id: 'n1', type: 'image', url: '/media/stories/synthetic/a.png', placement: 'wide' };
+    assert.throws(() => normalizeStoryBlocks([{ id: 's1', type: 'section', content: [[image]] }]), /not available for photos inside a section/);
+    assert.equal(normalizeStoryBlocks([{ id: 's1', type: 'section', content: [[{ ...image, placement: undefined }]] }])[0].content[0][0].placement, undefined);
+    assert.equal(normalizeStoryBlocks([{ ...image, id: 'top' }])[0].placement, 'wide');
+  });
   const isolated = await Promise.all([renderMediaMarkdown('{{photo 1}}', mediaPhotos), renderMediaMarkdown('{{photo 2}}', mediaPhotos)]);
   check('concurrent renderer requests do not share photo state', () => { assert.deepEqual([...isolated[0].used], [0]); assert.deepEqual([...isolated[1].used], [1]); });
   check('derived excerpts skip marker-only paragraphs and marker fragments', () => { assert.equal(storyExcerpt('{{photo 1}}\n\nSynthetic article text.'), 'Synthetic article text.'); assert.equal(storyExcerpt('Before {{photo 99}} after.'), 'Before after.'); });

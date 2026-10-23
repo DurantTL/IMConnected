@@ -18,7 +18,11 @@ export function restoreMediaMarkers(body: string, oldKeys: string[], currentKeys
     }
     for (const line of textLines) {
       if (blocked.has(line)) continue;
-      const value = raw[line]?.trim() ?? '';
+      const trimmed = raw[line]?.trim() ?? '';
+      // The renderer drops the backslash of an escaped marker line and still renders it, so it is remapped like any other (the backslash is kept).
+      const escaped = trimmed.startsWith('\\{{');
+      const value = escaped ? trimmed.slice(1) : trimmed;
+      const lead = escaped ? '\\' : '';
       // The grammar is bounded independently of the old count: an old invalid index
       // must never become an executable marker for a newly added replacement photo.
       const marker = parsePhotoMarker(value, 999);
@@ -26,12 +30,12 @@ export function restoreMediaMarkers(body: string, oldKeys: string[], currentKeys
       const gallery = galleryMarker(value, 999);
       if (photo !== null) {
         const index = slot(photo);
-        raw[line] = index < 0 ? '{{photo missing}}' : `{{photo ${index + 1}${marker?.placement ? ` ${marker.placement}` : ''}}}`;
+        raw[line] = lead + (index < 0 ? '{{photo missing}}' : `{{photo ${index + 1}${marker?.placement ? ` ${marker.placement}` : ''}}}`);
         missing ||= index < 0;
       } else if (gallery) {
         const indices = gallery.indices.map(slot);
         const valid = indices.every((n, i) => n >= 0 && (i === 0 || n === indices[i - 1] + 1));
-        raw[line] = valid ? `{{gallery ${indices[0] + 1}-${indices.at(-1)! + 1} columns=${gallery.columns}}}` : '{{gallery missing}}';
+        raw[line] = lead + (valid ? `{{gallery ${indices[0] + 1}-${indices.at(-1)! + 1} columns=${gallery.columns}}}` : '{{gallery missing}}');
         missing ||= !valid;
       }
     }

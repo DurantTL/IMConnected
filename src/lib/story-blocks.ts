@@ -243,6 +243,7 @@ export function normalizeStoryBlocks(input: unknown): StoryBlock[] {
       total += b.items.join('').length;
     }
     if (r.placement !== undefined && r.placement !== null && r.placement !== '') {
+      if (depth > 0) return error('Size and alignment is not available for photos inside a section. Place the photo outside the section.');
       if (b.type !== 'image' || !['wide', 'full', 'left', 'right'].includes(r.placement as string)) return error('Choose column width, wide, full width, left or right for an image.');
       b.placement = r.placement as StoryBlock['placement'];
     }

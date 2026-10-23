@@ -85,7 +85,8 @@ const studio = (stories) => call('POST', '/api/publish', { headers: { Authorizat
 const photo = (i, alt, extra = {}) => ({ url: dataUrl(PICS[i]), alt, ...extra });
 const LOREM = 'Synthetic paragraph text for a layout test. The congregation gathered for a short service and shared a meal afterwards. '.repeat(6);
 const OPTS = ['wide', 'full', 'left', 'right'];
-const bodyText = `${LOREM}\n\n{{photo 2}}\n\n${LOREM}\n\n${OPTS.map((o, i) => `{{photo ${i % 3 + 1} ${o}}}\n\n${LOREM}\n\n${LOREM}`).join('\n\n')}\n\n{{photo 1 huge}}\n\nClosing paragraph.`;
+const BESIDE = 'Short lead-in beside the photo.\n\n- Synthetic item one\n- Synthetic item two\n\n> Synthetic quote beside the photo.\n\n' + LOREM;
+const bodyText = `${LOREM}\n\n{{photo 2}}\n\n${LOREM}\n\n${OPTS.map((o, i) => `{{photo ${i % 3 + 1} ${o}}}\n\n${o === 'left' ? BESIDE : LOREM + '\n\n' + LOREM}`).join('\n\n')}\n\n{{photo 1 huge}}\n\nClosing paragraph.`;
 const slugOf = (res, ref) => res.data.stories?.find((s) => s.ref === ref)?.slug;
 
 try {
@@ -106,7 +107,7 @@ try {
   {
     const ph = JSON.parse(q('SELECT photos FROM stories WHERE slug = ?', modsSlug)[0].photos); const lead = q('SELECT image FROM stories WHERE slug = ?', modsSlug)[0].image;
     const urls = [lead, ...ph];
-    const blocks = [{ id: 't0', type: 'text', text: LOREM }, ...OPTS.map((o, i) => ({ id: `i${i}`, type: 'image', url: urls[i % 3], photoIndex: i % 3, alt: `Module ${o}`, placement: o })), { id: 'tn', type: 'text', text: LOREM }, { id: 'ip', type: 'image', url: urls[0], photoIndex: 0, alt: 'Module plain' }];
+    const blocks = [{ id: 't0', type: 'text', text: LOREM }, ...OPTS.flatMap((o, i) => [{ id: `i${i}`, type: 'image', url: urls[i % 3], photoIndex: i % 3, alt: `Module ${o}`, placement: o }, ...(o === 'left' ? [{ id: 'tx-short', type: 'text', text: 'Short lead-in beside the photo.' }, { id: 'q1', type: 'quote', text: 'Synthetic quote beside the photo.' }, { id: 'l1', type: 'list', items: ['Synthetic item one', 'Synthetic item two'] }] : []), { id: `tx${i}`, type: 'text', text: LOREM }]), { id: 'tn', type: 'text', text: LOREM }, { id: 'ip', type: 'image', url: urls[0], photoIndex: 0, alt: 'Module plain' }, { id: 'sec', type: 'section', content: [[{ id: 'sn', type: 'image', url: urls[1], photoIndex: 1, alt: 'Module in section' }, { id: 'sc1', type: 'text', text: 'Column one text.' }], [{ id: 'sc2', type: 'text', text: 'Column two text.' }]] }];
     await stopServer();
     const db = new DatabaseSync(DB_FILE); db.exec('PRAGMA busy_timeout = 5000');
     db.prepare('UPDATE stories SET story_blocks = ?, rev = rev + 1 WHERE slug = ?').run(JSON.stringify(blocks), modsSlug);
@@ -115,6 +116,7 @@ try {
     const mh = await page(modsSlug);
     for (const o of OPTS) check(`image module placement ${o} renders data-placement and a link to the full image`, new RegExp(`<figure class="story-module story-module-image"[^>]*data-placement="${o}"><a href="/media/stories/[^"]+" data-photo`).test(mh));
     check('an image module without placement has no data-placement', /<figure class="story-module story-module-image" data-module-id="ip"><a/.test(mh));
+    check('a Section column image renders without placement', /data-module-id="sn"><a/.test(mh));
   }
 
   let pw;
@@ -125,10 +127,10 @@ try {
   else { try { browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: process.env.CHROMIUM_NO_SANDBOX === '1' || process.getuid?.() === 0 ? ['--no-sandbox'] : [] }); } catch (err) { why = 'no browser could be started: ' + String(err.message).split('\n')[0]; } }
   if (!browser) skip('browser checks (widths, floats, overflow, viewer, axe)', why);
   else {
-    const targets = [{ name: 'inline', slug: inlineSlug, sel: 'figure.story-inline-photo' }, { name: 'modules', slug: modsSlug, sel: 'figure.story-module-image' }];
+    const targets = [{ name: 'inline', slug: inlineSlug, sel: 'figure.story-inline-photo' }, { name: 'modules', slug: modsSlug, sel: '.prose > figure.story-module-image' }];
     const measure = (p, sel) => p.evaluate((s) => {
       const prose = document.querySelector('.prose').getBoundingClientRect();
-      return { prose: prose.width, vw: document.documentElement.clientWidth, figs: [...document.querySelectorAll(s)].map((f) => { const r = f.getBoundingClientRect(); const cs = getComputedStyle(f); return { placement: f.dataset.placement ?? 'plain', width: r.width, left: r.left, right: r.right, float: cs.float, next: (() => { const n = f.nextElementSibling; if (!n || !n.firstChild) return 0; const range = document.createRange(); range.selectNodeContents(n); const lines = [...range.getClientRects()]; return lines.length ? Math.min(...lines.slice(0, 3).map((l) => l.width)) : 0; })() }; }) };
+      return { prose: prose.width, vw: document.documentElement.clientWidth, figs: [...document.querySelectorAll(s)].map((f) => { const r = f.getBoundingClientRect(); const cs = getComputedStyle(f); return { placement: f.dataset.placement ?? 'plain', width: r.width, left: r.left, right: r.right, float: cs.float, next: (() => { let n = f.nextElementSibling; while (n && !n.matches('p, .story-module-text')) n = n.nextElementSibling; if (!n) return 0; const range = document.createRange(); range.selectNodeContents(n); const lines = [...range.getClientRects()].filter((l) => l.width > 0); return lines.length ? Math.min(...lines.slice(0, 3).map((l) => l.width)) : 0; })() }; }) };
     }, sel);
     const near = (a, b, tol = 3) => Math.abs(a - b) <= tol;
     const overflow = [];
@@ -140,7 +142,7 @@ try {
         await p.evaluate(async () => { await Promise.all(Array.from(document.images).map((i) => (i.loading === 'lazy' ? (i.loading = 'eager', i.decode().catch(() => {})) : i.decode().catch(() => {})))); });
         const m = await p.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
         if (m.sw > m.cw) overflow.push(`${t.name}@${w}: ${m.sw} > ${m.cw}`);
-        if (w === 390 || w === 1280) {
+        if (w === 390 || w === 768 || w === 1280) {
           const r = await measure(p, t.sel);
           const by = (k) => r.figs.find((f) => f.placement === k);
           const plain = by('plain'), wide = by('wide'), full = by('full'), left = by('left'), right = by('right');
@@ -148,10 +150,12 @@ try {
           check(`${tag}: all five photos present`, r.figs.length === 5, JSON.stringify(r.figs.map((f) => f.placement)));
           check(`${tag}: a plain photo is the text column width`, near(plain.width, r.prose), `${plain.width} vs ${r.prose}`);
           check(`${tag}: wide and full stay inside the page and are centred`, wide.left >= -1 && wide.right <= r.vw + 1 && full.left >= -1 && full.right <= r.vw + 1 && near((wide.left + wide.right) / 2, r.vw / 2, 12) && near((full.left + full.right) / 2, r.vw / 2, 12), JSON.stringify({ wide, full, vw: r.vw }));
-          if (w === 1280) {
+          if (w === 768) {
+            check(`${tag}: left and right float from 768px and the text beside them stays readable (>= 200px)`, left.float === 'left' && right.float === 'right' && left.next >= 200 && right.next >= 200, JSON.stringify({ left, right, prose: r.prose }));
+          } else if (w === 1280) {
             check(`${tag}: wide is wider than the text column and full is wider than wide`, wide.width > r.prose + 40 && full.width > wide.width + 40, JSON.stringify({ prose: r.prose, wide: wide.width, full: full.width }));
             check(`${tag}: left and right float at about 45% of the column`, left.float === 'left' && right.float === 'right' && near(left.width / r.prose, 0.45, 0.02) && near(right.width / r.prose, 0.45, 0.02), JSON.stringify({ left, right, prose: r.prose }));
-            check(`${tag}: text beside a float stays readable (at least 240px wide)`, left.next >= 240, String(left.next));
+            check(`${tag}: text beside a float stays readable (at least 240px wide, measured on the text itself)`, left.next >= 240 && right.next >= 240, String(left.next));
           } else {
             check(`${tag}: left and right stack at full column width on phones, with no float`, left.float === 'none' && right.float === 'none' && near(left.width, r.prose) && near(right.width, r.prose), JSON.stringify({ left, right, prose: r.prose }));
           }
@@ -166,6 +170,13 @@ try {
     await p.goto(`${BASE}/stories/${inlineSlug}/`, { waitUntil: 'load' });
     const order = await p.evaluate(() => [...document.querySelector('.prose').children].map((k) => k.matches('figure') ? 'F' + (k.dataset.placement ?? '') : k.tagName));
     check('floated photos keep their place in the reading order (DOM order unchanged)', order.indexOf('Fleft') > order.indexOf('Ffull') && order.indexOf('Fright') > order.indexOf('Fleft') && order[order.indexOf('Fleft') - 1] === 'P', order.join(','));
+    const besideCheck = () => p.evaluate(() => { const f = document.querySelector('figure[data-placement=left]').getBoundingClientRect(); return ['ul', 'blockquote'].flatMap((tag) => { const el = [...document.querySelectorAll('.prose ' + tag)].find((e) => e.textContent.includes('Synthetic')); if (!el) return []; const r = el.getBoundingClientRect(); return [{ tag, overlapsRows: r.top < f.bottom, left: r.left, floatRight: f.right }]; }); });
+    const besideInline = await besideCheck();
+    check('inline: a list beside a left float starts after the photo, not under it', besideInline.length === 1 && besideInline.every((b) => b.overlapsRows && b.left >= b.floatRight - 1), JSON.stringify(besideInline));
+    await p.goto(`${BASE}/stories/${modsSlug}/`, { waitUntil: 'load' });
+    const besideMods = await besideCheck();
+    check('modules: a quote and a list beside a left float start after the photo, not under it', besideMods.length === 2 && besideMods.every((b) => b.overlapsRows && b.left >= b.floatRight - 1), JSON.stringify(besideMods));
+    await p.goto(`${BASE}/stories/${inlineSlug}/`, { waitUntil: 'load' });
     await p.locator('figure[data-placement=left] a[data-photo]').click();
     await p.waitForSelector('dialog.viewer[open]');
     check('the photo viewer still opens from a floated photo', true);
@@ -186,6 +197,33 @@ try {
       check('axe scan: no violation on pages with placed photos', bad.length === 0, bad.join(' | '));
     } else skip('axe scan', 'set AXE_JS to the path of axe.min.js');
     await browser.close();
+    // classic (always visible) scrollbars: a full-width photo must not cause horizontal scroll (the default headless browser hides scrollbars)
+    const classic = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, ignoreDefaultArgs: ['--hide-scrollbars'], args: process.env.CHROMIUM_NO_SANDBOX === '1' || process.getuid?.() === 0 ? ['--no-sandbox'] : [] });
+    const scrollIssues = [];
+    for (const w of [320, 390, 768, 1280]) {
+      const ctx2 = await classic.newContext({ viewport: { width: w, height: 800 } });
+      const p2 = await ctx2.newPage();
+      await p2.addInitScript(() => { document.addEventListener('DOMContentLoaded', () => { const s = document.createElement('style'); s.textContent = '::-webkit-scrollbar{width:17px;height:17px;display:block}'; document.head.append(s); }); });
+      for (const t of targets) {
+        await p2.goto(`${BASE}/stories/${t.slug}/`, { waitUntil: 'load' });
+        await p2.evaluate(async () => { await Promise.all(Array.from(document.images).map((i) => (i.loading === 'lazy' ? (i.loading = 'eager', i.decode().catch(() => {})) : i.decode().catch(() => {})))); });
+        const m = await p2.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, bar: window.innerWidth - document.documentElement.clientWidth, full: document.querySelector('[data-placement=full]').getBoundingClientRect().right }));
+        if (m.bar < 10) scrollIssues.push(`${t.name}@${w}: no classic scrollbar (${m.bar}px)`);
+        if (m.sw > m.cw || m.full > m.cw + 0.5) scrollIssues.push(`${t.name}@${w}: scrollWidth ${m.sw} > ${m.cw} or full photo right ${m.full}`);
+      }
+      await ctx2.close();
+    }
+    check('with a 17px classic scrollbar, a full-width photo causes no horizontal scroll at 320, 390, 768 and 1280', scrollIssues.length === 0, scrollIssues.join('; '));
+    // a photo with a placement inside a Section column must stay inside its column even if the attribute were present (CSS safety net; the server refuses it)
+    {
+      const ctx3 = await classic.newContext({ viewport: { width: 1280, height: 800 } });
+      const p3 = await ctx3.newPage();
+      await p3.goto(`${BASE}/stories/${modsSlug}/`, { waitUntil: 'load' });
+      const res3 = await p3.evaluate(() => { const out = []; for (const v of ['wide', 'full', 'left', 'right']) { const fig = document.querySelector('[data-module-id=sn]'); fig.dataset.placement = v; const col = fig.closest('.story-section-column').getBoundingClientRect(); const r = fig.getBoundingClientRect(); out.push({ v, inside: r.left >= col.left - 1 && r.right <= col.right + 1, float: getComputedStyle(fig).float }); } return out; });
+      check('a nested image with a placement attribute stays in its Section column (no float, no spill)', res3.every((x) => x.inside && x.float === 'none'), JSON.stringify(res3));
+      await ctx3.close();
+    }
+    await classic.close();
   }
   check('the server log has no token', !serverLog.some((l) => l.includes(PUBLISH_TOKEN)));
 } catch (err) {

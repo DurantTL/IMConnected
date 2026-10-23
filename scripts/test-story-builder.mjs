@@ -378,7 +378,12 @@ try {
   const beforeNoopHistory = m.listDraftRevisions(mediaDraft).length; assert.equal(m.changePhoto(mediaDraft, m.getDraft(mediaDraft).updatedAt, user, 'lead', replacement.id).ok, true); assert.equal(m.listDraftRevisions(mediaDraft).length, beforeNoopHistory, 'boundary photo no-op does not churn history');
   const markerSource = 'Before.\n{{photo 1}}\n{{photo 2}}\n{{gallery 1-2 columns=2}}\n\n`{{photo 1}}`\n\n```text\n{{photo 1}}\n```\n\n[{{photo 1}}](https://example.invalid/)\n\n\\{{photo 1}}';
   const remappedMarkers = m.restoreMediaMarkers(markerSource, ['gone', 'kept'], ['kept', 'replacement']);
-  assert.ok(remappedMarkers.missing); assert.match(remappedMarkers.body, /^\{\{photo missing\}\}$/m); assert.match(remappedMarkers.body, /^\{\{gallery missing\}\}$/m); assert.match(remappedMarkers.body, /`\{\{photo 1\}\}`/); assert.match(remappedMarkers.body, /```text\n\{\{photo 1\}\}\n```/); assert.ok(remappedMarkers.body.endsWith('\\{{photo 1}}'));
+  assert.ok(remappedMarkers.missing); assert.match(remappedMarkers.body, /^\{\{photo missing\}\}$/m); assert.match(remappedMarkers.body, /^\{\{gallery missing\}\}$/m); assert.match(remappedMarkers.body, /`\{\{photo 1\}\}`/); assert.match(remappedMarkers.body, /```text\n\{\{photo 1\}\}\n```/); assert.ok(remappedMarkers.body.endsWith('\\{{photo missing}}'), 'an escaped marker line is remapped like the renderer treats it (it renders as a live photo)');
+  { // escaped marker lines render as live photos, so a revision restore remaps them (backslash kept, option kept)
+    const r = m.restoreMediaMarkers('\\{{photo 1 left}}\n\\{{photo 2}}\n\\{{gallery 1-2 columns=2}}', ['a', 'b'], ['b', 'a']);
+    assert.equal(r.body, '\\{{photo 2 left}}\n\\{{photo 1}}\n\\{{gallery missing}}'); assert.equal(r.missing, true);
+    assert.equal(m.restoreMediaMarkers('\\{{photo 1 right}}', ['a'], ['x', 'a']).body, '\\{{photo 2 right}}');
+  }
   { // Size and alignment options survive a revision restore (issue #86); only executable markers are rewritten
     const src = '{{photo 2 left}}\n{{photo 1 full}}\n{{photo 1 huge}}\n\n`{{photo 2 wide}}`\n\n```text\n{{photo 2 right}}\n```\n\n[{{photo 2 wide}}](https://example.invalid/)';
     const r = m.restoreMediaMarkers(src, ['a', 'b'], ['x', 'b', 'a']);
