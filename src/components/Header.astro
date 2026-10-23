@@ -11,12 +11,11 @@ const active = currentNavigation(items, Astro.url, current);
 ---
 <header class="site-header" data-navigation-section={current}>
   <div class="publication-line"><div class="wrap"><span>Faith in action. Close to home.</span><a href={SITE.publisherUrl}>Iowa-Missouri Conference <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M7 7h10v10" /></svg></a></div></div>
-  <div class="wrap">
+  <div class="masthead-band"><div class="wrap">
     <div class="bar">
       <p class="masthead-note">The stories.<br />The people.<br /><strong>Our community.</strong></p>
       <a class="brand" href="/" aria-label={`${SITE.name} home`}>
         <BrandMark />
-        <span class="brand-sub">{SITE.publisher}</span>
       </a>
       <div class="masthead-actions">
       <a class="header-search" href="/search/" aria-current={current === 'search' ? 'page' : undefined}>
@@ -29,6 +28,9 @@ const active = currentNavigation(items, Astro.url, current);
       </button>
       </div>
     </div>
+  </div></div>
+  <div class="conference-strip"><div class="wrap"><p><span aria-hidden="true">Iowa-Missouri Conference</span><span class="sr-only">{SITE.publisher}</span></p></div></div>
+  <div class="wrap">
     <div class="section-nav-row"><nav class="nav" aria-label="Sections" data-navigation-items>
       {items.filter((i) => i.visible).map((i) => <a href={i.href} aria-current={active === i.id ? 'page' : undefined}>{i.label}</a>)}
     </nav><span class="masthead-edition">Iowa + Missouri</span></div>

@@ -61,7 +61,6 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .brand { display: flex; flex-direction: column; text-decoration: none; line-height: 1.1; margin-right: auto; }
 .brand-name { font-family: var(--serif); font-weight: 700; font-size: 1.75rem; letter-spacing: -0.045em; color: var(--brand-text); }
 .brand-name span { color: var(--accent); }
-.brand-sub { margin-top: 6px; font-size: 0.7rem; color: var(--ink-2); letter-spacing: 0.01em; max-width: 31ch; line-height: 1.25; }
 .nav { display: flex; gap: 4px; align-items: center; }
 .nav a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; font-size: 0.87rem; font-weight: 600; color: var(--ink-2); padding: 8px 10px; border-radius: 8px; }
 .nav a:hover, .nav a[aria-current='page'] { color: var(--brand-text); background: var(--brand-soft); }
@@ -81,7 +80,6 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
   .menu-toggle { display: inline-flex; }
   .site-header .bar { min-height: 76px; gap: 12px; }
   .brand-name { font-size: 1.6rem; }
-  .brand-sub { font-size: .65rem; max-width: 27ch; }
   .mobile-nav[data-open='true'] { display: block; border-top: 1px solid var(--line); padding: 8px 0 16px; max-height: calc(100dvh - 76px); overflow: auto; }
   .mobile-nav a { display: block; min-height: 44px; padding: 12px 4px; text-decoration: none; font-weight: 600; border-bottom: 1px solid var(--line); }
   .mobile-nav a[aria-current] { color: var(--brand-text); background: var(--brand-soft); }
@@ -293,7 +291,6 @@ html.video-open { overflow: hidden; }
 
 @media (max-width: 520px) {
   .home-intro { padding-top: 28px; }
-  .brand-sub { max-width: 24ch; }
   .header-search { padding: 8px 0; }
   .card.compact .media { flex-basis: 96px; }
   .block-head h2 { font-size: 1.45rem; }
@@ -302,7 +299,6 @@ html.video-open { overflow: hidden; }
 @media (max-width: 359px) {
   .site-header .bar { gap: 8px; }
   .brand-name { font-size: 1.4rem; }
-  .brand-sub { max-width: 22ch; font-size: .6rem; }
   .header-search { gap: 4px; font-size: .75rem; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -322,7 +318,6 @@ body:not(.admin) .masthead-note { margin:0; font-size:.72rem; color:var(--ink-2)
 body:not(.admin) .masthead-note strong { color:var(--brand-text); }
 body:not(.admin) .site-header .brand { margin:0; text-align:center; align-items:center; }
 body:not(.admin) .site-header .brand-name { font-size:clamp(2.6rem,4.3vw,4rem); letter-spacing:-.07em; }
-body:not(.admin) .site-header .brand-sub { font-size:.65rem; font-weight:600; text-transform:uppercase; letter-spacing:.1em; max-width:none; margin-top:10px; }
 body:not(.admin) .masthead-actions { display:flex; justify-content:flex-end; align-items:center; gap:16px; }
 body:not(.admin) .header-search { font-size:.75rem; }
 body:not(.admin) .header-submit { font-size:.74rem; padding:10px 13px; }
@@ -419,14 +414,12 @@ body:not(.admin) .site-footer .footer-bottom { border-top-color:#52716d; }
 @media(max-width:1100px) {
   body:not(.admin) .masthead-actions { gap:8px; }
   body:not(.admin) .site-header .bar { gap:16px; }
-  body:not(.admin) .site-header .brand-sub { max-width:36ch; }
   body:not(.admin) .topic-directory>a { padding-inline:12px; }
 }
 @media(max-width:920px) {
   body:not(.admin) .site-header .bar { display:flex; min-height:82px; gap:12px; }
   body:not(.admin) .site-header .brand { margin-right:auto; text-align:left; align-items:flex-start; }
   body:not(.admin) .site-header .brand-name { font-size:2.15rem; }
-  body:not(.admin) .site-header .brand-sub { font-size:.65rem; max-width:36ch; margin-top:5px; }
   body:not(.admin) .masthead-note,body:not(.admin) .section-nav-row { display:none; }
   body:not(.admin) .publication-line a { display:none; }
   body:not(.admin) .hero { gap:24px; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); }
@@ -472,7 +465,6 @@ body:not(.admin) .site-footer .footer-bottom { border-top-color:#52716d; }
 }
 @media(max-width:360px) {
   body:not(.admin) .site-header .brand-name { font-size:1.85rem; }
-  body:not(.admin) .site-header .brand-sub { font-size:.65rem; max-width:31ch; }
   body:not(.admin) .masthead-actions { gap:5px; }
   body:not(.admin) .header-search { padding:8px 0; }
   body:not(.admin) .header-search svg { display:none; }
@@ -494,12 +486,15 @@ body:not(.admin) .site-footer .footer-bottom { border-top-color:#52716d; }
 body:not(.admin) .section-nav-row .nav{flex:1;flex-wrap:wrap;gap:6px 22px;min-width:0}body:not(.admin) .section-nav-row .nav a{max-width:18em;overflow-wrap:anywhere}body:not(.admin) .masthead-edition{flex-shrink:0}
 
 /* Publication brand: the newsletter's teal, navy, aqua and mint on warm paper. */
-.brand-wordmark { display:block; width:360px; max-width:100%; aspect-ratio:5; overflow:hidden; background:#3a4044; border-radius:2px; }
+.brand-wordmark { display:block; width:360px; max-width:100%; aspect-ratio:5; overflow:hidden; background:#36383A; border-radius:2px; }
 .brand-wordmark img { display:block; width:100%; height:100%; object-fit:cover; object-position:center; }
 body:not(.admin) .site-header { background:#0B3954; color:#fff; border:0; }
 body:not(.admin) .publication-line { background:#072c42; color:#E0F5F7; }
+/* Masthead as in the newsletter email: the wordmark on a full-width charcoal band (the image's own background), then a navy conference strip. */
+body:not(.admin) .masthead-band { background:#36383A; }
+.conference-strip { background:#0B3853; color:#C9D6DC; border-bottom:1px solid #ffffff1f; }
+.conference-strip p { margin:0; padding:7px 0; text-align:center; font:500 .65rem/1.4 var(--sans); letter-spacing:.24em; text-transform:uppercase; }
 body:not(.admin) .site-header .bar { min-height:124px; grid-template-columns:1fr auto 1fr; }
-body:not(.admin) .site-header .brand-sub { color:#E0F5F7; font-size:.65rem; letter-spacing:.07em; }
 body:not(.admin) .masthead-note,body:not(.admin) .masthead-note strong { color:#E0F5F7; }
 body:not(.admin) .header-search { color:#fff; }
 body:not(.admin) .header-submit { background:#2DD4BF; color:#0B3954; border-radius:2px; }
@@ -605,7 +600,6 @@ body.admin .admin-bar .admin-public-link:hover { color:#fff; border-color:#2DD4B
 @media(max-width:650px) {
   body:not(.admin) .site-header .bar { min-height:82px; gap:10px; }
   .site-header .brand-wordmark { width:210px; }
-  body:not(.admin) .site-header .brand-sub { font-size:.65rem; max-width:28ch; }
   body:not(.admin) .home-intro { padding:22px 0; }
   body:not(.admin) .home-intro h1 { font-size:1.65rem; max-width:22ch; }
   body:not(.admin) .home-intro-note { display:none; }
