@@ -617,10 +617,6 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 .spotlight-choices button[aria-current] { border-color:#2DD4BF; background:#2DD4BF; color:#0B3954; }
 /* The flyer ring sits inside the stage so it is not clipped; navy shows on the pale gradient padding where mint would not. */
 .event-spotlight .spotlight-flyer:focus-visible { outline-color:#0B3954; outline-offset:-6px; }
-.spotlight-play { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; padding:0; border:0; border-bottom:3px solid #799dac; background:transparent; color:#E0F5F7; cursor:pointer; }
-.spotlight-play:hover { color:#fff; border-color:#E0F5F7; }
-.spotlight-play:disabled { cursor:default; opacity:.55; }
-.spotlight-play:disabled:hover { color:#E0F5F7; border-color:#799dac; }
 .spotlight-play .icon-play, .spotlight-play[data-state=paused] .icon-pause { display:none; }
 .spotlight-play[data-state=paused] .icon-play { display:block; }
 .spotlight-status { color:#E0F5F7; margin:0; }
