@@ -3,49 +3,54 @@ import BrandMark from './BrandMark.astro';
 import { SITE } from '../lib/site';
 import { defaultNavigation, currentNavigation } from '../lib/site-navigation';
 import { readNavigation } from '../lib/navigation-store';
+import { readPublicChrome } from '../lib/chrome-store';
+import { defaultPublicChrome } from '../lib/site-chrome';
 const { current } = Astro.props as { current?: string };
 let items = defaultNavigation();
 // Prerendered submission/search/error pages never open the database during a build.
 if (!Astro.isPrerendered) { try { items = readNavigation().items; } catch { /* retain safe default links if settings are temporarily unavailable */ } }
 const active = currentNavigation(items, Astro.url, current);
+// Issue #156: editable text, links and visibility; prerendered pages render the defaults and refresh from the API.
+const chrome = (Astro.isPrerendered ? defaultPublicChrome() : readPublicChrome()).header;
 ---
 <header class="site-header" data-navigation-section={current}>
-  <div class="publication-line"><div class="wrap"><span>Faith in action. Close to home.</span><a href={SITE.publisherUrl}>Iowa-Missouri Conference <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M7 7h10v10" /></svg></a></div></div>
+  {chrome.topLine && <div class="publication-line" data-chrome="topline"><div class="wrap"><span data-chrome-text="topline">{chrome.topLine.text}</span><a href={chrome.topLine.link.url} data-chrome-link="topline">{chrome.topLine.link.label} <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M7 7h10v10" /></svg></a></div></div>}
   <div class="masthead-band"><div class="wrap">
     <div class="bar">
-      <p class="masthead-note">The stories.<br />The people.<br /><strong>Our community.</strong></p>
+      {chrome.mastheadNote && <p class="masthead-note" data-chrome="note">{chrome.mastheadNote[0]}<br />{chrome.mastheadNote[1]}<br /><strong>{chrome.mastheadNote[2]}</strong></p>}
       <a class="brand" href="/" aria-label={`${SITE.name} home`}>
         <BrandMark />
       </a>
       <div class="masthead-actions">
-      <a class="header-search" href="/search/" aria-current={current === 'search' ? 'page' : undefined}>
+      {chrome.search && <a class="header-search" data-chrome="search" href="/search/" aria-current={current === 'search' ? 'page' : undefined}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <span>Search</span>
-      </a>
-      <a class="btn accent header-submit" href="/submit/">Submit a Story</a>
+      </a>}
+      {chrome.submit && <a class="btn accent header-submit" data-chrome="submit" href="/submit/">{chrome.submit}</a>}
       <button class="icon-btn menu-toggle" type="button" aria-controls="mobile-nav" aria-expanded="false" aria-label="Open menu">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
       </div>
     </div>
   </div></div>
-  <div class="conference-strip"><div class="wrap"><p><span aria-hidden="true">Iowa-Missouri Conference</span><span class="sr-only">{SITE.publisher}</span></p></div></div>
+  {chrome.strip && <div class="conference-strip" data-chrome="strip"><div class="wrap"><p><span aria-hidden="true" data-chrome-text="strip">{chrome.strip}</span><span class="sr-only">{SITE.publisher}</span></p></div></div>}
   <div class="wrap">
     <div class="section-nav-row"><nav class="nav" aria-label="Sections" data-navigation-items>
       {items.filter((i) => i.visible).map((i) => <a href={i.href} aria-current={active === i.id ? 'page' : undefined}>{i.label}</a>)}
-    </nav><span class="masthead-edition">Iowa + Missouri</span></div>
+    </nav>{chrome.edition && <span class="masthead-edition" data-chrome="edition">{chrome.edition}</span>}</div>
     <nav class="mobile-nav" id="mobile-nav" data-open="false" aria-label="Sections" inert>
       <div class="mobile-nav-inner"><div data-navigation-items>
         {items.filter((i) => i.visible).map((i) => <a href={i.href} aria-current={active === i.id ? 'page' : undefined}>{i.label}</a>)}
       </div>
-      <a href="/search/" aria-current={current === 'search' ? 'page' : undefined}>Search</a>
-      <a class="btn accent" href="/submit/">Submit a Story</a>
+      {chrome.search && <a data-chrome="search" href="/search/" aria-current={current === 'search' ? 'page' : undefined}>Search</a>}
+      {chrome.submit && <a class="btn accent" data-chrome="submit" href="/submit/">{chrome.submit}</a>}
       </div>
     </nav>
   </div>
 </header>
 <script>
   import { normalizeNavigation, currentNavigation } from '../lib/site-navigation';
+  import { applyChrome } from '../scripts/site-chrome-refresh';
   const btn = document.querySelector<HTMLButtonElement>('.menu-toggle');
   const nav = document.getElementById('mobile-nav');
   const setOpen = (open: boolean) => {
@@ -71,7 +76,9 @@ const active = currentNavigation(items, Astro.url, current);
   // Refresh prerendered/cached headers too; failure retains the complete server-rendered menu.
   void fetch('/api/navigation', { credentials: 'omit', cache: 'no-store' }).then(async (response) => {
     if (!response.ok) return;
-    const data = await response.json(), items = normalizeNavigation(data.items), active = currentNavigation(items, new URL(location.href), document.querySelector<HTMLElement>('.site-header')?.dataset.navigationSection);
+    const data = await response.json();
+    try { applyChrome(data.chrome, document); } catch { /* keep the server-rendered header and footer */ }
+    const items = normalizeNavigation(data.items), active = currentNavigation(items, new URL(location.href), document.querySelector<HTMLElement>('.site-header')?.dataset.navigationSection);
     for (const list of document.querySelectorAll('[data-navigation-items]')) {
       const links = items.filter((i) => i.visible).map((i) => { const a = document.createElement('a'); a.href = i.href; a.textContent = i.label; if (i.id === active) a.setAttribute('aria-current', 'page'); return a; });
       // Do not replace a keyboard user's focused menu link while the request finishes.

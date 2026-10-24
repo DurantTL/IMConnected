@@ -1,37 +1,39 @@
 ---
 import BrandMark from './BrandMark.astro';
 import { SECTIONS, SITE } from '../lib/site';
+import { readPublicChrome } from '../lib/chrome-store';
+import { defaultPublicChrome, splitIntro } from '../lib/site-chrome';
 const year = new Date().getFullYear();
+// Issue #156: editable text, links and visibility; prerendered pages render the defaults and refresh from the API (see Header.astro).
+const chrome = (Astro.isPrerendered ? defaultPublicChrome() : readPublicChrome()).footer;
+const intro = chrome.intro ? splitIntro(chrome.intro) : null;
 ---
 <footer class="site-footer">
   <div class="wrap">
-    <div class="footer-statement"><p>Connected by community.<br /><em>Inspired by faith.</em></p><a class="btn" href="/submit/">Share your story <span aria-hidden="true">↗</span></a></div>
+    <div class="footer-statement"><p data-chrome="statement-text">{chrome.statement.line1}<br /><em>{chrome.statement.line2}</em></p>{chrome.statement.button && <a class="btn" data-chrome="statement-button" href={chrome.statement.button.url}>{chrome.statement.button.label} <span aria-hidden="true">↗</span></a>}</div>
     <div class="cols">
       <div>
         <a class="brand" href="/">
           <BrandMark />
         </a>
-        <p class="footer-intro">{SITE.tagline}. A publication of the <a href={SITE.publisherUrl}>{SITE.publisher}</a>.</p>
+        {chrome.intro && <p class="footer-intro" data-chrome="intro">{intro ? <>{intro[0]}<a href={SITE.publisherUrl}>{intro[1]}</a>{intro[2]}</> : chrome.intro}</p>}
       </div>
-      <div>
-        <h2>Sections</h2>
+      {chrome.sections && <div data-chrome="sections">
+        <h2 data-chrome-text="sections-heading">{chrome.sections.heading}</h2>
         <ul>
           {SECTIONS.map((s) => <li><a href={`/${s.key}/`}>{s.label}</a></li>)}
         </ul>
-      </div>
-      <div>
-        <h2>Get involved</h2>
-        <ul>
-          <li><a href="/submit/">Submit a story</a></li>
-          <li><a href="/search/">Search stories</a></li>
-          <li><a href={`mailto:${SITE.contactEmail}`}>{SITE.contactEmail}</a></li>
-          <li><a href={SITE.publisherUrl}>imsda.org</a></li>
+      </div>}
+      {chrome.involved && <div data-chrome="involved">
+        <h2 data-chrome-text="involved-heading">{chrome.involved.heading}</h2>
+        <ul data-chrome-list="involved">
+          {chrome.involved.links.map((l) => <li><a href={l.url}>{l.label}</a></li>)}
         </ul>
-      </div>
+      </div>}
     </div>
     <div class="footer-bottom">
-      <p class="fine">© {year} {SITE.publisher}. All rights reserved.</p>
-      <a class="footer-editor" href="/admin">Editor sign in <span aria-hidden="true">→</span></a>
+      <p class="fine" data-chrome="copyright">© {year} {chrome.copyright}. All rights reserved.</p>
+      {chrome.editor && <a class="footer-editor" data-chrome="editor" href="/admin">Editor sign in <span aria-hidden="true">→</span></a>}
     </div>
   </div>
 </footer>
