@@ -3,11 +3,12 @@
 // so without JavaScript the bar is still a normal form that posts to the confirmation step. JavaScript only adds the
 // "select all" checkbox and the "N selected" count. Each button carries its own action, so one selection can be
 // published, rejected or edited (drafts), or unpublished or edited (live stories).
-interface Props { action: string; label: string; noun: string; more?: { action: string; label: string; danger?: boolean }[] }
-const { action, label, noun, more = [] } = Astro.props;
+interface Props { action: string; label: string; noun: string; back?: string; more?: { action: string; label: string; danger?: boolean }[] }
+const { action, label, noun, back = '', more = [] } = Astro.props;
 const buttons = [{ action, label, danger: action === 'unpublish' }, ...more];
 ---
 <form class="bulk-bar" id="bulk-form" method="post" action="/admin/bulk" aria-label="Bulk actions">
+  {back && <input type="hidden" name="back" value={back} />}
   <label class="bulk-all" id="bulk-all-label" hidden><input type="checkbox" id="bulk-all" /> Select all on this page</label>
   <p class="bulk-count" id="bulk-count" role="status" hidden>0 selected</p>
   <div class="bulk-buttons">

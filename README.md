@@ -62,7 +62,7 @@ The home page shows recent stories only: those dated within the last 90 days (`H
 
 The [community navigation guide](docs/COMMUNITY-NAVIGATION.md) covers the homepage event rail, administrator website-menu settings, separate Stories/Announcements/Events queues and customizable module quick access.
 
-See the [design review and screenshots](docs/DESIGN_REVIEW.md) for the magazine layout and dedicated editor workspace. The editor separates **Content**, **Story settings**, **Photos**, and **Review & publish**; inactive panels leave the keyboard tab order, while their fields remain included in saves. A sticky toolbar keeps Save and private Preview available.
+See the [design review and screenshots](docs/DESIGN_REVIEW.md) for the magazine layout and dedicated editor workspace. The editor is a two-column page: the story canvas and one sidebar with the tabs Modules, Module, Settings, Publish and History; inactive panels leave the keyboard tab order, while their fields remain included in saves. A sticky toolbar keeps Save and private Preview available.
 
 The editor at `/admin/drafts/<id>` supports Markdown and a modular story workspace. Choose **Use modules** to preserve existing Markdown inside paragraph modules, then add paragraphs, headings, quotes, lists, inline story images, buttons/links, and dividers. The outline has drag reordering and labelled Move up/Move down controls. Modules can be duplicated, deleted, undone and redone before leaving the page. Text modules support Markdown formatting; raw HTML remains inert. Click a module in the private preview to select its settings. Desktop and Phone change only the preview width, and previewing never publishes.
 
@@ -436,6 +436,11 @@ Editors sign in at `/admin` with email + password and a required second factor (
 
   Only a hash of the invite token is stored, so the link can't be shown again. Run the command again to get a fresh one.
 - **Local testing.** `DATA_DIR=/tmp/imc-data npm start`, then `DATA_DIR=/tmp/imc-data node scripts/create-admin.mjs test@example.com "Test Admin"`. Session cookies are always `Secure`, so local sign-in needs Chrome or Firefox on `localhost` (they accept Secure cookies there). Use synthetic data and delete the folder afterwards.
+
+- **The dashboard.** After sign-in the pages share one admin shell: a sidebar (Stories, Announcements, Events and Published; Newsletter issues, Website menu, Backups and Audit log for administrators; Editors and My account for everyone) and a content area, with a compact bar on phones.
+  - **Drafts lists** (`/admin`, `/admin/announcements`, `/admin/events`): status cards (needs a person, new, in review, scheduled, rejected), search over title, church, author and text, filters (section, source, type, newsletter issue, story date range), a sort (the first choice, "Default order", means recently updated, or soonest scheduled under Status = Scheduled), 25/50/100 a page with page links, and removable filter chips. Everything is in the address, so a view can be bookmarked.
+  - **Published list** (`/admin/published`): live stories with search, section/area/issue/year filters, group cards (featured, with an open draft, edited this month, this year), sorts (default: published, newest first), pages, and per-row Edit and Unpublish. Unpublish and the bulk actions (`/admin/bulk`) on either list return to the same filtered, sorted, paged view.
+  - **Story editor** (`/admin/drafts/<id>`): the canvas on one side (title, summary, body or modules) and a sidebar with tabs for Modules, Module settings, Settings (section, author, date, newsletter issue and key points), Publish (checks, scheduling and the confirmed Publish button) and History (saved revisions). The top bar has Save, a private Preview in a dialog and a layout menu (hide the sidebar, move it left or right, make it narrower or wider, reset; you can also drag its edge); the layout is remembered in that browser only. Autosave and Save with JavaScript update in place; without JavaScript every panel is shown below the canvas and Save returns to the editor with a "Changes saved." notice.
 
 ### Sign-in, 2FA and recovery codes
 

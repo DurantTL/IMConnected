@@ -925,8 +925,15 @@ try {
     check('without JavaScript every Story settings, Publishing and History panel is shown and the JavaScript-only parts are not', await plainPage.locator('#studio-panel-settings').isVisible() && await plainPage.locator('#studio-panel-review').isVisible() && await plainPage.locator('#studio-panel-history').isVisible() && await plainPage.locator('#studio-panel-modules').isHidden());
     await plainPage.locator('input[name=author]').fill('Synthetic Plain Author');
     await plainPage.locator('input[name=title]').fill('Synthetic plain title');
-    const [plainResponse] = await Promise.all([plainPage.waitForResponse((r) => r.url().includes(`/api/admin/drafts/${legacyId}/save`)), plainPage.locator('#save-btn').click()]);
-    check('without JavaScript a sidebar field (author) and a canvas field (title) both save with the native Save', plainResponse.status() === 200 && legacyDraft().author === 'Synthetic Plain Author' && legacyDraft().title === 'Synthetic plain title');
+    await Promise.all([plainPage.waitForURL(/[?&]n=saved/, { timeout: 30000 }), plainPage.locator('#save-btn').click()]);
+    check('without JavaScript a sidebar field (author) and a canvas field (title) both save with the native Save', legacyDraft().author === 'Synthetic Plain Author' && legacyDraft().title === 'Synthetic plain title');
+    // Issue #148: the native Save lands back on the editor with the saved notice, not on a JSON page.
+    check('without JavaScript the native Save returns to the editor at ?n=saved and shows "Changes saved."', new URL(plainPage.url()).pathname === `/admin/drafts/${legacyId}` && await plainPage.locator('form#draft-form').count() === 1 && await plainPage.locator('p.admin-ok[role=status]', { hasText: 'Changes saved.' }).isVisible());
+    // A version conflict (the draft changed since this page loaded) comes back to the same editor with the conflict text.
+    await plainPage.locator('input[name=title]').fill('Synthetic stale plain title');
+    db.prepare("UPDATE drafts SET updated_at = updated_at + 5 WHERE id = ?").run(legacyId);
+    await Promise.all([plainPage.waitForURL(/[?&]e=conflict/, { timeout: 30000 }), plainPage.locator('#save-btn').click()]);
+    check('without JavaScript a stale Save returns to the editor with the conflict error and saves nothing', new URL(plainPage.url()).pathname === `/admin/drafts/${legacyId}` && await plainPage.locator('p.admin-error[role=alert]:not([hidden])', { hasText: 'Someone else changed this draft' }).isVisible() && legacyDraft().title === 'Synthetic plain title');
     await plain.close();
   }
 

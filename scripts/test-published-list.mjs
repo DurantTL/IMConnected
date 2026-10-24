@@ -267,6 +267,56 @@ try {
   check('?n= and ?e= notices still show', r.html.includes('off the site now') && /role="alert"/.test(r.html));
   check('the list shows no email addresses', !/list-pub@example\.test|list-editor@example\.test/.test((await get()).html));
 
+  // ---------- issue #148: Default order sort option, and `back` keeps the view after actions ----------
+  x = await get('');
+  check('Sort select starts with "Default order (published, newest first)" (empty value), selected by default', /<select name="sort">\s*<option value="" selected>Default order \(published, newest first\)<\/option>/.test(x.html));
+  x = await get('?sort=title');
+  check('...and is not selected when another sort is chosen', /<option value="">Default order/.test(x.html) && /<option value="title" selected>/.test(x.html));
+  check('an empty sort is the default order', slugsOf((await get('?sort=')).html).join() === base66);
+  check('links leave out the default sort', !/href="[^"]*sort=published_desc/.test((await get('?sort=published_desc&page=2&perPage=25')).html));
+
+  const post = async (route, fields, headers = {}) => {
+    const res = await fetch(base + route, { method: 'POST', redirect: 'manual', headers: { Cookie: `__Host-imc_session=${token}`, Origin: base, 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: new URLSearchParams(fields) });
+    return { status: res.status, location: res.headers.get('location') || '', html: res.status === 200 ? await res.text() : '' };
+  };
+  x = await get('?q=synthetic&sort=title&perPage=50&page=2');
+  check('the Unpublish form and the bulk bar carry the current view as `back`', (x.html.match(/name="back" value="\/admin\/published\?q=synthetic&amp;sort=title&amp;perPage=50&amp;page=2"/g) || []).length >= 2);
+  r = await post('/api/admin/stories/unpublish', { slug: S[60].slug, back: 'q=synthetic&sort=title&perPage=50&page=2' });
+  check('Unpublish returns to the same filtered, sorted, paged view with the notice appended', r.status === 303 && r.location === '/admin/published?q=synthetic&sort=title&perPage=50&page=2&n=unpublished', `${r.status} ${r.location}`);
+  r = await post('/api/admin/stories/unpublish', { slug: 'synth-no-such-story', back: '/admin/published?featured=yes' });
+  check('an error keeps the view too (?e= appended, the full path form is accepted)', r.status === 303 && r.location.startsWith('/admin/published?featured=yes&e='), r.location);
+  r = await post('/api/admin/stories/unpublish', { slug: S[59].slug });
+  check('without `back` Unpublish goes to the plain list', r.status === 303 && r.location === '/admin/published?n=unpublished', r.location);
+  const evil = ['//evil.example', '//evil.example/admin/published', 'https://evil.example/', 'http://evil.example/admin/published?x=1', '/admin/editors', '/admin/editors?page=2', '/admin/published/../editors', '/admin/publishedx', '%2F%2Fevil.example', '%2Fadmin%2Feditors', '\\\\evil.example', 'javascript:alert(1)', '/\\evil.example', '@evil.example', 'evil.example', '?//evil.example', ' //evil.example', '/admin/published?next=https://evil.example&q=x', 'x'.repeat(5000)];
+  for (const [i, back] of evil.entries()) {
+    const slug = S[20 + i].slug; // each attempt targets a distinct live story
+    r = await post('/api/admin/stories/unpublish', { slug, back });
+    const loc = r.location;
+    const ok = r.status === 303 && loc.startsWith('/admin/published') && !/^\/\//.test(loc) && !/evil|<|>|%3C|\\|javascript/i.test(loc) && /^\/admin\/published(\?[A-Za-z0-9_=&.%+-]*)?$/.test(loc);
+    check(`malicious back ${JSON.stringify(back.slice(0, 40))} stays inside /admin/published (${loc.slice(0, 70)})`, ok, loc);
+  }
+  r = await post('/api/admin/stories/unpublish', { slug: S[41].slug, back: '/admin/editors' });
+  check('a back to another admin page falls back to the plain list', r.location === '/admin/published?n=unpublished', r.location);
+  r = await post('/api/admin/stories/unpublish', { slug: S[42].slug, back: '//evil.example' });
+  check('a protocol-relative back falls back to the plain list', r.location === '/admin/published?n=unpublished', r.location);
+  r = await post('/api/admin/stories/unpublish', { slug: S[43].slug, back: 'sort=bogus&perPage=7&page=abc&q=%0Ahello%0D&section=nope' });
+  check('back is rebuilt from the parsed filter: bad values drop to defaults, the search text is kept clean', r.location === '/admin/published?q=hello&n=unpublished', r.location);
+
+  const bulkEnv = { back: '/admin/published?section=news&sort=title&page=2' };
+  r = await post('/admin/bulk', { action: 'unpublish', slug: S[44].slug, ...bulkEnv });
+  check('bulk Unpublish confirmation: Cancel and the form carry the rebuilt view', r.status === 200 && r.html.includes('href="/admin/published?section=news&amp;sort=title&amp;page=2"') && r.html.includes('name="back" value="/admin/published?section=news&amp;sort=title&amp;page=2"'), r.status);
+  r = await post('/admin/bulk', { action: 'unpublish', step: 'run', slug: S[44].slug, ...bulkEnv });
+  check('bulk Unpublish result: Back to the list returns to the view', r.status === 200 && /1 of 1 unpublished/.test(r.html) && r.html.includes('href="/admin/published?section=news&amp;sort=title&amp;page=2"'));
+  r = await post('/admin/bulk', { action: 'editstory', slug: S[45].slug, ...bulkEnv });
+  check('bulk Edit fields page: Cancel and the form carry the view', r.status === 200 && r.html.includes('href="/admin/published?section=news&amp;sort=title&amp;page=2"') && r.html.includes('name="back" value="/admin/published?section=news&amp;sort=title&amp;page=2"'));
+  r = await post('/admin/bulk', { action: 'editstory', step: 'run', slug: S[45].slug, tick_featured: '1', e_featured: 'on', ...bulkEnv });
+  check('bulk Edit fields result: Back to the list returns to the view', r.status === 200 && /1 of 1 updated/.test(r.html) && r.html.includes('href="/admin/published?section=news&amp;sort=title&amp;page=2"'));
+  for (const back of ['//evil.example', 'https://evil.example/x', '/admin/editors', '%2Fadmin%2Feditors', '<script>alert(1)</script>']) {
+    r = await post('/admin/bulk', { action: 'unpublish', slug: S[46].slug, back });
+    const backs = [...r.html.matchAll(/name="back" value="([^"]*)"/g)].map((m) => m[1]);
+    check(`bulk page with malicious back ${JSON.stringify(back.slice(0, 30))} only carries and links to /admin/published`, r.status === 200 && backs.length > 0 && backs.every((v) => v === '/admin/published') && r.html.includes('href="/admin/published"') && !/evil/i.test(r.html) && !/<script>alert/.test(r.html), `${r.status} ${backs}`);
+  }
+
   // ---------- browser: no horizontal scroll, screenshots (optional; needs Playwright and Chromium) ----------
   let browser;
   try {
