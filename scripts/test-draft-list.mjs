@@ -283,7 +283,7 @@ try {
   const backsOf = (html) => [...html.matchAll(/name="back" value="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
   const cancelOf = (html) => [...html.matchAll(/<a class="cms-btn secondary" href="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
   r = await list('q=Synthetic&sort=title&perPage=50&page=2&status=all');
-  check('the bulk bar carries the current drafts view as `back` (path and query)', /name="back" value="\/admin\?q=Synthetic&amp;status=all&amp;sort=title&amp;perPage=50&amp;page=2"/.test(r.text), (r.text.match(/name="back" value="[^"]*"/) || [''])[0]);
+  check('the bulk bar carries the current drafts view as `back` (path and query)', /name="back" value="\/admin\?q=Synthetic&amp;sort=title&amp;perPage=50&amp;page=2&amp;status=all"/.test(r.text), (r.text.match(/name="back" value="[^"]*"/) || [''])[0]);
   const t2 = D.find((d) => d.status === 'new' && d.kind === 'story' && d.i !== target.i);
   const t3 = D.find((d) => d.status === 'in_review' && d.kind === 'story' && !d.publishAt && d.i !== t2.i);
   const one = (d) => ({ action: 'reject', id: String(d.i), [`v_${d.i}`]: String(d.updated) });
