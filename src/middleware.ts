@@ -90,6 +90,7 @@ function harden(res: Response): Response {
 const adminOnly = (path: string, method: string) =>
   path === '/admin/navigation' ||
   path === '/admin/homepage' ||
+  path === '/admin/header-footer' ||
   path === '/admin/issues' ||
   path === '/admin/audit' ||
   path === '/api/admin/audit' ||
