@@ -1,5 +1,5 @@
 .story-builder { --sb-teal:#087e8b; }
-.ed [hidden] { display:none!important; }
+.ed [hidden]:not([hidden=until-found]) { display:none!important; }
 .sb-eyebrow { color:#355b63; font-size:.72rem; font-weight:750; text-transform:uppercase; letter-spacing:.12em; }
 .sb-controls,.sb-preview-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; }
 .sb-controls button[aria-pressed=true],.sb-preview-tools button[aria-pressed=true] { background:#e0f2f3; color:#064650; border-color:#087e8b; }

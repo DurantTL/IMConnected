@@ -994,6 +994,7 @@ if (browser) {
     await page.locator('[data-studio-tab=settings]').click();
     await page.fill('input[name=title]', 'Title edited before a photo change');
     await page.locator('#photos').scrollIntoViewIfNeeded();
+    await page.locator('.ed-photo').nth(1).locator('details.ed-photo-more > summary').click(); // Make lead sits in the photo's details (issue #150)
     await page.locator('.ed-photo').nth(1).locator('button', { hasText: 'Make lead' }).click();
     await page.waitForURL(/n=photos/);
     check('a photo action first saves unsaved edits, then applies', draftRow(W).title === 'Title edited before a photo change' && q('SELECT id FROM draft_photos WHERE draft_id = ? ORDER BY position', W).length === 3);
