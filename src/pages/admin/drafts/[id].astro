@@ -54,7 +54,7 @@ const scheduleStopped = !!draft && draft.publishFailCount >= MAX_FAILURES;
 const safeImg = (u: string) => /^\/(images|media)\/[A-Za-z0-9._\-/]+$/.test(u) || /^https:\/\//.test(u);
 const sectionKnown = !!draft && SECTIONS.some((s) => s.key === draft.section);
 const eyebrow = draft && sectionKnown ? sectionLabel(draft.section, draft.area) : '';
-const hasBody = !!draft && (!!draft.body.trim() || !!draft.storyBlocks?.length);
+const hasBody = !!draft && !!draft.body.trim();
 const isModular = !!draft?.storyBlocks?.length;
 // Problems the editor already knows about (the rules publishing enforces, plus photo descriptions and inline photo markers), shown as links to the part that fixes them.
 const problems: { text: string; panel: string; href: string; key?: string }[] = [];
@@ -333,7 +333,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
             <button type="button" role="tab" class="ed-tab" id="studio-tab-modules" data-studio-tab="modules" aria-controls="studio-panel-modules" aria-selected="true" hidden={!editable}>Modules</button>
             <button type="button" role="tab" class="ed-tab" id="studio-tab-module" data-studio-tab="module" aria-controls="studio-panel-module" aria-selected="false" tabindex="-1" hidden={!isModular} aria-label="Module settings">Module</button>
             <button type="button" role="tab" class="ed-tab" id="studio-tab-settings" data-studio-tab="settings" aria-controls="studio-panel-settings" aria-selected="false" tabindex="-1" aria-label="Settings for the story">Settings</button>
-            {editable && <button type="button" role="tab" class="ed-tab" id="studio-tab-review" data-studio-tab="review" aria-controls="studio-panel-review" aria-selected="false" tabindex="-1" aria-label="Publishing">Publish</button>}
+            {editable && <button type="button" role="tab" class="ed-tab" id="studio-tab-review" data-studio-tab="review" aria-controls="studio-panel-review" aria-selected="false" tabindex="-1">Publish</button>}
             {editable && <button type="button" role="tab" class="ed-tab" id="studio-tab-history" data-studio-tab="history" aria-controls="studio-panel-history" aria-selected="false" tabindex="-1">History</button>}
           </div>
 
