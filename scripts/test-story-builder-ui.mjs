@@ -1016,6 +1016,8 @@ try {
     const typeBoxes = await page.locator('[data-type-control] .ed-seg-opt').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
     check('the Type control is a three-way radio group at the top of Story details, 44px or taller, and replaces the select', typeBoxes.length === 3 && typeBoxes.every((h) => h >= 44) && await page.locator('[name=announcementKind]').count() === 3 && await page.locator('select[name=announcementKind]').count() === 0 && await page.locator('#ed-details-body > fieldset:first-child[data-type-control]').count() === 1);
     check('a story starts with Story selected, the Announcement group hidden and the back link saying Stories', await page.locator('input[name=announcementKind][value=story]').isChecked() && await page.locator('[data-announcement-group]').isHidden() && (await page.locator('[data-kind-back]').textContent()).includes('Stories'));
+    const saveNow = async () => { await page.locator('#save-btn:visible, #mobile-save-btn:visible').first().click(); await page.waitForFunction(() => /Last saved/.test(document.getElementById('save-status')?.textContent || ''), null, { timeout: 8000 }).catch(() => {}); await sleep(300); };
+    const revisions = () => db.prepare('SELECT COUNT(*) n FROM draft_revisions WHERE draft_id=?').get(gid).n;
     await page.locator('label.ed-seg-opt', { hasText: 'Event' }).click();
     check('choosing Event opens Settings, focuses the event date, and updates the back link', await page.evaluate(() => document.activeElement?.getAttribute('name')) === 'eventDate' && await page.locator('[data-announcement-group]').isVisible() && (await page.locator('[data-kind-back]').textContent()).includes('Events') && (await page.locator('[data-kind-back]').getAttribute('href')) === '/admin/events');
     const evProblem = () => page.locator('[data-problem=eventDate]').evaluate((el) => !el.hidden);
@@ -1023,14 +1025,34 @@ try {
     await page.locator('label.ed-seg-opt', { hasText: 'Announcement' }).click();
     check('Event to Announcement keeps the details and updates the label with no confirmation', await page.locator('[name=eventDate]').inputValue() === '2027-05-05' && (await page.locator('[data-kind-back]').textContent()).includes('Announcements'));
     await page.locator('[name=eventLocation]').fill('Synthetic Hall');
+    await saveNow();
+    check('the Announcement type with its details is saved', JSON.parse(gdraft().announcement || 'null')?.kind === 'announcement' && JSON.parse(gdraft().announcement).location === 'Synthetic Hall', String(gdraft().announcement));
     page.removeAllListeners('dialog');
     let asked = '';
     page.once('dialog', (d) => { asked = d.message(); void d.dismiss(); });
     await page.locator('label.ed-seg-opt', { hasText: 'Story' }).click();
     check('choosing Story asks first (event date, location, links and video); Cancel keeps the type and every detail', /cleared/.test(asked) && /date/.test(asked) && await page.locator('input[name=announcementKind][value=announcement]').isChecked() && await page.locator('[name=eventLocation]').inputValue() === 'Synthetic Hall' && await page.locator('[data-announcement-group]').isVisible());
+    check('after Cancel focus returns to the restored radio', await page.evaluate(() => document.activeElement?.getAttribute('value')) === 'announcement');
+    await saveNow();
+    check('after Cancel the saved row still has the announcement', JSON.parse(gdraft().announcement || 'null')?.kind === 'announcement' && JSON.parse(gdraft().announcement).location === 'Synthetic Hall');
+    const revBeforeOk = revisions();
     page.on('dialog', (d) => d.accept());
     await page.locator('label.ed-seg-opt', { hasText: 'Story' }).click();
+    await saveNow();
+    check('after OK the saved row has no announcement and a new revision holds the previous state', gdraft().announcement === null && revisions() === revBeforeOk + 1, `${gdraft().announcement} ${revBeforeOk} ${revisions()}`);
     check('OK clears the event details, hides the group and goes back to Stories', await page.locator('input[name=announcementKind][value=story]').isChecked() && await page.locator('[name=eventLocation]').inputValue() === '' && await page.locator('[name=eventDate]').inputValue() === '' && await page.locator('[data-announcement-group]').isHidden() && (await page.locator('[data-kind-back]').textContent()).includes('Stories'));
+
+    // Keyboard: arrow keys move through the radio group natively; the checked segment is visible in forced-colors mode.
+    await load();
+    await page.locator('input[name=announcementKind][value=story]').focus();
+    await page.keyboard.press('ArrowRight');
+    check('ArrowRight on the Type group moves to Announcement (native radio keyboard behaviour)', await page.locator('input[name=announcementKind][value=announcement]').isChecked() && await page.locator('[data-announcement-group]').evaluate((el) => !el.hidden));
+    await page.keyboard.press('ArrowLeft');
+    check('ArrowLeft returns to Story through the confirmation when details exist or none, and the group follows', await page.locator('input[name=announcementKind][value=story]').isChecked() && await page.locator('[data-announcement-group]').isHidden());
+    await page.emulateMedia({ forcedColors: 'active' });
+    const segLook = await page.evaluate(() => Array.from(document.querySelectorAll('.ed-seg-opt')).map((l) => { const c = getComputedStyle(l.querySelector('span')); return `${c.backgroundColor}|${c.color}|${c.textDecorationLine}`; }));
+    check('in forced-colors mode the checked segment differs from the others (fill, text and underline)', segLook.length === 3 && segLook[0] !== segLook[1] && segLook[1] === segLook[2] && /underline/.test(segLook[0]) && !/underline/.test(segLook[1]), JSON.stringify(segLook));
+    await page.emulateMedia({ forcedColors: 'none' });
 
     // 4. Module library groups.
     await splitModules(page);

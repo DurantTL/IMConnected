@@ -248,8 +248,8 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
             <legend>Content type</legend>
             <label><input type="checkbox" name="tick_type" value="1" checked={carried(['tick_type']).length > 0} /> Change the content type</label>
             <fieldset class="bulk-field bulk-sub"><legend>New content type</legend>
-              {([['story', 'Story (clears any event date, location, links and video)'], ['announcement', 'Announcement'], ['event', 'Event']] as const).map(([v, l]) => <label><input type="radio" name="e_type" value={v} checked={(carried(['e_type'])[0]?.v ?? 'story') === v} /> {l}</label>)}
-              <label for="e_event_date">Event date <span class="hint">applies to every item set to Event; an item with no date of its own is skipped without it</span></label>
+              {([['story', 'Story (clears any event date, location, links and video)'], ['announcement', 'Announcement'], ['event', 'Event']] as const).map(([v, l]) => <label><input type="radio" name="e_type" value={v} checked={carried(['e_type'])[0]?.v === v} /> {l}</label>)}
+              <label for="e_event_date">Event date <span class="hint">fills only items that have no event date; an existing event date is kept, and an item with none is skipped without it</span></label>
               <input id="e_event_date" type="date" name="e_event_date" value={carried(['e_event_date'])[0]?.v ?? ''} />
             </fieldset>
           </fieldset>

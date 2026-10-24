@@ -314,3 +314,10 @@ body.adm-compact .adm-col, .admin-main:has(.editor-studio), .editor-studio, .ed-
 .ed-seg-opt input:checked + span { background: var(--e-navy, #1d3557); color: #fff; }
 .ed-seg-opt input:focus-visible + span { outline: 3px solid var(--e-focus, #0b5fff); outline-offset: -3px; }
 @media (max-width: 480px) { .ed-type .ed-seg { display: grid; grid-template-columns: 1fr 1.5fr 1fr; width: 100%; } .ed-type .ed-seg .ed-seg-opt { min-width: 0; width: 100%; max-width: none; } .ed-seg-opt span { padding: 0 6px; font-size: .92rem; } }
+/* Windows High Contrast: colours are replaced, so the checked segment needs a system-colour fill and a non-colour cue. */
+@media (forced-colors: active) {
+  .ed-seg { border-color: CanvasText; }
+  .ed-seg-opt span { forced-color-adjust: none; color: CanvasText; background: Canvas; }
+  .ed-seg-opt input:checked + span { background: Highlight; color: HighlightText; text-decoration: underline; text-decoration-thickness: 3px; text-underline-offset: 4px; }
+  .ed-seg-opt input:focus-visible + span { outline: 3px solid CanvasText; outline-offset: -6px; }
+}

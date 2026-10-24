@@ -96,7 +96,7 @@ export function describeChanges(c: EditChanges): string[] {
   if (c.featured !== undefined) out.push(`Featured: ${c.featured ? 'on' : 'off'}`);
   if (c.date) out.push(`Date: ${c.date}`);
   if (c.contentType) {
-    const label = { story: 'Story (any event date, location, links and video are cleared)', announcement: 'Announcement', event: c.eventDate ? `Event on ${c.eventDate}` : 'Event (an item with no event date is skipped, with a reason)' }[c.contentType];
+    const label = { story: 'Story (any event date, location, links and video are cleared)', announcement: 'Announcement', event: c.eventDate ? `Event (items without an event date get ${c.eventDate}; an existing event date is kept)` : 'Event (an item with no event date is skipped, with a reason)' }[c.contentType];
     out.push(`Content type: ${label}`);
   }
   return out;
@@ -107,12 +107,12 @@ interface Patch { section: string; area: string; column: string; additionalSecti
 
 /**
  * The announcement an item gets from the ticked content type. Story clears it; Announcement keeps what is stored (an event's
- * details carry over) or starts empty; Event needs a date, from the bulk field or already stored. The result goes through
+ * details carry over) or starts empty; Event needs a date: an item's own date is kept, and the bulk date only fills items that have none. The result goes through
  * normalizeAnnouncement, and an item that fails it is refused with nothing changed.
  */
 function nextAnnouncement(cur: Announcement | null, c: EditChanges): { ok: true; value: Announcement | null } | { ok: false; reason: string } {
   if (c.contentType === 'story') return { ok: true, value: null };
-  const eventDate = c.contentType === 'event' ? c.eventDate ?? cur?.eventDate : cur?.eventDate;
+  const eventDate = cur?.eventDate ?? (c.contentType === 'event' ? c.eventDate : undefined);
   if (c.contentType === 'event' && !eventDate) return { ok: false, reason: 'An event needs a date, and this item has none. Enter an event date for the batch, or open it to set one. Nothing was changed.' };
   try {
     return { ok: true, value: normalizeAnnouncement({ ...(cur ?? { links: [] }), kind: c.contentType, ...(eventDate ? { eventDate } : {}) }) };
@@ -171,7 +171,7 @@ export function editDraftItem(draftId: number, version: number, changes: EditCha
   if (!applied.ok) return applied;
   const title = draft.title || 'Untitled story';
   if (applied.changed.length === 0) return { ok: true, title, changed: [] };
-  // An explicit whitelist of editorial fields (never contact details). storyBlocks and announcement stay undefined so the save keeps them.
+  // An explicit whitelist of editorial fields (never contact details). storyBlocks stays undefined (and announcement unless the content type is ticked) so the save keeps them.
   const fields: DraftFields = {
     title: draft.title, dek: draft.dek, section: applied.patch.section, additionalSections: applied.patch.additionalSections, area: applied.patch.area,
     column: applied.patch.column, author: draft.author, authorTitle: draft.authorTitle, church: draft.church, date: applied.patch.date,

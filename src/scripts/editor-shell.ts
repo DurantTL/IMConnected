@@ -291,6 +291,7 @@ if (root && form && body && sidebar) {
     if (radio.value === 'story' && lastKind !== 'story') {
       if (!window.confirm('Change this to a story? The event date, location, links and video will be cleared. You can bring them back from History in Settings.')) {
         kindRadios.forEach((r) => { r.checked = r.value === lastKind; });
+        kindRadios.find((r) => r.checked)?.focus();
         event.stopImmediatePropagation();
         return;
       }

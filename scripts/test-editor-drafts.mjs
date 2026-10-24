@@ -1025,8 +1025,10 @@ if (browser) {
   check('switching to Announcement keeps the details', JSON.parse(draftRow(T).announcement).kind === 'announcement' && JSON.parse(draftRow(T).announcement).location === 'Synthetic Hall');
   r = await post('story');
   check('switching to Story clears the announcement and the previous state is a revision', draftRow(T).announcement === null && q('SELECT COUNT(*) n FROM draft_revisions WHERE draft_id = ?', T)[0].n >= 2);
+  const rowBefore = JSON.stringify(draftRow(T));
   r = await post('bogus');
-  check('an unknown type is refused and nothing changes', r.status !== 200 && r.status !== 303 || draftRow(T).announcement === null, String(r.status));
+  check('an unknown type is refused with a client error (not saved)', r.status === 400 || r.status === 422 || (r.status === 303 && /e=save_invalid/.test(r.loc || '')), `${r.status} ${r.loc}`);
+  check('an unknown type leaves the row unchanged', JSON.stringify(draftRow(T)) === rowBefore);
   // an agent draft is not touched by opening it
   const now = Date.now();
   const AG = Number(run("INSERT INTO drafts(status,source,title,section,area,author,date,body,announcement,created_at,updated_at) VALUES('new','agent','Synthetic Agent Notice','news','conference','Synthetic Author','2027-01-01','Synthetic agent body text for the notice.',?,?,?)", JSON.stringify({ kind: 'event', eventDate: '2027-06-06', links: [] }), now, now).lastInsertRowid);

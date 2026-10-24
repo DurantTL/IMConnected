@@ -196,7 +196,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                 </div>
                 <div class="ed-group-body" id="ed-details-body" data-card-body>
                 <fieldset class="ed-type" data-type-control>
-                  <legend>Type</legend>
+                  <legend>Type <span class="hint">Choosing Event moves you to the event date.</span></legend>
                   <div class="ed-seg">
                     {([['story', 'Story'], ['announcement', 'Announcement'], ['event', 'Event']] as const).map(([value, label]) => (
                       <label class="ed-seg-opt"><input form="draft-form" type="radio" name="announcementKind" value={value} checked={(draft.announcement?.kind ?? 'story') === value} /><span>{label}</span></label>
@@ -519,7 +519,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               <label>Event date <span class="hint">needed for an event</span><input form="draft-form" type="date" id="f-event-date" name="eventDate" value={draft.announcement?.eventDate ?? ''} /></label>
               <label class="full">Event location <input form="draft-form" name="eventLocation" maxlength="200" value={draft.announcement?.location ?? ''} /></label>
               <label class="full">Announcement video <span class="hint">Paste a YouTube or Vimeo link; readers open it in a video popup.</span><input form="draft-form" name="announcementVideo" maxlength="2048" value={draft.announcement?.videoUrl ?? ''} /></label>
-              <fieldset class="full"><legend>Announcement link buttons</legend><p class="admin-note">Choose Announcement or Event above. The first photo is its full-height flyer. Add a text summary so the flyer is also accessible.</p>
+              <fieldset class="full"><legend>Announcement link buttons</legend><p class="admin-note">Choose Announcement or Event with the Type control in Story details. The first photo is its full-height flyer. Add a text summary so the flyer is also accessible.</p>
                 {[0, 1, 2].map((i) => <div class="ed-grid"><label>Link {i + 1} label<input form="draft-form" name={`announcementLink${i}Label`} maxlength="120" value={draft.announcement?.links[i]?.label ?? ''} /></label><label>Link {i + 1} address<input form="draft-form" name={`announcementLink${i}Url`} maxlength="2048" value={draft.announcement?.links[i]?.url ?? ''} placeholder="https://" /></label></div>)}
               </fieldset>
                 </div></div>
