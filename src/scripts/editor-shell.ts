@@ -2,6 +2,7 @@
 // preview dialog. Everything here is an enhancement: without JavaScript the page is the canvas followed by every sidebar
 // panel, and every form submits. The module builder (story-builder.ts) meets this file through editor-bus.ts.
 import { editorBus } from './editor-bus';
+import { revealEditorTarget } from './editor-groups';
 import {
   DEFAULT_EDITOR_LAYOUT, MIN_SIDEBAR_WIDTH, SIDEBAR_WIDTH_STEP, clearEditorLayout, displayedSidebarWidth, maxSidebarWidthFor,
   readEditorLayout, resizeKeys, widthFromPointer, writeEditorLayout, clampSidebarWidth, type EditorLayout,
@@ -30,7 +31,7 @@ if (root && form && body && sidebar) {
 
   root.setAttribute('data-js', '');
   for (const heading of sidebar.querySelectorAll<HTMLElement>('.ed-panel-title')) heading.tabIndex = -1;
-  for (const heading of canvas.querySelectorAll<HTMLElement>('.ed-step > h2')) heading.tabIndex = -1;
+  for (const heading of canvas.querySelectorAll<HTMLElement>('.ed-step summary > h2')) heading.tabIndex = -1;
 
   // ---- layout: side, width and visibility, remembered in this browser ----
   let layout: EditorLayout = readEditorLayout();
@@ -77,8 +78,19 @@ if (root && form && body && sidebar) {
     onLayoutAction(control.dataset.layoutAction!);
     if (fromMenu) { setMenu(false); menuButton.focus(); }
   });
-  wide.addEventListener('change', applyLayout);
-  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => applyLayout()).observe(body);
+  // One scroll (issue #150): the sidebar sticks under the top of the page only while all of it fits in the window. A taller
+  // sidebar is not sticky and scrolls with the page, so there is never a scrollbar inside it. Its height does not depend on
+  // whether it sticks, so measuring it cannot flip-flop.
+  function updateSticky() {
+    const fits = wide.matches && sidebar!.offsetHeight + 24 <= window.innerHeight;
+    root!.dataset.sidebarFits = String(fits);
+  }
+  wide.addEventListener('change', () => { applyLayout(); updateSticky(); });
+  window.addEventListener('resize', updateSticky);
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => applyLayout()).observe(body);
+    new ResizeObserver(updateSticky).observe(sidebar);
+  }
 
   // The layout menu: a button that opens a group; Escape closes it and gives focus back.
   const setMenu = (open: boolean) => { menu.hidden = !open; menuButton.setAttribute('aria-expanded', String(open)); };
@@ -159,9 +171,16 @@ if (root && form && body && sidebar) {
     showTab(name, !hash);
     const target = hash && hash.length > 1 ? document.querySelector<HTMLElement>(hash) : null;
     if (!target) return;
-    const heading = target.closest<HTMLElement>('[data-studio-panel], .ed-step')?.querySelector<HTMLElement>('.ed-panel-title, .ed-step > h2') ?? (target.matches('.ed-step') ? target.querySelector<HTMLElement>('h2') : null);
-    (target.matches(FOCUSABLE) ? target : target.querySelector<HTMLElement>(FOCUSABLE) ?? heading)?.focus();
-    target.scrollIntoView({ block: 'center' });
+    let focusTarget: HTMLElement = target;
+    // "N photos have no description" opens the first photo that lacks one.
+    if (target.id === 'photos') focusTarget = Array.from(target.querySelectorAll<HTMLInputElement>('input[name^="photo_"][name$="_alt"]')).find((input) => !input.value.trim()) ?? target;
+    // A field in a collapsed group or card is opened first, then focused.
+    revealEditorTarget(focusTarget);
+    const heading = target.closest<HTMLElement>('[data-studio-panel], .ed-step')?.querySelector<HTMLElement>('.ed-panel-title, .ed-step summary > h2') ?? (target.matches('.ed-step') ? target.querySelector<HTMLElement>('h2') : null);
+    const visible = (el: HTMLElement) => el.getClientRects().length > 0;
+    const inner = focusTarget.matches(FOCUSABLE) ? focusTarget : Array.from(focusTarget.querySelectorAll<HTMLElement>(FOCUSABLE)).find((el) => !el.matches('summary') && visible(el)) ?? heading;
+    inner?.focus();
+    (inner ?? target).scrollIntoView({ block: 'center' });
   });
   // The "Editor" link takes focus to the canvas.
   bar.querySelector('[data-editor-nav="editor"]')?.addEventListener('click', (event) => {
@@ -221,7 +240,38 @@ if (root && form && body && sidebar) {
   }
   const bodyField = document.getElementById('f-body') as HTMLTextAreaElement;
   const blocksField = document.getElementById('story-blocks') as HTMLInputElement;
+  // The one-line summaries of the collapsed step cards, the key points count and the photo layout name.
+  const cardSummary = (name: string) => canvas.querySelector<HTMLElement>(`[data-card-summary="${name}"]`);
+  const photoCount = canvas.querySelectorAll('ol.ed-photos > li').length;
+  function refreshCardSummaries() {
+    const value = (name: string) => ((form!.elements.namedItem(name) as HTMLInputElement | null)?.value ?? '').trim();
+    const points = [0, 1, 2].filter((i) => value(`keyPoint${i}`)).length;
+    const counter = canvas.querySelector('[data-kp-count]'); if (counter) counter.textContent = String(points);
+    const details = cardSummary('details');
+    if (details) details.textContent = [value('title') || 'No headline yet', points ? `${points} key ${points === 1 ? 'point' : 'points'}` : ''].filter(Boolean).join(' · ');
+    const layoutInput = form!.querySelector<HTMLInputElement>('input[name="photoLayout"]:checked');
+    const layoutName = layoutInput?.closest('label')?.querySelector('.lay-name')?.textContent ?? '';
+    const layoutLabel = canvas.querySelector('[data-layout-name]'); if (layoutLabel) layoutLabel.textContent = layoutName;
+    const photos = cardSummary('photos');
+    if (photos) photos.textContent = photoCount ? `${photoCount} ${photoCount === 1 ? 'photo' : 'photos'} · ${layoutName}` : 'No photos yet';
+    const story = cardSummary('story');
+    if (story) {
+      const modules = document.getElementById('module-count')?.textContent?.trim();
+      const modular = document.getElementById('split')?.dataset.mode === 'modules';
+      const words = bodyField.value.trim() ? bodyField.value.trim().split(/\s+/).length : 0;
+      story.textContent = modular ? `${modules || 0} modules` : words ? `Markdown · ${words} ${words === 1 ? 'word' : 'words'}` : 'No text yet';
+    }
+  }
+  const moduleCount = document.getElementById('module-count');
+  if (moduleCount) new MutationObserver(refreshCardSummaries).observe(moduleCount, { childList: true, characterData: true, subtree: true });
+  // The Announcement section only applies to announcements and events; without JavaScript it is simply shown.
+  const announcementGroup = root.querySelector<HTMLElement>('[data-announcement-group]');
+  const kindSelect = form.elements.namedItem('announcementKind') as HTMLSelectElement | null;
+  const syncAnnouncementGroup = () => { if (announcementGroup && kindSelect) announcementGroup.hidden = kindSelect.value === 'story'; };
+  kindSelect?.addEventListener('change', syncAnnouncementGroup);
+  syncAnnouncementGroup();
   form.addEventListener('input', () => {
+    refreshCardSummaries();
     const value = (name: string) => ((form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '').trim();
     const storyTitle = value('title') || 'Untitled story';
     const author = value('author') || 'Add an author in Story settings';
@@ -242,6 +292,7 @@ if (root && form && body && sidebar) {
   // ---- start: the layout, then the tab the address or the last action asks for ----
   const notice = new URLSearchParams(location.search).get('n');
   applyLayout();
+  updateSticky();
   const wanted = location.hash.slice(1);
   let emptyStory = false;
   try { emptyStory = !!JSON.parse(document.getElementById('story-builder-data')?.textContent || '{}').emptyStory; } catch { /* the page still works */ }

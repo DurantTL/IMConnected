@@ -5,9 +5,9 @@
 export type SidebarSide = 'left' | 'right';
 export interface EditorLayout { sidebarVisible: boolean; side: SidebarSide; width: number }
 
-export const DEFAULT_EDITOR_LAYOUT: EditorLayout = { sidebarVisible: true, side: 'right', width: 380 };
-export const MIN_SIDEBAR_WIDTH = 300;
-export const MAX_SIDEBAR_WIDTH = 600;
+export const DEFAULT_EDITOR_LAYOUT: EditorLayout = { sidebarVisible: true, side: 'right', width: 340 };
+export const MIN_SIDEBAR_WIDTH = 280;
+export const MAX_SIDEBAR_WIDTH = 560;
 /** One press of an arrow key, or of the narrower / wider buttons. */
 export const SIDEBAR_WIDTH_STEP = 40;
 /** The share of the editor's width the sidebar may take; the stylesheet's `max-width` is the same figure. */

@@ -33,10 +33,26 @@ let browser;
 let db;
 let checks = 0;
 const openContent = async (pg) => { const current = pg.locator('#module-outline [data-select-module][aria-current=true]'); if (await current.count() && await current.first().isEnabled()) await current.first().click(); else await pg.locator('#story-builder').scrollIntoViewIfNeeded(); };
-const openPhotos = (pg) => pg.locator('#photos').scrollIntoViewIfNeeded();
-const openTab = (pg, name) => pg.locator(`[data-studio-tab=${name}]`).click();
-const addModule = async (pg, type) => { await pg.locator('[data-studio-tab=modules]').click(); await pg.locator(`[data-add-module="${type}"]`).click(); };
-const insertLayout = async (pg, layout) => { await pg.locator('[data-studio-tab=modules]').click(); await pg.locator(`[data-insert-layout="${layout}"]`).click(); };
+// Opens the Photos card and every photo's details (caption, description, crop and replace sit in a per-photo disclosure, issue #150).
+// Clicks every collapsed summary a locator matches, waiting for each to report itself open (aria-expanded follows the toggle event, a moment after the click).
+const expandAll = async (locator) => { while (await locator.count()) { const handle = await locator.first().elementHandle(); await handle.click(); await handle.evaluate((el) => new Promise((resolve) => { const wait = () => el.getAttribute('aria-expanded') === 'true' ? resolve() : requestAnimationFrame(wait); wait(); })); } };
+const scrollSettled = (pg) => pg.evaluate(() => new Promise((resolve) => { let last = -1, still = 0; const tick = () => { if (scrollY === last) still++; else { still = 0; last = scrollY; } if (still >= 6) resolve(); else requestAnimationFrame(tick); }; tick(); }));
+const openPhotos = async (pg) => {
+  const card = pg.locator('#photos > details > summary');
+  if (await card.getAttribute('aria-expanded') === 'false') await card.click();
+  await pg.locator('#photos').scrollIntoViewIfNeeded();
+  await expandAll(pg.locator('.ed-photo-more > summary[aria-expanded=false]'));
+};
+const openTabRaw = (pg, name) => pg.locator(`[data-studio-tab=${name}]`).click();
+// Opens a sidebar tab and every collapsed group in it, so tests that use a field need not know which group holds it (issue #150).
+const openTab = async (pg, name) => {
+  await openTabRaw(pg, name);
+  await expandAll(pg.locator(`[data-studio-panel=${name}] details[data-group] > summary[aria-expanded=false]:visible`));
+};
+// The library and the starter layouts sit in collapsible groups (issue #150); open the one that holds a control before using it.
+const openGroupOf = async (pg, selector) => { const summary = pg.locator(`details[data-group]:has(${selector}) > summary`).first(); if (await summary.getAttribute('aria-expanded') === 'false') await summary.click(); };
+const addModule = async (pg, type) => { await pg.locator('[data-studio-tab=modules]').click(); await openGroupOf(pg, `[data-add-module="${type}"]`); await pg.locator(`[data-add-module="${type}"]`).click(); };
+const insertLayout = async (pg, layout) => { await pg.locator('[data-studio-tab=modules]').click(); await openGroupOf(pg, `[data-insert-layout="${layout}"]`); await pg.locator(`[data-insert-layout="${layout}"]`).click(); };
 const splitModules = async (pg) => { await pg.locator('[data-studio-tab=modules]').click(); await pg.locator('#use-modules').click(); };
 const openPreview = (pg) => pg.locator('[data-studio-preview]').first().click();
 const closePreview = (pg) => pg.locator('[data-preview-close]').click();
@@ -149,7 +165,7 @@ try {
   await page.locator('#module-library-search').fill('no-such-module');
   check('library no-results state has a visible recovery action', await page.locator('#module-library-empty').isVisible() && await page.locator('[data-add-module]:visible').count() === 0 && await page.locator('#module-library-reset').isVisible());
   await page.locator('#module-library-reset').click();
-  check('clearing library search restores the same eleven module controls without changing content', await page.locator('[data-add-module]:visible').count() === 11 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
+  check('clearing library search restores the same eleven module controls without changing content', await page.locator('[data-add-module]:not([hidden])').count() === 11 && await page.locator('details[data-library-group]:not([hidden])').count() === 4 && await page.locator('#module-library-search').inputValue() === '' && JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
   for (const layout of ['news', 'recap', 'announcement']) {
     await page.getByRole('button', { name: /^1\. Paragraph/ }).click();
     const before = await blocks();
@@ -175,7 +191,7 @@ try {
   for (let i = 0; i < 16; i++) await page.locator('#blocks-undo').click();
   check('rejected starters do not consume undo history', JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
   const paneBoxes = await Promise.all(['.ed-canvas', '.ed-sidebar'].map((selector) => page.locator(selector).boundingBox()));
-  check('1440px editor places the wide canvas left and the one sidebar (380px) right, with no persistent preview column', paneBoxes.every(Boolean) && paneBoxes[0].x + paneBoxes[0].width <= paneBoxes[1].x + 1 && Math.abs(paneBoxes[1].width - 380) < 2 && paneBoxes[0].width > paneBoxes[1].width * 1.5 && await page.locator('.ed-preview-card').count() === 0 && !(await page.locator('#ed-preview-dialog').evaluate((dialog) => dialog.open)));
+  check('1440px editor places the wide canvas left and the one sidebar (340px) right, with no persistent preview column', paneBoxes.every(Boolean) && paneBoxes[0].x + paneBoxes[0].width <= paneBoxes[1].x + 1 && Math.abs(paneBoxes[1].width - 340) < 2 && paneBoxes[0].width > paneBoxes[1].width * 1.5 && await page.locator('.ed-preview-card').count() === 0 && !(await page.locator('#ed-preview-dialog').evaluate((dialog) => dialog.open)));
 
   await page.getByRole('button', { name: /^1\. Paragraph/ }).focus();
   await page.keyboard.press('Enter');
@@ -243,6 +259,7 @@ try {
   await page.locator('.sb-focus-settings').evaluate((details) => { details.open = true; });
   const focal = page.locator(`[data-focal="${photo.id}"]`);
   await focal.scrollIntoViewIfNeeded();
+  await scrollSettled(page); // the page scrolls smoothly; measure only once it has stopped
   const box = await focal.boundingBox();
   assert.ok(box && box.width > 0 && box.height > 0, 'focal control is visible');
   await page.mouse.move(box.x + box.width * .25, box.y + box.height * .75);
@@ -262,7 +279,7 @@ try {
   check('Reset crop restores the complete default crop', await zoom.inputValue() === '1' && await page.locator(`[name="photo_${photo.id}_focalX"]`).inputValue() === '50' && await page.locator(`[name="photo_${photo.id}_focalY"]`).inputValue() === '50');
   await zoom.fill('1.8');
   const crop = page.locator(`[data-pan-photo="${photo.id}"]`);
-  await crop.scrollIntoViewIfNeeded();
+  await crop.scrollIntoViewIfNeeded(); await scrollSettled(page);
   await crop.locator('img').evaluate((image) => image.decode());
   const cropBox = await crop.boundingBox();
   await page.mouse.move(cropBox.x + cropBox.width / 2, cropBox.y + cropBox.height / 2);
@@ -311,7 +328,7 @@ try {
     const fitBox = page.getByRole('checkbox', { name: 'Fit whole photo', exact: true });
     const fillGroup = page.getByRole('group', { name: 'Fill behind the photo' });
     const frame = page.locator(`[data-pan-photo="${photo.id}"]`);
-    await fitBox.scrollIntoViewIfNeeded();
+    await fitBox.scrollIntoViewIfNeeded(); await scrollSettled(page);
     check('Fit whole photo is an unchecked, labelled checkbox and the fill choice is disabled while it is off', !(await fitBox.isChecked()) && await fillGroup.evaluate((g) => g.disabled) && await frame.getAttribute('data-fit') === null);
     const zoomValueBefore = await page.locator(`[name="photo_${photo.id}_zoom"]`).inputValue();
     await fitBox.check();
@@ -365,7 +382,7 @@ try {
   await page.frameLocator('#preview').locator('a[href="https://example.invalid/synthetic-details"]').click();
   check('canvas links select settings without navigating the private preview', await page.locator('#module-title').textContent() === 'Button / link settings' && await page.locator('[data-module-field="label"]').evaluate((field) => field === document.activeElement) && await page.locator('#preview').evaluate((frame) => frame.contentWindow.location.href) === canvasUrl);
   if (shots) await page.screenshot({ path: path.join(shots, 'story-builder-canvas-selection.png') });
-  await page.locator('#story-builder h2').first().click();
+  await page.locator('#story-builder .sb-drag-help').first().click();
   await page.keyboard.press('/');
   check('"/" jumps to the module search and opens the Modules tab (not while typing in a field)', await page.locator('[data-studio-tab=modules]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.id === 'module-library-search'));
   await page.keyboard.type('a/b');
@@ -641,8 +658,8 @@ try {
   check('published Gallery module excludes its photos from the surrounding layout', await publicPage.locator('.story-inline-gallery img').count() === 2 && await publicPage.locator('article img').count() === 2 && await publicPage.locator('[data-photo-layout]').count() === 0);
   legacyId = await createLegacy(); await saveLegacy('heroGrid'); await uploadLegacy();
   await page.goto(BASE + `/admin/drafts/${legacyId}`);
-  await page.locator('[data-studio-tab=settings]').click();
-  await page.locator('[name=announcementKind]').selectOption('event');
+  await openTab(page, 'settings');
+  await page.locator('[name=announcementKind]').selectOption('event'); await openTab(page, 'settings');
   await page.locator('[name=eventDate]').fill('2026-12-01'); await page.locator('[name=eventLocation]').fill('Synthetic Hall <north>');
   await page.locator('[name=announcementLink0Label]').fill('Register'); await page.locator('[name=announcementLink0Url]').fill('https://example.invalid/register');
   await page.locator('[name=announcementVideo]').fill('https://youtu.be/abcdefghijk');
@@ -748,6 +765,7 @@ try {
   check('keyboard canvas selection opens a nested child inspector', await page.locator('[data-module-field=text]').inputValue() === 'Synthetic right column text.');
   const beforeLayout = await page.locator('#story-blocks').inputValue();
   await openTab(page, 'modules');
+  await openGroupOf(page, '#saved-layout-name');
   await page.locator('#saved-layout-name').fill('Synthetic <layout>');
   const savedLayoutResponse = page.waitForResponse((r) => r.url() === BASE + '/api/admin/layouts' && r.request().method() === 'POST');
   await page.locator('#save-story-layout').click(); const savedLayoutJson = await (await savedLayoutResponse).json();
@@ -808,27 +826,29 @@ try {
 
     // The layout menu and the movable sidebar.
     const defaultBox = await sidebarBox();
-    check('the sidebar starts on the right, 380px wide, and the resize handle reports it', Math.abs(defaultBox.width - 380) < 2 && await page.locator('.editor-studio').getAttribute('data-side') === 'right' && await page.locator('#ed-resize').getAttribute('aria-valuenow') === '380' && await page.locator('#ed-resize').getAttribute('role') === 'separator' && await page.locator('#ed-resize').getAttribute('aria-orientation') === 'vertical');
+    check('the sidebar starts on the right, 340px wide, and the resize handle reports it', Math.abs(defaultBox.width - 340) < 2 && await page.locator('.editor-studio').getAttribute('data-side') === 'right' && await page.locator('#ed-resize').getAttribute('aria-valuenow') === '340' && await page.locator('#ed-resize').getAttribute('role') === 'separator' && await page.locator('#ed-resize').getAttribute('aria-orientation') === 'vertical');
     await page.locator('#ed-layout-button').click();
     check('Layout options is a button with aria-expanded that opens a labelled group', await page.locator('#ed-layout-button').getAttribute('aria-expanded') === 'true' && await page.locator('#ed-layout-menu').isVisible() && await page.locator('#ed-layout-menu').getAttribute('role') === 'group');
     await page.keyboard.press('Escape');
     check('Escape closes the layout menu and returns focus to its button', await page.locator('#ed-layout-menu').isHidden() && await page.locator('#ed-layout-button').getAttribute('aria-expanded') === 'false' && await page.evaluate(() => document.activeElement?.id === 'ed-layout-button'));
     await layoutAction('Sidebar wider');
-    check('Sidebar wider adds one 40px step', Math.abs((await sidebarBox()).width - 420) < 2 && (await storedLayout()).width === 420);
+    check('Sidebar wider adds one 40px step', Math.abs((await sidebarBox()).width - 380) < 2 && (await storedLayout()).width === 380);
     await layoutAction('Sidebar narrower'); await layoutAction('Sidebar narrower');
-    check('Sidebar narrower removes steps', Math.abs((await sidebarBox()).width - 340) < 2);
+    check('Sidebar narrower removes steps', Math.abs((await sidebarBox()).width - 300) < 2);
     await page.locator('#ed-resize').focus();
     for (let i = 0; i < 12; i++) await page.keyboard.press('ArrowRight');
-    check('the resize handle stops at the 300px minimum, which disables Sidebar narrower', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '300' && await page.locator('[data-layout-action=narrower]').isDisabled());
+    check('the resize handle stops at the 280px minimum, which disables Sidebar narrower', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '280' && await page.locator('[data-layout-action=narrower]').isDisabled());
     await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowLeft');
-    check('arrow keys on the focused handle resize by 40px (Left widens a right-hand sidebar)', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '380' && Math.abs((await sidebarBox()).width - 380) < 2);
+    check('arrow keys on the focused handle resize by 40px (Left widens a right-hand sidebar)', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '360' && Math.abs((await sidebarBox()).width - 360) < 2);
     await page.keyboard.press('End');
     const maxNow = Number(await page.locator('#ed-resize').getAttribute('aria-valuenow'));
     const bodyWidth = (await page.locator('#ed-body').boundingBox()).width;
-    check('the sidebar never takes more than half the body, and Sidebar wider is disabled at that limit', maxNow <= 600 && maxNow <= Math.floor(bodyWidth / 2) + 1 && await page.locator('[data-layout-action=wider]').isDisabled());
+    check('the sidebar never takes more than half the body, and Sidebar wider is disabled at that limit', maxNow <= 560 && maxNow <= Math.floor(bodyWidth / 2) + 1 && await page.locator('[data-layout-action=wider]').isDisabled());
     await page.locator('#ed-resize').focus(); await page.keyboard.press('Home');
+    await scrollSettled(page);
     const handleBox = await page.locator('#ed-resize').boundingBox();
-    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 200); await page.mouse.down(); await page.mouse.move(handleBox.x - 120, handleBox.y + 200, { steps: 5 }); await page.mouse.up();
+    const dragY = Math.min(Math.max(300, handleBox.y + 20), handleBox.y + handleBox.height - 20); // a point of the handle that is inside the window
+    await page.mouse.move(handleBox.x + handleBox.width / 2, dragY); await page.mouse.down(); await page.mouse.move(handleBox.x - 120, dragY, { steps: 5 }); await page.mouse.up();
     { const dragged = (await sidebarBox()).width; check('dragging the edge resizes the sidebar and remembers the width', dragged > 400 && dragged < 480 && Math.abs((await storedLayout()).width - dragged) < 2); }
     await layoutAction('Move sidebar to the left');
     const leftSide = await sidebarBox(), canvasLeft = await page.locator('.ed-canvas').boundingBox();
@@ -841,14 +861,14 @@ try {
     await page.locator('.ed-publish').click();
     check('Publish shows a hidden sidebar and focuses the publish button', await page.locator('.ed-sidebar').isVisible() && await page.evaluate(() => document.activeElement?.matches('#publish-form button')));
     await layoutAction('Reset layout');
-    check('Reset layout restores the defaults and forgets the stored layout', await page.locator('.editor-studio').getAttribute('data-side') === 'right' && Math.abs((await sidebarBox()).width - 380) < 2 && (await storedLayout()) === null);
+    check('Reset layout restores the defaults and forgets the stored layout', await page.locator('.editor-studio').getAttribute('data-side') === 'right' && Math.abs((await sidebarBox()).width - 340) < 2 && (await storedLayout()) === null);
     for (const bad of ['{not json', '{"sidebarVisible":"yes","side":"up","width":"wide"}', '{"width":99999,"side":"left"}', 'null', '[]']) {
       await page.evaluate(([key, value]) => localStorage.setItem(key, value), [layoutKey, bad]);
       await page.reload();
       const width = Number(await page.locator('#ed-resize').getAttribute('aria-valuenow'));
       const side = await page.locator('.editor-studio').getAttribute('data-side');
       const expectedSide = bad.includes('"left"') ? 'left' : 'right';
-      check(`a stored layout of ${bad.slice(0, 24)} falls back per part to a valid layout`, await page.locator('.ed-sidebar').isVisible() && side === expectedSide && width >= 300 && width <= 600 && (bad.includes('99999') ? width <= Math.floor(bodyWidth / 2) + 1 : width === 380));
+      check(`a stored layout of ${bad.slice(0, 24)} falls back per part to a valid layout`, await page.locator('.ed-sidebar').isVisible() && side === expectedSide && width >= 280 && width <= 560 && (bad.includes('99999') ? width <= Math.floor(bodyWidth / 2) + 1 : width === 340));
     }
     await page.evaluate((key) => localStorage.removeItem(key), layoutKey);
     await page.reload();
@@ -894,6 +914,170 @@ try {
     await page.goto(BASE + `/admin/drafts/${agentId}`);
     await page.waitForTimeout(500);
     check('after all of that the agent draft is still untouched, so an agent update would still land', snapshot() === before);
+  }
+
+  // ---- Issue #150: wider canvas, one scroll, collapsible sidebar groups and canvas cards ----
+  {
+    const GROUPS_KEY = 'imc.storyEditor.groups.v1';
+    const gcreated = await post('/api/admin/drafts/new', new FormData());
+    const gid = Number(gcreated.headers.get('location').split('/').pop());
+    const gdraft = () => db.prepare('SELECT * FROM drafts WHERE id=?').get(gid);
+    const gform = new FormData();
+    for (const [k, v] of Object.entries({ version: gdraft().updated_at, title: 'Synthetic groups story', dek: 'Synthetic summary.', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: 'Synthetic groups body text.', photoLayout: 'twoUp', keyPointsPresent: '1', keyPoint0: 'Synthetic point' })) gform.set(k, String(v));
+    assert.equal((await post(`/api/admin/drafts/${gid}/save`, gform)).status, 200);
+    for (let i = 0; i < 2; i++) { const up = new FormData(); up.set('version', String(gdraft().updated_at)); up.set('op', 'upload'); up.set('photos', new Blob([png], { type: 'image/png' }), `g${i}.png`); await post(`/api/admin/drafts/${gid}/photos`, up); }
+    const gurl = BASE + `/admin/drafts/${gid}`;
+    const load = async (width = 1440, height = 1000, fresh = true) => {
+      await page.setViewportSize({ width, height });
+      await page.goto(gurl);
+      if (fresh) { await page.evaluate((key) => { try { localStorage.removeItem(key); } catch {} }, GROUPS_KEY); await page.reload(); }
+      await page.waitForSelector('.ed-tablist:not([hidden])');
+    };
+    const expanded = (selector) => page.locator(`${selector} > summary`).getAttribute('aria-expanded');
+    const stored = () => page.evaluate((key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return 'unreadable'; } }, GROUPS_KEY);
+    const noHScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+
+    // 1. Wider canvas.
+    for (const [width, minimum] of [[1280, 780], [1440, 920]]) {
+      await load(width, 1000, false);
+      const m = await page.evaluate(() => { const c = document.querySelector('.ed-canvas').getBoundingClientRect(), s = document.querySelector('.ed-sidebar').getBoundingClientRect(), step = document.querySelector('.ed-step').getBoundingClientRect(), main = getComputedStyle(document.querySelector('.admin-main')); return { canvas: c.width, sidebar: s.width, step: step.width, pad: main.paddingLeft, padR: main.paddingRight, gap: s.left - c.right }; });
+      console.log(`canvas ${width}px: canvas ${m.canvas}px, sidebar ${m.sidebar}px, card ${m.step}px, padding ${m.pad}, gap ${m.gap}px`);
+      check(`at ${width}px the canvas is at least ${minimum}px wide with the 340px sidebar shown`, m.canvas >= minimum && Math.abs(m.sidebar - 340) < 2);
+      check(`at ${width}px the canvas cards use the full canvas width, the page padding is 16px and the gap around the canvas 16px`, Math.abs(m.step - m.canvas) < 1.5 && m.pad === '16px' && m.padR === '16px' && Math.abs(m.gap - 16) < 1.5);
+    }
+    await load(1024, 900, false);
+    check('under 1280px the page padding and the gap are 12px', await page.evaluate(() => { const c = document.querySelector('.ed-canvas').getBoundingClientRect(), s = document.querySelector('.ed-sidebar').getBoundingClientRect(); return getComputedStyle(document.querySelector('.admin-main')).paddingLeft === '12px' && Math.abs(s.left - c.right - 12) < 1.5; }));
+    for (const width of [360, 768, 1024, 1280, 1440]) { await load(width, 900, false); check(`no horizontal scroll at ${width}px with the groups in their default state`, await noHScroll()); }
+
+    // 2. One scroll: the sidebar has no scroll area, sticks only while it fits, and keeps its tab row on top.
+    await load(1440, 1000);
+    await openTabRaw(page, 'history');
+    check('a short sidebar (History) fits the window, so it is sticky', await page.locator('.ed-sidebar').evaluate((el) => getComputedStyle(el).position === 'sticky') && await page.locator('.editor-studio').getAttribute('data-sidebar-fits') === 'true');
+    await openTabRaw(page, 'settings');
+    await expandAll(page.locator('[data-studio-panel=settings] > fieldset > details > summary[aria-expanded=false]:visible'));
+    await page.setViewportSize({ width: 1440, height: 600 });
+    await page.waitForFunction(() => document.querySelector('.editor-studio').dataset.sidebarFits === 'false');
+    const overflow = await page.evaluate(() => [document.querySelector('.ed-sidebar'), ...document.querySelectorAll('.ed-tabpanel')].map((el) => { const style = getComputedStyle(el); return { y: style.overflowY, fits: el.scrollHeight <= el.clientHeight + 1 }; }));
+    check('the sidebar and its panels have no overflow scroll area', overflow.every((o) => !['auto', 'scroll'].includes(o.y) && o.fits));
+    check('a sidebar taller than the window is not sticky', await page.locator('.ed-sidebar').evaluate((el) => getComputedStyle(el).position === 'relative'));
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    const topBefore = await page.locator('.ed-sidebar').evaluate((el) => el.getBoundingClientRect().top);
+    await page.evaluate(() => window.scrollTo({ top: 300, behavior: 'instant' }));
+    const topAfter = await page.locator('.ed-sidebar').evaluate((el) => el.getBoundingClientRect().top);
+    check('...and scrolls with the page (one scrollbar)', topBefore - topAfter > 250 && await page.evaluate(() => document.scrollingElement.scrollHeight > innerHeight));
+    check('the sidebar tab row stays visible at the top while the page scrolls', await page.locator('.ed-tablist').evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= -1 && r.top <= 2 && r.height > 0; }));
+    await page.setViewportSize({ width: 1440, height: 2000 });
+    await page.waitForFunction(() => document.querySelector('.editor-studio').dataset.sidebarFits === 'true');
+    check('the sidebar becomes sticky again when the window is tall enough', await page.locator('.ed-sidebar').evaluate((el) => getComputedStyle(el).position === 'sticky'));
+
+    // 3. Settings groups: defaults, toggle, keyboard, persistence.
+    await load();
+    await openTabRaw(page, 'settings');
+    const settingsGroups = ['placement', 'byline', 'church', 'announcement', 'newsletter'];
+    check('the Settings tab has the five sections, the first open and the rest closed, each a 44px disclosure with aria-expanded', await page.evaluate(() => [...document.querySelectorAll('[data-studio-panel=settings] > fieldset > details[data-group]')].map((d) => d.dataset.group + ':' + d.querySelector(':scope > summary').getAttribute('aria-expanded') + ':' + (d.querySelector(':scope > summary').getBoundingClientRect().height >= 43.5 || d.hidden)).join()) === 'placement:true:true,byline:false:true,church:false:true,announcement:false:true,newsletter:false:true');
+    check('the Announcement section is hidden for a plain story, and the notes section is absent without a submitter', await page.locator('[data-announcement-group]').isHidden() && await page.locator('#studio-panel-notes').count() === 0);
+    check('a field in a closed section is not shown', await page.locator('#f-author').isHidden());
+    await page.locator('[data-group=byline] > summary').click();
+    check('clicking a section header opens it, flips aria-expanded and shows its fields', await expanded('[data-group=byline]') === 'true' && await page.locator('#f-author').isVisible());
+    check('the choice is remembered under the groups key, per tab', (await stored())?.settings?.byline === true);
+    await page.locator('[data-group=byline] > summary').focus();
+    await page.keyboard.press('Enter');
+    check('Enter on a focused header closes the section', await expanded('[data-group=byline]') === 'false' && await page.locator('#f-author').isHidden());
+    await page.keyboard.press('Space');
+    check('Space opens it again', await expanded('[data-group=byline]') === 'true' && await page.locator('#f-author').isVisible());
+    await page.locator('[data-group=placement] > summary').click();
+    await page.reload(); await page.waitForSelector('.ed-tablist:not([hidden])'); await openTabRaw(page, 'settings');
+    check('open and closed sections are restored after a reload (Byline open, the first section closed again)', await expanded('[data-group=byline]') === 'true' && await expanded('[data-group=placement]') === 'false' && await expanded('[data-group=church]') === 'false');
+    for (const bad of ['{not json', 'null', '[]', '{"settings":"x","modules":{"writing":"no"}}']) {
+      await page.evaluate(([key, value]) => localStorage.setItem(key, value), [GROUPS_KEY, bad]);
+      await page.reload(); await page.waitForSelector('.ed-tablist:not([hidden])'); await openTabRaw(page, 'settings');
+      check(`a stored value of ${bad.slice(0, 18)} is ignored: the first section is open, the others closed`, await expanded('[data-group=placement]') === 'true' && await expanded('[data-group=byline]') === 'false');
+    }
+    // An announcement draft shows its section; changing the type shows or hides it.
+    await load();
+    await openTabRaw(page, 'settings');
+    await page.locator('select[name=announcementKind]').selectOption('event');
+    check('choosing Event shows the Announcement section, choosing Story hides it again', await page.locator('[data-announcement-group]').isVisible() && (await page.locator('select[name=announcementKind]').selectOption('story'), await page.locator('[data-announcement-group]').isHidden()));
+
+    // 4. Module library groups.
+    await splitModules(page);
+    await openTabRaw(page, 'modules');
+    check('the Modules tab lists the library in four groups, the first open', await page.evaluate(() => [...document.querySelectorAll('details[data-library-group]')].map((d) => d.dataset.libraryGroup + ':' + d.querySelector(':scope > summary').getAttribute('aria-expanded')).join()) === 'writing:true,media:false,layout:false,actions:false' && await page.locator('[data-add-module="text"]').isVisible() && await page.locator('[data-add-module="video"]').isHidden());
+    await page.locator('#module-library-search').fill('video');
+    check('a search that matches opens the group with the hit and hides the empty groups', await expanded('[data-library-group=media]') === 'true' && await page.locator('[data-add-module="video"]').isVisible() && await page.locator('[data-library-group=writing]').isHidden() && await page.locator('[data-library-group=layout]').isHidden());
+    check('the search does not remember the groups it opened', (await stored())?.modules?.media === undefined);
+    await page.locator('#module-library-reset').click();
+    check('clearing the search puts the groups back as they were', await expanded('[data-library-group=media]') === 'false' && await expanded('[data-library-group=writing]') === 'true' && await page.locator('[data-library-group=layout]').isVisible());
+    check('every module card and library item is easy to target (stable data attributes, one element each)', await page.locator('#module-outline > li[data-module-card][data-module-id][data-module-type]').count() === await page.locator('#module-outline > li[data-module-id]').count() && await page.locator('[data-library-item]').count() === 11 && await page.locator('[data-add-module]').count() === 11);
+
+    // 5. Canvas cards.
+    await load();
+    check('Story details keeps the headline and summary, and the key points row is open because a point is set', await page.locator('#f-title').isVisible() && await page.locator('input[name=dek]').isVisible() && await page.locator('[data-group=keypoints] > summary').innerText() === 'Key points (1)' && await expanded('[data-group=keypoints]') === 'true' && await page.locator('input[name=keyPoint0]').isVisible());
+    await page.locator('[data-group=keypoints] > summary').click();
+    check('the key points row collapses by its header, and its inputs stay in the form', await page.locator('input[name=keyPoint0]').isHidden() && await page.locator('input[name=keyPoint0]').evaluate((el) => el.form?.id === 'draft-form'));
+    check('the photos are a thumbnail strip in one row, with Up, Down and Drag on each thumbnail', await page.evaluate(() => { const tiles = [...document.querySelectorAll('.ed-photo')]; return tiles.length === 2 && Math.abs(tiles[0].getBoundingClientRect().top - tiles[1].getBoundingClientRect().top) < 2 && tiles.every((t) => t.querySelector('.ed-photo-thumb img') && t.querySelector('[data-photo-handle]') && t.querySelector('button[value^="up:"]') && t.querySelector('button[value^="down:"]')); }));
+    check('caption, description, crop and replace are in a per-photo disclosure, closed at first', await page.locator('.ed-photo').first().locator('details.ed-photo-more').getAttribute('open') === null && await page.locator('input[name$="_caption"]').first().isHidden() && await page.locator('.ph-replace').first().isHidden());
+    await page.locator('.ed-photo').first().locator('details.ed-photo-more > summary').click();
+    check('opening a photo shows its caption, alt text, crop and Replace controls', await page.locator('.ed-photo').first().locator('input[name$="_caption"]').isVisible() && await page.locator('.ed-photo').first().locator('input[name$="_alt"]').isVisible() && await page.locator('.ed-photo').first().locator('.ph-replace summary').isVisible());
+    check('the photo layout picker is a collapsible "Photo layout: Two up" row', await page.locator('[data-group=photo-layout] > summary').innerText() === 'Photo layout: Two up' && await expanded('[data-group=photo-layout]') === 'false' && await page.locator('input[name=photoLayout]').first().isHidden());
+    await page.locator('[data-group=photo-layout] > summary').click();
+    await page.locator('input[name=photoLayout][value=stack]').check({ force: true });
+    check('the layout name in the row follows the choice', await page.locator('[data-group=photo-layout] > summary').innerText() === 'Photo layout: ' + await page.locator('input[name=photoLayout][value=stack]').locator('xpath=..').locator('.lay-name').innerText());
+    await page.locator('#ed-photos-heading').click();
+    check('a step card collapses from its header and shows a one-line summary', await expanded('[data-group=photos]') === 'false' && await page.locator('[data-card-summary=photos]').isVisible() && /^2 photos · /.test(await page.locator('[data-card-summary=photos]').innerText()) && await page.locator('.ed-photos').isHidden());
+    await page.locator('#ed-details-heading').click();
+    check('the Story details card collapses too, summarising the headline', await page.locator('[data-card-summary=details]').innerText() === 'Synthetic groups story · 1 key point' && await page.locator('#f-title').isHidden());
+    check('card state is remembered with the groups key (canvas scope) and survives a reload', (await stored())?.canvas?.photos === false && (await (async () => { await page.reload(); await page.waitForSelector('.ed-tablist:not([hidden])'); return expanded('[data-group=photos]'); })()) === 'false' && await expanded('[data-group=details]') === 'false' && await expanded('[data-group=story]') === 'true');
+
+    // 6. A problem link opens the collapsed group or card that holds the field, then focuses it.
+    await openTabRaw(page, 'settings');
+    check('the Byline section is closed (the first section is open, it was left that way)', await expanded('[data-group=placement]') === 'true');
+    await page.locator('[data-group=byline] > summary').click(); await page.locator('#f-author').fill('');
+    await page.locator('[data-group=byline] > summary').click();
+    check('with Byline closed and the author cleared, the field is hidden', await page.locator('#f-author').isHidden());
+    await openTabRaw(page, 'review');
+    check('the Publish tab problems list stays open (not in a collapsible group) and shows the author problem', await page.locator('.ed-problems').evaluate((el) => !el.closest('details')) && await page.locator('[data-problem=author]').isVisible());
+    await page.locator('[data-problem=author] a').click();
+    check('the author problem link opens the closed section and focuses the field', await expanded('[data-group=byline]') === 'true' && await page.evaluate(() => document.activeElement?.id === 'f-author'));
+    await page.locator('#f-author').fill('Synthetic Editor');
+    await load(1440, 1000, false);
+    check('the Story details card is still closed from before the reload', await expanded('[data-group=details]') === 'false');
+    await page.locator('#ed-details-heading').click();
+    await page.locator('#f-title').fill('');
+    await page.locator('#ed-details-heading').click();
+    await openTabRaw(page, 'review');
+    await page.locator('[data-problem=title] a').click();
+    check('a problem in a collapsed card opens the card and focuses the headline', await expanded('[data-group=details]') === 'true' && await page.evaluate(() => document.activeElement?.id === 'f-title'));
+    await page.locator('#f-title').fill('Synthetic groups story');
+
+    // 7. Publish tab: Publish stays visible; schedule and reject are collapsible sections.
+    await openTabRaw(page, 'review');
+    check('Publish stays visible while the schedule and reject sections start closed', await page.locator('#publish-form button').isVisible() && await expanded('#studio-schedule') === 'false' && await expanded('#reject-details') === 'false' && await page.locator('#schedule-form').isHidden() && await page.locator('#reject-form').isHidden());
+    await page.locator('#studio-schedule > summary').click();
+    check('opening the schedule section shows its form', await page.locator('#schedule-form').isVisible() && (await stored())?.review?.schedule === true);
+
+    // 8. Axe on the redesigned tabs.
+    if (axePath && fs.existsSync(axePath)) {
+      await load(1440, 1000, false);
+      await page.addScriptTag({ path: axePath });
+      for (const tab of ['modules', 'settings', 'review']) {
+        await openTabRaw(page, tab);
+        const result = await page.evaluate(async () => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } }));
+        check(`the ${tab} tab with collapsible groups passes axe WCAG A/AA checks`, result.violations.length === 0, JSON.stringify(result.violations.map((v) => [v.id, v.nodes.map((n) => n.target)])));
+      }
+    }
+
+    // 9. Without JavaScript every group is open and Save still stores a sidebar field.
+    const plainGroups = await context.browser().newContext({ viewport: { width: 1280, height: 900 }, javaScriptEnabled: false });
+    await plainGroups.addCookies(await context.cookies());
+    const noJs = await plainGroups.newPage();
+    await noJs.goto(gurl);
+    check('without JavaScript every group and card is open and every sidebar field is visible', await noJs.locator('details[data-group]:not([open])').count() === 0 && await noJs.locator('#f-author').isVisible() && await noJs.locator('input[name=church]').isVisible() && await noJs.locator('#schedule-form').isVisible() && await noJs.locator('input[name=keyPoint0]').isVisible());
+    await noJs.locator('input[name=church]').fill('Synthetic Church Name');
+    await Promise.all([noJs.waitForURL(/[?&]n=saved/, { timeout: 30000 }), noJs.locator('#save-btn').click()]);
+    check('without JavaScript Save stores a field from a collapsible sidebar section (church)', gdraft().church === 'Synthetic Church Name');
+    await plainGroups.close();
+    await page.setViewportSize({ width: 1440, height: 1000 });
   }
 
   // Split into modules and back: the pressed button disappears, so focus must move on, and sidebar-only fields must save (autosave, and natively without JavaScript).

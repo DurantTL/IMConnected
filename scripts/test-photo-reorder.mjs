@@ -33,6 +33,8 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'imc-photo-reorder-'));
 const serverLog = [];
 let browser, db, checks = 0;
 const check = (label, condition, extra = '') => { assert.ok(condition, `${label} ${extra}`); checks++; console.log(`PASS ${label}`); };
+// Caption, description, crop and Replace sit in a per-photo disclosure (issue #150): open them all before using one.
+const openPhotoDetails = async (pg) => { const closed = pg.locator('.ed-photo-more > summary[aria-expanded=false]'); while (await closed.count()) { const handle = await closed.first().elementHandle(); await handle.click(); await handle.evaluate((el) => new Promise((resolve) => { const wait = () => el.getAttribute('aria-expanded') === 'true' ? resolve() : requestAnimationFrame(wait); wait(); })); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const server = spawn(process.execPath, ['dist/server/entry.mjs'], {
   cwd: ROOT,
@@ -260,11 +262,13 @@ try {
   // drag photo 1 (A) below photo 3
   await page.setViewportSize({ width: 1280, height: 3200 }); const boxA = await handles.nth(0).boundingBox();
   const lastCard = await page.locator('[data-photo-item]').nth(2).boundingBox();
+  // The photos are a wrapping strip of thumbnails (issue #150), so a drop target is the far side of the last card, not below it.
+  const lastX = lastCard.x + lastCard.width - 4, lastY = lastCard.y + lastCard.height / 2;
   const dragRev0 = revisions(id), dragAudit0 = audits('draft.photo_move');
   // Escape cancels a drag
   await page.mouse.move(boxA.x + boxA.width / 2, boxA.y + boxA.height / 2);
   await page.mouse.down();
-  await page.mouse.move(boxA.x + boxA.width / 2, lastCard.y + lastCard.height - 4, { steps: 6 });
+  await page.mouse.move(lastX, lastY, { steps: 6 });
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await sleep(500);
@@ -272,7 +276,7 @@ try {
   await page.mouse.move(boxA.x + boxA.width / 2, boxA.y + boxA.height / 2);
   await page.mouse.down();
   await page.mouse.move(boxA.x + boxA.width / 2, boxA.y + boxA.height / 2 + 40, { steps: 4 });
-  await page.mouse.move(boxA.x + boxA.width / 2, lastCard.y + lastCard.height - 4, { steps: 8 });
+  await page.mouse.move(lastX, lastY, { steps: 8 });
   check('while dragging, the drop position is shown', await page.locator('.drop-after').count() === 1);
   await page.mouse.up();
   check('dropping saves the new order (B, C, A) through the version-checked form', await expectOrder([b.id, c.id, a.id]));
@@ -307,9 +311,9 @@ try {
     const before = orderNow(), tRev = revisions(id), tAudit = audits('draft.photo_move');
     const hb = await tp.locator('[data-photo-handle]').nth(0).boundingBox(), lb = await tp.locator('[data-photo-item]').nth(2).boundingBox();
     const cdp = await touchContext.newCDPSession(tp);
-    const x = hb.x + hb.width / 2, y0 = hb.y + hb.height / 2, y1 = lb.y + lb.height - 4;
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: y0 }] });
-    for (let i = 1; i <= 8; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y0 + (y1 - y0) * i / 8 }] });
+    const x0 = hb.x + hb.width / 2, y0 = hb.y + hb.height / 2, x1 = lb.x + lb.width - 4, y1 = lb.y + lb.height / 2;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
+    for (let i = 1; i <= 8; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 8, y: y0 + (y1 - y0) * i / 8 }] });
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     check('a touch drag from the handle moves the first photo to the end (one revision, one audit entry)', await expectOrder([before[1], before[2], before[0]]) && revisions(id) === tRev + 1 && audits('draft.photo_move') === tAudit + 1);
     await touchContext.close();
@@ -329,7 +333,7 @@ try {
     await page.locator('#photos').scrollIntoViewIfNeeded();
     const idle = photos(id);
     const decoy = path.join(scratch, 'decoy-file-name.png'); fs.writeFileSync(decoy, png(COLORS[0]));
-    await page.locator('.ph-replace summary').nth(2).click();
+    await openPhotoDetails(page); await page.locator('.ph-replace summary').nth(2).click();
     await page.locator(`input[name="replacement_${idle[2].id}"]`).setInputFiles(decoy);
     // A later listener on the same event sees what the page's own filter left in the form data (Playwright cannot read multipart bodies).
     await page.evaluate(() => { const f = document.querySelector('#photo-form'); for (const [n, v] of [['op', 'move:999999'], ['to', '1']]) { const i = document.createElement('input'); i.type = 'hidden'; i.name = n; i.value = v; i.dataset.reorder = n; f.append(i); } });
@@ -342,7 +346,7 @@ try {
 
   // replace through the browser
   await page.locator('#photos').scrollIntoViewIfNeeded();
-  await page.locator('.ph-replace summary').first().click();
+  await openPhotoDetails(page); await page.locator('.ph-replace summary').first().click();
   const pngPath = path.join(scratch, 'browser-new.png'); fs.writeFileSync(pngPath, png(COLORS[2]));
   const slot0 = photos(id)[0], key0 = slot0.media_key;
   await page.locator(`input[name="replacement_${slot0.id}"]`).setInputFiles(pngPath);
@@ -380,7 +384,7 @@ try {
   const axePath = process.env.AXE_JS || (() => { try { return playwrightRequire.resolve('axe-core/axe.min.js'); } catch { return ''; } })();
   check('axe is available (set AXE_JS)', !!axePath && fs.existsSync(axePath));
   await page.addScriptTag({ path: axePath });
-  await page.locator('.ph-replace summary').first().click();
+  await openPhotoDetails(page); await page.locator('.ph-replace summary').first().click();
   const violations = await page.evaluate(async () => (await window.axe.run(document.querySelector('#photos'), { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })).violations.map(({ id, nodes }) => ({ id, targets: nodes.map((n) => n.target) })));
   check('the photo list has no axe violations', violations.length === 0, JSON.stringify(violations));
   const small = await page.evaluate(() => [...document.querySelectorAll('#photos .ed-photo .ops button, #photos .ed-photo .ops summary, #photos [data-photo-handle]')].map((el) => { const r = el.getBoundingClientRect(); return { t: el.textContent.trim().slice(0, 20), w: r.width, h: r.height }; }).filter((x) => x.w > 0 && (x.h < 43.5 || x.w < 43.5)));

@@ -81,6 +81,15 @@ const KEYED = [
 const hasNotes = !!draft && (isAgent || !!draft.agentNote || hasSubmitter);
 // The compact line under the headline (kept in step by the page script as the Story settings change).
 const detailsLine = draft ? ([sectionKnown ? eyebrow : '', draft.author, draft.date, draft.church].filter(Boolean).join(' · ') || 'Section, author and date are set in Story settings.') : '';
+const keyPointCount = draft ? (draft.keyPoints ?? []).filter((k) => k.trim()).length : 0;
+const layoutLabel = draft ? PHOTO_LAYOUTS.find((l) => l.value === draft.photoLayout)?.label ?? '' : '';
+const wordCount = draft ? (draft.body.trim() ? draft.body.trim().split(/\s+/).length : 0) : 0;
+// One-line summaries shown on a collapsed step card (kept in step by the page script).
+const detailsSummary = draft ? [draft.title.trim() || 'No headline yet', keyPointCount ? `${keyPointCount} key ${keyPointCount === 1 ? 'point' : 'points'}` : ''].filter(Boolean).join(' · ') : '';
+const photosSummary = draft ? (photos.length ? `${photos.length} ${photos.length === 1 ? 'photo' : 'photos'} · ${layoutLabel}` : 'No photos yet') : '';
+const storySummary = draft ? (isModular ? `${countStoryBlocks(draft.storyBlocks ?? [])} modules` : hasBody ? `Markdown · ${wordCount} ${wordCount === 1 ? 'word' : 'words'}` : 'No text yet') : '';
+const libraryGroups: [string, string][] = [['writing', 'Writing'], ['media', 'Images & video'], ['layout', 'Layout & structure'], ['actions', 'Links & buttons']];
+const notesTitle = isAgent ? 'AI agent' : 'Submitter & notes';
 const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draft.status === 'rejected' ? 'Rejected' : scheduledAt !== null ? `Scheduled for ${fmtChicago(scheduledAt)}` : draft.status === 'new' ? 'New' : 'In review · saved';
 ---
 <Admin title={draft ? draft.title || 'Untitled story' : 'Draft not found'} current={draft?.announcement?.kind === 'event' ? 'events' : draft?.announcement ? 'announcements' : 'drafts'} wide compact>
@@ -178,7 +187,9 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
             <input type="hidden" name="version" value={draft.updatedAt} />
             <fieldset disabled={!editable} class="ed ed-canvas-fields">
               <section class="ed-card ed-step" id="ed-details" aria-labelledby="ed-details-heading">
-                <h2 id="ed-details-heading"><span class="ed-badge" aria-hidden="true">1</span> Story details</h2>
+                <details class="ed-group ed-card-group" data-group="details" open>
+                <summary class="ed-card-head"><h2 id="ed-details-heading"><span class="ed-badge" aria-hidden="true">1</span> Story details</h2><span class="ed-card-summary" data-card-summary="details">{detailsSummary}</span></summary>
+                <div class="ed-group-body">
                 <div class="ed-grid">
               <label class="full ed-big">Title <span class="hint">up to {LIMITS.title} characters</span>
                 <input type="text" id="f-title" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
@@ -188,24 +199,44 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               </label>
                 </div>
                 <p class="ed-summary-line" data-details-line><span data-details-text>{detailsLine}</span> <a href="#studio-panel-settings" data-open-panel="settings">Edit details</a></p>
+              <details class="ed-group ed-keypoints-group" data-group="keypoints" data-group-default="closed" data-group-auto-open={keyPointCount > 0 ? 'true' : undefined} open>
+              <summary class="ed-group-summary"><span>Key points (<span data-kp-count>{keyPointCount}</span>)</span></summary>
+              <div class="ed-group-body">
               <fieldset class="ed-key-points"><legend>Key points <span class="hint">optional, up to 3 short lines of plain text (160 characters each); shown in a box above the story</span></legend>
                 <input type="hidden" name="keyPointsPresent" value="1" />
                 {[0, 1, 2].map((i) => <label>Key point {i + 1}<input type="text" name={`keyPoint${i}`} value={draft.keyPoints?.[i] ?? ''} maxlength="160" autocomplete="off" /></label>)}
               </fieldset>
+              </div>
+              </details>
+                </div>
+                </details>
               </section>
 
               <section class="ed-card ed-step" id="photos" aria-labelledby="ed-photos-heading">
-                <h2 id="ed-photos-heading"><span class="ed-badge" aria-hidden="true">2</span> Photos</h2>
+                <details class="ed-group ed-card-group" data-group="photos" open>
+                <summary class="ed-card-head"><h2 id="ed-photos-heading"><span class="ed-badge" aria-hidden="true">2</span> Photos</h2><span class="ed-card-summary" data-card-summary="photos">{photosSummary}</span></summary>
+                <div class="ed-group-body">
             <p class="admin-note">The first photo leads the story. JPG, PNG, WebP or AVIF, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
             {photos.length > 0 && (
               <p class="admin-note" id="photo-reorder-help">Reorder: use Up and Down on any device or keyboard. With a mouse or touch, drag a photo by its Drag handle onto a new place. Inline photo markers follow their photos.</p>
               <p class="sr-only" role="status" aria-live="polite" id="photo-reorder-live" data-announce={photoNotice ? notice : undefined}></p>
               <ol class="ed-photos" aria-describedby="photo-reorder-help">
                 {photos.map((p, i) => (
-                  <li class="ed-photo" data-photo-item={p.id}>
+                  <li class="ed-photo" data-photo-item={p.id} data-photo-id={p.id}>
+                    <div class="ed-photo-thumb">
+                      {(p.path || p.url && safeImg(p.url)) ? <img src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt="" draggable="false" referrerpolicy="no-referrer" loading="lazy" data-photo-thumb={p.id} style={`object-position:${p.focalX ?? 50}% ${p.focalY ?? 50}%`} /> : <span class="ed-photo-nothumb" aria-hidden="true">No preview</span>}
+                      <strong class="ed-photo-label">{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
+                    </div>
+                    <div class="ops ed-photo-move">
+                      {editable && photos.length > 1 && <span class="ph-handle" data-photo-handle={p.id} hidden title="Drag to reorder" aria-hidden="true">⋮⋮ Drag</span>}
+                      <button type="submit" form="photo-form" name="op" value={`up:${p.id}`} disabled={i === 0} aria-label={`Move photo ${i + 1} up`}>Up</button>
+                      <button type="submit" form="photo-form" name="op" value={`down:${p.id}`} disabled={i === photos.length - 1} aria-label={`Move photo ${i + 1} down`}>Down</button>
+                    </div>
+                    <details class="ed-group ed-photo-more" data-group={`photo-${p.id}`} data-group-persist="false" data-group-default="closed" open>
+                      <summary class="ed-group-summary"><span>Details<span class="sr-only"> for photo {i + 1}: caption, description, crop and replace</span></span></summary>
+                      <div class="ed-group-body ed-photo-body">
                     <div class="sb-photo-preview"><span class="sb-crop-label">Reader crop preview</span>{(p.path || p.url && safeImg(p.url)) ? <div class="sb-pan-crop" data-pan-photo={p.id} tabindex={editable && p.fit !== 'contain' ? 0 : -1} aria-disabled={p.fit === 'contain' ? 'true' : undefined} {...(photoFrameAttrs(p, p.path ? `/api/admin/photos/${p.id}` : p.url!) ?? {})} role="group" aria-label={`Pan crop for photo ${i + 1}. Drag the image or use arrow keys. Shift moves ten percent.`}><img data-focus-preview={p.id} src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt="" draggable="false" style={photoFocusStyle({ ...p, fit: 'cover' })} referrerpolicy="no-referrer" /></div> : <div></div>}<p class="admin-note" data-pan-note={p.id}>{p.fit === 'contain' ? 'The whole photo is shown, so there is nothing to pan.' : 'Drag the crop to move the image. Arrow keys pan; Shift moves faster.'}</p></div>
                     <div class="fields">
-                      <strong>{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
                       <label>Alt text (describe the photo for readers who can't see it)
                         <input type="text" name={`photo_${p.id}_alt`} value={p.alt} maxlength="300" autocomplete="off" />
                       </label>
@@ -243,9 +274,6 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                       </details>}
                     </div>
                     <div class="ops">
-                      {editable && photos.length > 1 && <span class="ph-handle" data-photo-handle={p.id} hidden title="Drag to reorder" aria-hidden="true">⋮⋮ Drag</span>}
-                      <button type="submit" form="photo-form" name="op" value={`up:${p.id}`} disabled={i === 0} aria-label={`Move photo ${i + 1} up`}>Up</button>
-                      <button type="submit" form="photo-form" name="op" value={`down:${p.id}`} disabled={i === photos.length - 1} aria-label={`Move photo ${i + 1} down`}>Down</button>
                       {i > 0 && <button type="submit" form="photo-form" name="op" value={`lead:${p.id}`}>Make lead</button>}
                       <button type="submit" form="photo-form" name="op" value={`delete:${p.id}`} class="del" aria-label={`Delete photo ${i + 1}`}>Delete</button>
                       {editable && <details class="ph-replace"><summary>Replace photo</summary>
@@ -254,6 +282,8 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                         <button type="submit" form="photo-form" name="op" value={`replace:${p.id}`} aria-label={`Replace photo ${i + 1} with the chosen file`}>Replace</button>
                       </details>}
                     </div>
+                      </div>
+                    </details>
                   </li>
                 ))}
               </ol>
@@ -265,6 +295,9 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                 <div><button type="submit" form="photo-form" name="op" value="upload" class="cms-btn secondary">Upload</button></div>
               </div>
             )}
+            <details class="ed-group" data-group="photo-layout" data-group-default="closed" open>
+              <summary class="ed-group-summary"><span>Photo layout: <span data-layout-name>{layoutLabel}</span></span></summary>
+              <div class="ed-group-body">
             <fieldset class="ed-layouts">
               <legend>Photo layout</legend>
               <p class="admin-note">How the photos are arranged on the story page. A layout with more places than photos simply uses what there is: with one photo every layout looks like “One hero”.</p>
@@ -281,10 +314,16 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                 ))}
               </div>
             </fieldset>
+              </div>
+            </details>
+                </div>
+                </details>
               </section>
 
               <section class="ed-card ed-step story-builder" id="story-builder" aria-labelledby="ed-story-heading">
-                <h2 id="ed-story-heading"><span class="ed-badge" aria-hidden="true">3</span> Story</h2>
+                <details class="ed-group ed-card-group" data-group="story" open>
+                <summary class="ed-card-head"><h2 id="ed-story-heading"><span class="ed-badge" aria-hidden="true">3</span> Story</h2><span class="ed-card-summary" data-card-summary="story">{storySummary}</span></summary>
+                <div class="ed-group-body">
             {draft.body.includes('<') && (
               <p class="admin-error" role="alert">This text contains “&lt;”, so it may hold raw HTML. Raw HTML is not kept: after you publish, it is shown to readers as plain text. Rewrite it in Markdown if you need the formatting.</p>
             )}
@@ -319,6 +358,8 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                   </div>
                   <p id="module-status" class="admin-note" role="status" aria-live="polite"></p>
                 </div>
+                </div>
+                </details>
               </section>
             </fieldset>
           </form>
@@ -353,23 +394,38 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                     <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
                     <label class="sb-library-category" for="module-library-category">Browse modules<select id="module-library-category"><option value="all">All modules</option><option value="favorites">My quick access</option><option value="writing">Writing</option><option value="media">Images &amp; video</option><option value="layout">Layout &amp; structure</option><option value="actions">Links &amp; buttons</option></select></label>
                     <details class="sb-library-preferences"><summary>Customize quick access</summary><p>Choose your go-to modules. Saved in this browser.</p>{libraryModules.map(([type,label]) => <label><input type="checkbox" data-pin-module={type} />{label}</label>)}<p id="module-pin-status" role="status"></p></details>
-                    <div class="sb-library" role="group" aria-label="Add content module">
-                      {libraryModules.map(([type,label,category]) => <button type="button" data-add-module={type} data-library-category={category}>{label}</button>)}
+                    <div class="sb-library-groups">
+                      {libraryGroups.map(([key, title], index) => (
+                        <details class="ed-group" data-group={key} data-library-group={key} data-group-default={index === 0 ? 'open' : 'closed'} open>
+                          <summary class="ed-group-summary"><span>{title}</span></summary>
+                          <div class="ed-group-body sb-library" role="group" aria-label={title}>
+                            {libraryModules.filter((m) => m[2] === key).map(([type,label,category]) => <button type="button" data-add-module={type} data-library-category={category} data-library-item={type}>{label}</button>)}
+                          </div>
+                        </details>
+                      ))}
+                      <details class="ed-group" data-group="starters" data-group-default="closed" open>
+                        <summary class="ed-group-summary"><span>Starter layouts</span></summary>
+                        <div class="ed-group-body">
+                          <p class="sb-insert-help">Add an empty structure, then write your own story.</p>
+                          <div class="sb-starters" role="group" aria-label="Insert starter layout after selected module">
+                            <button type="button" data-insert-layout="news">News story <small>Paragraph · heading · paragraph · quote</small></button>
+                            <button type="button" data-insert-layout="recap">Event recap <small>Heading · paragraph · list · paragraph</small></button>
+                            <button type="button" data-insert-layout="announcement">Announcement <small>Heading · paragraph · list · divider</small></button>
+                          </div>
+                        </div>
+                      </details>
+                      <details class="ed-group" data-group="saved" data-group-default="closed" open>
+                        <summary class="ed-group-summary"><span>My saved layouts</span></summary>
+                        <div class="ed-group-body">
+                          <p class="admin-note">Save the structure and settings. Text, links and photo choices are left out.</p>
+                          <label>Layout name<input id="saved-layout-name" data-editor-local maxlength="80" autocomplete="off" /></label>
+                          <button type="button" id="save-story-layout">Save this structure</button>
+                          <label>Saved layout<select id="saved-layout-choice" aria-label="Saved layout" data-editor-local><option value="">Loading layouts…</option></select></label>
+                          <div class="sb-controls"><button type="button" id="insert-story-layout">Insert saved layout</button><button type="button" id="delete-story-layout">Delete saved layout</button></div>
+                          <p id="saved-layout-status" role="status" class="admin-note"></p>
+                        </div>
+                      </details>
                     </div>
-                    <h3 class="sb-library-heading">Starter layouts</h3>
-                    <p class="sb-insert-help">Add an empty structure, then write your own story.</p>
-                    <div class="sb-starters" role="group" aria-label="Insert starter layout after selected module">
-                      <button type="button" data-insert-layout="news">News story <small>Paragraph · heading · paragraph · quote</small></button>
-                      <button type="button" data-insert-layout="recap">Event recap <small>Heading · paragraph · list · paragraph</small></button>
-                      <button type="button" data-insert-layout="announcement">Announcement <small>Heading · paragraph · list · divider</small></button>
-                    </div>
-                    <h3 class="sb-library-heading">My saved layouts</h3>
-                    <p class="admin-note">Save the structure and settings. Text, links and photo choices are left out.</p>
-                    <label>Layout name<input id="saved-layout-name" data-editor-local maxlength="80" autocomplete="off" /></label>
-                    <button type="button" id="save-story-layout">Save this structure</button>
-                    <label>Saved layout<select id="saved-layout-choice" aria-label="Saved layout" data-editor-local><option value="">Loading layouts…</option></select></label>
-                    <div class="sb-controls"><button type="button" id="insert-story-layout">Insert saved layout</button><button type="button" id="delete-story-layout">Delete saved layout</button></div>
-                    <p id="saved-layout-status" role="status" class="admin-note"></p>
                     </div>
               </div>
             </fieldset>
@@ -384,8 +440,10 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
           <section class="ed-tabpanel studio-settings" role="tabpanel" id="studio-panel-settings" data-studio-panel="settings" aria-labelledby="studio-tab-settings">
             <h2 class="ed-panel-title">Story settings</h2>
             <p class="admin-note">Where readers find this story, and who wrote it. <span class="studio-source">{isAgent ? 'From AI agent' : SOURCE_LABEL[draft.source]}</span></p>
-            <fieldset disabled={!editable} class="ed-flat">
-              <div class="ed-grid ed-stack">
+            <fieldset disabled={!editable} class="ed-flat ed-groups">
+              <details class="ed-group" data-group="placement" open>
+                <summary class="ed-group-summary"><span>Section and placement</span></summary>
+                <div class="ed-group-body"><div class="ed-grid ed-stack">
               <label>Section
                 <select form="draft-form" name="section" id="f-section">
                   {!SECTIONS.some((s) => s.key === draft.section) && <option value="" selected>Choose a section</option>}
@@ -405,14 +463,20 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                   )))}
                 </select>
               </label>
+              <label>Content type
+                <select form="draft-form" name="announcementKind"><option value="story" selected={!draft.announcement}>Story</option><option value="announcement" selected={draft.announcement?.kind === 'announcement'}>Announcement</option><option value="event" selected={draft.announcement?.kind === 'event'}>Event</option></select>
+              </label>
+              <label class="ed-check"><input form="draft-form" type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
+                </div></div>
+              </details>
+              <details class="ed-group" data-group="byline" data-group-default="closed" open>
+                <summary class="ed-group-summary"><span>Byline and date</span></summary>
+                <div class="ed-group-body"><div class="ed-grid ed-stack">
               <label>Author
                 <input form="draft-form" type="text" id="f-author" name="author" value={draft.author} maxlength="120" autocomplete="off" />
               </label>
               <label>Author title
                 <input form="draft-form" type="text" name="authorTitle" value={draft.authorTitle} maxlength="120" autocomplete="off" />
-              </label>
-              <label>Church
-                <input form="draft-form" type="text" name="church" value={draft.church} maxlength="160" autocomplete="off" />
               </label>
               <label>Date
                 <input form="draft-form" type="date" id="f-date" name="date" value={draft.date} />
@@ -420,16 +484,30 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               <label>Photo credit
                 <input form="draft-form" type="text" name="photoCredit" value={draft.photoCredit} maxlength="120" autocomplete="off" />
               </label>
-              <label>Content type
-                <select form="draft-form" name="announcementKind"><option value="story" selected={!draft.announcement}>Story</option><option value="announcement" selected={draft.announcement?.kind === 'announcement'}>Announcement</option><option value="event" selected={draft.announcement?.kind === 'event'}>Event</option></select>
+                </div></div>
+              </details>
+              <details class="ed-group" data-group="church" data-group-default="closed" open>
+                <summary class="ed-group-summary"><span>Church</span></summary>
+                <div class="ed-group-body"><div class="ed-grid ed-stack">
+              <label>Church
+                <input form="draft-form" type="text" name="church" value={draft.church} maxlength="160" autocomplete="off" />
               </label>
+                </div></div>
+              </details>
+              <details class="ed-group" data-group="announcement" data-group-default="closed" data-announcement-group open>
+                <summary class="ed-group-summary"><span>Announcement</span></summary>
+                <div class="ed-group-body"><div class="ed-grid ed-stack">
               <label>Event date <span class="hint">optional</span><input form="draft-form" type="date" name="eventDate" value={draft.announcement?.eventDate ?? ''} /></label>
               <label class="full">Event location <input form="draft-form" name="eventLocation" maxlength="200" value={draft.announcement?.location ?? ''} /></label>
               <label class="full">Announcement video <span class="hint">Paste a YouTube or Vimeo link; readers open it in a video popup.</span><input form="draft-form" name="announcementVideo" maxlength="2048" value={draft.announcement?.videoUrl ?? ''} /></label>
               <fieldset class="full"><legend>Announcement link buttons</legend><p class="admin-note">Choose Announcement or Event above. The first photo is its full-height flyer. Add a text summary so the flyer is also accessible.</p>
                 {[0, 1, 2].map((i) => <div class="ed-grid"><label>Link {i + 1} label<input form="draft-form" name={`announcementLink${i}Label`} maxlength="120" value={draft.announcement?.links[i]?.label ?? ''} /></label><label>Link {i + 1} address<input form="draft-form" name={`announcementLink${i}Url`} maxlength="2048" value={draft.announcement?.links[i]?.url ?? ''} placeholder="https://" /></label></div>)}
               </fieldset>
-              <label class="ed-check"><input form="draft-form" type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
+                </div></div>
+              </details>
+              <details class="ed-group" data-group="newsletter" data-group-default="closed" open>
+                <summary class="ed-group-summary"><span>Newsletter</span></summary>
+                <div class="ed-group-body"><div class="ed-grid ed-stack">
               <label>Newsletter issue <span class="hint">where this story first appeared</span>
                 <input form="draft-form" type="hidden" name="newsletterIssuePresent" value="1" />
                 <select form="draft-form" name="newsletterIssue" id="f-newsletter-issue">
@@ -440,11 +518,13 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               <label>Position in the issue <span class="hint">1 to 999, optional</span>
                 <input form="draft-form" type="number" name="newsletterPosition" min="1" max="999" step="1" inputmode="numeric" value={draft.newsletterIssue?.position ?? ''} />
               </label>
-              </div>
+                </div></div>
+              </details>
             </fieldset>
             {hasNotes && (
-              <div class="studio-submitter-notes" id="studio-panel-notes">
-                <h3 class="ed-subtitle">Submitter &amp; notes</h3>
+              <details class="ed-group studio-submitter-notes" id="studio-panel-notes" data-group="notes" data-group-default="closed" open>
+                <summary class="ed-group-summary"><span>{notesTitle}</span></summary>
+                <div class="ed-group-body">
                 <p class="admin-note">Private. Editors only; never published.</p>
       {isAgent && (
         <section class="ed-card ed-sub">
@@ -482,7 +562,8 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
           <p class="admin-note">Contact details are for editors only and are never published.</p>
         </section>
       )}
-              </div>
+                </div>
+              </details>
             )}
           </section>
 
@@ -502,8 +583,9 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
             <input type="hidden" name="version" value={draft.updatedAt} />
             <button type="submit" class="cms-btn">{scheduledAt !== null ? 'Publish now' : draft.slug ? 'Publish changes' : 'Publish'}</button>
           </form>
-          <section class="studio-schedule" id="studio-schedule" aria-labelledby="schedule-heading" style="margin-top:16px">
-            <h3 id="schedule-heading">Publish at a set time</h3>
+          <details class="ed-group studio-schedule" id="studio-schedule" data-group="schedule" data-group-default="closed" data-group-auto-open={scheduledAt !== null || !!draft.publishError ? 'true' : undefined} open>
+            <summary class="ed-group-summary"><span id="schedule-heading">Publish at a set time</span>{scheduledAt !== null && <span class="ed-group-note">Scheduled</span>}</summary>
+            <div class="ed-group-body">
             {scheduledAt !== null ? (
               <>
                 <p class="admin-ok" role="status" id="scheduled-for"><strong>Scheduled for <time datetime={new Date(scheduledAt).toISOString()}>{fmtChicago(scheduledAt)}</time>.</strong>{draft.publishAtByName ? ` Scheduled by ${draft.publishAtByName}.` : ''} The server publishes it then, at the version saved at that moment.</p>
@@ -527,16 +609,18 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               </div>
             )}
             {studioBlocked && <p class="admin-error" role="status" id="schedule-studio-blocked">{errorTextFor('schedule_studio_overwrote')}</p>}
-            {!studioBlocked && <form id="schedule-form" method="post" action={`/api/admin/drafts/${draft.id}/schedule`} style="margin-top:8px">
+            {!studioBlocked && <form id="schedule-form" method="post" action={`/api/admin/drafts/${draft.id}/schedule`}>
               <input type="hidden" name="version" value={draft.updatedAt} />
               <label class="ed-field">Publish at (Central Time)
                 <input type="datetime-local" name="publish_at" required value={scheduledAt !== null ? msToChicagoInput(scheduledAt) : ''} min={msToChicagoInput(Date.now())} data-editor-local />
               </label>
               <p><button type="submit" class="cms-btn secondary">{scheduledAt !== null ? 'Change time' : 'Schedule'}</button></p>
             </form>}
-          </section>
-          <details style="margin-top:12px" id="reject-details">
-            <summary>Reject this draft</summary>
+                      </div>
+          </details>
+          <details class="ed-group" id="reject-details" data-group="reject" data-group-default="closed" open>
+            <summary class="ed-group-summary"><span>Reject this draft</span></summary>
+            <div class="ed-group-body">
             <form id="reject-form" method="post" action={`/api/admin/drafts/${draft.id}/reject`}>
               <input type="hidden" name="version" value={draft.updatedAt} />
               <label class="ed-field">Internal note (optional, never published)
@@ -544,6 +628,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               </label>
               <p><button type="submit" class="cms-btn danger">Reject draft</button></p>
             </form>
+            </div>
           </details>
             </section>
           )}

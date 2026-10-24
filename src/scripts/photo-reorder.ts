@@ -2,6 +2,8 @@
 // dragging anywhere else would fight the pan/zoom crop controls and page scrolling on touch. The Up/Down buttons stay
 // the keyboard and screen-reader path and the no-JavaScript path. A drop submits the ordinary photo form
 // (version-checked, saves pending edits first) with op=move:<id> and the new 1-based position. Escape or a lost pointer cancels.
+import { revealEditorTarget } from './editor-groups';
+
 const list = document.querySelector<HTMLOListElement>('ol.ed-photos');
 const form = document.querySelector<HTMLFormElement>('#photo-form');
 const live = document.querySelector<HTMLElement>('#photo-reorder-live');
@@ -39,7 +41,10 @@ if (list && form) {
         let t = 0, best = Infinity;
         for (let i = 0; i < all.length; i++) {
           const r = all[i].getBoundingClientRect();
-          const distance = ev.clientY < r.top ? r.top - ev.clientY : ev.clientY > r.bottom ? ev.clientY - r.bottom : 0;
+          // The photos sit in a wrapping strip, so the nearest card is found in both directions.
+          const dy = ev.clientY < r.top ? r.top - ev.clientY : ev.clientY > r.bottom ? ev.clientY - r.bottom : 0;
+          const dx = ev.clientX < r.left ? r.left - ev.clientX : ev.clientX > r.right ? ev.clientX - r.right : 0;
+          const distance = Math.hypot(dx, dy);
           if (distance < best) { best = distance; t = i; }
         }
         target = t;
@@ -94,6 +99,7 @@ if (list && form) {
       const target = n === 'photo_replaced'
         ? item?.querySelector<HTMLElement>('.ph-replace summary')
         : enabled(asked) ?? enabled(asked === 'up' ? 'down' : 'up');
+      revealEditorTarget(target ?? null); // the Replace control sits in the photo's collapsed details
       target?.focus({ preventScroll: false });
       setTimeout(() => { live.textContent = message; }, 250);
     }, 0);

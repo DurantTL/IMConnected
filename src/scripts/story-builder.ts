@@ -1,4 +1,5 @@
 import { editorBus } from './editor-bus';
+import { revealEditorTarget, setGroup } from './editor-groups';
 import { isStoryButtonUrl, checkStoryBlockLength, walkStoryBlocks, mapStoryBlocks, countStoryBlocks, findStoryBlockLocation, STORY_BLOCK_LIMIT, splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
@@ -62,6 +63,7 @@ if (form && blocksField) {
       ? outline.querySelector<HTMLButtonElement>(`[data-select-module="${CSS.escape(selected)}"]`) || document.querySelector<HTMLButtonElement>('[data-add-module="text"]')
       : useModules;
     if (target?.closest('.sb-library-disclosure')) editorBus.showTab('modules');
+    revealEditorTarget(target ?? null); // the Story card or the library group may be collapsed
     target?.focus();
   }
   function remember(key = '') {
@@ -138,6 +140,8 @@ if (form && blocksField) {
       const item = node('li');
       item.draggable = editable;
       item.dataset.moduleId = block.id;
+      item.dataset.moduleType = block.type;
+      item.dataset.moduleCard = '';
       if (column !== undefined) item.style.marginLeft = '16px';
       // No aria-label: the visible text ("1. Paragraph ...") is the accessible name (WCAG 2.5.3 label in name).
       const select = button(`${display}. ${labels[block.type]}${column !== undefined ? ` · Column ${column + 1}` : ''}`, () => { selected = block.id; editorBus.showTab('module'); render(); focusSelected(); revealInPreview(); });
@@ -336,7 +340,7 @@ if (form && blocksField) {
       field(block, 'Image description (alt text)', 'alt', block.alt || '');
       if (block.type === 'flyer') fields.append(node('p', 'Leave the description empty to follow the current photo description in Photo studio.', 'admin-note'));
       fields.append(node('p', block.type === 'flyer' ? 'Flyers show the whole image so its text stays visible. Add a text summary to the story for accessibility.' : 'This photo appears here in the story text. Adjust its focal point in the Photo studio.', 'admin-note'));
-      fields.append(button('Open Photo studio', () => { const heading = document.getElementById('ed-photos-heading'); heading?.scrollIntoView({ block: 'start' }); heading?.focus(); }));
+      fields.append(button('Open Photo studio', () => { const heading = document.getElementById('ed-photos-heading'); revealEditorTarget(heading); heading?.scrollIntoView({ block: 'start' }); heading?.focus(); }));
     }
     if (block.type === 'divider') fields.append(node('p', 'A simple divider gives the next part of your story room to breathe.', 'admin-note'));
     const settings = node('div', undefined, 'sb-controls');
@@ -376,15 +380,27 @@ if (form && blocksField) {
       filterLibrary();
     });
   }
+  // The library is shown in collapsible groups. While a search or a category is active, the groups with hits open and the
+  // empty ones are hidden; the editor's own open/closed choices are put back when the search is cleared.
+  const libraryGroups = Array.from(document.querySelectorAll<HTMLDetailsElement>('details[data-library-group]'));
+  const beforeSearch = new Map<HTMLDetailsElement, boolean>();
   function filterLibrary() {
     const query = librarySearch.value.trim().toLocaleLowerCase();
+    const category = libraryCategory.value;
+    const filtering = !!query || category !== 'all';
     let matches = 0;
     for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) {
-      const category = libraryCategory.value;
       const matchesQuery = `${add.textContent} ${add.dataset.addModule}`.toLocaleLowerCase().includes(query) && (category === 'all' || category === 'favorites' && pinned.has(add.dataset.addModule!) || add.dataset.libraryCategory === category);
       add.hidden = !matchesQuery;
       if (matchesQuery) matches++;
     }
+    if (filtering && !beforeSearch.size) for (const group of libraryGroups) beforeSearch.set(group, group.open);
+    for (const group of libraryGroups) {
+      const hits = group.querySelectorAll('[data-add-module]:not([hidden])').length;
+      if (filtering) { group.hidden = hits === 0; setGroup(group, hits > 0); }
+      else { group.hidden = false; if (beforeSearch.has(group)) setGroup(group, beforeSearch.get(group)!); }
+    }
+    if (!filtering) beforeSearch.clear();
     document.getElementById('module-library-results')!.textContent = `${matches} ${matches === 1 ? 'module' : 'modules'}${query ? ' found' : ''}`;
     document.getElementById('module-library-empty')!.hidden = matches > 0;
     libraryReset.hidden = !librarySearch.value && libraryCategory.value === 'all';
