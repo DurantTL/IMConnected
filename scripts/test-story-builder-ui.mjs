@@ -1603,6 +1603,29 @@ try {
       await ctx.close();
     }
     {
+      const { pg, ctx } = await dndPage(base, { touch: true, viewport: { width: 1280, height: 800 } });
+      const cdp = await ctx.newCDPSession(pg);
+      await showCanvas(pg); await pg.waitForTimeout(80);
+      const grip = await pg.locator('[data-drag-handle="c"] > span').boundingBox();
+      const point = (x, y) => [{ x, y, id: 1 }];
+      const gx = grip.x + grip.width / 2, gy = grip.y + grip.height / 2;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(gx, gy) });
+      await pg.waitForTimeout(350);
+      check('a real touch held on a handle\'s grip starts the drag and it survives the capture handover', await pg.locator('.sb-drag-ghost').count() === 1);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(gx, gy - 10) });
+      await pg.waitForTimeout(200);
+      check('the drag is still on after the first move (the grip\'s lost capture did not cancel it)', await pg.locator('.sb-drag-ghost').count() === 1);
+      await pg.waitForTimeout(250);
+      const t = await spot(pg, 'a', 'top');
+      for (const f of [0.3, 0.6, 1]) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(gx + (t.x - gx) * f, gy + (t.y - gy) * f) }); await pg.waitForTimeout(40); }
+      await pg.waitForTimeout(250);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await pg.waitForTimeout(250);
+      check('a touch drag from a handle\'s grip moves the card (stored order checked)', ids(await order(pg)).join() === 'c,a,b');
+      check('the grip does not take pointer events itself', await pg.locator('[data-drag-handle="c"] > span').evaluate((el) => getComputedStyle(el).pointerEvents === 'none'));
+      await ctx.close();
+    }
+    {
       const { pg, ctx } = await dndPage(base);
       await lift(pg, pg.locator('[data-drag-handle="c"]'));
       const t = await spot(pg, 'a', 'top');

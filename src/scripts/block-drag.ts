@@ -41,6 +41,7 @@ export function initBlockDrag(api: DragApi) {
   document.addEventListener('touchmove', (e) => { if (dragActive && e.cancelable) e.preventDefault(); }, { passive: false, capture: true });
 
   document.addEventListener('pointerdown', (event) => {
+    if (!busy) dragActive = false; // a stale flag must never cancel the touchmoves of an ordinary scroll
     if (busy || !api.editable || !api.isModular()) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     if (event.pointerType !== 'mouse' && !event.isPrimary) return;
@@ -91,7 +92,7 @@ export function initBlockDrag(api: DragApi) {
     // Losing the window, the tab or the pointer capture cancels like Escape, but is not followed by a click, so nothing is swallowed.
     on(window, 'blur', () => { if (state === 'dragging') finish(true, true, 'other'); }, false);
     on(document, 'visibilitychange', () => { if (document.visibilityState === 'hidden' && state === 'dragging') finish(true, true, 'other'); }, false);
-    on(window, 'lostpointercapture', (e: PointerEvent) => { if (e.pointerId === pointerId && state === 'dragging') finish(true, true, 'other'); }, false);
+    on(window, 'lostpointercapture', (e: PointerEvent) => { if (e.pointerId === pointerId && e.target === source && state === 'dragging') finish(true, true, 'other'); }, false); // only the capturing button: a touch auto-captures a child (the grip) and releases it when the button takes over
     on(window, 'scroll', () => { if (state === 'dragging') follow(); }, false);
     // A held touch must not open the context menu or pan the page once the drag has started.
     on(document, 'contextmenu', (e: Event) => { if (touch) e.preventDefault(); });
@@ -254,7 +255,6 @@ export function initBlockDrag(api: DragApi) {
       const before = rects();
       const dropped = current;
       const ghostBox = ghost?.getBoundingClientRect();
-      const swallow = (e: Event) => { e.preventDefault(); e.stopPropagation(); };
       // The click that follows a release must not add the module (or select a card). After Escape the pointer is still down, so the swallower
       // waits for its release, and also ends at the next pointer press or after one second; blur, a hidden tab and a lost pointer get none.
       if (how !== 'other') {

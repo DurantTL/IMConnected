@@ -118,6 +118,7 @@
 .ed-module-canvas .sb-handle { position: absolute; left: 0; top: 0; bottom: 0; width: 44px; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--e-muted); font-size: 1.1rem; line-height: 1; cursor: grab; touch-action: none; display: grid; place-items: center; }
 .ed-module-canvas .sb-select-module { padding-left: 44px; }
 .ed-module-canvas .sb-module-actions { padding-left: 44px; }
+.ed-module-canvas .sb-handle > span { pointer-events: none; }
 .ed-module-canvas .sb-handle:hover, .ed-module-canvas .sb-handle:focus-visible { background: var(--e-navy-soft); color: var(--e-navy); }
 .ed-module-canvas .sb-handle:focus-visible { outline: 3px solid var(--e-navy); outline-offset: -3px; }
 .ed-module-canvas #module-outline > li.sb-empty-column { border: 1px dashed var(--e-field); background: transparent; padding: 14px; text-align: center; color: var(--e-muted); font-size: .85rem; }
