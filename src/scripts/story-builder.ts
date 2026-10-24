@@ -1,5 +1,6 @@
 import { editorBus } from './editor-bus';
 import { revealEditorTarget, setGroup } from './editor-groups';
+import { initBlockDrag } from './block-drag';
 import { isStoryButtonUrl, checkStoryBlockLength, walkStoryBlocks, mapStoryBlocks, countStoryBlocks, findStoryBlockLocation, STORY_BLOCK_LIMIT, splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
@@ -135,18 +136,19 @@ if (form && blocksField) {
   function renderOutline() {
     outline.replaceChildren();
     let number = 0;
-    const renderList = (siblings: StoryBlock[], column?: number) => { for (const [index, block] of siblings.entries()) {
+    const renderList = (siblings: StoryBlock[], column?: number, parent?: StoryBlock) => { for (const [index, block] of siblings.entries()) {
       const display = ++number;
       const item = node('li');
-      item.draggable = editable;
       item.dataset.moduleId = block.id;
       item.dataset.moduleType = block.type;
       item.dataset.moduleCard = '';
-      if (column !== undefined) item.style.marginLeft = '16px';
+      item.dataset.parentId = parent?.id ?? '';
+      item.dataset.column = String(column ?? 0);
+      item.dataset.index = String(index);
+      if (column !== undefined) { item.style.marginLeft = '16px'; if (index === 0 && column > 0) item.style.marginTop = '12px'; if (parent && index === siblings.length - 1 && column === (parent.content?.length ?? 1) - 1) item.style.marginBottom = '12px'; }
       // No aria-label: the visible text ("1. Paragraph ...") is the accessible name (WCAG 2.5.3 label in name).
       const select = button(`${display}. ${labels[block.type]}${column !== undefined ? ` · Column ${column + 1}` : ''}`, () => { selected = block.id; editorBus.showTab('module'); render(); focusSelected(); revealInPreview(); });
       select.dataset.selectModule = block.id;
-      const grip = node('span', '⠿', 'sb-grip'); grip.setAttribute('aria-hidden', 'true'); select.prepend(grip);
       select.setAttribute('aria-pressed', String(selected === block.id));
       if (selected === block.id) select.setAttribute('aria-current', 'true');
       select.className = 'sb-select-module';
@@ -160,22 +162,27 @@ if (form && blocksField) {
       down.disabled = !editable || index === siblings.length - 1;
       actions.append(up, down);
       item.append(actions);
-      item.addEventListener('dragstart', (event) => {
-        if ((event.target as HTMLElement).closest('input,textarea,select')) { event.preventDefault(); return; }
-        event.dataTransfer?.setData('text/plain', block.id);
-        if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-        item.classList.add('dragging');
-      });
-      item.addEventListener('dragend', () => item.classList.remove('dragging'));
-      item.addEventListener('dragover', (event) => { if (editable) event.preventDefault(); });
-      item.addEventListener('drop', (event) => {
+      // The drag handle comes after the move buttons in tab order and sits on the card's left edge (CSS). Dragging it is pointer
+      // only (block-drag.ts); the arrow keys on it are a keyboard path, and Move up / Move down above stay.
+      const handle = button('', () => announce('Use the Move up and Move down buttons, or the up and down arrow keys on this handle, to reorder.'), `Drag module ${display} to reorder`);
+      handle.className = 'sb-handle'; handle.dataset.dragHandle = block.id; handle.dataset.dragLabel = labels[block.type];
+      const grip = node('span', '⠿'); grip.setAttribute('aria-hidden', 'true'); handle.append(grip);
+      handle.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
         event.preventDefault();
-        const id = event.dataTransfer?.getData('text/plain') || '', source = findStoryBlockLocation(blocks, id);
-        if (source && source.siblings !== siblings) { announce('Drag within the current column. Use Move to column in module settings to move between columns.'); return; }
-        move(id, index);
+        const where = findStoryBlockLocation(blocks, block.id);
+        if (where) { move(block.id, where.index + (event.key === 'ArrowUp' ? -1 : 1)); outline.querySelector<HTMLElement>(`[data-drag-handle="${CSS.escape(block.id)}"]`)?.focus(); }
       });
+      item.append(handle);
       outline.append(item);
-      for (const [col, children] of (block.content ?? []).entries()) renderList(children, col);
+      for (const [col, children] of (block.content ?? []).entries()) {
+        renderList(children, col, block);
+        if (!children.length) {
+          const empty = node('li', `Column ${col + 1} is empty. Drag a module here.`, 'sb-empty-column');
+          empty.dataset.dropEmpty = ''; empty.dataset.parentId = block.id; empty.dataset.column = String(col); empty.style.marginLeft = '16px';
+          outline.append(empty);
+        }
+      }
       if (column === undefined) {
         const row = node('li', undefined, 'ed-insert-row');
         const insert = button('', () => { selected = block.id; render(); editorBus.showTab('modules'); document.getElementById('module-library-search')?.focus(); }, `Insert a module after module ${display}`);
@@ -497,13 +504,9 @@ if (form && blocksField) {
     remember(); body.value = projection; modular = false; blocks = []; selected = ''; render(); changed(); announce('Markdown mode enabled.');
     (revealEditorTarget(body), body.focus());
   });
-  for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) add.addEventListener('click', () => {
-    if (!editable || !modular) return;
-    if (countStoryBlocks(blocks) >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
-    const type = add.dataset.addModule as StoryBlock['type'];
-    if (['image', 'gallery', 'flyer'].includes(type) && !photos.some((p) => p.src)) return;
-    if (type === 'section' && countStoryBlocks(blocks) + 3 > STORY_BLOCK_LIMIT) { announce('A two-column section needs three module spaces.'); return; }
-    remember();
+  /** The module "+ Add" and a dragged library item both insert: same defaults. Null when it cannot be made (no story photo for an image type). */
+  function makeBlock(type: StoryBlock['type']): StoryBlock | null {
+    if (['image', 'gallery', 'flyer'].includes(type) && !photos.some((p) => p.src)) return null;
     const block: StoryBlock = { id: uid(), type };
     if (['text', 'heading', 'quote'].includes(type)) block.text = '';
     if (type === 'heading') block.level = 2;
@@ -515,6 +518,16 @@ if (form && blocksField) {
     }
     if (type === 'video') { block.label = 'Event video'; block.url = ''; }
     if (['image', 'flyer'].includes(type)) { block.photoId = photos.find((p) => p.src)!.id; if (type === 'image') block.alt = photos.find((p) => p.id === block.photoId)?.alt || ''; }
+    return block;
+  }
+  for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) add.addEventListener('click', () => {
+    if (!editable || !modular) return;
+    if (countStoryBlocks(blocks) >= STORY_BLOCK_LIMIT) { announce('A story can have up to 60 modules.'); return; }
+    const type = add.dataset.addModule as StoryBlock['type'];
+    if (['image', 'gallery', 'flyer'].includes(type) && !photos.some((p) => p.src)) return;
+    if (type === 'section' && countStoryBlocks(blocks) + 3 > STORY_BLOCK_LIMIT) { announce('A two-column section needs three module spaces.'); return; }
+    remember();
+    const block = makeBlock(type)!;
     const at = type === 'section' ? undefined : findStoryBlockLocation(blocks, selected);
     const rootIndex = type === 'section' ? blocks.findIndex((b) => b.id === selected || b.content?.flat().some((c) => c.id === selected)) : -1;
     (at?.siblings ?? blocks).splice(at ? at.index + 1 : rootIndex >= 0 ? rootIndex + 1 : blocks.length, 0, block); selected = block.id;
@@ -526,6 +539,18 @@ if (form && blocksField) {
     const state = JSON.parse(raw); blocks = state.blocks; modular = state.modular; body.value = state.body; selected = state.selected || blocks[0]?.id || '';
     editKey = ''; render(); focusSelected(); changed();
   }
+  initBlockDrag({
+    editable, isModular: () => modular, blocks: () => blocks, outline, canvas: moduleCanvas, make: makeBlock, label: (b) => labels[b.type], announce,
+    commit(plan, added, message) {
+      remember(); blocks = plan.blocks; selected = plan.id;
+      render(); changed(); announce(message);
+      if (added) { // the new module's settings open, as with + Add
+        editorBus.showTab('module');
+        const first = fields.querySelector<HTMLElement>('input,textarea,select,button');
+        revealEditorTarget(first); first?.focus();
+      } else outline.querySelector<HTMLElement>(`[data-drag-handle="${CSS.escape(plan.id)}"]`)?.focus({ preventScroll: true }); // keyboard users keep their place after a pointer move
+    },
+  });
   undo.addEventListener('click', () => { if (!editable || !history.length) return; future.push(snapshot()); restore(history.pop()!); announce('Module change undone.'); });
   redo.addEventListener('click', () => { if (!editable || !future.length) return; history.push(snapshot()); restore(future.pop()!); announce('Module change restored.'); });
   for (const control of document.querySelectorAll<HTMLButtonElement>('[data-preview-width]')) control.addEventListener('click', () => {
