@@ -15,6 +15,7 @@ export const sectionLabel = (key: string, area?: string) => {
 
 /** Messages for the fixed ?n= codes the action routes redirect with. */
 export const NOTICES: Record<string, string> = {
+  saved: 'Changes saved.',
   rejected: 'Draft rejected. Its photos are kept for 30 days.',
   restored: 'Draft restored to In review.',
   uploaded: 'Photos uploaded.',

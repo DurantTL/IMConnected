@@ -56,6 +56,7 @@ export const ERRORS = {
   schedule_owner_inactive: 'The person who scheduled this can no longer sign in; schedule it again.',
   schedule_studio_overwrote: 'IMConnected Studio published over this story, so this draft was not published automatically and cannot be scheduled. Review it and publish it now, or reject it.',
   schedule_none: 'This draft has no suggested time.',
+  save_invalid: 'Some fields were not valid, so nothing was saved. Check the fields and save again.',
   section_unknown: 'That story uses a section this editor does not know.',
 } as const;
 

@@ -5,6 +5,7 @@ import { listStoriesPage, parsePublishedFilter, publishedCounts, publishedFacets
 import { SECTIONS, getSection } from '../../lib/site';
 import { noticeText, fmtTime, sectionLabel } from '../../lib/admin-ui';
 import { errorText } from '../../lib/messages';
+import { publishedHref } from '../../lib/admin-back';
 import { siteUrl } from '../../lib/draft-http';
 import BulkBar from '../../components/BulkBar.astro';
 export const prerender = false;
@@ -31,28 +32,17 @@ try {
 }
 
 const SORT_LABELS: Record<string, string> = {
-  published_desc: 'Published, newest first', published_asc: 'Published, oldest first', edited_desc: 'Recently edited',
+  published_asc: 'Published, oldest first', edited_desc: 'Recently edited',
   date_desc: 'Story date, newest first', title: 'Title A to Z', section: 'Section',
 };
 
 /** The list address for a filter, leaving out every default. */
 function href(over: Partial<PublishedFilter> & { edited?: boolean } = {}, keep = true): string {
   const g: PublishedFilter = keep ? { ...f, ...over } : { ...f, q: '', section: '', area: '', issue: null, year: '', featured: false, openDraft: false, editedThisMonth: false, page: 1, ...over };
-  const p = new URLSearchParams();
-  if (g.q) p.set('q', g.q);
-  if (g.section) p.set('section', g.section);
-  if (g.area) p.set('area', g.area);
-  if (g.issue !== null) p.set('issue', String(g.issue));
-  if (g.year) p.set('year', g.year);
-  if (g.featured) p.set('featured', 'yes');
-  if (g.openDraft) p.set('openDraft', 'yes');
-  if (g.editedThisMonth) p.set('edited', 'month');
-  if (g.sort !== 'published_desc') p.set('sort', g.sort);
-  if (g.perPage !== 25) p.set('perPage', String(g.perPage));
-  if (g.page > 1) p.set('page', String(g.page));
-  const s = p.toString();
-  return '/admin/published' + (s ? '?' + s : '');
+  return publishedHref(g);
 }
+// Row and bulk actions return to this same view; the server rebuilds the address from it (never the raw text).
+const backValue = Astro.url.pathname + Astro.url.search;
 
 const anyFilter = !!(f.q || f.section || f.issue !== null || f.year || f.featured || f.openDraft || f.editedThisMonth);
 const flags = { featured: f.featured, openDraft: f.openDraft, edited: f.editedThisMonth, year: !!counts.year && f.year === counts.year };
@@ -135,6 +125,7 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
       </label>
       <label>Sort by
         <select name="sort">
+          <option value="" selected={f.sort === 'published_desc'}>Default order (published, newest first)</option>
           {Object.entries(SORT_LABELS).map(([v, l]) => <option value={v} selected={f.sort === v}>{l}</option>)}
         </select>
       </label>
@@ -157,7 +148,7 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
       <p class="admin-note">{anyFilter ? 'No published stories match these filters.' : 'No published stories yet.'}</p>
     ) : (
       <>
-      <BulkBar action="unpublish" label="Unpublish selected" noun="stories" more={[{ action: "editstory", label: "Edit fields" }]} />
+      <BulkBar action="unpublish" label="Unpublish selected" noun="stories" back={backValue} more={[{ action: "editstory", label: "Edit fields" }]} />
       <div class="adm-table-wrap">
       <table class="adm-table">
         <caption class="adm-sr">Published stories, {from} to {to} of {total}</caption>
@@ -204,6 +195,7 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
                 </form>
                 <form method="post" action="/api/admin/stories/unpublish" data-confirm={`Unpublish "${r.title || r.slug}"? It will be hidden from the public site.`}>
                   <input type="hidden" name="slug" value={r.slug} />
+                  <input type="hidden" name="back" value={backValue} />
                   <button class="cms-btn danger" type="submit">Unpublish<span class="adm-sr"> {r.title || r.slug}</span></button>
                 </form>
               </td>

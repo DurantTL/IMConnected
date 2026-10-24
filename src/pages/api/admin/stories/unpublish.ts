@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { validSlug } from '../../../../lib/story-publish';
 import { unpublishStoryItem } from '../../../../lib/bulk-actions';
 import { readFormLimited, redirectTo } from '../../../../lib/draft-http';
+import { safePublishedBack } from '../../../../lib/admin-back';
 import { clientIp } from '../../../../lib/request';
 
 export const prerender = false;
@@ -10,8 +11,9 @@ export const prerender = false;
 // page cache is cleared, so it is gone from the pages, feeds, search and /api/stories on the next request.
 export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
   const user = locals.user!;
-  const back = '/admin/published';
   const form = await readFormLimited(request, 8 * 1024);
+  // The list's own view (filters, sort, page), rebuilt from the parsed filter, never the raw value.
+  const back = safePublishedBack(form && form !== 'too_big' ? form.get('back') : null);
   const slugValue = form && form !== 'too_big' ? form.get('slug') : null;
   const slug = typeof slugValue === 'string' ? slugValue : '';
   if (!validSlug(slug)) return redirectTo(back, { e: 'slug_bad' });

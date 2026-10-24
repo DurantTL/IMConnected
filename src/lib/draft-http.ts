@@ -17,7 +17,9 @@ export function redirectTo(path: string, params: { n?: string; e?: ErrorCode; po
   if (params.photo && /^\d{1,12}$/.test(params.photo)) q.set('photo', params.photo);
   if (params.focus && /^(up|down|lead|move)$/.test(params.focus)) q.set('focus', params.focus);
   const qs = q.toString();
-  return new Response(null, { status: 303, headers: { Location: qs ? `${path}?${qs}` : path, ...NO_STORE } });
+  // `path` may already carry a rebuilt list query (see admin-back.ts); the notice is appended to it.
+  const joiner = path.includes('?') ? '&' : '?';
+  return new Response(null, { status: 303, headers: { Location: qs ? `${path}${joiner}${qs}` : path, ...NO_STORE } });
 }
 
 export function siteUrl(): string {

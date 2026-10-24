@@ -22,6 +22,9 @@ const f = result.filter;
 const view: ListView = { filter: f, sortParam: DRAFT_SORTS.some((o) => o.value === raw.sort) ? (raw.sort as ListView['sortParam']) : '' };
 const href = (over: Parameters<typeof listHref>[1] = {}) => listHref(view, over);
 const kind = f.kind;
+// "Default order" submits an empty sort, which means the default for the chosen status (soonest first for Scheduled).
+const defaultSort = f.status === 'scheduled' ? 'scheduled' : 'updated';
+const DEFAULT_SORT_NOTE = { updated: 'recently updated', scheduled: 'soonest scheduled' } as const;
 const queueTitle = kind === 'event' ? 'Events' : kind === 'announcement' ? 'Announcements' : kind === 'all' ? 'All drafts' : 'Stories';
 const newKind = kind === 'all' ? 'story' : kind;
 const counts = countDraftsByStatus(kind);
@@ -165,7 +168,8 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
       </label>
       <label>Sort by
         <select name="sort">
-          {DRAFT_SORTS.map((o) => <option value={o.value} selected={o.value === f.sort}>{o.label}</option>)}
+          <option value="" selected={f.sort === defaultSort}>Default order ({DEFAULT_SORT_NOTE[defaultSort]})</option>
+          {DRAFT_SORTS.map((o) => <option value={o.value} selected={o.value === f.sort && f.sort !== defaultSort}>{o.label}</option>)}
         </select>
       </label>
     </div>
@@ -217,7 +221,7 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
     <div class="adm-table-card"><p class="adm-empty">No drafts match. {chips.length > 0 ? <a href={clearHref}>Clear filters</a> : 'Items of this content type will appear here.'}</p></div>
   ) : (
     <>
-    {canBulk && <BulkBar action="publish" label="Publish selected" noun="drafts" more={[{ action: "edit", label: "Edit fields" }, { action: "reject", label: "Reject selected", danger: true }]} />}
+    {canBulk && <BulkBar action="publish" label="Publish selected" noun="drafts" back={Astro.url.pathname + Astro.url.search} more={[{ action: "edit", label: "Edit fields" }, { action: "reject", label: "Reject selected", danger: true }]} />}
     <div class="adm-table-card">
     <table class="adm-table">
       <thead>

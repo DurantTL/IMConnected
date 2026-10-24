@@ -253,6 +253,60 @@ try {
   await fetch(BASE + '/admin/bulk', { method: 'POST', headers, body: fdPub });
   check('...and a bulk publish too', rows('SELECT status FROM drafts WHERE id=?', target.i)[0].status === 'new');
 
+  // ---- issue #148: "Default order" and Status = Scheduled through the form ----
+  const sortOptions = (html) => (/<select name="sort">([\s\S]*?)<\/select>/.exec(html) || [])[1] || '';
+  r = await list('');
+  check('Sort starts with "Default order (recently updated)" (empty value), selected by default', /^\s*<option value="" selected>Default order \(recently updated\)<\/option>/.test(sortOptions(r.text)));
+  r = await list('status=scheduled');
+  check('under Scheduled the default option reads "(soonest scheduled)" and is selected', /^\s*<option value="" selected>Default order \(soonest scheduled\)<\/option>/.test(sortOptions(r.text)) && !/<option value="scheduled" selected>/.test(sortOptions(r.text)));
+  r = await list('status=scheduled&sort=updated');
+  check('an explicit non-default sort stays selected, not Default order', /<option value="updated" selected>/.test(sortOptions(r.text)) && !/<option value="" selected>/.test(sortOptions(r.text)));
+  r = await list('sort=title');
+  check('the chosen sort is selected and Default order is not', /<option value="title" selected>/.test(sortOptions(r.text)) && !/<option value="" selected>/.test(sortOptions(r.text)));
+  const schedOrder = ids(D.filter((d) => d.kind === 'story' && d.publishAt && open(d)).sort((a, b) => a.publishAt - b.publishAt || a.i - b.i));
+  // The form submits every control, so changing Status to Scheduled sends the Sort select's visible value (now Default order = empty).
+  r = await list('q=&section=&kind=story&source=&sort=&status=scheduled&issue=&from=&to=');
+  check('submitting the form with Status = Scheduled and Default order lists soonest first', same(r.ids, schedOrder) && schedOrder.length > 1, r.ids.join());
+  check('...and that view shows Default order (soonest scheduled) selected', /<option value="" selected>Default order \(soonest scheduled\)/.test(sortOptions(r.text)));
+  r = await list('q=&section=&kind=story&source=&sort=&status=new&issue=&from=&to=');
+  check('an empty sort under another status is that status default (recently updated)', same(r.ids, (await list('status=new')).ids));
+  const pageLinks = (await list('status=scheduled&sort=&perPage=50')).text;
+  check('no link carries the default sort (sort=scheduled) under Scheduled', !/href="[^"]*[?&;]sort=scheduled/.test(pageLinks));
+
+  // ---- issue #148: `back` keeps the drafts view after bulk actions ----
+  const bulk = async (fields) => {
+    const f = new FormData();
+    for (const [k, v] of Object.entries(fields)) f.set(k, v);
+    const res = await fetch(BASE + '/admin/bulk', { method: 'POST', headers, body: f });
+    return { status: res.status, text: await res.text() };
+  };
+  const backsOf = (html) => [...html.matchAll(/name="back" value="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
+  const cancelOf = (html) => [...html.matchAll(/<a class="cms-btn secondary" href="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
+  r = await list('q=Synthetic&sort=title&perPage=50&page=2&status=all');
+  check('the bulk bar carries the current drafts view as `back` (path and query)', /name="back" value="\/admin\?q=Synthetic&amp;status=all&amp;sort=title&amp;perPage=50&amp;page=2"/.test(r.text) || /name="back" value="\/admin\?[^"]*sort=title/.test(r.text), (r.text.match(/name="back" value="[^"]*"/) || [''])[0]);
+  const t2 = D.find((d) => d.status === 'new' && d.kind === 'story' && d.i !== target.i);
+  const t3 = D.find((d) => d.status === 'in_review' && d.kind === 'story' && !d.publishAt && d.i !== t2.i);
+  const one = (d) => ({ action: 'reject', id: String(d.i), [`v_${d.i}`]: String(d.updated) });
+  const want = '/admin?q=Synthetic&status=all&sort=title&perPage=50&page=2';
+  let b = await bulk({ ...one(t2), back: '/admin?q=Synthetic&status=all&sort=title&perPage=50&page=2' });
+  check('bulk Reject confirmation: Cancel and the form carry the rebuilt view', b.status === 200 && cancelOf(b.text).includes(want) && backsOf(b.text).every((v) => v === want) && backsOf(b.text).length > 0, `${cancelOf(b.text)} ${backsOf(b.text)}`);
+  b = await bulk({ ...one(t2), step: 'run', back: '/admin?q=Synthetic&status=all&sort=title&perPage=50&page=2' });
+  check('bulk Reject result: Back to the list returns to the view', b.status === 200 && /1 of 1 rejected/.test(b.text) && cancelOf(b.text).includes(want), cancelOf(b.text));
+  b = await bulk({ action: 'edit', id: String(t3.i), [`v_${t3.i}`]: String(t3.updated), back: '/admin/events?status=all&sort=updated&kind=story&q=x' });
+  check('bulk Edit fields page on a preset path keeps that path; kind is ignored; default sort left out', b.status === 200 && cancelOf(b.text).includes('/admin/events?q=x&status=all') && backsOf(b.text).every((v) => v === '/admin/events?q=x&status=all'), `${cancelOf(b.text)}`);
+  b = await bulk({ action: 'edit', step: 'run', id: String(t3.i), [`v_${t3.i}`]: String(t3.updated), tick_featured: '1', e_featured: 'on', back: '/admin/announcements?status=scheduled&sort=' });
+  check('bulk Edit fields result keeps /admin/announcements and the status', b.status === 200 && /1 of 1 updated/.test(b.text) && cancelOf(b.text).includes('/admin/announcements?status=scheduled'), cancelOf(b.text));
+  b = await bulk({ ...one(t3), back: 'kind=all&status=scheduled&perPage=100' });
+  check('a bare query string works too, and is rebuilt with the type', cancelOf(b.text).includes('/admin?kind=all&status=scheduled&perPage=100'), `${cancelOf(b.text)}`);
+  b = await bulk({ ...one(t3) });
+  check('without `back` the list is plain /admin', b.status === 200 && cancelOf(b.text).includes('/admin') && cancelOf(b.text).every((h) => h === '/admin'));
+  for (const back of ['//evil.example', '//evil.example/admin', 'https://evil.example/', 'http://evil.example/admin?x=1', '/admin/editors', '/admin/editors?status=all', '/admin/published', '/admin/events/../editors', '/administrator', '%2F%2Fevil.example', '%2Fadmin%2Feditors', '/\\evil.example', '\\\\evil.example', 'javascript:alert(1)', '@evil.example', '/admin?next=https://evil.example', 'x'.repeat(5000)]) {
+    b = await bulk({ ...one(t3), back });
+    const carried = backsOf(b.text), cancels = cancelOf(b.text);
+    const good = (v) => /^\/admin(\/announcements|\/events)?(\?[A-Za-z0-9_=&.%+-]*)?$/.test(v) && !/evil|editors|published/i.test(v);
+    check(`malicious back ${JSON.stringify(back.slice(0, 32))} only yields a drafts list address`, b.status === 200 && carried.length > 0 && carried.every(good) && cancels.length > 0 && cancels.every(good) && !/evil/i.test(b.text), `${carried} | ${cancels}`);
+  }
+
   // ---- layout in a real browser (optional) ----
   const root = process.env.PLAYWRIGHT_ROOT || '/opt/node-tools';
   let chromium = null;

@@ -33,7 +33,12 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
   const draft = id === null ? null : getDraft(id);
   if (!draft || !ACTIONS.has(action)) return jsonResponse(404, { ok: false, error: 'Not found.' });
   const page = `/admin/drafts/${draft.id}`;
-  const isJson = action === 'save' || action === 'preview';
+  // The editor's fetch (autosave, Save with JavaScript) sends `Accept: application/json` and keeps its JSON answers. A native
+  // form post (no JavaScript) sends a browser Accept header with text/html and gets a redirect back to the editor. Anything
+  // else (scripts and tests with no Accept or `*/*`) keeps JSON, as before.
+  const accept = request.headers.get('accept') ?? '';
+  const nativeSave = action === 'save' && !/application\/json/i.test(accept) && /text\/html/i.test(accept);
+  const isJson = (action === 'save' && !nativeSave) || action === 'preview';
   const refuse = (code: ErrorCode, status = 400) => (isJson ? jsonResponse(status, { ok: false, error: ERRORS[code] }) : redirectTo(page, { e: code }));
 
   const maxBytes = action === 'photos' ? (LIMITS.maxPhotos * LIMITS.maxPhotoMB + 2) * 1024 * 1024 : 400 * 1024;
@@ -94,11 +99,14 @@ export const POST: APIRoute = async ({ params, request, locals, clientAddress })
     try {
       parsed = readDraftFields(form);
     } catch (err) {
-      return jsonResponse(400, { ok: false, error: (err as Error).message });
+      // The text of a field problem is free-form, so a redirect carries only a fixed code.
+      return nativeSave ? redirectTo(page, { e: 'save_invalid' }) : jsonResponse(400, { ok: false, error: (err as Error).message });
     }
     const r = saveDraft(draft.id, version, parsed.fields, parsed.photoAlts, user.id, parsed.layout, parsed.photoFocus, parsed.photoCaptions);
+    if (!r.ok && nativeSave) return redirectTo(page, { e: r.code });
     if (!r.ok) return jsonResponse(r.reason === 'conflict' ? 409 : r.reason === 'locked' ? 423 : 400, { ok: false, conflict: r.reason === 'conflict', error: r.message });
     if (saveAuditDue(user.id, draft.id)) audit('draft.save', { userId: user.id, target: `draft:${draft.id}`, ip });
+    if (nativeSave) return redirectTo(page, { n: 'saved' });
     return jsonResponse(200, { ok: true, updatedAt: r.updatedAt, savedBy: user.name, savedAt: r.updatedAt });
   }
 

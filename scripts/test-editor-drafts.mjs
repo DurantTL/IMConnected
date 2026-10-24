@@ -513,6 +513,41 @@ let H, slugH;
   check('a stale reject is rejected', r.params.get('e') === 'conflict' && draftRow(id).status === 'in_review');
   r = await c2.json(`/api/admin/drafts/${id}/save`, { version: version(id), ...baseFields({ title: 'Conflict Story (two, reloaded)' }) });
   check('after reloading, the second editor can save', r.data.ok);
+
+  // ---- issue #148: Save without JavaScript (a native form post) goes back to the editor; fetch keeps JSON ----
+  const NATIVE = { Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' };
+  const saveForm = (fields) => { const fd = new FormData(); for (const [k, v] of Object.entries(fields)) fd.append(k, String(v)); return fd; };
+  r = await c1.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: version(id), ...baseFields({ title: 'Native Save Story' }) }), NATIVE);
+  check('a native form Save answers 303 to /admin/drafts/<id>?n=saved', r.status === 303 && r.loc === `/admin/drafts/${id}?n=saved` && draftRow(id).title === 'Native Save Story', `${r.status} ${r.loc}`);
+  r = await c1.get(`/admin/drafts/${id}?n=saved`);
+  check('the editor page shows the "Changes saved." notice', r.status === 200 && /<p class="admin-ok" role="status">Changes saved\.<\/p>/.test(r.text));
+  const stale = version(id) - 1;
+  const beforeStale = draftRow(id).title;
+  r = await c2.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: stale, ...baseFields({ title: 'Native Stale Save' }) }), NATIVE);
+  check('a native Save from a stale page redirects to the editor with ?e=conflict and saves nothing', r.status === 303 && r.loc === `/admin/drafts/${id}?e=conflict` && draftRow(id).title === beforeStale, `${r.status} ${r.loc}`);
+  r = await c2.get(`/admin/drafts/${id}?e=conflict`);
+  check('...and the editor page shows the conflict text', /role="alert"[^>]*>[^<]*Someone else changed this draft/.test(r.text));
+  r = await c1.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ ...baseFields({ title: 'Native No Version' }) }), NATIVE);
+  check('a native Save without a version redirects with ?e=stale_page', r.status === 303 && r.loc === `/admin/drafts/${id}?e=stale_page`, `${r.status} ${r.loc}`);
+  r = await c1.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: version(id), keyPointsPresent: '1', keyPoint0: 'x'.repeat(400), ...baseFields({ title: 'Native Invalid Save' }) }), NATIVE);
+  check('a native Save with an invalid field redirects with a fixed ?e= code (no free text in the URL)', r.status === 303 && r.loc === `/admin/drafts/${id}?e=save_invalid` && draftRow(id).title === beforeStale, `${r.status} ${r.loc}`);
+  r = await c1.get(`/admin/drafts/${id}?e=save_invalid`);
+  check('...and the editor page shows its text', /Some fields were not valid, so nothing was saved/.test(r.text));
+  // The editor's fetch (autosave and Save with JavaScript) sends Accept: application/json and still gets JSON, even with a browser-like Accept list.
+  r = await c1.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: version(id), ...baseFields({ title: 'Fetch Save Story' }) }), { Accept: 'application/json' });
+  check('Accept: application/json keeps the JSON answer (200, ok, updatedAt)', r.status === 200 && /application\/json/.test(r.headers.get('content-type')) && JSON.parse(r.text).ok === true && typeof JSON.parse(r.text).updatedAt === 'number' && draftRow(id).title === 'Fetch Save Story');
+  r = await c1.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: version(id), ...baseFields({ title: 'Fetch Both Accepts' }) }), { Accept: 'application/json, text/html;q=0.5' });
+  check('a request that asks for JSON first is JSON even if it also accepts HTML', r.status === 200 && JSON.parse(r.text).ok === true);
+  r = await c2.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: stale, ...baseFields({ title: 'Fetch Stale' }) }), { Accept: 'application/json' });
+  check('a fetch conflict is still JSON 409 with conflict: true', r.status === 409 && JSON.parse(r.text).conflict === true);
+  r = await c1.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: version(id), keyPointsPresent: '1', keyPoint0: 'x'.repeat(400), ...baseFields() }), { Accept: 'application/json' });
+  check('a fetch validation error is still JSON 400 with its message', r.status === 400 && /key point/i.test(JSON.parse(r.text).error || ''), r.text.slice(0, 120));
+  r = await c1.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: version(id), ...baseFields({ title: 'No Accept Header Save' }) }));
+  check('a request with no Accept header (scripts) keeps the JSON answer', r.status === 200 && JSON.parse(r.text).ok === true);
+  r = await c1.req('POST', `/api/admin/drafts/${id}/save`, saveForm({ version: version(id), ...baseFields({ title: 'Native Back Story' }) }), NATIVE);
+  check('a native Save redirect has no open-redirect surface: Location is the fixed editor path', r.loc === `/admin/drafts/${id}?n=saved`);
+  // Put the draft back as the checks below expect it (last saved by the second editor).
+  await c2.json(`/api/admin/drafts/${id}/save`, { version: version(id), ...baseFields({ title: 'Conflict Story (two, reloaded)' }) });
   const page = (await c1.get(`/admin/drafts/${id}`)).text;
   check('the page shows who saved last', page.includes('by Second Editor'));
   const n = (await c1.json(`/api/admin/drafts/${id}/save`, { version: 'abc', ...baseFields() }));

@@ -10,6 +10,7 @@ import { validSlug } from '../../lib/story-publish';
 import { intParam } from '../../lib/draft-form';
 import { BULK_MAX, bulkReason, publishDraftItem, rejectDraftItem, unpublishStoryItem } from '../../lib/bulk-actions';
 import { EDIT_FORM_KEYS, describeChanges, editDraftItem, editStoryItem, parseEditChanges, type EditChanges } from '../../lib/bulk-edit';
+import { safeDraftBack, safePublishedBack } from '../../lib/admin-back';
 import { SECTIONS } from '../../lib/site';
 import { readFormLimited } from '../../lib/draft-http';
 import { clientIp } from '../../lib/request';
@@ -65,7 +66,9 @@ if (!form || form === 'too_big') {
   }
 }
 
-const back = draftBased(action) ? '/admin' : '/admin/published';
+// The list view the person came from (filters, sort, page), rebuilt from the parsed filter; never the raw `back` text.
+const rawBack = form && form !== 'too_big' ? form.get('back') : null;
+const back = draftBased(action) ? safeDraftBack(rawBack) : safePublishedBack(rawBack);
 const verb = { publish: 'Publish', unpublish: 'Unpublish', reject: 'Reject', edit: 'Edit', editstory: 'Edit' }[action];
 const past = { publish: 'published', unpublish: 'unpublished', reject: 'rejected', edit: 'updated', editstory: 'updated' }[action];
 const badgeOk = { publish: 'Published', unpublish: 'Unpublished', reject: 'Rejected', edit: 'Updated', editstory: 'Updated' }[action];
@@ -138,6 +141,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
       {failed.length > 0 ? (
         <form method="post" action="/admin/bulk">
           <input type="hidden" name="action" value={action} />
+          <input type="hidden" name="back" value={back} />
           <input type="hidden" name="step" value="confirm" />
           {carried(EDIT_FORM_KEYS).map((c) => <input type="hidden" name={c.k} value={c.v} />)}
           {action === 'reject' && note && <input type="hidden" name="note" value={note} />}
@@ -187,6 +191,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
       </ol>
       <form method="post" action="/admin/bulk">
         <input type="hidden" name="action" value={action} />
+          <input type="hidden" name="back" value={back} />
         <input type="hidden" name="step" value="confirm" />
         {items.map((i) => (
           <>
@@ -261,6 +266,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
       </ol>
       <form method="post" action="/admin/bulk">
         <input type="hidden" name="action" value={action} />
+          <input type="hidden" name="back" value={back} />
         <input type="hidden" name="step" value="run" />
         {carried(EDIT_FORM_KEYS).map((c) => <input type="hidden" name={c.k} value={c.v} />)}
         {action === 'reject' && (
