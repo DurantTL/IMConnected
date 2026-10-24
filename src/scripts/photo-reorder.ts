@@ -87,7 +87,6 @@ if (list && form) {
     const message = live.dataset.announce;
     document.querySelector('.admin-ok[role=status]')?.removeAttribute('role'); // the live region speaks it instead, once the page has settled
     setTimeout(() => {
-      document.querySelector<HTMLButtonElement>('[data-studio-tab="photos"]')?.click();
       const item = document.querySelector<HTMLElement>(`li[data-photo-item="${photo}"]`);
       // Keep focus on the control just used (so Enter again repeats it); if it is now disabled (first or last place), the other direction.
       const asked = params.get('focus') === 'down' ? 'down' : 'up';

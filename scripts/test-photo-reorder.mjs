@@ -252,7 +252,7 @@ try {
   page.on('pageerror', (e) => pageErrors.push(String(e)));
   page.on('dialog', (dialog) => dialog.accept());
   await page.goto(`${BASE}/admin/drafts/${id}`);
-  await page.locator('[data-studio-tab="photos"]').click();
+  await page.locator('#photos').scrollIntoViewIfNeeded();
   const handles = page.locator('[data-photo-handle]');
   check('JavaScript reveals a Drag handle on every photo; Up and Down stay as the keyboard path', await handles.count() === 3 && await page.getByRole('button', { name: 'Move photo 1 down' }).isVisible());
   const orderNow = () => photos(id).map((p) => p.id);
@@ -280,16 +280,16 @@ try {
   await page.waitForLoadState('load');
   await page.waitForFunction(() => document.querySelector('#photo-reorder-live')?.textContent === 'Photo moved to position 3 of 3.');
   check('the position is announced by a live region filled after load (it is not in the page at load)', await page.locator('#photo-reorder-live').getAttribute('data-announce') === 'Photo moved to position 3 of 3.' && await page.locator('.admin-ok[role=status]').count() === 0);
-  check('after the reload the Photos tab is open and focus is on a control of the moved photo', await page.locator('[data-studio-tab="photos"]').getAttribute('aria-selected') === 'true' && await page.evaluate((pid) => !!document.activeElement?.closest(`li[data-photo-item="${pid}"]`) && document.activeElement.matches('button'), String(a.id)));
+  check('after the reload the Photos card is in view and focus is on a control of the moved photo', await page.locator('#photos').isVisible() && await page.evaluate((pid) => !!document.activeElement?.closest(`li[data-photo-item="${pid}"]`) && document.activeElement.matches('button'), String(a.id)));
   check('markers followed the dragged photo (A was 1, now 3; B 2 -> 1, C 3 -> 2; the code examples stay literal)', draft(id).body.includes('{{photo 1}}\n\n{{photo 2 wide}}') && draft(id).body.includes('```\n{{photo 1}}\n```') && draft(id).body.includes('`{{photo 3}}`'), draft(id).body);
   check('the drag recorded exactly one revision and one audit entry', revisions(id) === dragRev0 + 1 && audits('draft.photo_move') === dragAudit0 + 1);
   // buttons by click
-  await page.locator('[data-studio-tab="photos"]').click();
+  await page.locator('#photos').scrollIntoViewIfNeeded();
   await page.getByRole('button', { name: 'Move photo 3 up' }).click();
   check('the Up button reorders (B, A, C)', await expectOrder([b.id, a.id, c.id]));
   await page.waitForURL(/pos=2&of=3/); await page.waitForLoadState('load');
   // a no-op drop (back where it started) does nothing
-  await page.locator('[data-studio-tab="photos"]').click();
+  await page.locator('#photos').scrollIntoViewIfNeeded();
   await page.setViewportSize({ width: 1280, height: 3200 });
   const h0 = await handles.nth(0).boundingBox();
   const revs3 = revisions(id), noopAudit0 = audits('draft.photo_move'), noopUrl = page.url(), noopVersion = draft(id).updated_at;
@@ -303,7 +303,7 @@ try {
     await touchContext.addCookies([{ name: '__Host-imc_session', value: token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
     const tp = await touchContext.newPage();
     await tp.goto(`${BASE}/admin/drafts/${id}#photos`);
-    await tp.locator('[data-studio-tab="photos"]').click();
+    await tp.locator('#photos').scrollIntoViewIfNeeded();
     const before = orderNow(), tRev = revisions(id), tAudit = audits('draft.photo_move');
     const hb = await tp.locator('[data-photo-handle]').nth(0).boundingBox(), lb = await tp.locator('[data-photo-item]').nth(2).boundingBox();
     const cdp = await touchContext.newCDPSession(tp);
@@ -315,7 +315,7 @@ try {
     await touchContext.close();
     // put it back: A, B, C -> use the buttons
     await page.goto(`${BASE}/admin/drafts/${id}`);
-    await page.locator('[data-studio-tab="photos"]').click();
+    await page.locator('#photos').scrollIntoViewIfNeeded();
     for (const name of ['Move photo 3 up', 'Move photo 2 up']) {
       const was = page.url();
       await page.getByRole('button', { name }).click();
@@ -326,7 +326,7 @@ try {
   // other chosen files do not ride along with a move or a replace
   {
     await page.goto(`${BASE}/admin/drafts/${id}`);
-    await page.locator('[data-studio-tab="photos"]').click();
+    await page.locator('#photos').scrollIntoViewIfNeeded();
     const idle = photos(id);
     const decoy = path.join(scratch, 'decoy-file-name.png'); fs.writeFileSync(decoy, png(COLORS[0]));
     await page.locator('.ph-replace summary').nth(2).click();
@@ -341,7 +341,7 @@ try {
   }
 
   // replace through the browser
-  await page.locator('[data-studio-tab="photos"]').click();
+  await page.locator('#photos').scrollIntoViewIfNeeded();
   await page.locator('.ph-replace summary').first().click();
   const pngPath = path.join(scratch, 'browser-new.png'); fs.writeFileSync(pngPath, png(COLORS[2]));
   const slot0 = photos(id)[0], key0 = slot0.media_key;
@@ -354,8 +354,7 @@ try {
 
   // restore across a replace through the revision history UI
   {
-    await page.goto(`${BASE}/admin/drafts/${rid}#review`);
-    await page.getByText('Saved revision history', { exact: true }).click();
+    await page.goto(`${BASE}/admin/drafts/${rid}#history`);
     await page.waitForFunction((rev) => [...document.getElementById('draft-revision-choice').options].some((o) => o.value === String(rev)), withKeys);
     await page.locator('#draft-revision-choice').selectOption(String(withKeys));
     await page.locator('#restore-draft-revision').click();
@@ -363,7 +362,7 @@ try {
     check('restoring across a replace shows the replaced notice (status) and NOT the missing-media alert', await page.locator('#revision-replaced-kept[role=status]').isVisible() && await page.locator('#revision-missing-media').count() === 0 && !/missing_media/.test(page.url()));
   }
   await page.goto(`${BASE}/admin/drafts/${id}`);
-  await page.locator('[data-studio-tab="photos"]').click();
+  await page.locator('#photos').scrollIntoViewIfNeeded();
   // focus stays on the control that was used; at an edge it moves to the other direction
   for (const [name, prefix] of [['Move photo 1 down', 'down:'], ['Move photo 2 down', 'up:']]) {
     const was = page.url();
@@ -377,7 +376,7 @@ try {
   }
 
   // accessibility, touch targets, sideways scroll
-  await page.locator('[data-studio-tab="photos"]').click();
+  await page.locator('#photos').scrollIntoViewIfNeeded();
   const axePath = process.env.AXE_JS || (() => { try { return playwrightRequire.resolve('axe-core/axe.min.js'); } catch { return ''; } })();
   check('axe is available (set AXE_JS)', !!axePath && fs.existsSync(axePath));
   await page.addScriptTag({ path: axePath });
@@ -390,7 +389,7 @@ try {
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto(`${BASE}/admin/drafts/${id}`);
-    await page.locator('[data-studio-tab="photos"]').click();
+    await page.locator('#photos').scrollIntoViewIfNeeded();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     check(`no horizontal scroll at ${width}px`, overflow <= 0, String(overflow));
   }

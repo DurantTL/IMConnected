@@ -32,6 +32,14 @@ const serverLog = [];
 let browser;
 let db;
 let checks = 0;
+const openContent = async (pg) => { const current = pg.locator('#module-outline [data-select-module][aria-current=true]'); if (await current.count() && await current.first().isEnabled()) await current.first().click(); else await pg.locator('#story-builder').scrollIntoViewIfNeeded(); };
+const openPhotos = (pg) => pg.locator('#photos').scrollIntoViewIfNeeded();
+const openTab = (pg, name) => pg.locator(`[data-studio-tab=${name}]`).click();
+const addModule = async (pg, type) => { await pg.locator('[data-studio-tab=modules]').click(); await pg.locator(`[data-add-module="${type}"]`).click(); };
+const insertLayout = async (pg, layout) => { await pg.locator('[data-studio-tab=modules]').click(); await pg.locator(`[data-insert-layout="${layout}"]`).click(); };
+const splitModules = async (pg) => { await pg.locator('[data-studio-tab=modules]').click(); await pg.locator('#use-modules').click(); };
+const openPreview = (pg) => pg.locator('[data-studio-preview]').first().click();
+const closePreview = (pg) => pg.locator('[data-preview-close]').click();
 const check = (label, condition) => { assert.ok(condition, label); checks++; console.log(`PASS ${label}`); };
 const server = spawn(process.execPath, ['dist/server/entry.mjs'], {
   cwd: ROOT,
@@ -107,7 +115,7 @@ try {
   const emptyCreated = await post('/api/admin/drafts/new', new FormData());
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto(BASE + emptyCreated.headers.get('location'));
-  await page.locator('#module-workspace').waitFor({ state: 'visible' });
+  await page.locator('#module-fields').waitFor({ state: 'visible' });
   check('new empty stories show a writing prompt and paragraph placeholder', await page.locator('#module-start-writing').isVisible() && await page.locator('[data-module-field="text"]').getAttribute('placeholder') === 'Start writing your story here…');
   const emptyId = Number(/\/drafts\/(\d+)/.exec(emptyCreated.headers.get('location'))[1]);
   const emptyBefore = db.prepare('SELECT status, updated_at, updated_by FROM drafts WHERE id=?').get(emptyId);
@@ -130,11 +138,12 @@ try {
   const blocks = () => page.locator('#story-blocks').inputValue().then(JSON.parse);
   const selectedHasFocus = () => page.evaluate(() => document.activeElement.matches('[data-select-module][aria-pressed="true"]'));
   check('existing Markdown stays in Markdown mode until the editor chooses modules', (await blocks()).length === 0 && await page.locator('#markdown-workspace').isVisible() && await page.locator('#f-body').inputValue() === legacy);
-  await page.locator('#use-modules').click();
+  await splitModules(page);
   check('enabling modules preserves the complete legacy Markdown', (await blocks())[0].text === legacy);
-  await page.locator('[data-add-module="heading"]').click();
+  await addModule(page, 'heading');
   await page.locator('[data-module-field="text"]').fill('A synthetic heading');
   const layoutBefore = await blocks();
+  await openTab(page, 'modules');
   await page.locator('#module-library-search').fill('HEADING');
   check('library search is labelled, case-insensitive and reports its count', await page.getByLabel('Find a module').inputValue() === 'HEADING' && await page.locator('[data-add-module]:visible').count() === 1 && await page.locator('#module-library-results').textContent() === '1 module found');
   await page.locator('#module-library-search').fill('no-such-module');
@@ -144,7 +153,7 @@ try {
   for (const layout of ['news', 'recap', 'announcement']) {
     await page.getByRole('button', { name: /^1\. Paragraph/ }).click();
     const before = await blocks();
-    await page.locator(`[data-insert-layout="${layout}"]`).click();
+    await insertLayout(page, layout);
     const inserted = await blocks();
     check(`${layout} starter inserts four unique modules after selection and preserves both existing modules`, inserted.length === before.length + 4 && inserted[0].id === before[0].id && inserted[5].id === before[1].id && new Set(inserted.map((block) => block.id)).size === inserted.length && inserted.slice(1, 5).every((block) => !before.some((old) => old.id === block.id)) && inserted.every((block) => !['button', 'image'].includes(block.type)) && JSON.stringify(inserted[0]) === JSON.stringify(before[0]) && JSON.stringify(inserted[5]) === JSON.stringify(before[1]));
     await page.locator('#blocks-undo').click();
@@ -153,20 +162,20 @@ try {
     check(`${layout} starter redo restores its stable IDs`, JSON.stringify(await blocks()) === JSON.stringify(inserted));
     await page.locator('#blocks-undo').click();
   }
-  for (let i = 0; i < 14; i++) await page.locator('[data-insert-layout="news"]').click();
+  for (let i = 0; i < 14; i++) await insertLayout(page, 'news');
   check('starter layouts can fill the story up to 58 modules', (await blocks()).length === 58);
   const beforeLimit = await blocks();
-  await page.locator('[data-insert-layout="news"]').click();
+  await insertLayout(page, 'news');
   check('a starter that would exceed 60 modules makes no partial change', JSON.stringify(await blocks()) === JSON.stringify(beforeLimit) && (await page.locator('#module-status').textContent()).includes('No modules were added'));
-  await page.locator('[data-add-module="divider"]').click();
-  await page.locator('[data-add-module="divider"]').click();
+  await addModule(page, 'divider');
+  await addModule(page, 'divider');
   const atLimit = await blocks();
-  await page.locator('[data-insert-layout="announcement"]').click();
+  await insertLayout(page, 'announcement');
   check('starter insertion at the 60-module limit preserves every existing ID', atLimit.length === 60 && JSON.stringify(await blocks()) === JSON.stringify(atLimit));
   for (let i = 0; i < 16; i++) await page.locator('#blocks-undo').click();
   check('rejected starters do not consume undo history', JSON.stringify(await blocks()) === JSON.stringify(layoutBefore));
-  const paneBoxes = await Promise.all(['.sb-outline', '.ed-preview', '#module-inspector'].map((selector) => page.locator(selector).boundingBox()));
-  check('1440px builder places outline left, composed canvas center and inspector right', paneBoxes.every(Boolean) && paneBoxes[0].x + paneBoxes[0].width <= paneBoxes[1].x + 1 && paneBoxes[1].x + paneBoxes[1].width <= paneBoxes[2].x + 1 && Math.abs(paneBoxes[0].y - paneBoxes[1].y) < 2 && Math.abs(paneBoxes[1].y - paneBoxes[2].y) < 2);
+  const paneBoxes = await Promise.all(['.ed-canvas', '.ed-sidebar'].map((selector) => page.locator(selector).boundingBox()));
+  check('1440px editor places the wide canvas left and the one sidebar (380px) right, with no persistent preview column', paneBoxes.every(Boolean) && paneBoxes[0].x + paneBoxes[0].width <= paneBoxes[1].x + 1 && Math.abs(paneBoxes[1].width - 380) < 2 && paneBoxes[0].width > paneBoxes[1].width * 1.5 && await page.locator('.ed-preview-card').count() === 0 && !(await page.locator('#ed-preview-dialog').evaluate((dialog) => dialog.open)));
 
   await page.getByRole('button', { name: /^1\. Paragraph/ }).focus();
   await page.keyboard.press('Enter');
@@ -202,19 +211,19 @@ try {
   check('deleting a module focuses its remaining neighbour', (await blocks()).length === 2 && await selectedHasFocus());
   await page.locator('#blocks-undo').click();
   await page.locator('#blocks-undo').click();
-  await page.locator('[data-add-module="list"]').click();
+  await addModule(page, 'list');
   await page.locator('[data-module-field="items"]').fill('First synthetic item\nSecond synthetic item');
-  await page.locator('[data-add-module="button"]').click();
+  await addModule(page, 'button');
   await page.locator('[data-module-field="label"]').fill('Synthetic details');
   await page.locator('[data-module-field="url"]').fill('https://example.invalid/synthetic-details');
-  await page.locator('[data-add-module="image"]').click();
+  await addModule(page, 'image');
   await page.locator('[data-module-field="photoId"]').selectOption('');
   await page.locator('[data-module-field="photoId"]').selectOption(String(photo.id));
   check('changing the image preserves focus on the recreated photo selector', await page.locator('[data-module-field="photoId"]').evaluate((select) => select === document.activeElement));
   await page.locator('[data-module-field="alt"]').fill('Synthetic image used only in this test');
-  await page.locator('[data-add-module="quote"]').click();
+  await addModule(page, 'quote');
   await page.locator('[data-module-field="text"]').fill('A synthetic quoted statement.');
-  await page.locator('[data-add-module="divider"]').click();
+  await addModule(page, 'divider');
   const expected = await blocks();
   check('all seven supported module types are represented', new Set(expected.map((b) => b.type)).size === 7);
   // a hidden invalid address must not block Save silently: the field is plain text and the server explains the problem
@@ -230,7 +239,7 @@ try {
   await page.locator(`[data-select-module="${buttonModule.id}"]`).click();
   await page.locator('[data-module-field="url"]').fill(buttonModule.url);
 
-  await page.locator('[data-studio-tab=photos]').click();
+  await openPhotos(page);
   await page.locator('.sb-focus-settings').evaluate((details) => { details.open = true; });
   const focal = page.locator(`[data-focal="${photo.id}"]`);
   await focal.scrollIntoViewIfNeeded();
@@ -277,12 +286,12 @@ try {
   check('modular story and focus save successfully', saved.status() === 200 && (await saved.json()).ok);
   await page.reload();
   if (shots) {
-    await page.locator('[data-studio-tab=photos]').click();
+    await openPhotos(page);
     await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: path.join(shots, 'story-photo-zoom-pan.png'), fullPage: true });
   }
-  await page.locator('[data-studio-tab=content]').click();
-  await page.locator('#module-workspace').waitFor({ state: 'visible' });
+  await openContent(page);
+  await page.locator('#module-canvas').waitFor({ state: 'visible' });
   check('module order and content survive reload', JSON.stringify(await blocks()) === JSON.stringify(expected));
   const storedPhoto = db.prepare('SELECT * FROM draft_photos WHERE id=?').get(photo.id);
   check('focal settings survive reload in SQLite', storedPhoto.focal_x === x && storedPhoto.focal_y === y);
@@ -297,7 +306,7 @@ try {
   check('preview keeps scripts disabled in its sandbox', !(await page.locator('#preview').getAttribute('sandbox') || '').split(/\s+/).includes('allow-scripts'));
   // Fit whole photo (issue #82): live preview, disabled zoom and pan, accessible controls, persistence, then back to the crop.
   {
-    await page.locator('[data-studio-tab=photos]').click();
+    await openPhotos(page);
     await page.locator('.sb-focus-settings').first().evaluate((details) => { details.open = true; });
     const fitBox = page.getByRole('checkbox', { name: 'Fit whole photo', exact: true });
     const fillGroup = page.getByRole('group', { name: 'Fill behind the photo' });
@@ -328,7 +337,7 @@ try {
     await page.locator('#save-btn').click();
     check('saving with Fit whole photo on succeeds', (await fitSave).status() === 200);
     await page.reload();
-    await page.locator('[data-studio-tab=photos]').click();
+    await openPhotos(page);
     await page.locator('.sb-focus-settings').first().evaluate((details) => { details.open = true; });
     const stored = db.prepare('SELECT zoom, fit, fit_fill FROM draft_photos WHERE id=?').get(photo.id);
     check('fit and fill are stored, the saved zoom is untouched, and the editor reopens with them on', stored.fit === 'contain' && stored.fit_fill === 'navy' && stored.zoom === 1.8 && await fitBox.isChecked() && await page.getByRole('radio', { name: 'Navy', exact: true }).isChecked() && await page.locator(`[name="photo_${photo.id}_zoom"]`).isDisabled() && await frame.getAttribute('data-fit') === 'contain');
@@ -340,23 +349,40 @@ try {
     check('turning it off and saving restores the crop', (await fitOff).status() === 200 && db.prepare('SELECT zoom, fit FROM draft_photos WHERE id=?').get(photo.id).fit === 'cover');
     await page.reload();
     check('the earlier zoom and focus come back after switching the fit off', db.prepare('SELECT zoom, focal_x FROM draft_photos WHERE id=?').get(photo.id).zoom === 1.8 && await page.locator(`[name="photo_${photo.id}_zoom"]`).inputValue() === '1.8');
-    await page.locator('[data-studio-tab=content]').click();
-    await page.locator('#module-workspace').waitFor({ state: 'visible' });
+    await openContent(page);
+    await page.locator('#module-canvas').waitFor({ state: 'visible' });
   }
   const canvasHeading = page.frameLocator('#preview').locator(`[data-module-id="${expected.find((block) => block.type === 'heading').id}"]`);
+  await openPreview(page);
   await canvasHeading.press('Enter');
   check('Enter on a canvas module selects it, highlights it and focuses its inspector field', await canvasHeading.getAttribute('data-preview-selected') !== null && await canvasHeading.evaluate((module) => module.style.outline.includes('3px')) && await page.locator('[data-module-field="text"]').evaluate((field) => field === document.activeElement) && await page.locator('#module-title').textContent() === 'Heading settings');
   const canvasQuote = page.frameLocator('#preview').locator(`[data-module-id="${expected.find((block) => block.type === 'quote').id}"]`);
+  await openPreview(page);
   await canvasQuote.press('Space');
   check('Space selects a different canvas module and clears the previous highlight', await canvasQuote.getAttribute('data-preview-selected') !== null && await canvasHeading.getAttribute('data-preview-selected') === null && await page.locator('#module-title').textContent() === 'Quote settings');
   const canvasUrl = await page.locator('#preview').evaluate((frame) => frame.contentWindow.location.href);
+  await openPreview(page);
   await page.frameLocator('#preview').locator('a[href="https://example.invalid/synthetic-details"]').click();
   check('canvas links select settings without navigating the private preview', await page.locator('#module-title').textContent() === 'Button / link settings' && await page.locator('[data-module-field="label"]').evaluate((field) => field === document.activeElement) && await page.locator('#preview').evaluate((frame) => frame.contentWindow.location.href) === canvasUrl);
   if (shots) await page.screenshot({ path: path.join(shots, 'story-builder-canvas-selection.png') });
+  await page.locator('#story-builder h2').first().click();
+  await page.keyboard.press('/');
+  check('"/" jumps to the module search and opens the Modules tab (not while typing in a field)', await page.locator('[data-studio-tab=modules]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.id === 'module-library-search'));
+  await page.keyboard.type('a/b');
+  check('"/" is typed normally inside a field', await page.locator('#module-library-search').inputValue() === 'a/b');
+  await page.locator('#module-library-reset').click();
+  await page.locator('.ed-insert').first().click();
+  check('a plus button between modules opens the Modules tab to insert after that module', await page.locator('[data-studio-tab=modules]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.id === 'module-library-search') && await page.locator('#module-outline [data-select-module][aria-current=true]').count() === 1);
+  await openPreview(page);
+  await page.locator('[data-preview-width=phone]').click();
+  check('the preview dialog narrows to a phone width with the Phone toggle', (await page.locator('#preview').boundingBox()).width <= 376 && await page.locator('[data-preview-width=phone]').getAttribute('aria-pressed') === 'true');
+  await page.locator('[data-preview-width=desktop]').click();
+  await closePreview(page);
 
   const axePath = process.env.AXE_JS || (() => { try { return playwrightRequire.resolve('axe-core/axe.min.js'); } catch { return ''; } })();
   if (axePath && fs.existsSync(axePath)) {
     await page.addScriptTag({ path: axePath });
+    await openPreview(page);
     check('canvas keeps native heading and list semantics while exposing keyboard selection', await canvasHeading.evaluate((heading) => heading.matches('h2,h3') && !heading.hasAttribute('role') && heading.tabIndex === 0) && await page.frameLocator('#preview').getByRole('heading', { name: 'A synthetic heading', exact: true }).count() === 1 && await page.frameLocator('#preview').getByRole('list').filter({ hasText: 'First synthetic item' }).getByRole('listitem').count() === 2);
     // Sandbox scripts stay disabled. Audit an exact snapshot of the enhanced frame DOM
     // in a diagnostic page, where axe's asynchronous checks can execute.
@@ -368,26 +394,27 @@ try {
     await canvasAudit.evaluate(fs.readFileSync(axePath, 'utf8'));
     const canvasViolations = await canvasAudit.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })).violations.map(({ id, impact, nodes }) => ({ id, impact, nodes: nodes.map(({ target, failureSummary }) => ({ target, failureSummary })) })));
     await canvasAudit.close();
+    await closePreview(page);
     if (shots) fs.writeFileSync(path.join(shots, 'editor-canvas-axe-results.json'), JSON.stringify(canvasViolations, null, 2));
     if (canvasViolations.length) console.error(JSON.stringify(canvasViolations, null, 2));
     check('enhanced canvas DOM snapshot passes axe WCAG A/AA checks', canvasViolations.length === 0);
 
     const accessibility = [];
-    for (const panel of ['content', 'settings', 'photos', 'review']) {
-      await page.locator(`[data-studio-tab=${panel}]`).click();
+    for (const panel of ['content', 'modules', 'settings', 'photos', 'review', 'history']) {
+      if (panel === 'content') await openContent(page); else if (panel === 'photos') await openPhotos(page); else await openTab(page, panel);
       const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })).violations.map(({ id, impact, nodes }) => ({ id, impact, nodes: nodes.map(({ target, failureSummary }) => ({ target, failureSummary })) })));
       accessibility.push({ panel, violations });
     }
     if (shots) fs.writeFileSync(path.join(shots, 'editor-axe-results.json'), JSON.stringify(accessibility, null, 2));
     if (accessibility.some((result) => result.violations.length)) console.error(JSON.stringify(accessibility, null, 2));
-    check('all four editor panels pass axe WCAG A/AA checks', accessibility.every((result) => result.violations.length === 0));
-    await page.locator('[data-studio-tab=content]').click();
+    check('every editor part (canvas with module settings, modules, story settings, photos, publishing and history) passes axe WCAG A/AA checks', accessibility.every((result) => result.violations.length === 0));
+    await openContent(page);
   } else console.log('SKIP editor axe checks: install axe-core or set AXE_JS');
   if (shots) {
-    await page.locator('[data-studio-tab=photos]').click();
+    await openPhotos(page);
     await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: path.join(shots, 'story-photos-desktop.png') });
-    await page.locator('[data-studio-tab=content]').click();
+    await openContent(page);
     await page.evaluate(() => scrollTo(0, 0));
     await page.locator(`[data-select-module="${expected.find((block) => block.type === 'heading').id}"]`).click();
     await page.locator('#preview').evaluate((frame) => frame.contentWindow.scrollTo(0, 0));
@@ -395,22 +422,30 @@ try {
     await page.screenshot({ path: path.join(shots, 'story-builder-desktop.png') });
   }
   await page.setViewportSize({ width: 390, height: 900 });
-  await page.locator('[data-studio-tab=photos]').click();
+  await openPhotos(page);
   check('phone crop controls reflow without horizontal overflow and retain touch targets', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && [...document.querySelectorAll('.sb-zoom-controls button')].every((button) => button.getBoundingClientRect().height >= 44)));
   if (shots) {
     await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: path.join(shots, 'story-photo-zoom-pan-mobile.png'), fullPage: true });
   }
-  await page.locator('[data-studio-tab=content]').click();
+  await openContent(page);
   await page.waitForTimeout(100);
   check('editor reflows without horizontal overflow at 390px', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
-  check('phone Build view keeps its inspector visible and its preview hidden and inert', await page.getByRole('button', { name: 'Build', exact: true }).isVisible() && await page.locator('#module-inspector').isVisible() && await page.locator('.ed-preview').evaluate((pane) => pane.hidden && pane.inert));
-  await page.locator('.ed-tabs [data-view=preview]').click();
-  check('phone Preview view removes library and inspector controls from the focus order', await page.locator('.ed-preview').isVisible() && await page.locator('.ed-write').evaluate((pane) => pane.hidden && pane.inert) && await page.locator('#module-inspector').evaluate((pane) => pane.hidden && pane.inert));
-  await page.getByRole('button', { name: 'Build', exact: true }).click();
-  check('phone Build action restores the selected inspector', await page.locator('#module-inspector').isVisible() && await page.locator('.ed-write').isVisible());
+  const previewDialog = page.locator('#ed-preview-dialog');
+  check('phone editor is one column: the canvas first, the sidebar stacked below it at full width, and no preview until Preview is pressed', await page.evaluate(() => { const c = document.querySelector('.ed-canvas').getBoundingClientRect(), s = document.querySelector('.ed-sidebar').getBoundingClientRect(); return s.top >= c.bottom - 1 && Math.abs(s.width - c.width) < 2; }) && !(await previewDialog.evaluate((d) => d.open)) && !(await page.locator('#ed-resize').isVisible()) && !(await page.locator('#ed-layout-button').isVisible()));
+  await openPreview(page);
+  check('Preview opens the draft preview in a modal dialog', await previewDialog.evaluate((d) => d.open && d.matches(':modal')) && await previewDialog.isVisible());
+  check('while the preview is open the editor behind it is inert, so focus cannot reach it', await page.locator('#story-builder').evaluate((panel) => !!panel.closest('[inert]')) && await page.locator('#ed-bar').evaluate((bar) => bar.inert) && await page.locator('.ed-sidebar').evaluate((side) => !!side.closest('[inert]')));
+  for (let i = 0; i < 8; i++) await page.keyboard.press('Tab');
+  check('Tab stays inside the open preview dialog', await page.evaluate(() => !!document.activeElement?.closest('#ed-preview-dialog')));
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.activeElement?.matches('[data-studio-preview]'));
+  check('Escape closes the preview, gives the editor back and returns focus to the Preview button', !(await previewDialog.evaluate((d) => d.open)) && await page.locator('#story-builder').evaluate((panel) => !panel.closest('[inert]')) && await page.evaluate(() => document.activeElement?.matches('[data-studio-preview]')));
+  await openPreview(page);
+  await closePreview(page);
+  check('Close preview returns to the editor', !(await previewDialog.isVisible()) && await page.locator('#module-inspector').count() === 1 && await page.locator('#story-builder').evaluate((panel) => !panel.closest('[inert]')));
 
-  check('phone header scrolls normally and desktop actions leave the focus order', await page.locator('.studio-head').evaluate((head) => getComputedStyle(head).position === 'static') && !(await page.locator('#save-btn').isVisible()) && await page.locator('#mobile-save-btn').isVisible());
+  check('phone header scrolls normally and desktop actions leave the focus order', await page.locator('#ed-bar').evaluate((head) => !['sticky', 'fixed'].includes(getComputedStyle(head).position)) && !(await page.locator('#save-btn').isVisible()) && await page.locator('#mobile-save-btn').isVisible());
   await page.locator('#module-fields').scrollIntoViewIfNeeded();
   const phoneSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${id}/save` && response.request().method() === 'POST');
   await page.locator('#mobile-save-btn').click();
@@ -419,7 +454,7 @@ try {
   check('phone actions stay compact and visible at the viewport edge', bar && bar.height < 100 && Math.abs(bar.y + bar.height - 900) < 2);
   await page.locator('.studio-mobile-actions [data-open-panel="review"]').click();
   check('phone Review action opens the publishing review panel', await page.locator('#studio-panel-review').isVisible());
-  await page.locator('[data-studio-tab=content]').click();
+  await openContent(page);
   await page.locator('[data-select-module]').last().click();
   await page.locator('#module-fields').scrollIntoViewIfNeeded();
   await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
@@ -428,16 +463,19 @@ try {
     await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: path.join(shots, 'story-builder-mobile.png') });
   }
-  await page.locator('[data-studio-tab=content]').focus();
+  await page.locator('[data-studio-tab=settings]').focus();
+  await page.keyboard.press('Enter');
+  check('sidebar tabs open one panel at a time (aria-selected set, every other panel hidden and inert)', await page.locator('#studio-panel-settings').isVisible() && await page.locator('[data-studio-tab=settings]').getAttribute('aria-selected') === 'true' && await page.locator('#studio-panel-modules').evaluate((panel) => panel.hidden && panel.inert) && await page.locator('#studio-panel-module').evaluate((panel) => panel.hidden && panel.inert));
   await page.keyboard.press('ArrowRight');
-  check('workspace tabs support keyboard selection and hide inactive controls', await page.locator('#studio-panel-settings').isVisible() && await page.locator('#story-builder').evaluate((panel) => panel.hidden && panel.inert));
-  await page.locator('[data-studio-tab=content]').click();
+  check('arrow keys move between the sidebar tabs (roving tabindex, the new tab is selected and focused)', await page.locator('[data-studio-tab=review]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.matches('[data-studio-tab=review]')) && await page.locator('[data-studio-tab=settings]').getAttribute('tabindex') === '-1');
+  check('the sidebar is a labelled tablist with a tabpanel for each tab', await page.locator('[role=tablist]').count() === 1 && await page.locator('[role=tab]:visible').count() === 5 && await page.locator('[role=tabpanel]').count() === 5 && await page.locator('[role=tabpanel][aria-labelledby]').count() === 5);
+  await openContent(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.locator('[data-studio-tab=review]').click();
   await Promise.all([page.waitForURL((url) => url.searchParams.get('n') === 'published'), page.locator('#publish-form button').click()]);
   const row = draft();
   check('local Publish creates a live modular story', row.status === 'published' && !!row.slug);
-  await page.locator('[data-studio-tab=content]').click();
+  await openContent(page);
   await page.waitForFunction(() => document.getElementById('preview')?.contentDocument?.querySelector('[data-module-id]'));
   check('published draft preview renders its saved title and modules from disabled fields', await page.frameLocator('#preview').locator('h1').textContent() === row.title && await page.frameLocator('#preview').locator('[data-module-id]').count() === expected.length);
   check('published draft preview has no editable canvas affordances', await page.frameLocator('#preview').locator('[data-module-id][tabindex], [data-preview-selected]').count() === 0);
@@ -489,8 +527,21 @@ try {
   };
   const publishLegacy = async () => {
     const data = new FormData(); data.set('version', String(legacyDraft().updated_at));
-    assert.equal((await post(`/api/admin/drafts/${legacyId}/publish`, data)).status, 303);
+    const publishResponse = await post(`/api/admin/drafts/${legacyId}/publish`, data);
+    assert.equal(publishResponse.status, 303);
+    assert.ok(!/[?&]e=/.test(publishResponse.headers.get('location') || ''), `publish was refused: ${publishResponse.headers.get('location')}`);
     await publicPage.goto(BASE + `/stories/${legacyDraft().slug}/`);
+  };
+  // A save is settled when nothing is in flight and the version has stopped moving (an autosave may overlap an explicit Save).
+  const settleSaves = async (pg) => {
+    let last = -1;
+    for (let i = 0; i < 20; i++) {
+      await pg.waitForFunction(() => !/Saving/.test(document.getElementById('save-status').textContent));
+      await pg.waitForTimeout(700);
+      const now = legacyDraft().updated_at;
+      if (now === last) return;
+      last = now;
+    }
   };
   await saveLegacy('one'); await publishLegacy();
   check('a legacy story with zero photos does not gain a dangling credit', !(await publicPage.locator('article').innerText()).includes(credit));
@@ -516,7 +567,7 @@ try {
   legacyId = await createLegacy();
   await saveLegacy('one'); await uploadLegacy(); await uploadLegacy();
   await page.goto(BASE + `/admin/drafts/${legacyId}`);
-  await page.locator('[data-studio-tab=content]').click();
+  await openContent(page);
   await page.locator('#f-body').fill('Before the inline photo.\n\nAfter the inline photo.');
   await page.locator('#f-body').evaluate((body) => { body.setSelectionRange(24, 24); });
   await page.locator('#inline-photo-choice').selectOption('2');
@@ -541,7 +592,7 @@ try {
   legacyId = await createLegacy();
   await saveLegacy('heroGrid'); await uploadLegacy(); await uploadLegacy(); await uploadLegacy();
   await page.goto(BASE + `/admin/drafts/${legacyId}`);
-  await page.locator('[data-studio-tab=content]').click();
+  await openContent(page);
   await page.locator('#f-body').fill('Before the gallery.\n\nAfter the gallery.');
   await page.locator('#gallery-photo-start').selectOption('3');
   await page.locator('#gallery-photo-end').selectOption('1');
@@ -564,8 +615,8 @@ try {
   await publicPage.keyboard.press('Escape');
   legacyId = await createLegacy(); await saveLegacy('twoUp'); await uploadLegacy(); await uploadLegacy();
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto(BASE + `/admin/drafts/${legacyId}`); await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
-  await page.locator('[data-add-module="gallery"]').click();
+  await page.goto(BASE + `/admin/drafts/${legacyId}`); await openContent(page); await splitModules(page);
+  await addModule(page, 'gallery');
   const visualBefore = JSON.parse(await page.locator('#story-blocks').inputValue());
   assert.equal(visualBefore.at(-1).type, 'gallery'); assert.equal(visualBefore.at(-1).photos.length, 2);
   check('Gallery module selects the available story photos and exposes labelled controls', visualBefore.at(-1).type === 'gallery' && visualBefore.at(-1).photos.length === 2 && await page.locator('#module-fields').getByLabel('Gallery columns', { exact: true }).count() === 1);
@@ -597,15 +648,15 @@ try {
   await page.locator('[name=announcementVideo]').fill('https://youtu.be/abcdefghijk');
   const flyerPhotoId = db.prepare('SELECT id FROM draft_photos WHERE draft_id=?').get(legacyId).id;
   await page.locator('[name="photo_' + flyerPhotoId + '_zoom"]').evaluate((el) => { el.value = '3'; });
-  await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
-  await page.locator('[data-add-module="flyer"]').click();
-  await page.locator('[data-studio-tab=photos]').click(); await page.locator('[name="photo_' + flyerPhotoId + '_alt"]').fill('Corrected synthetic flyer description'); await page.locator('[data-studio-tab=content]').click();
-  await page.locator('[data-add-module="video"]').click(); await page.locator('[data-module-field=label]').fill('Synthetic event overview'); await page.locator('[data-module-field=url]').fill('https://vimeo.com/12345678');
-  await page.locator('[data-add-module="button"]').click(); await page.locator('[data-module-field=label]').fill('Event page'); await page.locator('[data-module-field=url]').fill('https://example.invalid/event');
+  await openContent(page); await splitModules(page);
+  await addModule(page, 'flyer');
+  await openPhotos(page); await page.locator('[name="photo_' + flyerPhotoId + '_alt"]').fill('Corrected synthetic flyer description'); await openContent(page);
+  await addModule(page, 'video'); await page.locator('[data-module-field=label]').fill('Synthetic event overview'); await page.locator('[data-module-field=url]').fill('https://vimeo.com/12345678');
+  await addModule(page, 'button'); await page.locator('[data-module-field=label]').fill('Event page'); await page.locator('[data-module-field=url]').fill('https://example.invalid/event');
   await page.waitForFunction(() => { const doc = document.getElementById('preview')?.contentDocument; return doc?.querySelector('.story-flyer img') && doc.querySelectorAll('.story-module-video a').length === 2; });
   check('announcement private preview shows the full flyer and safe provider links without players', await page.frameLocator('#preview').locator('iframe,[data-load-video]').count() === 0 && await page.frameLocator('#preview').locator('.story-flyer img').evaluate((img) => img.alt === 'Corrected synthetic flyer description' && !img.style.scale && !img.style.aspectRatio.includes('16')));
   const announcementSave = page.waitForResponse((response) => response.url() === BASE + `/api/admin/drafts/${legacyId}/save` && response.request().method() === 'POST');
-  await page.locator('#save-btn').click(); assert.equal((await announcementSave).status(), 200); await publishLegacy();
+  await page.locator('#save-btn').click(); assert.equal((await announcementSave).status(), 200); await settleSaves(page); await publishLegacy();
   check('announcement publishes details, module links and one uncropped flyer', await publicPage.locator('.story-flyer img').count() === 1 && await publicPage.locator('article img').count() === 1 && (await publicPage.locator('.announcement-details').innerText()).includes('Synthetic Hall <north>') && await publicPage.getByRole('link', { name: 'Event page', exact: true }).count() === 1);
   check('announcement video players make no embedded request before reader action', await publicPage.locator('iframe').count() === 0 && await publicPage.locator('[data-load-video]').count() === 2);
   const mediaFeed = await (await fetch(BASE + '/stories.json')).json();
@@ -664,8 +715,8 @@ try {
   const boardAfter = await (await fetch(BASE + '/announcements/')).text();
   check('unpublish immediately invalidates cached board and removes that announcement', !boardAfter.includes('data-board-kind="announcement"') && boardAfter.includes('data-board-kind="event"'));
   legacyId = await createLegacy(); await saveLegacy('one'); await uploadLegacy();
-  await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(BASE + `/admin/drafts/${legacyId}`); await page.locator('[data-studio-tab=content]').click(); await page.locator('#use-modules').click();
-  await page.locator('[data-add-module=section]').click();
+  await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(BASE + `/admin/drafts/${legacyId}`); await openContent(page); await splitModules(page);
+  await addModule(page, 'section');
   const sectionState = JSON.parse(await page.locator('#story-blocks').inputValue()), section = sectionState.at(-1);
   check('Section inserts two columns with distinct stable paragraph IDs', section.type === 'section' && section.content.length === 2 && section.content[0][0].id !== section.content[1][0].id && await page.locator('#module-count').textContent() === '4');
   const choose = async (id) => page.locator(`[data-select-module="${id}"]`).click();
@@ -675,7 +726,7 @@ try {
   check('keyboard formatting wraps only selected text and preserves selection/focus', await page.locator('[data-module-field=text]').evaluate((el) => el === document.activeElement && el.value === 'Synthetic **left** column text.' && el.value.slice(el.selectionStart, el.selectionEnd) === 'left'));
   await page.getByLabel('Text alignment', { exact: true }).selectOption('center'); await page.getByLabel('Module spacing', { exact: true }).selectOption('relaxed');
   await page.locator('#blocks-undo').click(); check('formatting settings are atomic undo changes', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0][0].spacing === undefined); await page.locator('#blocks-redo').click();
-  await page.locator('[data-add-module=image]').click();
+  await addModule(page, 'image');
   await choose(section.content[1][0].id); await page.locator('[data-module-field=text]').fill('Synthetic right column text.');
   const beforeCrossDrop = await page.locator('#story-blocks').inputValue();
   await page.locator(`#module-outline [data-module-id="${section.content[0][0].id}"]`).evaluate((target, id) => { const dataTransfer = new DataTransfer(); dataTransfer.setData('text/plain', id); target.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer })); }, section.content[1][0].id);
@@ -692,9 +743,11 @@ try {
   check('changing to one column preserves all children in reading order', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0].length === 3);
   await page.locator('#blocks-undo').click();
   await page.waitForFunction((id) => document.getElementById('preview')?.contentDocument?.querySelector(`[data-module-id="${id}"]`), section.content[1][0].id);
+  await openPreview(page);
   await page.frameLocator('#preview').locator(`[data-module-id="${section.content[1][0].id}"]`).focus(); await page.frameLocator('#preview').locator(`[data-module-id="${section.content[1][0].id}"]`).press('Enter');
   check('keyboard canvas selection opens a nested child inspector', await page.locator('[data-module-field=text]').inputValue() === 'Synthetic right column text.');
   const beforeLayout = await page.locator('#story-blocks').inputValue();
+  await openTab(page, 'modules');
   await page.locator('#saved-layout-name').fill('Synthetic <layout>');
   const savedLayoutResponse = page.waitForResponse((r) => r.url() === BASE + '/api/admin/layouts' && r.request().method() === 'POST');
   await page.locator('#save-story-layout').click(); const savedLayoutJson = await (await savedLayoutResponse).json();
@@ -713,6 +766,7 @@ try {
   const layoutWalk = (blocks) => blocks.flatMap((b) => [b, ...(b.content?.flatMap(layoutWalk) ?? [])]); const allLayoutNodes = layoutWalk(afterLayout);
   check('inserting a saved section structure preserves original content and generates all new IDs', afterLayout.length > JSON.parse(beforeLayout).length && new Set(allLayoutNodes.map((b) => b.id)).size === allLayoutNodes.length && JSON.stringify(afterLayout.slice(0, 2)) === beforeLayout);
   await page.locator('#blocks-undo').click(); check('saved layout insertion is one undo change', await page.locator('#story-blocks').inputValue() === beforeLayout);
+  await openTab(page, 'modules');
   await page.locator('#delete-story-layout').click(); await page.waitForFunction(() => document.getElementById('saved-layout-choice')?.options.length === 1);
   check('saved layout deletion persists without deleting story content', await page.locator('#story-blocks').inputValue() === beforeLayout && (await (await fetch(BASE + '/api/admin/layouts', { headers: { Cookie: `__Host-imc_session=${token}` } })).json()).layouts.length === 0);
   // Match the save that carries the post-undo blocks, not an earlier in-flight autosave.
@@ -720,6 +774,162 @@ try {
   for (const [width, columns] of [[1440, 2], [390, 1]]) { await publicPage.setViewportSize({ width, height: 1000 }); check(`section reads in ${columns} columns at ${width}px`, await publicPage.locator('.story-section').evaluate((el, n) => getComputedStyle(el).gridTemplateColumns.split(' ').length === n && el.textContent.indexOf('left column') < el.textContent.indexOf('right column') && document.documentElement.scrollWidth <= innerWidth, columns)); if (shots) await publicPage.screenshot({ path: path.join(shots, `story-sections-${width}.png`), fullPage: true }); }
   check('public selected-text formatting and finite alignment/spacing survive publish', await publicPage.locator('.story-section [data-align=center]').evaluate((el) => getComputedStyle(el).textAlign === 'center' && getComputedStyle(el).marginBlockStart === '40px' && el.querySelector('strong').textContent === 'left'));
   check('nested image appears once and section source order survives publishing', await publicPage.locator('article img').count() === 1 && await publicPage.locator('.story-section img').count() === 1);
+
+  // An agent draft: opening the editor and moving around it must not touch it (no save on load), so a later agent update still lands (no 409).
+  {
+    const agentCreated = await post('/api/admin/drafts/new', new FormData());
+    const agentId = Number(agentCreated.headers.get('location').split('/').pop());
+    db.prepare("UPDATE drafts SET source='agent', status='new', title='Synthetic agent draft', body='Synthetic agent body text.', author='Staff Writer', section='news', area='conference', date=?, agent_note='Synthetic agent note.', updated_by=NULL WHERE id=?").run(new Date().toISOString().slice(0, 10), agentId);
+    const snapshot = () => JSON.stringify(db.prepare('SELECT updated_at, status, updated_by, title, body FROM drafts WHERE id=?').get(agentId));
+    const before = snapshot();
+    const layoutKey = 'imc.storyEditor.layout.v1';
+    const layoutAction = async (name) => { await page.locator('#ed-layout-button').click(); await page.getByRole('button', { name, exact: true }).click(); };
+    const storedLayout = () => page.evaluate((key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return 'unreadable'; } }, layoutKey);
+    const sidebarBox = () => page.locator('.ed-sidebar').boundingBox();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    await page.evaluate((key) => localStorage.removeItem(key), layoutKey);
+    await page.reload();
+    await page.waitForFunction(() => document.getElementById('preview')?.srcdoc?.length > 50);
+    check('an agent draft opens with its Markdown Body text editor in the canvas and Split into modules offered in the sidebar', await page.locator('#f-body').isVisible() && await page.locator('[data-split-modules]').isVisible() && await page.locator('#use-modules').isVisible() && await page.locator('[data-studio-tab=module]').isHidden());
+    await openTab(page, 'settings');
+    check('the agent note is under Story settings, in Submitter & notes', (await page.locator('#studio-panel-notes').innerText()).includes('Synthetic agent note.'));
+    for (const tab of ['review', 'history', 'modules', 'settings']) await openTab(page, tab);
+    await page.locator('#f-body').focus(); await page.locator('[data-studio-preview]').first().click(); await closePreview(page);
+    await page.waitForTimeout(1500);
+    check('opening an agent draft, switching tabs and opening Preview changes nothing (no save on load, same version, status and editor)', snapshot() === before);
+
+    // The top bar: section nav, Publish, and the status chip.
+    await page.locator('[data-editor-nav=settings]').click();
+    check('the "Story settings" link opens that sidebar tab and is marked current', await page.locator('[data-studio-tab=settings]').getAttribute('aria-selected') === 'true' && await page.locator('[data-editor-nav=settings]').getAttribute('aria-current') === 'true' && !(await page.locator('[data-editor-nav=editor]').getAttribute('aria-current')));
+    await page.locator('.ed-publish').click();
+    check('Publish opens the Publishing tab and focuses the existing publish button without publishing', await page.locator('[data-studio-tab=review]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => document.activeElement?.matches('#publish-form button')) && db.prepare('SELECT status FROM drafts WHERE id=?').get(agentId).status === 'new' && await page.locator('[data-editor-nav=review]').getAttribute('aria-current') === 'true');
+    check('the status chip says New for a fresh agent draft', (await page.locator('[data-editor-chip]').innerText()) === 'New');
+
+    // The layout menu and the movable sidebar.
+    const defaultBox = await sidebarBox();
+    check('the sidebar starts on the right, 380px wide, and the resize handle reports it', Math.abs(defaultBox.width - 380) < 2 && await page.locator('.editor-studio').getAttribute('data-side') === 'right' && await page.locator('#ed-resize').getAttribute('aria-valuenow') === '380' && await page.locator('#ed-resize').getAttribute('role') === 'separator' && await page.locator('#ed-resize').getAttribute('aria-orientation') === 'vertical');
+    await page.locator('#ed-layout-button').click();
+    check('Layout options is a button with aria-expanded that opens a labelled group', await page.locator('#ed-layout-button').getAttribute('aria-expanded') === 'true' && await page.locator('#ed-layout-menu').isVisible() && await page.locator('#ed-layout-menu').getAttribute('role') === 'group');
+    await page.keyboard.press('Escape');
+    check('Escape closes the layout menu and returns focus to its button', await page.locator('#ed-layout-menu').isHidden() && await page.locator('#ed-layout-button').getAttribute('aria-expanded') === 'false' && await page.evaluate(() => document.activeElement?.id === 'ed-layout-button'));
+    await layoutAction('Sidebar wider');
+    check('Sidebar wider adds one 40px step', Math.abs((await sidebarBox()).width - 420) < 2 && (await storedLayout()).width === 420);
+    await layoutAction('Sidebar narrower'); await layoutAction('Sidebar narrower');
+    check('Sidebar narrower removes steps', Math.abs((await sidebarBox()).width - 340) < 2);
+    await page.locator('#ed-resize').focus();
+    for (let i = 0; i < 12; i++) await page.keyboard.press('ArrowRight');
+    check('the resize handle stops at the 300px minimum, which disables Sidebar narrower', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '300' && await page.locator('[data-layout-action=narrower]').isDisabled());
+    await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowLeft');
+    check('arrow keys on the focused handle resize by 40px (Left widens a right-hand sidebar)', await page.locator('#ed-resize').getAttribute('aria-valuenow') === '380' && Math.abs((await sidebarBox()).width - 380) < 2);
+    await page.keyboard.press('End');
+    const maxNow = Number(await page.locator('#ed-resize').getAttribute('aria-valuenow'));
+    const bodyWidth = (await page.locator('#ed-body').boundingBox()).width;
+    check('the sidebar never takes more than half the body, and Sidebar wider is disabled at that limit', maxNow <= 600 && maxNow <= Math.floor(bodyWidth / 2) + 1 && await page.locator('[data-layout-action=wider]').isDisabled());
+    await page.locator('#ed-resize').focus(); await page.keyboard.press('Home');
+    const handleBox = await page.locator('#ed-resize').boundingBox();
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 200); await page.mouse.down(); await page.mouse.move(handleBox.x - 120, handleBox.y + 200, { steps: 5 }); await page.mouse.up();
+    { const dragged = (await sidebarBox()).width; check('dragging the edge resizes the sidebar and remembers the width', dragged > 400 && dragged < 480 && Math.abs((await storedLayout()).width - dragged) < 2); }
+    await layoutAction('Move sidebar to the left');
+    const leftSide = await sidebarBox(), canvasLeft = await page.locator('.ed-canvas').boundingBox();
+    check('Move sidebar to the left puts it before the canvas', leftSide.x < canvasLeft.x && await page.locator('.editor-studio').getAttribute('data-side') === 'left' && (await storedLayout()).side === 'left' && (await page.locator('[data-layout-action=side]').textContent()) === 'Move sidebar to the right');
+    await page.screenshot({ path: path.join(shots || scratch, 'v4-sidebar-left-1280.png') });
+    await layoutAction('Hide sidebar');
+    check('Hide sidebar leaves a slim rail with Show sidebar and the canvas takes the width', await page.locator('.ed-sidebar').isHidden() && await page.locator('#ed-rail').isVisible() && await page.locator('#ed-rail').getByRole('button', { name: 'Show sidebar' }).isVisible() && (await storedLayout()).sidebarVisible === false);
+    await page.reload();
+    check('the layout (hidden, left) is remembered across a reload', await page.locator('.ed-sidebar').isHidden() && await page.locator('.editor-studio').getAttribute('data-side') === 'left');
+    await page.locator('.ed-publish').click();
+    check('Publish shows a hidden sidebar and focuses the publish button', await page.locator('.ed-sidebar').isVisible() && await page.evaluate(() => document.activeElement?.matches('#publish-form button')));
+    await layoutAction('Reset layout');
+    check('Reset layout restores the defaults and forgets the stored layout', await page.locator('.editor-studio').getAttribute('data-side') === 'right' && Math.abs((await sidebarBox()).width - 380) < 2 && (await storedLayout()) === null);
+    for (const bad of ['{not json', '{"sidebarVisible":"yes","side":"up","width":"wide"}', '{"width":99999,"side":"left"}', 'null', '[]']) {
+      await page.evaluate(([key, value]) => localStorage.setItem(key, value), [layoutKey, bad]);
+      await page.reload();
+      const width = Number(await page.locator('#ed-resize').getAttribute('aria-valuenow'));
+      const side = await page.locator('.editor-studio').getAttribute('data-side');
+      const expectedSide = bad.includes('"left"') ? 'left' : 'right';
+      check(`a stored layout of ${bad.slice(0, 24)} falls back per part to a valid layout`, await page.locator('.ed-sidebar').isVisible() && side === expectedSide && width >= 300 && width <= 600 && (bad.includes('99999') ? width <= Math.floor(bodyWidth / 2) + 1 : width === 380));
+    }
+    await page.evaluate((key) => localStorage.removeItem(key), layoutKey);
+    await page.reload();
+    check('the Layout options menu items are all buttons and the hint mentions dragging and arrow keys', await page.locator('#ed-layout-button').click().then(() => page.locator('#ed-layout-menu button').count()) === 5 && (await page.locator('#ed-layout-menu .ed-hint').innerText()).includes('drag the sidebar') && (await page.locator('#ed-layout-menu .ed-hint').innerText()).includes('remembered in this browser'));
+    await page.screenshot({ path: path.join(shots || scratch, 'v4-layout-menu-1280.png') });
+    await page.keyboard.press('Escape');
+
+    // Publishing: the problem list is live and links focus real controls; marker problems ignore code blocks.
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    await openTab(page, 'review');
+    check('with a complete draft the Publishing tab says there are no problems', await page.locator('.ed-ok').isVisible() && await page.locator('.ed-problems').isHidden());
+    await page.locator('#f-title').fill('');
+    check('clearing the headline shows "Headline is missing" in Publishing at once', await page.locator('[data-problem=title]').isVisible() && await page.locator('.ed-ok').isHidden());
+    await page.locator('[data-problem=title] a').click();
+    check('the problem link focuses the headline field in the canvas', await page.evaluate(() => document.activeElement?.id === 'f-title'));
+    await page.locator('#f-title').fill('Synthetic agent draft');
+    await openTab(page, 'review');
+    check('...and the problem disappears when the headline is filled again', await page.locator('[data-problem=title]').isHidden() && await page.locator('.ed-ok').isVisible());
+    await page.locator('#f-body').fill('Synthetic text.\n\n```\n{{photo 9}}\n```\n\n    {{photo 8}}\n\nMore text.');
+    db.prepare('UPDATE drafts SET body=? WHERE id=?').run('Synthetic text.\n\n```\n{{photo 9}}\n```\n\n    {{photo 8}}\n\nMore text.', agentId);
+    await page.goto(BASE + `/admin/drafts/${agentId}`); await openTab(page, 'review');
+    check('marker-like lines inside fenced and indented code are not reported as problems', await page.locator('.ed-problems a', { hasText: 'marker' }).count() === 0);
+    db.prepare('UPDATE drafts SET body=? WHERE id=?').run('Synthetic text.\n\n{{photo 9}}\n\nMore text.', agentId);
+    await page.goto(BASE + `/admin/drafts/${agentId}`); await openTab(page, 'review');
+    check('a live marker that matches no photo is reported, as a link to the story text', await page.locator('.ed-problems a', { hasText: 'marker' }).count() === 1);
+    await page.locator('.ed-problems a', { hasText: 'marker' }).click();
+    check('the marker problem focuses the Story card', await page.evaluate(() => !!document.activeElement?.closest('#story-builder')));
+    db.prepare('UPDATE drafts SET body=?, updated_at=? WHERE id=?').run('Synthetic agent body text.', Number(JSON.parse(before).updated_at), agentId);
+    check('44px targets in the top bar, canvas and sidebar', await page.evaluate(() => [...document.querySelectorAll('#ed-bar button, #ed-bar a, .ed-tab, .ed-problems a, .ed-sidebar button, .ed-insert, .ed-btn')].filter((el) => el.getBoundingClientRect().width > 0 && !el.closest('[hidden]')).every((el) => el.getBoundingClientRect().height >= 43.5)));
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    check('sidebar tab panels and dots carry no stale status text (the dots are gone with the outline)', await page.locator('.ed-dot').count() === 0);
+
+    // Keyboard: "/" focuses the module search for a module story; it types normally in fields.
+    // No horizontal scroll at the five widths, on every sidebar tab.
+    for (const width of [360, 768, 1024, 1280, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(BASE + `/admin/drafts/${agentId}`);
+      const results = [];
+      for (const tab of ['modules', 'settings', 'review', 'history']) { await openTab(page, tab); results.push(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)); }
+      check(`no horizontal scroll at ${width}px on any sidebar tab of an agent draft`, results.every(Boolean));
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(BASE + `/admin/drafts/${agentId}`);
+    await page.waitForTimeout(500);
+    check('after all of that the agent draft is still untouched, so an agent update would still land', snapshot() === before);
+  }
+
+  // Split into modules and back: the pressed button disappears, so focus must move on, and sidebar-only fields must save (autosave, and natively without JavaScript).
+  {
+    legacyId = await createLegacy(); await saveLegacy('one');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(BASE + `/admin/drafts/${legacyId}`);
+    await page.locator('[data-split-modules]').click();
+    check('after the canvas Split into modules button, Module settings opens with focus on the first module field', await page.locator('[data-studio-tab=module]').getAttribute('aria-selected') === 'true' && await page.evaluate(() => !!document.activeElement?.closest('#module-fields')));
+    await openTab(page, 'modules');
+    await page.locator('#use-markdown').click();
+    check('after Switch to Markdown, focus moves to the Markdown text field', await page.evaluate(() => document.activeElement?.id === 'f-body'));
+    await page.locator('#blocks-undo').click();
+    await page.locator('#blocks-undo').click().catch(() => {});
+    // Autosave of a field that only exists in the sidebar (Author title), without pressing Save.
+    legacyId = await createLegacy(); await saveLegacy('one');
+    await page.goto(BASE + `/admin/drafts/${legacyId}`);
+    await openTab(page, 'settings');
+    await page.locator('input[name=authorTitle]').fill('Synthetic Director');
+    await page.locator('input[name=newsletterPosition]').fill('3');
+    await page.waitForFunction(() => /Last saved \d/.test(document.getElementById('save-status').textContent), null, { timeout: 30000 }).catch(() => {});
+    for (let i = 0; i < 60 && legacyDraft().author_title !== 'Synthetic Director'; i++) await page.waitForTimeout(500);
+    check('autosave stores a change made only in the sidebar Story settings', legacyDraft().author_title === 'Synthetic Director');
+    // No JavaScript: a sidebar field and a canvas field both submit with the native Save.
+    const plain = await context.browser().newContext({ viewport: { width: 1280, height: 900 }, javaScriptEnabled: false });
+    await plain.addCookies(await context.cookies());
+    const plainPage = await plain.newPage();
+    await plainPage.goto(BASE + `/admin/drafts/${legacyId}`);
+    check('without JavaScript every Story settings, Publishing and History panel is shown and the JavaScript-only parts are not', await plainPage.locator('#studio-panel-settings').isVisible() && await plainPage.locator('#studio-panel-review').isVisible() && await plainPage.locator('#studio-panel-history').isVisible() && await plainPage.locator('#studio-panel-modules').isHidden());
+    await plainPage.locator('input[name=author]').fill('Synthetic Plain Author');
+    await plainPage.locator('input[name=title]').fill('Synthetic plain title');
+    const [plainResponse] = await Promise.all([plainPage.waitForResponse((r) => r.url().includes(`/api/admin/drafts/${legacyId}/save`)), plainPage.locator('#save-btn').click()]);
+    check('without JavaScript a sidebar field (author) and a canvas field (title) both save with the native Save', plainResponse.status() === 200 && legacyDraft().author === 'Synthetic Plain Author' && legacyDraft().title === 'Synthetic plain title');
+    await plain.close();
+  }
+
   // Saved history must survive a reload and save unsaved edits before restoring.
   legacyId = await createLegacy();
   const revisionBaseline = 'Synthetic saved revision baseline.';
@@ -731,8 +941,7 @@ try {
   const revisionTarget = db.prepare('SELECT id FROM draft_revisions WHERE draft_id=? AND json_extract(payload,\'$.fields.body\')=? ORDER BY id DESC LIMIT 1').get(legacyId, revisionBaseline).id;
   await page.reload();
   await page.locator('#f-body').fill('Synthetic unsaved edits preserved before restore.');
-  await page.locator('[data-studio-tab=review]').click();
-  await page.getByText('Saved revision history', { exact: true }).click();
+  await page.locator('[data-studio-tab=history]').click();
   await page.waitForFunction((id) => [...document.getElementById('draft-revision-choice').options].some((o) => o.value === String(id)), revisionTarget);
   await page.locator('#draft-revision-choice').selectOption(String(revisionTarget));
   if (axePath) {
@@ -763,9 +972,9 @@ try {
   await page.waitForFunction(() => document.getElementById('draft-revision-status').textContent === 'Synthetic restore unavailable.');
   check('failed restore re-enables the editor and retry without losing saved edits', !(await page.locator('#f-body').isDisabled()) && !(await page.locator('#restore-draft-revision').isDisabled()) && !(await page.locator('.editor-studio').evaluate((el) => el.inert)) && legacyDraft().body === 'Synthetic unsaved edits preserved before restore.');
   await page.locator('#restore-draft-revision').click();
-  await page.waitForURL('**?revision_restored=1#review');
+  await page.waitForURL('**?revision_restored=1#history');
   await page.unroute(restoreUrl, holdRestore);
-  check('restoring a persisted revision returns to Review with visible confirmation', await page.locator('#revision-restored').isVisible() && await page.locator('#studio-panel-review').isVisible() && legacyDraft().body === revisionBaseline);
+  check('restoring a persisted revision returns to History with visible confirmation', await page.locator('#revision-restored').isVisible() && await page.locator('#studio-panel-history').isVisible() && legacyDraft().body === revisionBaseline);
   check('restore first saves unsaved edits into recoverable history without publishing', !!db.prepare('SELECT id FROM draft_revisions WHERE draft_id=? AND json_extract(payload,\'$.fields.body\')=?').get(legacyId, 'Synthetic unsaved edits preserved before restore.') && legacyDraft().status === 'in_review' && legacyDraft().slug === null);
   const history = await (await fetch(BASE + `/api/admin/drafts/${legacyId}/revisions`, { headers: { Cookie: `__Host-imc_session=${token}` } })).json();
   check('history API returns metadata only', history.ok && history.revisions.length >= 3 && history.revisions.every((r) => Object.keys(r).sort().join(',') === 'createdAt,editor,id'));
@@ -788,13 +997,12 @@ try {
   await uploadLegacy();
   const replacementPhoto = db.prepare('SELECT id,media_key FROM draft_photos WHERE draft_id=?').get(legacyId);
   check('browser missing-media fixture reuses the deleted photo ID with a fresh identity', replacementPhoto.id === removedPhoto.id && replacementPhoto.media_key !== removedPhoto.media_key);
-  await page.goto(BASE + `/admin/drafts/${legacyId}#review`);
-  await page.getByText('Saved revision history', { exact: true }).click();
+  await page.goto(BASE + `/admin/drafts/${legacyId}#history`);
   await page.waitForFunction((id) => [...document.getElementById('draft-revision-choice').options].some((o) => o.value === String(id)), photoRevision);
   await page.locator('#draft-revision-choice').selectOption(String(photoRevision));
   await page.locator('#restore-draft-revision').click();
-  await page.waitForURL('**?revision_restored=1&missing_media=1#review');
-  check('missing-media warning stays visible outside the closed history disclosure', await page.locator('#revision-missing-media').isVisible() && !(await page.locator('details').filter({ has: page.locator('#draft-revision-choice') }).evaluate((el) => el.open)));
+  await page.waitForURL('**?revision_restored=1&missing_media=1#history');
+  check('missing-media warning stays visible outside the history disclosure', await page.locator('#revision-missing-media').isVisible() && await page.locator('#revision-missing-media').evaluate((el) => !el.closest('details')));
   check('restored missing marker cannot silently bind a replacement upload', legacyDraft().body === 'Synthetic older photo.\n\n{{photo missing}}' && db.prepare('SELECT media_key FROM draft_photos WHERE draft_id=?').get(legacyId).media_key === replacementPhoto.media_key);
   if (shots) await page.screenshot({ path: path.join(shots, 'story-revision-history.png'), fullPage: true });
   const brokenData = path.join(scratch, 'synthetic-broken-db'); fs.mkdirSync(brokenData); fs.writeFileSync(path.join(brokenData, 'imconnected.db'), 'synthetic invalid sqlite fixture');

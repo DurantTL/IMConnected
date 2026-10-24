@@ -1,3 +1,4 @@
+import { editorBus } from './editor-bus';
 import { isStoryButtonUrl, checkStoryBlockLength, walkStoryBlocks, mapStoryBlocks, countStoryBlocks, findStoryBlockLocation, STORY_BLOCK_LIMIT, splitMarkdownIntoModules, storyBlocksToMarkdown, type StoryBlock } from '../lib/story-blocks';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
@@ -32,14 +33,9 @@ if (form && blocksField) {
   const useModules = document.getElementById('use-modules') as HTMLButtonElement;
   const useMarkdown = document.getElementById('use-markdown') as HTMLButtonElement;
   const split = document.getElementById('split')!;
-  const writePane = split.querySelector<HTMLElement>('.ed-write')!;
-  const previewPane = split.querySelector<HTMLElement>('.ed-preview')!;
-  const inspector = document.getElementById('module-inspector')!;
-  const compact = window.matchMedia('(max-width: 1100px)');
-  const library = document.querySelector<HTMLDetailsElement>('.sb-library-disclosure')!;
-  const phone = window.matchMedia('(max-width: 650px)');
-  if (phone.matches) library.open = false;
-  phone.addEventListener('change', () => { library.open = !phone.matches; });
+  const moduleCanvas = document.getElementById('module-canvas')!;
+  const markdownSplit = document.getElementById('markdown-split');
+  const moduleTab = document.querySelector<HTMLElement>('[data-studio-tab="module"]');
   const editable = !form.querySelector('fieldset')?.disabled;
   type Photo = { id: number; src: string; alt: string; focalX: number; focalY: number; zoom: number; fit?: 'cover' | 'contain'; fitFill?: 'blur' | 'paper' | 'navy' };
   const builderData = JSON.parse(document.getElementById('story-builder-data')?.textContent || '{"photos":[]}');
@@ -65,7 +61,7 @@ if (form && blocksField) {
     const target = modular
       ? outline.querySelector<HTMLButtonElement>(`[data-select-module="${CSS.escape(selected)}"]`) || document.querySelector<HTMLButtonElement>('[data-add-module="text"]')
       : useModules;
-    if (target?.closest('.sb-library-disclosure')) library.open = true;
+    if (target?.closest('.sb-library-disclosure')) editorBus.showTab('modules');
     target?.focus();
   }
   function remember(key = '') {
@@ -86,20 +82,24 @@ if (form && blocksField) {
       catch (error) { announce(error instanceof Error ? error.message : 'Check the module settings before saving.'); }
     }
     split.dataset.mode = modular ? 'modules' : 'markdown';
-    const writeTab = document.querySelector('[data-view=write]');
-    if (writeTab) writeTab.textContent = modular ? 'Build' : 'Write';
     workspace.hidden = !modular;
     markdown.hidden = modular;
-    syncPanes();
+    moduleCanvas.hidden = !modular;
+    if (markdownSplit) markdownSplit.hidden = modular;
+    if (moduleTab) moduleTab.hidden = !modular;
     highlightCanvas();
     useModules.setAttribute('aria-pressed', String(modular));
     useMarkdown.setAttribute('aria-pressed', String(!modular));
-    useModules.textContent = modular ? 'Modules active' : 'Use modules';
+    useModules.textContent = modular ? 'Modules active' : 'Split into modules';
     useMarkdown.textContent = modular ? 'Switch to Markdown' : 'Markdown active';
+    // Undo and redo appear for module stories, and while a Markdown/module switch can still be undone.
+    const undoGroup = undo.closest<HTMLElement>('.ed-undo');
+    if (undoGroup) undoGroup.hidden = !modular && !history.length && !future.length;
     undo.disabled = !editable || !history.length;
     redo.disabled = !editable || !future.length;
     const count = document.getElementById('module-count');
-    if (count) count.textContent = String(countStoryBlocks(blocks));
+    if (count) count.textContent = modular ? String(countStoryBlocks(blocks)) : '';
+    for (const rail of document.querySelectorAll<HTMLElement>('[data-rail-add]')) rail.hidden = !modular;
     const summary = document.querySelector('[data-review-content]');
     if (summary) summary.textContent = modular ? `${countStoryBlocks(blocks)} modules` : 'Markdown story';
     const start = document.getElementById('module-start-writing');
@@ -140,10 +140,11 @@ if (form && blocksField) {
       item.dataset.moduleId = block.id;
       if (column !== undefined) item.style.marginLeft = '16px';
       // No aria-label: the visible text ("1. Paragraph ...") is the accessible name (WCAG 2.5.3 label in name).
-      const select = button(`${display}. ${labels[block.type]}${column !== undefined ? ` · Column ${column + 1}` : ''}`, () => { selected = block.id; render(); focusSelected(); });
+      const select = button(`${display}. ${labels[block.type]}${column !== undefined ? ` · Column ${column + 1}` : ''}`, () => { selected = block.id; editorBus.showTab('module'); render(); focusSelected(); revealInPreview(); });
       select.dataset.selectModule = block.id;
       const grip = node('span', '⠿', 'sb-grip'); grip.setAttribute('aria-hidden', 'true'); select.prepend(grip);
       select.setAttribute('aria-pressed', String(selected === block.id));
+      if (selected === block.id) select.setAttribute('aria-current', 'true');
       select.className = 'sb-select-module';
       const summary = block.text || block.label || (block.type === 'image' ? photos.find((p) => p.id === block.photoId)?.alt : '') || '';
       if (summary) select.append(node('small', summary.slice(0, 64)));
@@ -171,6 +172,13 @@ if (form && blocksField) {
       });
       outline.append(item);
       for (const [col, children] of (block.content ?? []).entries()) renderList(children, col);
+      if (column === undefined) {
+        const row = node('li', undefined, 'ed-insert-row');
+        const insert = button('', () => { selected = block.id; render(); editorBus.showTab('modules'); document.getElementById('module-library-search')?.focus(); }, `Insert a module after module ${display}`);
+        insert.className = 'ed-insert'; insert.dataset.insertAfter = block.id;
+        const plus = node('span', '+'); plus.setAttribute('aria-hidden', 'true'); insert.append(plus);
+        row.append(insert); outline.append(row);
+      }
     } };
     renderList(blocks);
   }
@@ -328,7 +336,7 @@ if (form && blocksField) {
       field(block, 'Image description (alt text)', 'alt', block.alt || '');
       if (block.type === 'flyer') fields.append(node('p', 'Leave the description empty to follow the current photo description in Photo studio.', 'admin-note'));
       fields.append(node('p', block.type === 'flyer' ? 'Flyers show the whole image so its text stays visible. Add a text summary to the story for accessibility.' : 'This photo appears here in the story text. Adjust its focal point in the Photo studio.', 'admin-note'));
-      fields.append(button('Open Photo studio', () => setPanel('photos', true)));
+      fields.append(button('Open Photo studio', () => { const heading = document.getElementById('ed-photos-heading'); heading?.scrollIntoView({ block: 'start' }); heading?.focus(); }));
     }
     if (block.type === 'divider') fields.append(node('p', 'A simple divider gives the next part of your story room to breathe.', 'admin-note'));
     const settings = node('div', undefined, 'sb-controls');
@@ -352,15 +360,6 @@ if (form && blocksField) {
     fields.append(actions);
   }
   function render() { sync(); renderOutline(); renderFields(); }
-  function syncPanes() {
-    const previewOnly = compact.matches && split.dataset.view === 'preview';
-    for (const [pane, visible] of [[writePane, !previewOnly], [previewPane, !compact.matches || previewOnly], [inspector, modular && !previewOnly]] as const) {
-      pane.hidden = !visible;
-      pane.inert = !visible;
-    }
-  }
-  compact.addEventListener('change', syncPanes);
-  new MutationObserver(syncPanes).observe(split, { attributes: true, attributeFilter: ['data-view'] });
   const librarySearch = document.getElementById('module-library-search') as HTMLInputElement;
   const libraryReset = document.getElementById('module-library-reset') as HTMLButtonElement;
   const libraryCategory = document.getElementById('module-library-category') as HTMLSelectElement;
@@ -416,7 +415,7 @@ if (form && blocksField) {
     const at = findStoryBlockLocation(blocks, selected);
     (at?.siblings ?? blocks).splice(at ? at.index + 1 : blocks.length, 0, ...added);
     selected = added[0].id;
-    render(); changed();
+    render(); changed(); editorBus.showTab('module');
     fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
     announce(`${layout.label} inserted after the selected module. ${added.length} empty modules added; existing content is kept.`);
   });
@@ -454,7 +453,7 @@ if (form && blocksField) {
     // A structure containing sections stays at the root; sections cannot nest.
     const target = added.some((b) => b.type === 'section') && at?.section ? findStoryBlockLocation(blocks, at.section.id) : at;
     remember(); (target?.siblings ?? blocks).splice(target ? target.index + 1 : blocks.length, 0, ...added); selected = added[0].id;
-    render(); changed(); focusSelected(); announce('Saved structure inserted. Fill in its content and choose photos.');
+    render(); changed(); editorBus.showTab('module'); focusSelected(); announce('Saved structure inserted. Fill in its content and choose photos.');
   });
   document.getElementById('delete-story-layout')?.addEventListener('click', async () => {
     if (!editable || !layoutChoice.value || !window.confirm('Delete this saved layout?')) return;
@@ -469,6 +468,9 @@ if (form && blocksField) {
     blocks = splitMarkdownIntoModules(body.value).map((text) => ({ id: uid(), type: 'text' as const, text }));
     selected = blocks[0].id;
     render(); changed(); announce('Modules enabled. Your existing Markdown is preserved in the first paragraph module.');
+    // The button that was pressed is gone (the Markdown editor is hidden): continue in the first module's settings.
+    editorBus.showTab('module');
+    (fields.querySelector<HTMLElement>('textarea,input,select') ?? outline.querySelector<HTMLElement>('[data-select-module]'))?.focus();
   });
   useMarkdown.addEventListener('click', () => {
     if (!editable || !modular) return;
@@ -477,6 +479,7 @@ if (form && blocksField) {
     try { projection = storyBlocksToMarkdown(blocks); }
     catch (error) { announce(error instanceof Error ? error.message : 'Check the modules first.'); return; }
     remember(); body.value = projection; modular = false; blocks = []; selected = ''; render(); changed(); announce('Markdown mode enabled.');
+    body.focus();
   });
   for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) add.addEventListener('click', () => {
     if (!editable || !modular) return;
@@ -500,6 +503,7 @@ if (form && blocksField) {
     const rootIndex = type === 'section' ? blocks.findIndex((b) => b.id === selected || b.content?.flat().some((c) => c.id === selected)) : -1;
     (at?.siblings ?? blocks).splice(at ? at.index + 1 : rootIndex >= 0 ? rootIndex + 1 : blocks.length, 0, block); selected = block.id;
     render(); changed(); announce(`${labels[type]} module added.`);
+    editorBus.showTab('module');
     fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
   });
   function restore(raw: string) {
@@ -538,14 +542,14 @@ if (form && blocksField) {
       module.style.minHeight = '24px';
     }
     highlightCanvas();
+    revealInPreview();
     const selectFromCanvas = (target: Element) => {
       if (!editable || !modular) return;
       const id = target.closest<HTMLElement>('[data-module-id]')?.dataset.moduleId;
       if (!id || !walkStoryBlocks(blocks).some((block) => block.id === id)) return;
       selected = id;
-      // On phones, selecting a canvas module opens the Build view before focusing its field.
-      split.dataset.view = 'write';
-      for (const tab of document.querySelectorAll<HTMLElement>('.ed-tabs [data-view]')) tab.setAttribute('aria-pressed', String(tab.dataset.view === 'write'));
+      editorBus.closePreview(false);
+      editorBus.showTab('module');
       render();
       fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus();
       announce('Module selected from the canvas. Its settings are ready to edit.');
@@ -698,58 +702,16 @@ if (form && blocksField) {
       updateFocus(photo.id, photo.focalX + step[0] * amount, photo.focalY + step[1] * amount);
     });
   }
-  const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-studio-panel]'));
-  const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-studio-tab]'));
-  function setPanel(name: string, focus = false) {
-    if (!panels.some((panel) => panel.dataset.studioPanel === name)) name = 'content';
-    for (const panel of panels) {
-      const active = panel.dataset.studioPanel === name;
-      panel.hidden = !active; panel.inert = !active;
-    }
-    for (const tab of tabs) {
-      const active = tab.dataset.studioTab === name;
-      tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
-    }
-    document.querySelector('.editor-studio')?.setAttribute('data-active-panel', name);
-    if (focus) tabs.find((tab) => tab.dataset.studioTab === name)?.focus();
-    if (window.location.hash !== `#${name}`) window.history.replaceState(null, '', `#${name}`);
+  // Scrolls the private preview to the selected module when it can (the preview is a same-origin, script-disabled frame).
+  function revealInPreview() {
+    const doc = previewFrame.contentDocument, win = previewFrame.contentWindow;
+    if (!doc || !win || !doc.body || !modular) return;
+    const target = doc.querySelector(`[data-module-id="${CSS.escape(selected)}"]`);
+    if (!target) return;
+    const box = target.getBoundingClientRect();
+    if (box.top < 0 || box.bottom > win.innerHeight) win.scrollTo({ top: Math.max(0, box.top + win.scrollY - 72) });
   }
-  const tabbar = document.querySelector<HTMLElement>('.studio-tabs');
-  if (tabbar) tabbar.hidden = false;
-  for (const tab of tabs) {
-    tab.addEventListener('click', () => setPanel(tab.dataset.studioTab!, true));
-    tab.addEventListener('keydown', (event) => {
-      let index = tabs.indexOf(tab);
-      if (event.key === 'ArrowRight') index = (index + 1) % tabs.length;
-      else if (event.key === 'ArrowLeft') index = (index + tabs.length - 1) % tabs.length;
-      else if (event.key === 'Home') index = 0;
-      else if (event.key === 'End') index = tabs.length - 1;
-      else return;
-      event.preventDefault(); setPanel(tabs[index].dataset.studioTab!, true);
-    });
-  }
-  for (const control of document.querySelectorAll<HTMLElement>('[data-open-panel]')) control.addEventListener('click', () => setPanel(control.dataset.openPanel!, true));
-  const saveStatus = document.getElementById('save-status');
-  const mobileSaveStatus = document.querySelector('[data-mobile-save-status]');
-  if (saveStatus && mobileSaveStatus) {
-    const reflectStatus = () => { mobileSaveStatus.textContent = saveStatus.textContent; };
-    reflectStatus();
-    new MutationObserver(reflectStatus).observe(saveStatus, { childList: true, subtree: true, characterData: true });
-  }
-  for (const control of document.querySelectorAll('[data-studio-preview]')) control.addEventListener('click', () => {
-    setPanel('content');
-    document.getElementById('split')!.dataset.view = 'preview';
-    for (const tab of document.querySelectorAll('.ed-tabs [data-view]')) tab.setAttribute('aria-pressed', String((tab as HTMLElement).dataset.view === 'preview'));
-    previewFrame.focus();
-  });
-  form.addEventListener('input', () => {
-    const storyTitle = (form.elements.namedItem('title') as HTMLInputElement)?.value.trim() || 'Untitled story';
-    const author = (form.elements.namedItem('author') as HTMLInputElement)?.value.trim() || 'Add an author in Story settings';
-    const heading = document.querySelector('.studio-title-line h1'); if (heading) heading.textContent = storyTitle;
-    const reviewTitle = document.querySelector('[data-review-title]'); if (reviewTitle) reviewTitle.textContent = storyTitle;
-    const reviewAuthor = document.querySelector('[data-review-author]'); if (reviewAuthor) reviewAuthor.textContent = author;
-  });
-  const notice = new URLSearchParams(location.search).get('n');
-  setPanel(location.hash.slice(1) || (['photos', 'uploaded', 'photo_moved', 'photos_markers', 'photo_replaced', 'photo_unchanged'].includes(notice ?? '') ? 'photos' : notice === 'published' ? 'review' : 'content'));
+  editorBus.revealSelected = revealInPreview;
+  document.querySelector('[data-split-modules]')?.addEventListener('click', () => useModules.click());
   render();
 }

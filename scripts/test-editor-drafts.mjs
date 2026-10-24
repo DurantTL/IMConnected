@@ -22,6 +22,7 @@ const PUBLISH_TOKEN = process.env.PUBLISH_TOKEN || '';
 const SHOTS = process.env.SHOTS ? path.resolve(process.env.SHOTS) : '';
 const SERVER_LOG = process.env.SERVER_LOG ? path.resolve(process.env.SERVER_LOG) : '';
 
+const openContent = (pg) => pg.locator('#story-builder').scrollIntoViewIfNeeded();
 let fails = 0;
 const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  ' + extra}`);
@@ -899,7 +900,7 @@ if (browser) {
     await page.waitForSelector('#preview', { state: 'attached' });
     await page.waitForFunction(() => document.getElementById('preview').srcdoc.length > 50);
     check('390px: the editor has no horizontal scroll', await noOverflow());
-    await page.click('.ed-tabs [data-view=preview]');
+    await page.locator('[data-studio-preview]').first().click();
     await page.waitForTimeout(500);
     const sandbox = await page.getAttribute('#preview', 'sandbox');
     check('the preview allows authenticated same-origin photos but never scripts', sandbox === 'allow-same-origin' && !sandbox.includes('allow-scripts'));
@@ -907,7 +908,7 @@ if (browser) {
     const frameText = (await frame.locator('body').innerText()).replace(/\s+/g, ' ');
     check('the preview shows the hostile text as text', frameText.includes('<script>alert(1)</script>') && frameText.includes('<img src=x onerror=alert(1)>'), frameText.slice(0, 200));
     check('...and no element was created from it', (await frame.locator('article script, article img, article svg, article iframe, article b').count()) === 0);
-    await page.click('.ed-tabs [data-view=write]');
+    await page.click('[data-preview-close]');
     const titleValue = await page.inputValue('input[name=title]');
     check('the title field holds the hostile text as a plain value', titleValue === XSS[0]);
     check('no script ran and no dialog opened (editor, preview, inbox)', dialogs.length === 0, dialogs.join('|'));
@@ -918,7 +919,7 @@ if (browser) {
     await c1.form(`/api/admin/drafts/${W}/photos`, { version: version(W), op: 'upload' }, [{ bytes: PNG_A, filename: 'a.png' }, { bytes: PNG_B, filename: 'b.png' }]);
     await c1.form(`/api/admin/drafts/${W}/photos`, { version: version(W), op: 'upload' }, [{ bytes: PNG_B, filename: 'c.png' }]);
     await page.goto(`${BASE}/admin/drafts/${W}`);
-    await page.locator('[data-studio-tab=photos]').click();
+    await page.locator('#photos').scrollIntoViewIfNeeded();
     await page.waitForSelector('.ed-photo img');
     await page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth > 0));
     check('390px: uploaded photos load through the guarded route', true);
@@ -926,18 +927,18 @@ if (browser) {
     const small = await page.evaluate(() => [...document.querySelectorAll('button, input[type=file], select, .ed-check')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.height < 43 || r.width < 43) && !e.closest('[hidden]'); }).map((e) => e.outerHTML.slice(0, 60)));
     check('390px: buttons and fields are at least 44px tall (touch targets)', small.length === 0, small.slice(0, 3).join(' | '));
     await shot('editor-390.png');
-    await page.locator('[data-studio-tab=content]').click();
+    await openContent(page);
     await page.fill('#f-body', 'Hello world');
     await page.evaluate(() => { const t = document.getElementById('f-body'); t.setSelectionRange(0, 5); });
     await page.click('[data-md=bold]');
     check('the Bold button wraps the selection', (await page.inputValue('#f-body')).startsWith('**Hello** world'));
     await page.click('[data-md=quote]');
     check('the Quote button prefixes the line', (await page.inputValue('#f-body')).startsWith('> **Hello** world'));
-    await page.click('.ed-tabs [data-view=preview]');
+    await page.locator('[data-studio-preview]').first().click();
     await page.waitForFunction(() => document.getElementById('preview').srcdoc.includes('<strong>Hello</strong>'));
     check('the live preview is rendered by the server (blockquote, strong)', (await page.getAttribute('#preview', 'srcdoc')).includes('<blockquote>'));
     await shot('editor-preview-390.png');
-    await page.click('.ed-tabs [data-view=write]');
+    await page.click('[data-preview-close]');
     await page.locator('#save-btn:visible, #mobile-save-btn:visible').first().click(); // the toolbar Save on desktop, the bottom bar Save on phones
     await page.waitForFunction(() => /Last saved \d/.test(document.getElementById('save-status').textContent));
     check('Save works and shows the time and name', /Test Editor/.test(await page.textContent('#save-status')) && draftRow(W).body.startsWith('> **Hello** world'), await page.textContent('#save-status'));
@@ -957,7 +958,7 @@ if (browser) {
     await page.goto(`${BASE}/admin/drafts/${W}`);
     await page.locator('[data-studio-tab=settings]').click();
     await page.fill('input[name=title]', 'Title edited before a photo change');
-    await page.locator('[data-studio-tab=photos]').click();
+    await page.locator('#photos').scrollIntoViewIfNeeded();
     await page.locator('.ed-photo').nth(1).locator('button', { hasText: 'Make lead' }).click();
     await page.waitForURL(/n=photos/);
     check('a photo action first saves unsaved edits, then applies', draftRow(W).title === 'Title edited before a photo change' && q('SELECT id FROM draft_photos WHERE draft_id = ? ORDER BY position', W).length === 3);
