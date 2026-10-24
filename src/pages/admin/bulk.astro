@@ -141,7 +141,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
       {failed.length > 0 ? (
         <form method="post" action="/admin/bulk">
           <input type="hidden" name="action" value={action} />
-          <input type="hidden" name="back" value={back} />
+        <input type="hidden" name="back" value={back} />
           <input type="hidden" name="step" value="confirm" />
           {carried(EDIT_FORM_KEYS).map((c) => <input type="hidden" name={c.k} value={c.v} />)}
           {action === 'reject' && note && <input type="hidden" name="note" value={note} />}
@@ -191,7 +191,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
       </ol>
       <form method="post" action="/admin/bulk">
         <input type="hidden" name="action" value={action} />
-          <input type="hidden" name="back" value={back} />
+        <input type="hidden" name="back" value={back} />
         <input type="hidden" name="step" value="confirm" />
         {items.map((i) => (
           <>
@@ -266,7 +266,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
       </ol>
       <form method="post" action="/admin/bulk">
         <input type="hidden" name="action" value={action} />
-          <input type="hidden" name="back" value={back} />
+        <input type="hidden" name="back" value={back} />
         <input type="hidden" name="step" value="run" />
         {carried(EDIT_FORM_KEYS).map((c) => <input type="hidden" name={c.k} value={c.v} />)}
         {action === 'reject' && (
