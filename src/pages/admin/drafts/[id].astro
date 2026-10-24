@@ -64,19 +64,21 @@ if (draft && editable) {
   if (!sectionKnown) problems.push({ text: 'Choose a section', panel: 'settings', href: '#f-section', key: 'section' });
   if (!draft.date) problems.push({ text: 'Date is missing', panel: 'settings', href: '#f-date', key: 'date' });
   if (!hasBody) problems.push({ text: 'Story text is missing', panel: 'content', href: '#story-builder', key: 'body' });
+  if (draft.announcement?.kind === 'event' && !draft.announcement.eventDate) problems.push({ text: 'Event date is missing', panel: 'settings', href: '#f-event-date', key: 'eventDate' });
   const noAlt = photos.filter((p) => !p.alt.trim()).length;
   if (noAlt) problems.push({ text: `${noAlt} ${noAlt === 1 ? 'photo has' : 'photos have'} no description`, panel: 'photos', href: '#photos' });
   // Only a live marker counts: lines in code blocks, escaped examples and the like are left out, exactly as the renderer treats them.
   const badMarkers = isModular ? 0 : [...paragraphLines(draft.body).values()].filter((line) => isMediaMarkerLine(line) && !parsePhotoMarker(line.trim(), photos.length) && !galleryMarker(line.trim(), photos.length)).length;
   if (badMarkers) problems.push({ text: `${badMarkers} photo ${badMarkers === 1 ? 'marker does' : 'markers do'} not match a photo`, panel: 'content', href: '#story-builder' });
 }
-// The five fixed problems are always rendered (hidden while fine), so clearing a field shows its problem again without a reload.
+// The fixed problems are always rendered (hidden while fine), so clearing a field shows its problem again without a reload.
 const KEYED = [
   { key: 'title', text: 'Headline is missing', panel: 'details', href: '#f-title' },
   { key: 'author', text: 'Author is missing', panel: 'settings', href: '#f-author' },
   { key: 'section', text: 'Choose a section', panel: 'settings', href: '#f-section' },
   { key: 'date', text: 'Date is missing', panel: 'settings', href: '#f-date' },
   { key: 'body', text: 'Story text is missing', panel: 'content', href: '#story-builder' },
+  { key: 'eventDate', text: 'Event date is missing', panel: 'settings', href: '#f-event-date' },
 ];
 const hasNotes = !!draft && (isAgent || !!draft.agentNote || hasSubmitter);
 // The compact line under the headline (kept in step by the page script as the Story settings change).
@@ -101,7 +103,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
   ) : (
     <div class="ed editor-studio" data-draft={draft.id} data-side="right">
       <header class="ed-bar" id="ed-bar">
-        <a class="studio-back ed-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
+        <a class="studio-back ed-back" data-kind-back href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
         <div class="ed-title">
           <h1 class="ed-headline" title={draft.title || 'Untitled story'}>{draft.title || 'Untitled story'}</h1>
           <p class="ed-subline">
@@ -193,6 +195,14 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                   <button type="button" class="ed-card-toggle" data-card-toggle data-js-only aria-expanded="true" aria-controls="ed-details-body" data-label="Story details"><span class="sr-only">Collapse Story details</span></button>
                 </div>
                 <div class="ed-group-body" id="ed-details-body" data-card-body>
+                <fieldset class="ed-type" data-type-control>
+                  <legend>Type</legend>
+                  <div class="ed-seg">
+                    {([['story', 'Story'], ['announcement', 'Announcement'], ['event', 'Event']] as const).map(([value, label]) => (
+                      <label class="ed-seg-opt"><input form="draft-form" type="radio" name="announcementKind" value={value} checked={(draft.announcement?.kind ?? 'story') === value} /><span>{label}</span></label>
+                    ))}
+                  </div>
+                </fieldset>
                 <div class="ed-grid">
               <label class="full ed-big">Title <span class="hint">up to {LIMITS.title} characters</span>
                 <input type="text" id="f-title" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
@@ -475,9 +485,6 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                   )))}
                 </select>
               </label>
-              <label>Content type
-                <select form="draft-form" name="announcementKind"><option value="story" selected={!draft.announcement}>Story</option><option value="announcement" selected={draft.announcement?.kind === 'announcement'}>Announcement</option><option value="event" selected={draft.announcement?.kind === 'event'}>Event</option></select>
-              </label>
               <label class="ed-check"><input form="draft-form" type="checkbox" name="featured" value="1" checked={draft.featured} /> Feature on the home page</label>
                 </div></div>
               </details>
@@ -509,7 +516,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               <details class="ed-group" data-group="announcement" data-group-default="closed" data-announcement-group open>
                 <summary class="ed-group-summary"><span>Announcement</span></summary>
                 <div class="ed-group-body"><div class="ed-grid ed-stack">
-              <label>Event date <span class="hint">optional</span><input form="draft-form" type="date" name="eventDate" value={draft.announcement?.eventDate ?? ''} /></label>
+              <label>Event date <span class="hint">needed for an event</span><input form="draft-form" type="date" id="f-event-date" name="eventDate" value={draft.announcement?.eventDate ?? ''} /></label>
               <label class="full">Event location <input form="draft-form" name="eventLocation" maxlength="200" value={draft.announcement?.location ?? ''} /></label>
               <label class="full">Announcement video <span class="hint">Paste a YouTube or Vimeo link; readers open it in a video popup.</span><input form="draft-form" name="announcementVideo" maxlength="2048" value={draft.announcement?.videoUrl ?? ''} /></label>
               <fieldset class="full"><legend>Announcement link buttons</legend><p class="admin-note">Choose Announcement or Event above. The first photo is its full-height flyer. Add a text summary so the flyer is also accessible.</p>

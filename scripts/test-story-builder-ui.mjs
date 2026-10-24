@@ -659,7 +659,7 @@ try {
   legacyId = await createLegacy(); await saveLegacy('heroGrid'); await uploadLegacy();
   await page.goto(BASE + `/admin/drafts/${legacyId}`);
   await openTab(page, 'settings');
-  await page.locator('[name=announcementKind]').selectOption('event'); await openTab(page, 'settings');
+  await page.locator('input[name=announcementKind][value=event]').check(); await openTab(page, 'settings');
   await page.locator('[name=eventDate]').fill('2026-12-01'); await page.locator('[name=eventLocation]').fill('Synthetic Hall <north>');
   await page.locator('[name=announcementLink0Label]').fill('Register'); await page.locator('[name=announcementLink0Url]').fill('https://example.invalid/register');
   await page.locator('[name=announcementVideo]').fill('https://youtu.be/abcdefghijk');
@@ -1008,8 +1008,29 @@ try {
     // An announcement draft shows its section; changing the type shows or hides it.
     await load();
     await openTabRaw(page, 'settings');
-    await page.locator('select[name=announcementKind]').selectOption('event');
-    check('choosing Event shows the Announcement section, choosing Story hides it again', await page.locator('[data-announcement-group]').isVisible() && (await page.locator('select[name=announcementKind]').selectOption('story'), await page.locator('[data-announcement-group]').isHidden()));
+    await page.locator('input[name=announcementKind][value=event]').check();
+    check('choosing Event shows the Announcement section, choosing Story hides it again', await page.locator('[data-announcement-group]').isVisible() && (await page.locator('input[name=announcementKind][value=story]').check(), await page.locator('[data-announcement-group]').isHidden()));
+
+    // Type control (issue #154): one segmented group of radios, live back link, event date focus and problem, confirm before clearing.
+    await load();
+    const typeBoxes = await page.locator('[data-type-control] .ed-seg-opt').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+    check('the Type control is a three-way radio group at the top of Story details, 44px or taller, and replaces the select', typeBoxes.length === 3 && typeBoxes.every((h) => h >= 44) && await page.locator('[name=announcementKind]').count() === 3 && await page.locator('select[name=announcementKind]').count() === 0 && await page.locator('#ed-details-body > fieldset:first-child[data-type-control]').count() === 1);
+    check('a story starts with Story selected, the Announcement group hidden and the back link saying Stories', await page.locator('input[name=announcementKind][value=story]').isChecked() && await page.locator('[data-announcement-group]').isHidden() && (await page.locator('[data-kind-back]').textContent()).includes('Stories'));
+    await page.locator('label.ed-seg-opt', { hasText: 'Event' }).click();
+    check('choosing Event opens Settings, focuses the event date, and updates the back link', await page.evaluate(() => document.activeElement?.getAttribute('name')) === 'eventDate' && await page.locator('[data-announcement-group]').isVisible() && (await page.locator('[data-kind-back]').textContent()).includes('Events') && (await page.locator('[data-kind-back]').getAttribute('href')) === '/admin/events');
+    const evProblem = () => page.locator('[data-problem=eventDate]').evaluate((el) => !el.hidden);
+    check('an Event with no date shows the "Event date is missing" problem until a date is set', await evProblem() && (await page.locator('[name=eventDate]').fill('2027-05-05'), !(await evProblem())));
+    await page.locator('label.ed-seg-opt', { hasText: 'Announcement' }).click();
+    check('Event to Announcement keeps the details and updates the label with no confirmation', await page.locator('[name=eventDate]').inputValue() === '2027-05-05' && (await page.locator('[data-kind-back]').textContent()).includes('Announcements'));
+    await page.locator('[name=eventLocation]').fill('Synthetic Hall');
+    page.removeAllListeners('dialog');
+    let asked = '';
+    page.once('dialog', (d) => { asked = d.message(); void d.dismiss(); });
+    await page.locator('label.ed-seg-opt', { hasText: 'Story' }).click();
+    check('choosing Story asks first (event date, location, links and video); Cancel keeps the type and every detail', /cleared/.test(asked) && /date/.test(asked) && await page.locator('input[name=announcementKind][value=announcement]').isChecked() && await page.locator('[name=eventLocation]').inputValue() === 'Synthetic Hall' && await page.locator('[data-announcement-group]').isVisible());
+    page.on('dialog', (d) => d.accept());
+    await page.locator('label.ed-seg-opt', { hasText: 'Story' }).click();
+    check('OK clears the event details, hides the group and goes back to Stories', await page.locator('input[name=announcementKind][value=story]').isChecked() && await page.locator('[name=eventLocation]').inputValue() === '' && await page.locator('[name=eventDate]').inputValue() === '' && await page.locator('[data-announcement-group]').isHidden() && (await page.locator('[data-kind-back]').textContent()).includes('Stories'));
 
     // 4. Module library groups.
     await splitModules(page);

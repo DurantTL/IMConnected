@@ -321,7 +321,7 @@ export function editLiveStory(slug: string, compute: (story: Story) => Partial<S
     const next = { ...row, ...patch, contentHash: undefined, editedAt: now };
     writeStory(next, now);
     // The closed draft linked to this story keeps the same metadata, so unpublishing and publishing again cannot revert the edit.
-    syncPublishedDraftFields(slug, row.draftId, { section: next.section, area: next.area ?? '', column: '', additionalSections: next.additionalSections ?? [], featured: next.featured, date: next.date });
+    syncPublishedDraftFields(slug, row.draftId, { section: next.section, area: next.area ?? '', column: '', additionalSections: next.additionalSections ?? [], featured: next.featured, date: next.date, announcement: 'announcement' in patch ? next.announcement ?? null : undefined });
   });
   const result = out as { title: string; changed: boolean } | null;
   if (result?.changed) invalidateStories();

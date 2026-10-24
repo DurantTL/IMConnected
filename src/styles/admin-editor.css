@@ -302,3 +302,15 @@ body.adm-compact .adm-col, .admin-main:has(.editor-studio), .editor-studio, .ed-
 
 /* A collapsed card body stays searchable by find-in-page (hidden="until-found"); drop its padding so it takes no space. */
 .editor-studio .ed-card-head + .ed-group-body[hidden=until-found] { padding: 0; }
+
+/* Content type: a segmented group of three radios (issue #154). The radios stay real inputs, so it works without JavaScript. */
+.ed-type { border: 0; margin: 0 0 20px; padding: 0; min-width: 0; }
+.ed-type legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.ed-seg { display: inline-flex; max-width: 100%; border: 1px solid var(--e-line, #c9ced6); border-radius: 10px; overflow: hidden; background: #fff; }
+.ed-seg-opt { position: relative; display: flex; margin: 0; }
+.ed-seg-opt + .ed-seg-opt { border-left: 1px solid var(--e-line, #c9ced6); }
+.ed-seg-opt input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.ed-seg-opt span { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 16px; font-weight: 600; text-align: center; }
+.ed-seg-opt input:checked + span { background: var(--e-navy, #1d3557); color: #fff; }
+.ed-seg-opt input:focus-visible + span { outline: 3px solid var(--e-focus, #0b5fff); outline-offset: -3px; }
+@media (max-width: 480px) { .ed-type .ed-seg { display: grid; grid-template-columns: 1fr 1.5fr 1fr; width: 100%; } .ed-type .ed-seg .ed-seg-opt { min-width: 0; width: 100%; max-width: none; } .ed-seg-opt span { padding: 0 6px; font-size: .92rem; } }

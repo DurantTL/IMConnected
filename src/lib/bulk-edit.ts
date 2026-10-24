@@ -8,6 +8,7 @@ import { SECTIONS, SECTION_KEYS, canonicalSectionKey, getSection, isValidArea, n
 import { validDate } from './storyfile';
 import { EditorError, ERRORS } from './messages';
 import { audit } from './auth/audit';
+import { normalizeAnnouncement, type Announcement } from './announcement';
 
 /** What the editor ticked. A key that is absent is never touched. */
 export interface EditChanges {
@@ -19,12 +20,15 @@ export interface EditChanges {
   remove?: string[];
   featured?: boolean;
   date?: string;
+  /** Content type (issue #154). `eventDate` applies to every item set to Event. */
+  contentType?: 'story' | 'announcement' | 'event';
+  eventDate?: string;
 }
 
 export type EditResult = { ok: true; title: string; slug?: string; changed: string[] } | { ok: false; reason: string; code?: 'conflict' };
 
 /** Every form field the edit step uses; the confirmation and retry forms carry them forward. */
-export const EDIT_FORM_KEYS = ['tick_section', 'e_section', 'tick_area', 'e_area', 'tick_add', 'e_add', 'tick_remove', 'e_remove', 'tick_featured', 'e_featured', 'tick_date', 'e_date'];
+export const EDIT_FORM_KEYS = ['tick_section', 'e_section', 'tick_area', 'e_area', 'tick_add', 'e_add', 'tick_remove', 'e_remove', 'tick_featured', 'e_featured', 'tick_date', 'e_date', 'tick_type', 'e_type', 'e_event_date'];
 
 const AREAS = SECTIONS.flatMap((s) => (s.areas ?? []).map((a) => ({ section: s, key: a.key, label: a.label })));
 const sectionLabelOf = (key: string) => getSection(key)?.label ?? key;
@@ -65,6 +69,16 @@ export function parseEditChanges(form: FormData): { changes: EditChanges; error?
     if (!validDate(d)) return fail('Enter a valid date.');
     changes.date = d;
   }
+  if (ticked('type')) {
+    const t = text('e_type');
+    if (t !== 'story' && t !== 'announcement' && t !== 'event') return fail('Choose Story, Announcement or Event.');
+    changes.contentType = t;
+    const d = text('e_event_date').trim();
+    if (t === 'event' && d) {
+      if (!validDate(d)) return fail('Enter a valid event date.');
+      changes.eventDate = d;
+    }
+  }
   if (Object.keys(changes).length === 0) return fail('Tick at least one field to change.');
   return { changes };
 }
@@ -81,11 +95,31 @@ export function describeChanges(c: EditChanges): string[] {
   if (c.remove) out.push(`Additional sections: remove ${c.remove.map(sectionLabelOf).join(', ')}`);
   if (c.featured !== undefined) out.push(`Featured: ${c.featured ? 'on' : 'off'}`);
   if (c.date) out.push(`Date: ${c.date}`);
+  if (c.contentType) {
+    const label = { story: 'Story (any event date, location, links and video are cleared)', announcement: 'Announcement', event: c.eventDate ? `Event on ${c.eventDate}` : 'Event (an item with no event date is skipped, with a reason)' }[c.contentType];
+    out.push(`Content type: ${label}`);
+  }
   return out;
 }
 
-interface EditTarget { section: string; area?: string; column?: string; additionalSections?: string[]; featured: boolean; date: string }
-interface Patch { section: string; area: string; column: string; additionalSections: string[]; featured: boolean; date: string }
+interface EditTarget { section: string; area?: string; column?: string; additionalSections?: string[]; featured: boolean; date: string; announcement?: Announcement | null }
+interface Patch { section: string; area: string; column: string; additionalSections: string[]; featured: boolean; date: string; announcement?: Announcement | null }
+
+/**
+ * The announcement an item gets from the ticked content type. Story clears it; Announcement keeps what is stored (an event's
+ * details carry over) or starts empty; Event needs a date, from the bulk field or already stored. The result goes through
+ * normalizeAnnouncement, and an item that fails it is refused with nothing changed.
+ */
+function nextAnnouncement(cur: Announcement | null, c: EditChanges): { ok: true; value: Announcement | null } | { ok: false; reason: string } {
+  if (c.contentType === 'story') return { ok: true, value: null };
+  const eventDate = c.contentType === 'event' ? c.eventDate ?? cur?.eventDate : cur?.eventDate;
+  if (c.contentType === 'event' && !eventDate) return { ok: false, reason: 'An event needs a date, and this item has none. Enter an event date for the batch, or open it to set one. Nothing was changed.' };
+  try {
+    return { ok: true, value: normalizeAnnouncement({ ...(cur ?? { links: [] }), kind: c.contentType, ...(eventDate ? { eventDate } : {}) }) };
+  } catch (e) {
+    return { ok: false, reason: `${(e as Error).message} Nothing was changed.` };
+  }
+}
 
 /**
  * Apply the ticked changes to one item's current values; everything not ticked is carried over. A section change does not
@@ -105,6 +139,11 @@ export function applyEdit(cur: EditTarget, c: EditChanges): { ok: true; patch: P
   for (const k of c.remove ?? []) extras.delete(k);
   const additionalSections = normalizeAdditionalSections([...extras], section);
   const patch: Patch = { section, area, column: '', additionalSections, featured: c.featured ?? cur.featured, date: c.date ?? cur.date };
+  if (c.contentType) {
+    const next = nextAnnouncement(cur.announcement ?? null, c);
+    if (!next.ok) return next;
+    patch.announcement = next.value;
+  }
   const before = normalizeAdditionalSections(cur.additionalSections ?? [], cur.section);
   const changed: string[] = [];
   if (patch.section !== cur.section) changed.push('section');
@@ -112,6 +151,7 @@ export function applyEdit(cur: EditTarget, c: EditChanges): { ok: true; patch: P
   if (JSON.stringify(before) !== JSON.stringify(additionalSections)) changed.push('additionalSections');
   if (patch.featured !== cur.featured) changed.push('featured');
   if (patch.date !== cur.date) changed.push('date');
+  if (c.contentType && JSON.stringify(patch.announcement ?? null) !== JSON.stringify(cur.announcement ?? null)) changed.push('announcement');
   return { ok: true, patch, changed };
 }
 
@@ -136,6 +176,7 @@ export function editDraftItem(draftId: number, version: number, changes: EditCha
     title: draft.title, dek: draft.dek, section: applied.patch.section, additionalSections: applied.patch.additionalSections, area: applied.patch.area,
     column: applied.patch.column, author: draft.author, authorTitle: draft.authorTitle, church: draft.church, date: applied.patch.date,
     photoCredit: draft.photoCredit, photoLayout: draft.photoLayout, featured: applied.patch.featured, body: draft.body,
+    ...(applied.patch.announcement !== undefined ? { announcement: applied.patch.announcement } : {}),
   };
   try {
     const r = saveDraft(draft.id, version, fields, new Map(), userId);
@@ -169,6 +210,7 @@ export function editStoryItem(slug: string, changes: EditChanges, userId: number
       return {
         section: applied.patch.section, area: applied.patch.area || undefined, column: applied.patch.column || undefined,
         additionalSections: applied.patch.additionalSections, featured: applied.patch.featured, date: applied.patch.date,
+        ...(applied.patch.announcement !== undefined ? { announcement: applied.patch.announcement } : {}),
       };
     });
     if (!out) return { ok: false, reason: ERRORS.story_missing };
