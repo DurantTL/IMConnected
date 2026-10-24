@@ -93,6 +93,8 @@ if (root && form && body && sidebar) {
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => applyLayout()).observe(body);
     new ResizeObserver(updateSticky).observe(sidebar);
+    // The sticky tab row covers the top of the window; headings scroll to just below it, however tall it is (it can wrap).
+    new ResizeObserver(() => root!.style.setProperty('--ed-tabs-h', `${tablist.getBoundingClientRect().height}px`)).observe(tablist);
   }
 
   // The layout menu: a button that opens a group; Escape closes it and gives focus back.
@@ -182,7 +184,9 @@ if (root && form && body && sidebar) {
     revealEditorTarget(focusTarget);
     const heading = target.closest<HTMLElement>('[data-studio-panel], .ed-step')?.querySelector<HTMLElement>('.ed-panel-title, .ed-card-head h2') ?? (target.matches('.ed-step') ? target.querySelector<HTMLElement>('h2') : null);
     const visible = (el: HTMLElement) => el.getClientRects().length > 0;
-    const inner = focusTarget.matches(FOCUSABLE) ? focusTarget : Array.from(focusTarget.querySelectorAll<HTMLElement>(FOCUSABLE)).find((el) => !el.matches('summary') && visible(el)) ?? heading;
+    // For a card, look in its body and never land on the card's own Collapse button.
+    const scope = focusTarget.matches('[data-card-group]') ? focusTarget.querySelector<HTMLElement>('[data-card-body]') ?? focusTarget : focusTarget;
+    const inner = focusTarget.matches(FOCUSABLE) ? focusTarget : Array.from(scope.querySelectorAll<HTMLElement>(FOCUSABLE)).find((el) => !el.matches('summary, [data-card-toggle]') && visible(el)) ?? heading;
     inner?.focus();
     (inner ?? target).scrollIntoView({ block: 'center' });
   });
@@ -281,7 +285,12 @@ if (root && form && body && sidebar) {
     if (match) { const badge = canvas.querySelector<HTMLElement>(`[data-photo-noalt="${match[1]}"]`); if (badge) badge.hidden = !!field!.value.trim(); }
   });
   // A field that blocks the browser's own validation must never sit in a collapsed group where nothing says why.
-  document.addEventListener('invalid', (event) => { revealEditorTarget(event.target as Element); }, true);
+  document.addEventListener('invalid', (event) => {
+    const field = event.target as Element;
+    const panel = field.closest<HTMLElement>('[data-studio-panel]');
+    if (panel?.hidden) showTab(panel.dataset.studioPanel!); // the sidebar tab that holds the field
+    revealEditorTarget(field);
+  }, true);
   form.addEventListener('input', () => {
     refreshCardSummaries();
     const value = (name: string) => ((form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '').trim();

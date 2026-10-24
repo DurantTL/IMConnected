@@ -31,7 +31,11 @@ function mirror(g: Group, open: boolean) {
 /** Opens or closes a group without remembering it (a search or a problem link is not the editor's own choice). */
 export function setGroup(g: Group, open: boolean) {
   g.dataset.set = open ? '1' : '0';
-  if (isCard(g)) { const body = bodyOf(g); if (body) body.hidden = !open; } else (g as HTMLDetailsElement).open = open;
+  if (isCard(g)) {
+    // `until-found` keeps a closed card searchable: the browser's find-in-page opens it through `beforematch`.
+    const body = bodyOf(g);
+    if (body) { if (open) body.removeAttribute('hidden'); else body.setAttribute('hidden', 'until-found'); }
+  } else (g as HTMLDetailsElement).open = open;
   mirror(g, open);
 }
 /** Opens every collapsed group or card that holds `target` (or is it), so it can be seen and focused. True when one was opened. */
@@ -47,7 +51,8 @@ export function keepInView(el: Element | null | undefined) {
   if (!el) return;
   requestAnimationFrame(() => {
     const r = el.getBoundingClientRect();
-    if (r.top < 56 || r.bottom > window.innerHeight) (el as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'instant' as ScrollBehavior });
+    const tabs = parseFloat(getComputedStyle(root!).getPropertyValue('--ed-tabs-h')) || 44;
+    if (r.top < tabs + 12 || r.bottom > window.innerHeight) (el as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'instant' as ScrollBehavior });
   });
 }
 
@@ -63,6 +68,8 @@ if (root) {
     if (isCard(group)) {
       const flip = () => { const next = !isGroupOpen(group); setGroup(group, next); if (persist) writeGroupState(scope, name, next); keepInView(toggle); };
       toggle?.addEventListener('click', flip);
+      // Find-in-page found text in the collapsed card: open it, without remembering that as the editor's choice.
+      bodyOf(group)?.addEventListener('beforematch', () => setGroup(group, true));
       // The empty part of the header toggles too, for a mouse.
       group.querySelector<HTMLElement>(':scope > .ed-card-head')?.addEventListener('click', (event) => { if (event.target === event.currentTarget || (event.target as HTMLElement).closest('.ed-card-summary')) flip(); });
     } else {

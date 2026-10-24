@@ -895,7 +895,7 @@ try {
     await page.goto(BASE + `/admin/drafts/${agentId}`); await openTab(page, 'review');
     check('a live marker that matches no photo is reported, as a link to the story text', await page.locator('.ed-problems a', { hasText: 'marker' }).count() === 1);
     await page.locator('.ed-problems a', { hasText: 'marker' }).click();
-    check('the marker problem focuses the Story card', await page.evaluate(() => !!document.activeElement?.closest('#story-builder')));
+    check('the marker problem focuses a control inside the Story card body, not its Collapse button', await page.evaluate(() => !!document.activeElement?.closest('#story-builder [data-card-body]') && !document.activeElement.matches('[data-card-toggle]')));
     db.prepare('UPDATE drafts SET body=?, updated_at=? WHERE id=?').run('Synthetic agent body text.', Number(JSON.parse(before).updated_at), agentId);
     check('44px targets in the top bar, canvas and sidebar', await page.evaluate(() => [...document.querySelectorAll('#ed-bar button, #ed-bar a, .ed-tab, .ed-problems a, .ed-sidebar button, .ed-insert, .ed-btn')].filter((el) => el.getBoundingClientRect().width > 0 && !el.closest('[hidden]')).every((el) => el.getBoundingClientRect().height >= 43.5)));
     await page.goto(BASE + `/admin/drafts/${agentId}`);
@@ -1084,11 +1084,14 @@ try {
       check('a card heading sits outside any button or summary', await page.locator('#ed-story-heading').evaluate((h) => !h.closest('button, summary, a')) && await page.locator('#story-builder').getAttribute('aria-labelledby') === 'ed-story-heading');
       await openTabRaw(page, 'review');
       await page.locator('[data-problem=body] a').click();
-      check('the "Story text is missing" link opens the collapsed Story card and focuses inside it', await expanded('#story-builder') === 'true' && await page.evaluate(() => !!document.activeElement?.closest('#story-builder') && document.activeElement.matches('input,textarea,select,button')));
+      check('the "Story text is missing" link opens the collapsed Story card and focuses inside it', await expanded('#story-builder') === 'true' && await page.evaluate(() => !!document.activeElement?.closest('[data-card-body]') && !document.activeElement.matches('[data-card-toggle]') && document.activeElement.matches('input,textarea,select,button')));
       await page.locator('#story-builder [data-card-toggle]').click();
+      check('a collapsed card stays findable (hidden=until-found) and opens on beforematch without being remembered as the choice', await page.locator('#story-builder [data-card-body]').getAttribute('hidden') === 'until-found' && await page.evaluate(() => { document.querySelector('#story-builder [data-card-body]').dispatchEvent(new Event('beforematch')); return true; }) && await expanded('#story-builder') === 'true' && (await stored())?.canvas?.story === false);
+      check('the sticky tab row height is published for scroll margins', await page.evaluate(() => { const h = parseFloat(document.querySelector('.editor-studio').style.getPropertyValue('--ed-tabs-h')); return h > 0 && Math.abs(h - document.querySelector('.ed-tablist').getBoundingClientRect().height) < 1; }));
+      await openTabRaw(page, 'settings');
       await page.evaluate(() => document.getElementById('studio-schedule').scrollIntoView());
       await page.evaluate(() => { document.getElementById('schedule-form').requestSubmit(); });
-      check('a field that fails the browser\'s own validation opens its collapsed group (the schedule time)', await expanded('#studio-schedule') === 'true');
+      check('a field that fails the browser\'s own validation switches to its sidebar tab and opens its collapsed group (the schedule time)', await page.locator('[data-studio-tab=review]').getAttribute('aria-selected') === 'true' && await expanded('#studio-schedule') === 'true');
       await openTabRaw(page, 'settings');
       await page.evaluate(() => { document.querySelector('[data-group=church]').open = true; }); // what the browser\'s find-in-page does
       await page.waitForTimeout(300);

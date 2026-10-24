@@ -227,7 +227,6 @@
 .ed-card-toggle[aria-expanded=false]::after { transform: translateY(-2px) rotate(45deg); }
 @media (prefers-reduced-motion: reduce) { .ed-card-toggle::after { transition: none; } }
 .editor-studio .ed-card-head + .ed-group-body { padding: 16px 0 0; }
-.editor-studio .ed-step [data-card-body][hidden] { display: none; }
 .editor-studio .ed-keypoints-group { margin: 14px 0 0; }
 .editor-studio .ed-keypoints-group .ed-key-points { margin: 0; padding: 0; border: 0; }
 
@@ -264,7 +263,7 @@ body.adm-compact .adm-col, .admin-main:has(.editor-studio), .editor-studio, .ed-
 .ed-photo-noalt { position: absolute; left: 6px; top: 6px; padding: 1px 8px; border-radius: 99px; background: var(--e-gold-soft); color: var(--e-ink); border: 1px solid color-mix(in srgb, var(--e-gold) 60%, #fff); font-size: .72rem; font-weight: 600; }
 .ed-photo-noalt[hidden] { display: none; }
 .editor-studio .ed-photo .ph-handle { white-space: nowrap; font-size: .8rem; padding: 0 4px; }
-.ed-panel-title, .editor-studio .ed-group > summary { scroll-margin-top: 60px; scroll-margin-bottom: 16px; }
+.ed-panel-title, .editor-studio .ed-group > summary { scroll-margin-top: calc(var(--ed-tabs-h, 44px) + 16px); scroll-margin-bottom: 16px; }
 /* Save problems stay readable: the status line wraps under the headline instead of being cut off. */
 .ed-subline:has(.ed-status[data-bad=true]) { flex-wrap: wrap; white-space: normal; }
 .ed-subline .ed-status[data-bad=true] { flex: 1 1 100%; white-space: normal; overflow: visible; text-overflow: clip; color: #8a1f11; font-weight: 600; }
