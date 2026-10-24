@@ -5,7 +5,7 @@ only **suggest** a time; it can never schedule or publish.
 
 ## In the dashboard
 
-On a draft's Review and publish tab, under the Publish button, **Publish at a set time** takes a date and time. Times are always
+On a draft's Publish tab (in the editor sidebar), under the Publish button, **Publish at a set time** takes a date and time. Times are always
 America/Chicago (Central Time), shown and entered in that zone, whatever the viewer's own zone. A time that has passed, that is
 more than a year away, or that does not exist (the spring-forward hour) is refused.
 
