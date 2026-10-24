@@ -269,4 +269,4 @@ body.adm-compact .adm-col, .admin-main:has(.editor-studio), .editor-studio, .ed-
 .ed-subline .ed-status[data-bad=true] { flex: 1 1 100%; white-space: normal; overflow: visible; text-overflow: clip; color: #8a1f11; font-weight: 600; }
 
 /* A collapsed card body stays searchable by find-in-page (hidden="until-found"); drop its padding so it takes no space. */
-[data-card-body][hidden=until-found] { padding: 0; }
+.editor-studio .ed-card-head + .ed-group-body[hidden=until-found] { padding: 0; }
