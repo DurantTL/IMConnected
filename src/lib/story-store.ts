@@ -393,6 +393,8 @@ export function parsePublishedFilter(params: URLSearchParams): PublishedFilter {
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => '\\' + c);
 const PUB_LIVE = 'd.published_commit IS NOT NULL AND d.unpublished_at IS NULL';
 const PUB_AT = `COALESCE(CASE WHEN ${PUB_LIVE} THEN d.published_at END, s.published_at)`;
+/** Who a Studio publish is credited to; the same name as STUDIO_NAME in drafts.ts. */
+const STUDIO_PUBLISHER = 'IMConnected Studio';
 const PUB_FROM = 'FROM stories s LEFT JOIN drafts d ON d.slug = s.slug LEFT JOIN users u ON u.id = d.published_by';
 // "Edited" means changed after the story first went live. Publishing writes published_at and edited_at together (and republishing
 // rewrites both), so neither marks the first publish; drafts.submitter_notified_at does (set once, at a draft's first publish, and
@@ -440,8 +442,8 @@ export function listStoriesPage(f: PublishedFilter, now = Date.now()): { items: 
   const pages = Math.max(1, Math.ceil(total / f.perPage));
   const page = Math.min(f.page, pages);
   const rows = db.prepare(`SELECT s.slug, s.title, s.section, s.area, s.church, s.author, s.date, s.featured, s.newsletter_issue AS issue, CASE WHEN (${EDITED_COND}) THEN s.edited_at END AS edited_at,
-      ${PUB_AT} AS pub_at, CASE WHEN ${PUB_LIVE} THEN u.name END AS pub_by, CASE WHEN ${OPEN_DRAFT} THEN 1 ELSE 0 END AS open_draft, d.id AS draft_id
-    ${PUB_FROM} ${sql} ORDER BY ${ORDER[f.sort]} LIMIT ? OFFSET ?`).all(...args, f.perPage, (page - 1) * f.perPage) as Row[];
+      ${PUB_AT} AS pub_at, CASE WHEN ${PUB_LIVE} THEN CASE WHEN d.published_via_studio = 1 THEN ? ELSE u.name END END AS pub_by, CASE WHEN ${OPEN_DRAFT} THEN 1 ELSE 0 END AS open_draft, d.id AS draft_id
+    ${PUB_FROM} ${sql} ORDER BY ${ORDER[f.sort]} LIMIT ? OFFSET ?`).all(STUDIO_PUBLISHER, ...args, f.perPage, (page - 1) * f.perPage) as Row[];
   return {
     total, page, pages,
     items: rows.map((r) => ({
