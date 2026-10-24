@@ -124,6 +124,7 @@ try {
   await page.goto(BASE+`/admin/drafts/${draftIds.story}`);await openContent(page);
   check('story editor returns to its story queue',await page.locator('.studio-back').getAttribute('href')==='/admin');
   const savedVersion=row('SELECT updated_at FROM drafts WHERE id=?',draftIds.story).updated_at;
+  await page.locator('[data-group=more] > summary').click();await page.waitForFunction(()=>document.querySelector('[data-group=more]').open);
   await page.locator('#module-library-category').selectOption('media');check('module category exposes only images and video',await page.locator('[data-add-module]:visible').count()===4);
   await page.locator('.sb-library-preferences summary').click();await page.locator('[data-pin-module=video]').check();await page.locator('#module-library-category').selectOption('favorites');check('quick access includes user-pinned module types',await page.locator('[data-add-module=video]').isVisible());
   await delay(1000);check('library preferences do not dirty or autosave story content',row('SELECT updated_at FROM drafts WHERE id=?',draftIds.story).updated_at===savedVersion);

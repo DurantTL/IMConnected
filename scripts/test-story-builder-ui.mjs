@@ -1008,6 +1008,13 @@ try {
     check('the search does not remember the groups it opened', (await stored())?.modules?.media === undefined);
     await page.locator('#module-library-reset').click();
     check('clearing the search puts the groups back as they were', await expanded('[data-library-group=media]') === 'false' && await expanded('[data-library-group=writing]') === 'true' && await page.locator('[data-library-group=layout]').isVisible());
+    check('the Modules tab is search first, then the groups, then a closed "More" group holding Customize quick access and Use Markdown', await page.evaluate(() => { const search = document.getElementById('module-library-search').getBoundingClientRect().bottom, first = document.querySelector('details[data-library-group]').getBoundingClientRect().top, more = document.querySelector('[data-group=more]'); return first - search < 90 && !document.querySelector('[data-group=more]').open && more.querySelector('.sb-library-preferences') && more.querySelector('#use-markdown') && !document.body.textContent.includes('Browse modules') && [...document.querySelectorAll('details[data-library-group]')].every((d) => d.getBoundingClientRect().top < more.getBoundingClientRect().top); }));
+    for (const [width, maxHeight] of [[1440, 90], [1280, 90], [1024, 150]]) {
+      await page.setViewportSize({ width, height: 1000 });
+      check(`the editor top bar is ${width >= 1280 ? 'one row' : 'at most two rows'} at ${width}px (module story, undo and redo shown)`, await page.locator('#ed-bar').evaluate((el, max) => el.getBoundingClientRect().height < max, maxHeight));
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    check('undo and redo are 44px icon buttons with a name and a tooltip, and the headline carries its full title', await page.evaluate(() => ['blocks-undo', 'blocks-redo'].every((id) => { const b = document.getElementById(id), r = b.getBoundingClientRect(); return r.width >= 43.5 && r.height >= 43.5 && b.getAttribute('aria-label') === b.title && /module change$/.test(b.title); }) && document.querySelector('.ed-headline').title === document.querySelector('.ed-headline').textContent));
     check('every module card and library item is easy to target (stable data attributes, one element each)', await page.locator('#module-outline > li[data-module-card][data-module-id][data-module-type]').count() === await page.locator('#module-outline > li[data-module-id]').count() && await page.locator('[data-library-item]').count() === 11 && await page.locator('[data-add-module]').count() === 11);
 
     // 5. Canvas cards.

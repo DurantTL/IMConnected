@@ -275,7 +275,7 @@ if (root && form && body && sidebar) {
     const value = (name: string) => ((form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '').trim();
     const storyTitle = value('title') || 'Untitled story';
     const author = value('author') || 'Add an author in Story settings';
-    for (const el of document.querySelectorAll('.ed-headline')) el.textContent = storyTitle;
+    for (const el of document.querySelectorAll<HTMLElement>('.ed-headline')) { el.textContent = storyTitle; el.title = storyTitle; }
     const reviewTitle = document.querySelector('[data-review-title]'); if (reviewTitle) reviewTitle.textContent = storyTitle;
     const reviewAuthor = document.querySelector('[data-review-author]'); if (reviewAuthor) reviewAuthor.textContent = author;
     const sectionSelect = form.elements.namedItem('section') as HTMLSelectElement | null, areaSelect = form.elements.namedItem('area') as HTMLSelectElement | null;

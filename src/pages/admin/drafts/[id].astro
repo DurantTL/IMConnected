@@ -102,24 +102,24 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
     <div class="ed editor-studio" data-draft={draft.id} data-side="right">
       <header class="ed-bar" id="ed-bar">
         <a class="studio-back ed-back" href={draft.announcement?.kind === 'event' ? '/admin/events' : draft.announcement ? '/admin/announcements' : '/admin'}>← {draft.announcement?.kind === 'event' ? 'Events' : draft.announcement ? 'Announcements' : 'Stories'}</a>
-        <h1 class="ed-headline">{draft.title || 'Untitled story'}</h1>
+        <div class="ed-title">
+          <h1 class="ed-headline" title={draft.title || 'Untitled story'}>{draft.title || 'Untitled story'}</h1>
+          <p class="ed-subline">
+          <span class={`ed-chip ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : scheduledAt !== null ? 'ok' : 'warn'}`} data-editor-chip>{chipText}</span>
+          {isAgent && <span class="ed-chip">From AI agent</span>}
+          <span class="ed-live">{draft.live ? 'Live' : 'Not live · draft only'}</span><span class="ed-status" id="save-status" role="status" aria-live="polite">
+            {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
+          </span></p>
+        </div>
         <nav class="ed-nav" aria-label="Editor sections">
           <a href="#ed-canvas" aria-current="true" data-editor-nav="editor">Editor</a>
           <a href="#studio-panel-settings" data-open-panel="settings" data-editor-nav="settings">Story settings</a>
           {editable && <a href="#studio-panel-review" data-open-panel="review" data-editor-nav="review">Publishing</a>}
         </nav>
-        <span class="ed-bar-status">
-          <span class={`ed-chip ${draft.status === 'published' ? 'ok' : draft.status === 'rejected' ? 'bad' : scheduledAt !== null ? 'ok' : 'warn'}`} data-editor-chip>{chipText}</span>
-          {isAgent && <span class="ed-chip">From AI agent</span>}
-          <span class="ed-live">{draft.live ? 'Live' : 'Not live · draft only'}</span>
-          <span class="ed-status" id="save-status" role="status" aria-live="polite">
-            {draft.updatedByName ? <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time> by {draft.updatedByName}</> : <>Last saved <time datetime={new Date(draft.updatedAt).toISOString()} data-local>{fmtTime(draft.updatedAt)}</time></>}
-          </span>
-        </span>
         <span class="ed-bar-actions">
           <span class="ed-undo" role="group" aria-label="Module history" hidden={!isModular}>
-            <button class="ed-btn" type="button" id="blocks-undo" disabled>Undo module change</button>
-            <button class="ed-btn" type="button" id="blocks-redo" disabled>Redo module change</button>
+            <button class="ed-icon-btn" type="button" id="blocks-undo" aria-label="Undo module change" title="Undo module change" disabled><span aria-hidden="true">↶</span></button>
+            <button class="ed-icon-btn" type="button" id="blocks-redo" aria-label="Redo module change" title="Redo module change" disabled><span aria-hidden="true">↷</span></button>
           </span>
           <button type="button" class="ed-btn" data-studio-preview data-js-only>Preview</button>
           <button type="submit" form="draft-form" class="ed-btn outline" id="save-btn" disabled={!editable}>Save changes</button>
@@ -386,14 +386,11 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                 <button class="ed-btn" type="button" id="use-modules" title="Split the Markdown text into one paragraph module per block of text. You can undo this.">Split into modules</button>
               </div>
               <div id="module-workspace" class="sb-modules" hidden={!isModular}>
-                <button class="ed-btn" type="button" id="use-markdown">Use Markdown</button>
-                <div class="sb-library-disclosure"><h3 class="ed-subtitle">Add to the story</h3>
-                    <p class="sb-insert-help">Insert after the selected module. Existing content stays in place.</p>
+                <div class="sb-library-disclosure">
                     <label class="sb-library-search" for="module-library-search">Find a module<input type="search" id="module-library-search" placeholder="Try heading or image" autocomplete="off" aria-describedby="module-library-results" /></label>
+                    <p class="sb-insert-help">Click to add after the selected module.</p>
                     <div class="sb-library-feedback"><span id="module-library-results" role="status" aria-live="polite">11 modules</span><button type="button" id="module-library-reset" hidden>Clear search</button></div>
                     <p id="module-library-empty" class="admin-note" hidden>No modules match. Clear the search to see all modules.</p>
-                    <label class="sb-library-category" for="module-library-category">Browse modules<select id="module-library-category"><option value="all">All modules</option><option value="favorites">My quick access</option><option value="writing">Writing</option><option value="media">Images &amp; video</option><option value="layout">Layout &amp; structure</option><option value="actions">Links &amp; buttons</option></select></label>
-                    <details class="sb-library-preferences"><summary>Customize quick access</summary><p>Choose your go-to modules. Saved in this browser.</p>{libraryModules.map(([type,label]) => <label><input type="checkbox" data-pin-module={type} />{label}</label>)}<p id="module-pin-status" role="status"></p></details>
                     <div class="sb-library-groups">
                       {libraryGroups.map(([key, title], index) => (
                         <details class="ed-group" data-group={key} data-library-group={key} data-group-default={index === 0 ? 'open' : 'closed'} open>
@@ -425,8 +422,16 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                           <p id="saved-layout-status" role="status" class="admin-note"></p>
                         </div>
                       </details>
+                      <details class="ed-group" data-group="more" data-group-default="closed" open>
+                        <summary class="ed-group-summary"><span>More</span></summary>
+                        <div class="ed-group-body">
+                          <button class="ed-btn" type="button" id="use-markdown">Use Markdown</button>
+                          <label class="sb-library-category" for="module-library-category">Show only<select id="module-library-category"><option value="all">All modules</option><option value="favorites">My quick access</option><option value="writing">Writing</option><option value="media">Images &amp; video</option><option value="layout">Layout &amp; structure</option><option value="actions">Links &amp; buttons</option></select></label>
+                          <details class="sb-library-preferences"><summary>Customize quick access</summary><p>Choose your go-to modules. Saved in this browser.</p>{libraryModules.map(([type,label]) => <label><input type="checkbox" data-pin-module={type} />{label}</label>)}<p id="module-pin-status" role="status"></p></details>
+                        </div>
+                      </details>
                     </div>
-                    </div>
+                </div>
               </div>
             </fieldset>
           </section>
