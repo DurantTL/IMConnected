@@ -1,0 +1,173 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { readChromeForAdmin, saveChrome } from '../../lib/chrome-store';
+import { defaultChrome, CHROME_LINK_LIMIT, type SiteChrome } from '../../lib/site-chrome';
+import { readFormLimited } from '../../lib/draft-http';
+import { clientIp } from '../../lib/request';
+export const prerender = false;
+const user = Astro.locals.user!;
+if (user.role !== 'admin') return new Response('Administrators only.', { status: 403 });
+let { state, broken } = readChromeForAdmin();
+let error = '', success = '', staged = '';
+let shown: SiteChrome = { header: state.header, footer: state.footer };
+
+// Raw (unvalidated) values from the form, in the shape normalizeChrome() checks.
+function fromForm(form: FormData): unknown {
+  const s = (k: string) => { const v = form.get(k); return typeof v === 'string' ? v : ''; };
+  const b = (k: string) => form.has(k);
+  const rows: { label: string; url: string; order: number; row: number }[] = [];
+  for (let i = 0; i < CHROME_LINK_LIMIT; i++) {
+    const label = s(`label.${i}`), url = s(`href.${i}`);
+    if (!label.trim() && !url.trim()) continue;
+    const order = Number(s(`order.${i}`));
+    rows.push({ label, url, order: Number.isFinite(order) ? order : 99, row: i });
+  }
+  rows.sort((a, c) => a.order - c.order || a.row - c.row);
+  return {
+    header: {
+      showTopLine: b('h_showTopLine'), topLineText: s('h_topLineText'), topLineLinkLabel: s('h_topLineLinkLabel'), topLineLinkUrl: s('h_topLineLinkUrl'),
+      showMastheadNote: b('h_showMastheadNote'), mastheadNote: [s('h_note0'), s('h_note1'), s('h_note2')],
+      showStrip: b('h_showStrip'), stripText: s('h_stripText'), edition: s('h_edition'),
+      showSearch: b('h_showSearch'), showSubmit: b('h_showSubmit'), submitLabel: s('h_submitLabel'),
+    },
+    footer: {
+      statementLine1: s('f_statementLine1'), statementLine2: s('f_statementLine2'),
+      showStatementButton: b('f_showStatementButton'), statementButtonLabel: s('f_statementButtonLabel'), statementButtonUrl: s('f_statementButtonUrl'),
+      intro: s('f_intro'), showSections: b('f_showSections'), sectionsHeading: s('f_sectionsHeading'),
+      involvedHeading: s('f_involvedHeading'), involvedLinks: rows.map((r) => ({ label: r.label, url: r.url })),
+      contactEmail: s('f_contactEmail'), contactAfter: Number.isInteger(Number(s('f_contactAfter'))) && s('f_contactAfter') !== '' ? Number(s('f_contactAfter')) : -1,
+      copyright: s('f_copyright'), showEditorLink: b('f_showEditorLink'),
+    },
+  };
+}
+
+if (Astro.request.method === 'POST') {
+  try {
+    const form = await readFormLimited(Astro.request, 96 * 1024);
+    if (!form || form === 'too_big') throw new Error('The form is unreadable or too large.');
+    const version = String(form.get('version') ?? '');
+    if (!/^\d{1,12}$/.test(version)) throw new Error('Reload the page before saving.');
+    if (form.get('action') === 'reset') {
+      // Staged, like the home page editor: the defaults are shown in the form and nothing is saved until Save.
+      const current = readChromeForAdmin();
+      if (current.state.version !== Number(version)) { Astro.response.status = 409; error = 'Someone else changed the header and footer. Review the current version below and apply your changes again.'; shown = { header: current.state.header, footer: current.state.footer }; }
+      else shown = defaultChrome();
+      state = current.state; broken = current.broken;
+      if (!error) staged = 'The default header and footer are loaded below. Unsaved: press Save header and footer to apply them.';
+    } else {
+      const raw = fromForm(form);
+      shown = raw as SiteChrome;
+      const result = saveChrome(raw, Number(version), user.id, clientIp(Astro.request, Astro.clientAddress));
+      ({ state, broken } = readChromeForAdmin());
+      if (result === 'conflict') { Astro.response.status = 409; error = 'Someone else changed the header and footer. Review the current version below and apply your changes again.'; }
+      else { success = result === 'unchanged' ? 'No changes to save.' : 'Header and footer saved. Public pages will use these settings.'; }
+      shown = { header: state.header, footer: state.footer };
+    }
+  } catch (e) { Astro.response.status = 400; error = e instanceof Error ? e.message : 'The header and footer could not be saved.'; }
+}
+const h = shown.header, f = shown.footer;
+const note = (Array.isArray(h.mastheadNote) ? h.mastheadNote : []) as string[];
+const links = Array.isArray(f.involvedLinks) ? f.involvedLinks : [];
+const rows = Array.from({ length: CHROME_LINK_LIMIT }, (_, i) => links[i] ?? { label: '', url: '' });
+---
+<Admin title="Header and footer" current="header-footer" wide>
+  <div class="cms-bar admin-page-head"><div><p class="admin-eyebrow">Website settings</p><h1>Header and footer</h1><p class="admin-note">Edit the words, links and what shows at the top and bottom of every page. Everything is plain text. The website menu and the Sections list are edited elsewhere.</p></div></div>
+  {error && <p class="admin-error" role="alert">{error}</p>}
+  {success && <p class="admin-ok" role="status">{success}</p>}
+  {staged && <p class="admin-note chrome-staged" role="status">{staged}</p>}
+  {broken && <p class="admin-error" role="alert">The saved header and footer settings could not be read, so visitors see the defaults. The form shows the defaults: save to replace the damaged settings.</p>}
+  <form method="post" class="chrome-editor">
+    <input type="hidden" name="version" value={state.version} />
+    <div class="chrome-actions"><button class="cms-btn" type="submit" name="action" value="save">Save header and footer</button><button class="cms-btn secondary" type="submit" name="action" value="reset" formnovalidate>Restore defaults</button></div>
+
+    <fieldset class="chrome-card">
+      <legend>Header</legend>
+      <label class="chrome-check"><input type="checkbox" name="h_showTopLine" checked={h.showTopLine} />Show the top line</label>
+      <div class="chrome-grid">
+        <label>Top line text<input type="text" name="h_topLineText" maxlength="80" value={h.topLineText} /></label>
+        <label>Top line link label<input type="text" name="h_topLineLinkLabel" maxlength="40" value={h.topLineLinkLabel} /></label>
+        <label>Top line link address<input type="text" name="h_topLineLinkUrl" maxlength="2048" value={h.topLineLinkUrl} placeholder="https://…" /></label>
+      </div>
+      <label class="chrome-check"><input type="checkbox" name="h_showMastheadNote" checked={h.showMastheadNote} />Show the masthead note (beside the logo)</label>
+      <div class="chrome-grid">
+        <label>Masthead note, line 1<input type="text" name="h_note0" maxlength="80" value={note[0] ?? ''} /></label>
+        <label>Masthead note, line 2<input type="text" name="h_note1" maxlength="80" value={note[1] ?? ''} /></label>
+        <label>Masthead note, line 3 (bold)<input type="text" name="h_note2" maxlength="80" value={note[2] ?? ''} /></label>
+      </div>
+      <label class="chrome-check"><input type="checkbox" name="h_showStrip" checked={h.showStrip} />Show the conference strip</label>
+      <div class="chrome-grid">
+        <label>Conference strip text<input type="text" name="h_stripText" maxlength="80" value={h.stripText} /></label>
+        <label>Edition label (leave empty to hide)<input type="text" name="h_edition" maxlength="40" value={h.edition} /></label>
+      </div>
+      <label class="chrome-check"><input type="checkbox" name="h_showSearch" checked={h.showSearch} />Show the Search link</label>
+      <label class="chrome-check"><input type="checkbox" name="h_showSubmit" checked={h.showSubmit} />Show the Submit button</label>
+      <div class="chrome-grid"><label>Submit button label<input type="text" name="h_submitLabel" maxlength="40" value={h.submitLabel} /></label></div>
+    </fieldset>
+
+    <fieldset class="chrome-card">
+      <legend>Footer</legend>
+      <div class="chrome-grid">
+        <label>Statement, line 1<input type="text" name="f_statementLine1" maxlength="120" value={f.statementLine1} /></label>
+        <label>Statement, line 2 (emphasized)<input type="text" name="f_statementLine2" maxlength="120" value={f.statementLine2} /></label>
+      </div>
+      <label class="chrome-check"><input type="checkbox" name="f_showStatementButton" checked={f.showStatementButton} />Show the statement button</label>
+      <div class="chrome-grid">
+        <label>Statement button label<input type="text" name="f_statementButtonLabel" maxlength="40" value={f.statementButtonLabel} /></label>
+        <label>Statement button address<input type="text" name="f_statementButtonUrl" maxlength="2048" value={f.statementButtonUrl} placeholder="/submit/ or https://…" /></label>
+      </div>
+      <div class="chrome-grid"><label class="wide">Intro sentence (leave empty to hide; the conference name in it links to the conference site)<input type="text" name="f_intro" maxlength="240" value={f.intro} /></label></div>
+      <label class="chrome-check"><input type="checkbox" name="f_showSections" checked={f.showSections} />Show the Sections column (the list itself comes from the site’s sections)</label>
+      <div class="chrome-grid"><label>Sections column heading<input type="text" name="f_sectionsHeading" maxlength="40" value={f.sectionsHeading} /></label></div>
+      <div class="chrome-grid"><label>Get involved column heading<input type="text" name="f_involvedHeading" maxlength="40" value={f.involvedHeading} /></label></div>
+      <p class="admin-note">Up to {CHROME_LINK_LIMIT} Get involved links. Use a public /page/ address or a full HTTPS link. Clear a row’s label and address to remove it.</p>
+      <ol class="chrome-rows">{rows.map((l, i) => <li class="chrome-row">
+        <label><span data-row-label="position">Link {i + 1} position</span><input type="number" name={`order.${i}`} min="1" max={CHROME_LINK_LIMIT} value={i + 1} /></label>
+        <label><span data-row-label="label">Link {i + 1} label</span><input type="text" name={`label.${i}`} maxlength="40" value={l.label} /></label>
+        <label><span data-row-label="address">Link {i + 1} address</span><input type="text" name={`href.${i}`} maxlength="2048" value={l.url} placeholder="/page/ or https://…" /></label>
+        <div class="chrome-order" hidden><button type="button" class="cms-btn secondary" data-chrome-move="-1" aria-label={`Move link ${i + 1} up`} disabled={i === 0}>↑</button><button type="button" class="cms-btn secondary" data-chrome-move="1" aria-label={`Move link ${i + 1} down`} disabled={i === CHROME_LINK_LIMIT - 1}>↓</button></div>
+      </li>)}</ol>
+      <div class="chrome-grid">
+        <label>Contact email (leave empty to hide)<input type="email" name="f_contactEmail" maxlength="254" value={f.contactEmail} /></label>
+        <label>Show the contact email after link number (0 = first)<input type="number" name="f_contactAfter" min="0" max={CHROME_LINK_LIMIT} value={f.contactAfter} /></label>
+        <label>Copyright holder (the year is automatic)<input type="text" name="f_copyright" maxlength="120" value={f.copyright} /></label>
+      </div>
+      <label class="chrome-check"><input type="checkbox" name="f_showEditorLink" checked={f.showEditorLink} />Show the “Editor sign in” link</label>
+    </fieldset>
+  </form>
+</Admin>
+<script>
+  const rowsOf = () => Array.from(document.querySelectorAll<HTMLElement>('.chrome-row'));
+  const num = (r: HTMLElement) => r.querySelector<HTMLInputElement>('input[type=number]')!;
+  // Reorder controls are script-only: without JavaScript the Position numbers do the ordering.
+  const renumber = () => rowsOf().forEach((r, i) => {
+    num(r).value = String(i + 1);
+    for (const s of r.querySelectorAll<HTMLElement>('[data-row-label]')) s.textContent = `Link ${i + 1} ${s.dataset.rowLabel}`;
+    const c = r.querySelectorAll<HTMLButtonElement>('[data-chrome-move]');
+    c[0].disabled = i === 0; c[1].disabled = i === rowsOf().length - 1;
+    c[0].setAttribute('aria-label', `Move link ${i + 1} up`); c[1].setAttribute('aria-label', `Move link ${i + 1} down`);
+  });
+  for (const box of document.querySelectorAll<HTMLElement>('.chrome-order')) box.hidden = false;
+  // Show the rows in Position order first (a no-JavaScript form may have been posted with shuffled numbers).
+  rowsOf().sort((a, b) => Number(num(a).value) - Number(num(b).value)).forEach((r) => r.parentElement!.append(r)); renumber();
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-chrome-move]')) button.addEventListener('click', () => {
+    const row = button.closest<HTMLElement>('.chrome-row')!, rows = rowsOf(), next = rows[rows.indexOf(row) + Number(button.dataset.chromeMove)];
+    if (!next) return;
+    if (Number(button.dataset.chromeMove) < 0) next.before(row); else next.after(row);
+    renumber(); button.focus();
+  });
+</script>
+<style>
+  .chrome-actions{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+  .chrome-card{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:18px;margin:0 0 20px;display:grid;gap:14px;min-width:0}
+  .chrome-card legend{font-weight:700;padding:0 8px;font-size:1.05rem}
+  .chrome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+  .chrome-grid label,.chrome-row label{display:grid;gap:6px;font-size:.85rem;font-weight:600;min-width:0}
+  .chrome-grid label.wide{grid-column:1/-1}
+  .chrome-grid input,.chrome-row input[type=text],.chrome-row input[type=number]{width:100%;min-height:44px;padding:9px;border:1px solid var(--line);border-radius:7px;font:inherit;color:var(--ink);background:var(--bg)}
+  .chrome-check{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:600}
+  .chrome-check input{width:22px;height:22px;flex-shrink:0}
+  .chrome-rows{padding:0;list-style:none;display:grid;gap:10px;margin:0}
+  .chrome-row{display:grid;grid-template-columns:90px minmax(120px,1fr) minmax(200px,2fr) auto;gap:12px;align-items:end;padding:12px;border:1px solid var(--line);border-radius:10px}
+  .chrome-order{display:flex;gap:6px}.chrome-order[hidden]{display:none}.chrome-order button{min-width:44px}
+  @media(max-width:900px){.chrome-row{grid-template-columns:80px minmax(0,1fr)}.chrome-row label:nth-of-type(3){grid-column:1/-1}.chrome-order{justify-self:end}}
+</style>
