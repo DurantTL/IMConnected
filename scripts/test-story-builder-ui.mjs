@@ -3,7 +3,7 @@
 // npm run build
 // [PLAYWRIGHT_ROOT=<folder>] [CHROMIUM_PATH=<browser>] [CHROMIUM_NO_SANDBOX=1] [AXE_JS=<axe.min.js>] node scripts/test-story-builder-ui.mjs
 import assert from 'node:assert/strict';
-import { normalizeStoryBlocks } from '../src/lib/story-blocks.ts';
+import { normalizeStoryBlocks, storyBlocksToMarkdown } from '../src/lib/story-blocks.ts';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -745,9 +745,15 @@ try {
   await page.locator('#blocks-undo').click(); check('formatting settings are atomic undo changes', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0][0].spacing === undefined); await page.locator('#blocks-redo').click();
   await addModule(page, 'image');
   await choose(section.content[1][0].id); await page.locator('[data-module-field=text]').fill('Synthetic right column text.');
-  const beforeCrossDrop = await page.locator('#story-blocks').inputValue();
-  await page.locator(`#module-outline [data-module-id="${section.content[0][0].id}"]`).evaluate((target, id) => { const dataTransfer = new DataTransfer(); dataTransfer.setData('text/plain', id); target.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer })); }, section.content[1][0].id);
-  check('cross-column drag is rejected visibly without reordering the source', await page.locator('#story-blocks').inputValue() === beforeCrossDrop && (await page.locator('#module-status').textContent()).includes('Move to column'));
+  // Issue #151: dragging a column child by its handle into the other column is allowed (it follows the same rules as Move to column).
+  {
+    const handle = await page.locator(`[data-drag-handle="${section.content[1][0].id}"]`).boundingBox();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2); await page.mouse.down(); await page.mouse.move(handle.x + 20, handle.y + 20, { steps: 4 });
+    const target = await page.locator(`#module-outline [data-module-id="${section.content[0][0].id}"]`).boundingBox();
+    await page.mouse.move(target.x + 120, target.y + target.height - 1, { steps: 8 }); await page.waitForTimeout(250); await page.mouse.up(); await page.waitForTimeout(150);
+  }
+  check('a column child dragged by its handle into the other column moves there', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[1].length === 0 && (await page.locator('#module-status').textContent()).includes('moved to position'));
+  await page.locator('#blocks-undo').click();
   await page.getByRole('button', { name: 'Move to column 1', exact: true }).click();
   check('child modules can move across columns without losing content', JSON.parse(await page.locator('#story-blocks').inputValue()).at(-1).content[0].at(-1).text === 'Synthetic right column text.');
   await page.getByRole('button', { name: 'Move to column 2', exact: true }).click();
@@ -1268,6 +1274,306 @@ try {
     for (let attempt = 0; attempt < 80; attempt++) { try { unavailableResponse = await fetch(`http://localhost:${PORT + 1}/announcements/`); break; } catch { await sleep(100); } }
     check('unreadable database makes the board503/no-store with no frozen archive fallback', unavailableResponse?.status === 503 && unavailableResponse.headers.get('cache-control') === 'no-store' && !(await unavailableResponse.text()).includes('data-board-kind'));
   } finally { const stopped = new Promise((resolve) => unavailableServer.once('exit', resolve)); unavailableServer.kill('SIGTERM'); await Promise.race([stopped, sleep(2000)]); if (unavailableServer.exitCode === null) unavailableServer.kill('SIGKILL'); }
+  // ---- Drag modules onto the canvas and reorder by dragging (issue #151). Synthetic modules only.
+  {
+    const para = (id, text) => ({ id, type: 'text', text });
+    // `modules` is a list, or a function of the uploaded photo's id (an image module must name one of the draft's own photos).
+    const dndPage = async (modules, { photo = true, markdown = false, viewport = { width: 1440, height: 1000 }, reduced = false } = {}) => {
+      const made = await post('/api/admin/drafts/new', new FormData());
+      const dId = Number(/\/drafts\/(\d+)/.exec(made.headers.get('location'))[1]);
+      const version = () => String(db.prepare('SELECT updated_at FROM drafts WHERE id=?').get(dId).updated_at);
+      let photoId = null;
+      if (photo) {
+        const up = new FormData(); up.set('version', version()); up.set('op', 'upload'); up.set('photos', new Blob([png], { type: 'image/png' }), 'synthetic.png');
+        await post(`/api/admin/drafts/${dId}/photos`, up);
+        photoId = db.prepare('SELECT id FROM draft_photos WHERE draft_id=?').get(dId).id;
+      }
+      const list = typeof modules === 'function' ? modules(photoId) : modules;
+      const form = new FormData();
+      for (const [name, value] of Object.entries({ version: version(), title: 'Synthetic drag and drop story', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: markdown ? 'Synthetic Markdown body that stays Markdown, long enough to count as a story body.' : storyBlocksToMarkdown(list), photoLayout: 'one', photoCredit: 'Synthetic Photographer', storyBlocks: JSON.stringify(markdown ? [] : list) })) form.set(name, String(value));
+      const saved = await post(`/api/admin/drafts/${dId}/save`, form);
+      if (saved.status !== 200) assert.fail('synthetic drag draft save refused: ' + await saved.text());
+      const ctx = reduced ? await browser.newContext({ viewport, reducedMotion: 'reduce' }) : await browser.newContext({ viewport });
+      await ctx.addCookies([{ name: '__Host-imc_session', value: token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
+      const pg = await ctx.newPage();
+      pg.on('pageerror', (error) => pageErrors.push(String(error)));
+      pg.on('dialog', (dialog) => dialog.accept());
+      await pg.goto(`${BASE}/admin/drafts/${dId}`);
+      await pg.locator('#module-outline').waitFor({ state: 'attached' });
+      return { pg, ctx, dId, photoId };
+    };
+    const order = (pg) => pg.locator('#story-blocks').inputValue().then((v) => JSON.parse(v));
+    const ids = (list) => list.map((b) => b.id);
+    const status = (pg) => pg.locator('#module-status').textContent();
+    const card = (pg, id) => pg.locator(`#module-outline > li[data-module-id="${id}"]`);
+    const libraryItem = async (pg, type) => { await pg.locator('[data-studio-tab=modules]').click(); await openGroupOf(pg, `[data-library-item="${type}"]`); const item = pg.locator(`[data-library-item="${type}"]`); await item.scrollIntoViewIfNeeded(); return item; };
+    const showCanvas = (pg) => pg.evaluate(() => scrollTo(0, Math.max(0, document.querySelector('#module-outline').getBoundingClientRect().top + scrollY - 200)));
+    const lift = async (pg, source) => {
+      if (await source.evaluate((el) => el.hasAttribute('data-drag-handle'))) { await showCanvas(pg); await pg.waitForTimeout(50); }
+      const b = await source.boundingBox(), x = b.x + b.width / 2, y = b.y + b.height / 2;
+      await pg.mouse.move(x, y); await pg.mouse.down(); await pg.mouse.move(x + 3, y + 3); await pg.mouse.move(x + 14, y + 10, { steps: 3 });
+      await pg.locator('.sb-drag-ghost').waitFor();
+      await showCanvas(pg); // a library item is dragged from the sidebar; bring the canvas under the pointer
+      await pg.waitForTimeout(300); // the cards finish folding the "+" rows away (a 180ms FLIP) before positions are read
+      return { x, y };
+    };
+    const over = async (pg, x, y) => { await pg.mouse.move(x, y, { steps: 8 }); await pg.waitForTimeout(220); };
+    const spot = async (pg, id, where) => { const b = await card(pg, id).boundingBox(); return { x: b.x + b.width / 2, y: where === 'top' ? b.y + 1 : where === 'bottom' ? b.y + b.height - 1 : b.y + b.height / 2 }; };
+    const release = async (pg) => { await pg.mouse.up(); await pg.waitForTimeout(120); };
+    const base = [para('a', 'Alpha synthetic'), para('b', 'Bravo synthetic'), para('c', 'Charlie synthetic')];
+
+    // library -> top, middle, end
+    {
+      const { pg, ctx } = await dndPage(base);
+      const heading = await libraryItem(pg, 'heading');
+      await lift(pg, heading);
+      const topSpot = await spot(pg, 'a', 'top');
+      await over(pg, topSpot.x, topSpot.y);
+      check('dragging a library item shows a ghost, a lifted source and a navy insertion line', await pg.locator('.sb-drag-ghost').isVisible() && await heading.evaluate((el) => el.classList.contains('is-lifted')) && await pg.locator('.sb-drop-line[data-state=ok]').isVisible());
+      const line = await pg.locator('.sb-drop-line').boundingBox();
+      check('the insertion line is 3px, navy and rounded', Math.abs(line.height - 3) < 0.6 && await pg.locator('.sb-drop-line').evaluate((el) => { const s = getComputedStyle(el); return s.backgroundColor === 'rgb(0, 59, 92)' && parseFloat(s.borderTopLeftRadius) > 0; }));
+      check('neighbouring cards slide apart to make room (a translate on the cards after the line)', await pg.evaluate(() => [...document.querySelectorAll('#module-outline > li[data-module-card]')].some((li) => li.style.transform.startsWith('translateY'))) && await card(pg, 'a').evaluate((el) => getComputedStyle(el).transitionDuration) === '0.18s');
+      if (shots) await pg.screenshot({ path: path.join(shots, 'drag-library-to-top.png') });
+      await release(pg);
+      let list = await order(pg);
+      check('dropping a library item at the top inserts it first, exactly like + Add (defaults, selected)', list.length === 4 && list[0].type === 'heading' && list[0].level === 2 && list[0].text === '' && ids(list).slice(1).join() === 'a,b,c');
+      check('the dropped module is selected, its settings open and the drop is announced', await pg.locator('#module-title').textContent() === 'Heading settings' && await pg.locator('[data-studio-tab=module]').getAttribute('aria-selected') === 'true' && (await status(pg)) === 'Heading added at the top.');
+      check('only one module was added (the click after a drag is swallowed) and Undo removes it', list.length === 4 && await pg.locator('#blocks-undo').click().then(async () => (await order(pg)).length === 3));
+      const quote = await libraryItem(pg, 'quote');
+      await lift(pg, quote);
+      const between = await spot(pg, 'a', 'bottom');
+      await over(pg, between.x, between.y);
+      await release(pg);
+      list = await order(pg);
+      check('dropping between two modules inserts there and says what it follows', list.length === 4 && ids(list).filter((i) => ['a', 'b', 'c'].includes(i)).join() === 'a,b,c' && list[1].type === 'quote' && (await status(pg)) === 'Quote added after Paragraph.');
+      const divider = await libraryItem(pg, 'divider');
+      await lift(pg, divider);
+      const end = await spot(pg, 'c', 'bottom');
+      await over(pg, end.x, end.y + 30);
+      await release(pg);
+      list = await order(pg);
+      check('dropping below the last module appends it', list.length === 5 && list[4].type === 'divider');
+      await ctx.close();
+    }
+    // library -> a Section column (empty and filled), invalid targets
+    {
+      const section = { id: 's', type: 'section', content: [[para('s1', 'In column one')], []] };
+      const { pg, ctx } = await dndPage([para('a', 'Alpha synthetic'), section, para('z', 'Zulu synthetic')]);
+      check('an empty Section column shows a drop area', await pg.locator('li[data-drop-empty]').count() === 1);
+      const heading = await libraryItem(pg, 'heading');
+      await lift(pg, heading);
+      const empty = await pg.locator('li[data-drop-empty]').boundingBox();
+      await over(pg, empty.x + empty.width / 2, empty.y + empty.height / 2);
+      await release(pg);
+      let list = await order(pg);
+      check('a library item can be dropped into an empty Section column', list[1].content[1].length === 1 && list[1].content[1][0].type === 'heading' && list.length === 3);
+      const quote = await libraryItem(pg, 'quote');
+      await lift(pg, quote);
+      const child = await spot(pg, 's1', 'bottom');
+      await over(pg, child.x + 20, child.y);
+      await release(pg);
+      list = await order(pg);
+      check('a library item can be dropped after a module inside a column', list[1].content[0].map((b) => b.type).join() === 'text,quote' && (await status(pg)).startsWith('Quote added after Paragraph'));
+      const nested = await libraryItem(pg, 'section');
+      const before = JSON.stringify(await order(pg));
+      await lift(pg, nested);
+      const col = await spot(pg, 's1', 'top');
+      await over(pg, col.x + 20, col.y);
+      check('a section over a Section column shows the not-allowed state with the reason', await pg.locator('.sb-drop-line[data-state=invalid]').isVisible() && (await pg.locator('.sb-drop-tip').textContent()).includes('Sections cannot be nested'));
+      if (shots) await pg.screenshot({ path: path.join(shots, 'drag-invalid-target.png') });
+      await release(pg);
+      check('dropping a nested section changes nothing and says why', JSON.stringify(await order(pg)) === before && (await status(pg)).includes('Sections cannot be nested'));
+      const again = await libraryItem(pg, 'section');
+      await lift(pg, again);
+      const topSpot = await spot(pg, 'z', 'top');
+      await over(pg, topSpot.x, topSpot.y);
+      await release(pg);
+      list = await order(pg);
+      check('a section can be dropped between top-level modules (three module spaces)', list.length === 4 && list[2].type === 'section' && list[2].content.length === 2);
+      await ctx.close();
+    }
+    // image placement refused inside a section; a moved module can leave a section
+    {
+      const { pg, ctx } = await dndPage((photoId) => [{ id: 'img', type: 'image', photoId, alt: 'Synthetic wide photo', placement: 'wide' }, { id: 's', type: 'section', content: [[para('s1', 'Inside')], [para('s2', 'Inside two')]] }, para('tail', 'Tail synthetic')]);
+      const imgBefore = JSON.stringify(await order(pg));
+      check('the saved image module (with a placement) is on the canvas', JSON.parse(imgBefore)[0].placement === 'wide');
+      await lift(pg, pg.locator('[data-drag-handle="img"]'));
+      const col = await spot(pg, 's1', 'bottom');
+      await over(pg, col.x + 20, col.y);
+      check('an image with a size/alignment shows not-allowed over a Section column', await pg.locator('.sb-drop-line[data-state=invalid]').isVisible() && (await pg.locator('.sb-drop-tip').textContent()).includes('not available for photos inside a section'));
+      await release(pg);
+      check('refusing an image placement inside a section changes nothing', JSON.stringify(await order(pg)) === imgBefore && (await status(pg)).includes('Size and alignment is not available'));
+      await lift(pg, pg.locator('[data-drag-handle="s1"]'));
+      const top = await spot(pg, 'tail', 'bottom');
+      await over(pg, top.x - 10, top.y + 24);
+      await release(pg);
+      const list = await order(pg);
+      check('a module dragged out of a section column lands at the top level', list.map((b) => b.id).join() === 'img,s,tail,s1' && list[1].content[0].length === 0 && (await status(pg)).startsWith('Paragraph moved to position'));
+      await ctx.close();
+    }
+    // over the limit
+    {
+      const sixty = Array.from({ length: 60 }, (_, i) => ({ id: `d${i}`, type: 'divider' }));
+      const { pg, ctx } = await dndPage(sixty);
+      const paragraph = await libraryItem(pg, 'text');
+      await lift(pg, paragraph);
+      const t = await spot(pg, 'd0', 'top');
+      await over(pg, t.x, Math.max(t.y, 120));
+      check('over the 60-module limit the line shows not-allowed', await pg.locator('.sb-drop-line[data-state=invalid]').isVisible());
+      await release(pg);
+      check('a drop over the limit adds nothing and gives the existing message', (await order(pg)).length === 60 && (await status(pg)).includes('A story can have up to 60 modules'));
+      await ctx.close();
+    }
+    // reorder by dragging the handle
+    {
+      const { pg, ctx } = await dndPage(base);
+      check('every module card has a labelled drag handle button', await pg.locator('#module-outline button[data-drag-handle]').count() === 3 && await pg.locator('button[data-drag-handle="a"]').getAttribute('aria-label') === 'Drag module 1 to reorder');
+      await lift(pg, pg.locator('[data-drag-handle="c"]'));
+      const t = await spot(pg, 'a', 'top');
+      await over(pg, t.x, t.y);
+      if (shots) await pg.screenshot({ path: path.join(shots, 'drag-reorder-line.png') });
+      await release(pg);
+      check('dragging the last module to the top reorders the stored storyBlocks', ids(await order(pg)).join() === 'c,a,b' && (await status(pg)) === 'Paragraph moved to position 1.');
+      check('the moved card is highlighted briefly', await card(pg, 'c').evaluate((el) => el.classList.contains('sb-flash')));
+      await pg.waitForTimeout(800);
+      check('the highlight ends after about 600ms', await card(pg, 'c').evaluate((el) => !el.classList.contains('sb-flash')));
+      await lift(pg, pg.locator('[data-drag-handle="c"]'));
+      const e = await spot(pg, 'b', 'bottom');
+      await over(pg, e.x, e.y + 20);
+      await release(pg);
+      check('dragging to the end reorders again and Undo restores the previous order', ids(await order(pg)).join() === 'a,b,c' && await pg.locator('#blocks-undo').click().then(async () => ids(await order(pg)).join() === 'c,a,b'));
+      await lift(pg, pg.locator('[data-drag-handle="a"]'));
+      const same = await spot(pg, 'a', 'top');
+      await over(pg, same.x, same.y);
+      check('dropping a module where it already is shows no line', await pg.locator('.sb-drop-line').isHidden());
+      await release(pg);
+      check('and changes nothing', ids(await order(pg)).join() === 'c,a,b');
+      await pg.locator('[data-drag-handle="a"]').focus();
+      await pg.keyboard.press('ArrowDown');
+      check('the arrow keys on a handle move the module (keyboard path), announced', ids(await order(pg)).join() === 'c,b,a' && (await status(pg)).includes('moved to position 3'));
+      await ctx.close();
+    }
+    // Escape cancels
+    {
+      const { pg, ctx } = await dndPage(base);
+      const before = JSON.stringify(await order(pg));
+      await lift(pg, pg.locator('[data-drag-handle="c"]'));
+      const t = await spot(pg, 'a', 'top');
+      await over(pg, t.x, t.y);
+      await pg.keyboard.press('Escape');
+      await pg.waitForTimeout(350);
+      check('Escape cancels the drag: ghost, line and lift are gone, nothing changed, announced', JSON.stringify(await order(pg)) === before && await pg.locator('.sb-drag-ghost, .sb-drop-line').count() === 0 && await pg.locator('.is-lifted').count() === 0 && (await status(pg)) === 'Move cancelled.');
+      await release(pg);
+      check('releasing the pointer after Escape does nothing', JSON.stringify(await order(pg)) === before);
+      const heading = await libraryItem(pg, 'heading');
+      await lift(pg, heading); await pg.keyboard.press('Escape'); await pg.waitForTimeout(300); await release(pg);
+      check('Escape also cancels a library drag without adding anything', JSON.stringify(await order(pg)) === before);
+      await ctx.close();
+    }
+    // touch: a held press starts the drag; an early swipe is a scroll
+    {
+      const { pg, ctx } = await dndPage(base);
+      const fire = (selector, type, x, y) => pg.evaluate(([sel, t, cx, cy]) => { document.querySelector(sel).dispatchEvent(new PointerEvent(t, { bubbles: true, cancelable: true, composed: true, pointerId: 7, pointerType: 'touch', isPrimary: true, clientX: cx, clientY: cy, button: 0, buttons: t === 'pointerup' ? 0 : 1 })); }, [selector, type, x, y]);
+      await showCanvas(pg); await pg.waitForTimeout(50);
+      const hb = await pg.locator('[data-drag-handle="c"]').boundingBox();
+      const hx = hb.x + hb.width / 2, hy = hb.y + hb.height / 2;
+      await fire('[data-drag-handle="c"]', 'pointerdown', hx, hy);
+      await pg.waitForTimeout(100);
+      await fire('[data-drag-handle="c"]', 'pointermove', hx, hy - 30);
+      await pg.waitForTimeout(300);
+      check('a touch that moves before the long-press is a scroll: no drag starts', await pg.locator('.sb-drag-ghost').count() === 0);
+      await fire('[data-drag-handle="c"]', 'pointerup', hx, hy - 30);
+      await fire('[data-drag-handle="c"]', 'pointerdown', hx, hy);
+      await pg.waitForTimeout(100);
+      check('a touch needs a press of about 250ms before the drag starts', await pg.locator('.sb-drag-ghost').count() === 0);
+      await pg.waitForTimeout(300);
+      check('after the long-press the drag starts (lift and ghost)', await pg.locator('.sb-drag-ghost').count() === 1 && await pg.locator('.is-lifted').count() >= 1);
+      const t = await spot(pg, 'a', 'top');
+      await fire('[data-drag-handle="c"]', 'pointermove', t.x, t.y + 30);
+      await fire('[data-drag-handle="c"]', 'pointermove', t.x, t.y);
+      await pg.waitForTimeout(150);
+      await fire('[data-drag-handle="c"]', 'pointerup', t.x, t.y);
+      await pg.waitForTimeout(150);
+      check('a touch-style drag through pointer events reorders the modules', ids(await order(pg)).join() === 'c,a,b');
+      await ctx.close();
+    }
+    // auto-scroll near the window edges
+    {
+      const many = Array.from({ length: 40 }, (_, i) => para(`m${i}`, `Synthetic paragraph ${i}`));
+      const { pg, ctx } = await dndPage(many, { viewport: { width: 1280, height: 800 } });
+      await lift(pg, pg.locator('[data-drag-handle="m0"]'));
+      const before = await pg.evaluate(() => scrollY);
+      const b = await card(pg, 'm0').boundingBox();
+      await pg.mouse.move(b.x + 100, 790, { steps: 6 });
+      await pg.waitForTimeout(500);
+      const down = await pg.evaluate(() => scrollY);
+      check('dragging within 64px of the bottom edge scrolls the page', down > before + 40);
+      await pg.mouse.move(b.x + 100, 20, { steps: 6 });
+      await pg.waitForTimeout(500);
+      check('dragging within 64px of the top edge scrolls back up', await pg.evaluate(() => scrollY) < down);
+      await pg.mouse.move(b.x + 100, 400, { steps: 3 });
+      await pg.waitForTimeout(100);
+      const rest = await pg.evaluate(() => scrollY); await pg.waitForTimeout(300);
+      check('scrolling stops away from the edges', await pg.evaluate(() => scrollY) === rest);
+      await pg.keyboard.press('Escape'); await release(pg);
+      await ctx.close();
+    }
+    // reduced motion: no transforms, transitions, ghost transform or flash
+    {
+      const { pg, ctx } = await dndPage(base, { reduced: true });
+      check('the reduced-motion preference is on', await pg.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches));
+      await lift(pg, pg.locator('[data-drag-handle="c"]'));
+      const t = await spot(pg, 'a', 'top');
+      await over(pg, t.x, t.y);
+      const during = await pg.evaluate(() => ({
+        shifted: [...document.querySelectorAll('#module-outline > li')].some((li) => li.style.transform !== ''),
+        transitions: [...document.querySelectorAll('#module-outline > li')].some((li) => getComputedStyle(li).transitionDuration !== '0s'),
+        ghost: document.querySelector('.sb-drag-ghost').style.transform,
+        lineTransition: getComputedStyle(document.querySelector('.sb-drop-line')).transitionDuration,
+        lift: [...document.querySelectorAll('.is-lifted, li:has(> .is-lifted)')].some((el) => getComputedStyle(el).scale !== 'none'),
+      }));
+      check('reduced motion: no card transforms, transitions, ghost transform, line animation or lift scale during a drag', !during.shifted && !during.transitions && during.ghost === '' && during.lineTransition === '0s' && !during.lift, JSON.stringify(during));
+      check('reduced motion: the insertion line still shows where the module will land', await pg.locator('.sb-drop-line[data-state=ok]').isVisible());
+      await release(pg);
+      check('reduced motion: the drop works, with no flash and no running animations', ids(await order(pg)).join() === 'c,a,b' && await pg.locator('.sb-flash').count() === 0 && await pg.evaluate(() => document.getAnimations().length) === 0);
+      await ctx.close();
+    }
+    // keyboard: Enter on a library item adds after the selected module; Markdown stories have no drop zone
+    {
+      const { pg, ctx } = await dndPage(base);
+      await pg.locator('#module-outline [data-select-module="b"]').click();
+      const heading = await libraryItem(pg, 'heading');
+      await heading.focus(); await pg.keyboard.press('Enter');
+      const list = await order(pg);
+      check('Enter on a library item adds it after the selected module and announces it', ids(list).filter((i) => ['a', 'b', 'c'].includes(i)).join() === 'a,b,c' && list[2].type === 'heading' && (await status(pg)) === 'Heading module added.');
+      await ctx.close();
+    }
+    {
+      const { pg, ctx } = await dndPage([], { markdown: true });
+      check('a Markdown story shows Split into modules, no drag handles and no drop zone', await pg.locator('#use-modules').isVisible() && await pg.locator('[data-drag-handle]').count() === 0 && await pg.locator('#module-canvas').isHidden() && await pg.locator('[data-library-item]:visible').count() === 0);
+      await ctx.close();
+    }
+    // a series for the pull request: lift, line, drop, settle
+    if (shots) {
+      const { pg, ctx } = await dndPage(base, { viewport: { width: 1280, height: 800 } });
+      const item = await libraryItem(pg, 'quote');
+      await pg.screenshot({ path: path.join(shots, 'drag-1-before.png') });
+      await lift(pg, item);
+      await pg.waitForTimeout(250);
+      await pg.screenshot({ path: path.join(shots, 'drag-2-lift.png') });
+      const t = await spot(pg, 'b', 'top');
+      await over(pg, t.x, t.y);
+      await pg.screenshot({ path: path.join(shots, 'drag-3-insertion-line.png') });
+      await pg.mouse.up();
+      await pg.waitForTimeout(60);
+      await pg.screenshot({ path: path.join(shots, 'drag-4-drop-settle.png') });
+      await pg.waitForTimeout(220);
+      await pg.screenshot({ path: path.join(shots, 'drag-5-highlight.png') });
+      await pg.waitForTimeout(700);
+      await pg.screenshot({ path: path.join(shots, 'drag-6-done.png') });
+      await ctx.close();
+    }
+  }
   check('editor browser interactions have no uncaught errors', pageErrors.length === 0);
   console.log(`\n${checks} story-builder browser checks passed.`);
 } catch (error) {

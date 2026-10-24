@@ -112,6 +112,35 @@
 .ed-insert:hover { background: var(--e-navy-soft); }
 .ed-module-canvas .sb-drag-help { margin: 0 0 10px; color: var(--e-muted); font-size: .85rem; }
 
+/* ---- Dragging modules (issue #151): pointer-based, see src/scripts/block-drag.ts ---- */
+.ed-module-canvas #module-outline { position: relative; }
+.ed-module-canvas #module-outline > li { position: relative; }
+.ed-module-canvas .sb-handle { position: absolute; left: 0; top: 0; bottom: 0; width: 30px; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--e-muted); font-size: 1.1rem; line-height: 1; cursor: grab; touch-action: none; display: grid; place-items: center; }
+.ed-module-canvas .sb-handle:hover, .ed-module-canvas .sb-handle:focus-visible { background: var(--e-navy-soft); color: var(--e-navy); }
+.ed-module-canvas .sb-handle:focus-visible { outline: 3px solid var(--e-navy); outline-offset: -3px; }
+.ed-module-canvas #module-outline > li.sb-empty-column { border: 1px dashed var(--e-field); background: transparent; padding: 14px; text-align: center; color: var(--e-muted); font-size: .85rem; }
+.editor-studio [data-library-item] { cursor: grab; -webkit-touch-callout: none; user-select: none; }
+.sb-dragging, .sb-dragging * { cursor: grabbing !important; user-select: none !important; }
+.ed-module-canvas #module-outline.is-dnd { padding-bottom: 28px; }
+.ed-module-canvas #module-outline.is-dnd > li.ed-insert-row { display: none; }
+.is-lifted { opacity: .55; outline: 2px dashed var(--adm-navy, #003b5c); outline-offset: -2px; }
+li:has(> .sb-handle.is-lifted) { opacity: .55; }
+.sb-handle.is-lifted { outline: 0; opacity: 1; }
+.sb-drag-ghost { position: fixed; left: 0; top: 0; z-index: 10000; pointer-events: none; max-width: 260px; padding: 8px 14px; border-radius: 10px; background: var(--adm-navy, #003b5c); color: #fff; font: 600 .9rem/1.2 system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .85; box-shadow: 0 10px 24px rgba(0, 59, 92, .35); }
+.sb-drop-line { position: absolute; z-index: 3; height: 3px; border-radius: 99px; background: var(--adm-navy, #003b5c); pointer-events: none; }
+.sb-drop-line[data-state=invalid] { background: var(--adm-coral, #a95549); }
+.sb-drop-tip { position: absolute; top: 8px; left: 8px; max-width: calc(100% - 16px); padding: 3px 9px; border-radius: 6px; background: var(--adm-coral, #a95549); color: #fff; font: 600 .78rem/1.3 system-ui, sans-serif; }
+.sb-drop-tip:empty { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .ed-module-canvas #module-outline.is-dnd > li { transition: transform 180ms ease; }
+  .sb-drop-line { transition: top 120ms ease, left 120ms ease; }
+  .sb-drag-ghost { will-change: transform; }
+  li:has(> .sb-handle.is-lifted) { scale: 1.015; box-shadow: 0 8px 20px rgba(0, 59, 92, .22); }
+  [data-library-item].is-lifted { scale: 1.04; box-shadow: 0 8px 20px rgba(0, 59, 92, .22); }
+  .ed-module-canvas #module-outline > li.sb-flash { animation: sb-flash 600ms ease-out; }
+}
+@keyframes sb-flash { from { background: #e3d3f1; box-shadow: 0 0 0 3px #c9b0e3; } }
+
 /* ---- sidebar ---- */
 .ed-sidebar { position: relative; display: block; box-sizing: border-box; min-width: 0; margin-top: var(--ed-gap); background: var(--e-paper); border: 1px solid var(--e-line); border-radius: var(--e-radius); }
 .ed-tablist { display: flex; flex-wrap: wrap; overflow: hidden; gap: 0; padding: 0 4px; background: var(--e-card); border-bottom: 1px solid var(--e-line); border-radius: var(--e-radius) var(--e-radius) 0 0; position: sticky; top: 0; z-index: 3; }
