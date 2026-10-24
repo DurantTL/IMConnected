@@ -2,23 +2,29 @@
 import Admin from '../../layouts/Admin.astro';
 import { readHomepageLayout, saveHomepageLayout } from '../../lib/homepage-layout-store';
 import { defaultBlocks, newRailKey, isRailKey, BLOCK_INFO, RAIL_LIMIT, type HomepageBlock, type FixedBlockKey } from '../../lib/homepage-layout';
-import { SECTIONS } from '../../lib/site';
+import { SECTIONS, getSection } from '../../lib/site';
 import { readFormLimited } from '../../lib/draft-http';
 import { clientIp } from '../../lib/request';
 export const prerender = false;
 const user = Astro.locals.user!;
 if (user.role !== 'admin') return new Response('Administrators only.', { status: 403 });
-let layout = readHomepageLayout(), error = '', success = '';
+
+const nameOf = (b: HomepageBlock) => isRailKey(b.key) ? `${getSection(b.section ?? '')?.label ?? 'Section'} rail` : BLOCK_INFO[b.key as FixedBlockKey]?.label ?? b.key;
+let layout = readHomepageLayout(), blocks: HomepageBlock[] = layout.blocks, version = layout.version;
+let error = '', status = '', staged = false, focusId = '', submitted = false;
 if (Astro.request.method === 'POST') {
+  // Only "Save layout" saves. Every other button re-renders the page with the changed, unsaved layout carried in the form.
+  const fail = (code: number, message: string) => { Astro.response.status = code; error = message; };
   try {
     const form = await readFormLimited(Astro.request, 64 * 1024);
     if (!form || form === 'too_big') throw new Error('The layout form is unreadable or too large.');
-    const version = String(form.get('version'));
-    if (!/^\d{1,12}$/.test(version)) throw new Error('Reload the layout before saving.');
+    const sent = String(form.get('version'));
+    if (!/^\d{1,12}$/.test(sent)) throw new Error('Reload the layout before saving.');
+    version = Number(sent);
     const action = String(form.get('action') ?? 'save');
-    let blocks: HomepageBlock[] = [];
     if (action === 'reset') blocks = defaultBlocks();
     else {
+      blocks = [];
       for (let i = 0; i < 30; i++) {
         const key = form.get(`key.${i}`);
         if (key === null) continue;
@@ -26,58 +32,85 @@ if (Astro.request.method === 'POST') {
         const section = form.get(`section.${i}`);
         blocks.push({ key, visible: form.has(`visible.${i}`), ...(isRailKey(key) ? { section: typeof section === 'string' ? section : '' } : {}) });
       }
-      const [verb, at] = action.split(':'), i = Number(at);
+    }
+    if (!blocks.length) throw new Error('The layout form was empty. Reload the page.');
+    submitted = true; staged = action !== 'save';
+    const [verb, at] = action.split(':'), i = Number(at);
       if (verb === 'up' || verb === 'down') {
         const j = verb === 'up' ? i - 1 : i + 1;
         if (!Number.isInteger(i) || !blocks[i] || !blocks[j]) throw new Error('That block cannot move further.');
+        const moved = blocks[i];
         [blocks[i], blocks[j]] = [blocks[j], blocks[i]];
+        status = `Moved ${nameOf(moved)} to position ${j + 1} of ${blocks.length}.`;
+        focusId = `act-${moved.key}-${j === 0 ? 'down' : j === blocks.length - 1 ? 'up' : verb}`;
       } else if (verb === 'remove') {
         if (!Number.isInteger(i) || !blocks[i] || !isRailKey(blocks[i].key)) throw new Error('Only a section rail can be removed.');
+        status = `Removed the ${nameOf(blocks[i])}.`;
         blocks.splice(i, 1);
+        focusId = 'staged-status';
       } else if (verb === 'add') {
         const rails = blocks.filter((b) => isRailKey(b.key));
         if (rails.length >= RAIL_LIMIT) throw new Error(`Use at most ${RAIL_LIMIT} section rails.`);
-        const unused = SECTIONS.find((s) => !rails.some((r) => r.section === s.key))?.key ?? SECTIONS[0].key;
+        const unused = SECTIONS.find((s) => !rails.some((r) => r.section === s.key));
+        if (!unused) throw new Error('Every section already has a rail.');
         let last = -1; blocks.forEach((b, n) => { if (isRailKey(b.key)) last = n; });
-        blocks.splice(last >= 0 ? last + 1 : blocks.length, 0, { key: newRailKey(new Set(blocks.map((b) => b.key))), visible: true, section: unused });
-      } else if (verb !== 'save') throw new Error('Choose a layout action.');
+        const added = { key: newRailKey(new Set(blocks.map((b) => b.key))), visible: true, section: unused.key };
+        blocks.splice(last >= 0 ? last + 1 : blocks.length, 0, added);
+        status = `Added a ${unused.label} rail.`;
+        focusId = `section-${added.key}`;
+      } else if (verb === 'reset') { status = 'Default layout restored here.'; focusId = 'staged-status'; }
+      else if (verb !== 'save') throw new Error('Choose a layout action.');
+    if (action === 'save') {
+      if (saveHomepageLayout(blocks, version, user.id, clientIp(Astro.request, Astro.clientAddress))) {
+        layout = readHomepageLayout(); blocks = layout.blocks; version = layout.version; staged = false;
+        status = 'Home page layout saved. The home page will use it on the next visit.'; focusId = 'staged-status';
+      } else { staged = true; fail(409, 'Someone else changed this layout, so nothing was saved. Your changes are shown below; reload to see the current layout and apply them again.'); }
     }
-    if (!saveHomepageLayout(blocks, Number(version), user.id, clientIp(Astro.request, Astro.clientAddress))) { Astro.response.status = 409; error = 'Someone else changed this layout. Review the current version below and apply your changes again.'; }
-    else success = action === 'reset' ? 'Default layout restored. The home page will use it.' : 'Home page layout saved. The home page will use it on the next visit.';
-    layout = readHomepageLayout();
-  } catch (e) { Astro.response.status = 400; error = e instanceof Error ? e.message : 'The layout could not be saved.'; }
+  } catch (e) { fail(400, e instanceof Error ? e.message : 'The layout could not be saved.'); staged = submitted && blocks.length > 0; }
 }
-const blocks = layout.blocks, railCount = blocks.filter((b) => isRailKey(b.key)).length;
-const nameOf = (b: HomepageBlock) => isRailKey(b.key) ? 'Section rail' : BLOCK_INFO[b.key as FixedBlockKey]?.label ?? b.key;
+const railCount = blocks.filter((b) => isRailKey(b.key)).length;
+const spare = SECTIONS.some((s) => !blocks.some((b) => isRailKey(b.key) && b.section === s.key));
 ---
 <Admin title="Home page layout" current="homepage" wide>
-  <div class="cms-bar admin-page-head"><div><p class="admin-eyebrow">Website settings</p><h1>Shape the home page.</h1><p class="admin-note">Show or hide each block and move it up or down. A section rail shows the latest stories of one section (never more than three, and only when that section has recent stories). Blocks that have nothing to show are skipped automatically.</p></div></div>
+  <div class="cms-bar admin-page-head"><div><p class="admin-eyebrow">Website settings</p><h1>Shape the home page.</h1><p class="admin-note">Show or hide each block and move it up or down. A section rail shows the latest stories of one section (never more than three, and only when that section has recent stories). Each section can have one rail. Blocks that have nothing to show are skipped automatically. Nothing reaches the home page until you choose Save layout.</p></div></div>
   {error && <p class="admin-error" role="alert">{error}</p>}
-  {success && <p class="admin-ok" role="status">{success}</p>}
-  <form method="post" class="homepage-editor">
-    <input type="hidden" name="version" value={layout.version} />
-    <div class="homepage-actions"><button class="cms-btn" type="submit" name="action" value="save">Save layout</button><button class="cms-btn secondary" type="submit" name="action" value="reset" formnovalidate>Restore default layout</button><button class="cms-btn secondary" type="submit" name="action" value="add" formnovalidate disabled={railCount >= RAIL_LIMIT}>Add section rail</button></div>
-    <p class="admin-note">Up to {RAIL_LIMIT} section rails ({railCount} used). Every button saves the whole layout as shown, including any Show or section changes you made.</p>
-    <ol class="homepage-rows">{blocks.map((b, i) => <li class="homepage-row">
-      <input type="hidden" name={`key.${i}`} value={b.key} />
-      <div class="homepage-name"><strong>{nameOf(b)}</strong>{!isRailKey(b.key) && <span class="admin-note">{BLOCK_INFO[b.key as FixedBlockKey]?.note}</span>}</div>
-      {isRailKey(b.key) && <label class="homepage-section">Section for rail {i + 1}<select name={`section.${i}`}>{SECTIONS.map((s) => <option value={s.key} selected={s.key === b.section}>{s.label}</option>)}</select></label>}
-      <label class="homepage-visible"><input type="checkbox" name={`visible.${i}`} checked={b.visible} />Show {nameOf(b).toLowerCase()}{isRailKey(b.key) ? ` ${i + 1}` : ''}</label>
-      <div class="homepage-order">
-        <button type="submit" name="action" value={`up:${i}`} class="cms-btn secondary" formnovalidate disabled={i === 0} aria-label={`Move ${nameOf(b)} ${isRailKey(b.key) ? `${i + 1} ` : ''}up`}>Move up</button>
-        <button type="submit" name="action" value={`down:${i}`} class="cms-btn secondary" formnovalidate disabled={i === blocks.length - 1} aria-label={`Move ${nameOf(b)} ${isRailKey(b.key) ? `${i + 1} ` : ''}down`}>Move down</button>
-        {isRailKey(b.key) && <button type="submit" name="action" value={`remove:${i}`} class="cms-btn secondary" formnovalidate aria-label={`Remove section rail ${i + 1}`}>Remove</button>}
-      </div>
-    </li>)}</ol>
+  <div id="staged-status" tabindex="-1" role="status" class="homepage-status">
+    {status && <p class={staged ? 'admin-note' : 'admin-ok'}>{status}</p>}
+    {staged && <p class="homepage-unsaved"><strong>Unsaved changes</strong> — Save layout to put them on the home page.</p>}
+  </div>
+  <form method="post" class="homepage-editor" action="/admin/homepage" data-focus={focusId || undefined}>
+    <input type="hidden" name="version" value={version} />
+    <div class="homepage-actions"><button class="cms-btn" type="submit" name="action" value="save">Save layout</button><button class="cms-btn secondary" type="submit" name="action" value="reset" formnovalidate formaction="/admin/homepage#staged-status">Restore default layout</button><button class="cms-btn secondary" type="submit" name="action" value="add" formnovalidate formaction="/admin/homepage#staged-status" disabled={railCount >= RAIL_LIMIT || !spare}>Add section rail</button></div>
+    <p class="admin-note">{railCount} of {RAIL_LIMIT} section rails used, one per section. Restore, Add, Remove and Move only change this page until you Save.</p>
+    <ol class="homepage-rows">{blocks.map((b, i) => {
+      const rail = isRailKey(b.key), name = nameOf(b);
+      return <li class="homepage-row" id={`block-${b.key}`}>
+        <input type="hidden" name={`key.${i}`} value={b.key} />
+        <div class="homepage-name"><strong>{name}</strong>{!rail && <span class="admin-note">{BLOCK_INFO[b.key as FixedBlockKey]?.note}</span>}</div>
+        <div class="homepage-section">{rail && <label>Section for the {name}<select id={`section-${b.key}`} name={`section.${i}`}>{SECTIONS.map((s) => <option value={s.key} selected={s.key === b.section} disabled={s.key !== b.section && blocks.some((o) => o !== b && isRailKey(o.key) && o.section === s.key)}>{s.label}</option>)}</select></label>}</div>
+        <label class="homepage-visible"><input type="checkbox" name={`visible.${i}`} checked={b.visible} />Show {name.toLowerCase()}</label>
+        <div class="homepage-order">
+          <button type="submit" id={`act-${b.key}-up`} name="action" value={`up:${i}`} class="cms-btn secondary" formnovalidate formaction={`/admin/homepage#block-${b.key}`} disabled={i === 0}>Move up<span class="sr-only"> {name}</span></button>
+          <button type="submit" id={`act-${b.key}-down`} name="action" value={`down:${i}`} class="cms-btn secondary" formnovalidate formaction={`/admin/homepage#block-${b.key}`} disabled={i === blocks.length - 1}>Move down<span class="sr-only"> {name}</span></button>
+          {rail && <button type="submit" name="action" value={`remove:${i}`} class="cms-btn secondary" formnovalidate formaction="/admin/homepage#staged-status">Remove<span class="sr-only"> {name}</span></button>}
+        </div>
+      </li>;
+    })}</ol>
   </form>
 </Admin>
+<script>
+  // After a staged change the page was re-rendered by the server: put keyboard focus where the person was working.
+  const id = document.querySelector<HTMLElement>('form.homepage-editor')?.dataset.focus;
+  const target = id ? document.getElementById(id) : null;
+  if (target && !(target as HTMLButtonElement).disabled) target.focus({ preventScroll: false });
+</script>
 <style>
   .homepage-actions{display:flex;flex-wrap:wrap;gap:12px}.homepage-rows{padding:0;list-style:none;display:grid;gap:12px}
-  .homepage-row{display:grid;grid-template-columns:minmax(180px,2fr) minmax(210px,1.4fr) auto auto;gap:12px;align-items:center;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
-  .homepage-name{display:grid;gap:4px;min-width:0}.homepage-section{display:grid;gap:6px;font-size:.85rem;font-weight:600;min-width:0}
+  .homepage-status{margin:8px 0}.homepage-status:focus{outline:2px solid var(--navy,#143f48);outline-offset:4px}.homepage-unsaved{margin:6px 0;padding:10px 14px;border-left:4px solid var(--accent,#e8bb72);background:var(--surface);border-radius:6px}
+  .homepage-row{display:grid;grid-template-columns:minmax(150px,2fr) minmax(190px,1.4fr) 200px 300px;gap:12px;align-items:center;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+  .homepage-name{display:grid;gap:4px;min-width:0}.homepage-section{min-width:0}.homepage-section label{display:grid;gap:6px;font-size:.85rem;font-weight:600}
   .homepage-section select{width:100%;min-height:44px;padding:9px;border:1px solid var(--line);border-radius:7px;font:inherit;color:var(--ink);background:var(--bg)}
   .homepage-visible{display:flex;align-items:center;min-height:44px;gap:8px;font-size:.85rem;font-weight:600}.homepage-visible input{width:22px;height:22px}
-  .homepage-order{display:flex;flex-wrap:wrap;gap:6px}.homepage-order button{min-height:44px}
-  .homepage-row:has(.homepage-section) .homepage-name{grid-column:1}
-  @media(max-width:1000px){.homepage-row{grid-template-columns:minmax(0,1fr) auto}.homepage-name,.homepage-section{grid-column:1/-1}.homepage-order{grid-column:1/-1}}
+  .homepage-order{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}.homepage-order button{min-height:44px}
+  @media(max-width:1000px){.homepage-row{grid-template-columns:minmax(0,1fr) auto}.homepage-name,.homepage-section{grid-column:1/-1}.homepage-section:empty{display:none}.homepage-order{grid-column:1/-1}}
 </style>

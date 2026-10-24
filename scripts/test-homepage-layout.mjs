@@ -33,7 +33,8 @@ try {
   check('missing fixed blocks come back visible at their default place', JSON.stringify(readableHomepageBlocks([{ key: 'cta', visible: false }]).map((b) => b.key)) === JSON.stringify(['intro', 'spotlight', 'featured', 'hero', 'latest_issue', 'topics', 'community', 'archive', 'cta']) && readableHomepageBlocks([{ key: 'cta', visible: false }]).at(-1).visible === false);
   check('reading drops unknown blocks, bad rails and repeats; saving refuses them', readableHomepageBlocks([{ key: 'zzz', visible: true }, { key: 'rail-a', visible: true, section: 'nope' }, { key: 'intro', visible: true }, { key: 'intro', visible: false }]).filter((b) => b.key === 'intro').length === 1
     && [[{ key: 'zzz', visible: true }], [{ key: 'rail-a', visible: true, section: 'nope' }], [{ key: 'intro', visible: true }, { key: 'intro', visible: true }]].every((v) => { try { normalizeHomepageBlocks(v); return false; } catch { return true; } }));
-  check('the retired columns key is read as features', normalizeHomepageBlocks([...defaultBlocks(), { key: 'rail-old', visible: true, section: 'columns' }]).find((b) => b.key === 'rail-old').section === 'features');
+  check('the retired columns key is read as features', normalizeHomepageBlocks([...defaultBlocks().filter((b) => b.key !== 'rail-features'), { key: 'rail-old', visible: true, section: 'columns' }]).find((b) => b.key === 'rail-old').section === 'features');
+  check('a second rail for the same section is refused when saving and dropped when reading', (() => { const two = [...defaultBlocks(), { key: 'rail-twin', visible: true, section: 'kids' }]; try { normalizeHomepageBlocks(two); return false; } catch (e) { return e.message === 'Each section can have only one rail.' && readableHomepageBlocks(two).filter((b) => b.section === 'kids').length === 1 && !readableHomepageBlocks(two).some((b) => b.key === 'rail-twin'); } })());
 
   db = openDatabase(scratch); runMigrations(db, readMigrationsFromDir(path.join(ROOT, 'src/lib/db/migrations')));
   const now = Date.now(), run = (sql, ...v) => db.prepare(sql).run(...v), row = (sql, ...v) => db.prepare(sql).get(...v), rows = (sql, ...v) => db.prepare(sql).all(...v);
@@ -68,7 +69,13 @@ try {
   const saved = () => { const r = row('SELECT version,blocks FROM homepage_layout WHERE id=1'); return r ? { version: r.version, blocks: JSON.parse(r.blocks) } : { version: 0, blocks: defaultBlocks() }; };
   const form = (blocks, version, action = 'save') => { const f = new URLSearchParams(); f.set('version', String(version)); f.set('action', action); blocks.forEach((b, i) => { f.set(`key.${i}`, b.key); if (b.visible) f.set(`visible.${i}`, 'on'); if (b.section !== undefined) f.set(`section.${i}`, b.section); }); return f; };
   const post = (blocks, version, action = 'save', role = 'admin', extra = {}) => fetch(BASE + '/admin/homepage', { method: 'POST', redirect: 'manual', headers: { ...(role ? headers(role) : {}), ...extra, 'Content-Type': 'application/x-www-form-urlencoded' }, body: form(blocks, version, action) });
-  const act = async (action) => { const s = saved(); return post(s.blocks, s.version, action); };
+  // Buttons other than Save only stage: the response is the page with the changed layout carried in its form fields.
+  const parseRows = (html) => ({
+    version: Number(/name="version" value="(\d+)"/.exec(html)?.[1]),
+    rows: html.split('<li class="homepage-row"').slice(1).map((li) => ({ key: /name="key\.\d+" value="([^"]+)"/.exec(li)[1], visible: /name="visible\.\d+"[^>]*checked/.test(li), ...(/name="section\.\d+"/.test(li) ? { section: /<option value="([a-z]+)"[^>]*selected/.exec(li)?.[1] ?? '' } : {}) })),
+  });
+  const stage = async (action, from = saved()) => { const res = await post(from.blocks, from.version, action); const html = await res.text(); return { status: res.status, html, ...(res.status === 403 ? {} : parseRows(html)) }; };
+  const act = async (action) => { const st = await stage(action); if (st.status !== 200) return st; const res = await post(st.rows, st.version, 'save'); return { ...st, status: res.status }; }; // stage, then Save the staged rows
   const idx = (key) => saved().blocks.findIndex((b) => b.key === key);
   const railKeys = () => saved().blocks.filter((b) => b.key.startsWith('rail-')).map((b) => b.key);
   const toggle = (blocks, keys, visible) => blocks.map((b) => keys.includes(b.key) ? { ...b, visible } : b);
@@ -106,19 +113,40 @@ try {
   r = await post(toggle(saved().blocks, defaultBlocks().map((b) => b.key).concat(railKeys()), false), 5);
   check('hiding every block is refused and nothing changes', r.status === 400 && saved().version === 5 && (await r.text()).includes('at least one'));
 
-  // Reorder.
+  // Staging: Move, Show, section, Add, Remove and Restore change nothing until Save.
+  const v0 = saved().version, auditCount = () => rows("SELECT COUNT(*) c FROM audit_log WHERE action='homepage.update'")[0].c, audits0 = auditCount();
+  let st = await stage(`up:${idx('cta')}`);
+  check('Move up only stages: unsaved banner, status text, focus target, new order shown, nothing saved or audited', st.status === 200 && st.html.includes('Unsaved changes') && st.html.includes('Moved Submit a story to position 11 of 12.') && st.rows.at(-2).key === 'cta' && st.html.includes('data-focus="act-cta-up"') && saved().version === v0 && JSON.stringify(order(await home())) === JSON.stringify(DEFAULT_ORDER) && auditCount() === audits0);
+  check('rows have ids to return to, and buttons keep their visible text first', st.html.includes('id="block-cta"') && st.html.includes('formaction="/admin/homepage#block-cta"') && />Move up<span class="sr-only"[^>]*> Submit a story<\/span>/.test(st.html));
+  st = await stage('up:0');
+  check('the first block cannot move up (400, layout still shown)', st.status === 400 && st.html.includes('cannot move further') && st.rows.length === 12);
+  st = await stage('down:11');
+  check('the last block cannot move down', st.status === 400);
+  st = await stage('reset', { blocks: toggle(saved().blocks, ['hero'], false), version: saved().version });
+  check('Restore default layout only stages the defaults too', st.status === 200 && st.html.includes('Unsaved changes') && st.rows.every((x) => x.visible) && saved().version === v0);
+  st = await stage('save', { blocks: toggle(saved().blocks, ['hero'], false), version: saved().version - 1 });
+  check('a stale Save re-shows the submitted layout with the conflict (409), never dropping it', st.status === 409 && st.html.includes('Someone else changed this layout') && st.html.includes('Unsaved changes') && st.rows.find((x) => x.key === 'hero').visible === false && saved().version === v0);
+  st = await stage('save', { blocks: saved().blocks.map((b) => b.key === 'rail-kids' ? { ...b, section: 'youth' } : b), version: saved().version });
+  check('two rails on one section are refused with the submitted layout still shown', st.status === 400 && st.html.includes('Each section can have only one rail.') && st.rows.filter((x) => x.section === 'youth').length === 2 && saved().version === v0);
+  st = await stage('save', { blocks: toggle(saved().blocks, ['hero'], false), version: v0 });
+  check('Save saves the staged layout (version, audit, page) and says so', st.status === 200 && saved().version === v0 + 1 && st.html.includes('Home page layout saved') && !st.html.includes('Unsaved changes') && !order(await home()).includes('hero') && auditCount() === audits0 + 1);
+  st = await stage('save', { blocks: toggle(saved().blocks, ['hero'], true), version: saved().version });
+  check('showing it again and saving restores the default page', st.status === 200 && JSON.stringify(order(await home())) === JSON.stringify(DEFAULT_ORDER));
+
+  // Reorder (stage, then Save).
   r = await act(`up:${idx('cta')}`);
-  check('Move up swaps a block with the one before it (cta above archive)', r.status === 200 && JSON.stringify(order(await home())) === JSON.stringify([...DEFAULT_ORDER.slice(0, 10), 'cta', 'archive']));
+  check('Move up then Save swaps a block with the one before it (cta above archive)', r.status === 200 && JSON.stringify(order(await home())) === JSON.stringify([...DEFAULT_ORDER.slice(0, 10), 'cta', 'archive']));
   r = await act(`down:${idx('cta')}`);
-  check('Move down puts it back', r.status === 200 && JSON.stringify(order(await home())) === JSON.stringify(DEFAULT_ORDER));
-  r = await act(`up:${idx('intro')}`);
-  check('the first block cannot move up', r.status === 400);
+  check('Move down then Save puts it back', r.status === 200 && JSON.stringify(order(await home())) === JSON.stringify(DEFAULT_ORDER));
   r = await act(`up:${idx('spotlight')}`);
   check('the event spotlight can move above the intro', r.status === 200 && JSON.stringify(order(await home())) === JSON.stringify(['spotlight', 'intro', ...DEFAULT_ORDER.slice(2)]));
-  r = await post(defaultBlocks(), saved().version, 'reset');
-  check('Restore default layout writes the defaults (version bumps) and the page matches the original', r.status === 200 && JSON.stringify(saved().blocks) === JSON.stringify(defaultBlocks()) && JSON.stringify(order(await home())) === JSON.stringify(DEFAULT_ORDER) && (await home()) === base);
+  r = await post(saved().blocks.map((b) => ({ ...b, visible: b.key === 'spotlight' })), saved().version);
+  html = await home();
+  check('with only the spotlight showing the page has exactly one h1, placed before it', r.status === 200 && JSON.stringify(order(html)) === JSON.stringify(['spotlight']) && (html.match(/<h1/g) || []).length === 1 && html.indexOf('<h1') < html.indexOf('<section class="event-spotlight"'));
+  st = await act('reset');
+  check('Restore default then Save writes the defaults (version bumps) and the page matches the original', st.status === 200 && JSON.stringify(saved().blocks) === JSON.stringify(defaultBlocks()) && JSON.stringify(order(await home())) === JSON.stringify(DEFAULT_ORDER) && (await home()) === base);
 
-  // Rails.
+  // Rails (one per section).
   const kids = railKeys()[2];
   let s = saved(); r = await post(s.blocks.map((b) => b.key === kids ? { ...b, section: 'news' } : b), s.version);
   html = await home();
@@ -128,28 +156,28 @@ try {
   check('switching back restores the original markup', (await home()) === base);
   s = saved(); r = await post(s.blocks.map((b) => b.key === railKeys()[0] ? { ...b, section: 'columns' } : b), s.version);
   check('the retired columns key is accepted as features', r.status === 200 && saved().blocks.find((b) => b.key === railKeys()[0]).section === 'features');
-  const beforeAdd = railKeys().length;
+  const kidsPart = (await get('/admin/homepage', 'admin')).text.split('Section for the Kids rail')[1] || '';
+  check('rails are named by their section and a rail\'s select disables sections other rails use', kidsPart.includes('<option value="youth"') && /<option value="youth"[^>]*disabled/.test(kidsPart) && /<option value="kids"[^>]*selected/.test(kidsPart) && !/<option value="kids"[^>]*disabled/.test(kidsPart));
+  st = await stage('add');
+  check('Add section rail stages a rail with an unused section (News) and focuses its select', st.status === 200 && st.rows.find((x) => x.section === 'news') && st.html.includes('Added a News rail.') && /data-focus="section-rail-/.test(st.html) && railKeys().length === 3);
   r = await act('add');
-  check('Add section rail appends a rail with an unused section (youth/kids/features are used, so News)', r.status === 200 && railKeys().length === beforeAdd + 1 && saved().blocks.find((b) => !['rail-features', 'rail-youth', 'rail-kids'].includes(b.key) && b.key.startsWith('rail-')).section === 'news');
-  for (let i = railKeys().length; i < RAIL_LIMIT; i++) r = await act('add');
-  check('rails can be added up to the limit of 8', railKeys().length === RAIL_LIMIT && r.status === 200);
-  const versionAtLimit = saved().version; r = await act('add');
-  check('a ninth rail is refused', r.status === 400 && railKeys().length === RAIL_LIMIT && saved().version === versionAtLimit && (await r.text()).includes('at most 8'));
-  check('the page disables Add at the limit', (await get('/admin/homepage', 'admin')).text.includes('disabled') && /<button[^>]*value="add"[^>]*disabled/.test((await get('/admin/homepage', 'admin')).text));
+  check('Add then Save saves the new rail', r.status === 200 && railKeys().length === 4 && !!saved().blocks.find((b) => b.section === 'news'));
+  st = await stage('add');
+  check('with every section used, another rail cannot be added', st.status === 400 && st.html.includes('Every section already has a rail.') && st.rows.length === saved().blocks.length);
+  check('the page disables Add when every section has a rail', /<button[^>]*value="add"[^>]*disabled/.test((await get('/admin/homepage', 'admin')).text) && railKeys().length <= RAIL_LIMIT);
   const extra = railKeys().filter((k) => !['rail-features', 'rail-youth', 'rail-kids'].includes(k));
-  for (const k of extra) await act(`remove:${idx(k)}`);
-  check('a rail can be removed (back to three)', railKeys().length === 3 && JSON.stringify(railKeys()) === JSON.stringify(['rail-features', 'rail-youth', 'rail-kids']));
-  r = await act(`remove:${idx('hero')}`);
-  check('a fixed block cannot be removed', r.status === 400 && idx('hero') >= 0);
-  s = saved(); await post(s.blocks.map((b) => b.key === 'rail-kids' ? { ...b, section: 'youth' } : b), s.version);
-  html = await home();
-  check('two rails on the same section both render, in order', order(html).filter((k) => k === 'rail:youth').length === 2);
-  s = saved(); await post(s.blocks.map((b) => b.key === 'rail-kids' ? { ...b, section: 'kids' } : b), s.version);
-  await post(defaultBlocks(), saved().version, 'reset');
+  st = await stage(`remove:${idx(extra[0])}`);
+  check('Remove stages the removal and moves focus to the status', st.status === 200 && st.rows.length === saved().blocks.length - 1 && st.html.includes('Removed the News rail.') && st.html.includes('data-focus="staged-status"') && railKeys().length === 4);
+  r = await act(`remove:${idx(extra[0])}`);
+  check('a rail can be removed (back to three)', r.status === 200 && railKeys().length === 3 && JSON.stringify(railKeys()) === JSON.stringify(['rail-features', 'rail-youth', 'rail-kids']));
+  st = await stage(`remove:${idx('hero')}`);
+  check('a fixed block cannot be removed', st.status === 400 && idx('hero') >= 0);
+  await act('reset');
   const resave = async () => { const s2 = saved(); await post(s2.blocks, s2.version); }; // a real save clears the page cache after a direct database edit
+  const kidDates = rows("SELECT id,date FROM stories WHERE section='kids'");
   run("UPDATE stories SET date=?, rev=rev+1 WHERE section='kids'", day(400)); await resave();
   check('a rail whose section has no recent stories is skipped and leaves no empty wrapper', !order(await home()).includes('rail:kids') && !/<div class="wrap magazine-home">\s*<\/div>/.test(await home()));
-  run("UPDATE stories SET date=?, rev=rev+1 WHERE section='kids'", day(30)); await resave();
+  for (const k of kidDates) run('UPDATE stories SET date=?, rev=rev+1 WHERE id=?', k.date, k.id); await resave();
   check('the rail returns when its section has recent stories again', order(await home()).includes('rail:kids'));
 
   // Validation, conflict, audit, no story writes.
@@ -182,6 +210,9 @@ try {
   run('UPDATE homepage_layout SET blocks=? WHERE id=1', '{"not":"a list"}');
   fresh = await freshHome();
   check('a saved layout that is not a list shows the default layout', fresh.status === 200 && JSON.stringify(order(fresh.text)) === JSON.stringify(DEFAULT_ORDER));
+  run('DELETE FROM homepage_layout');
+  fresh = await freshHome();
+  check('a layout-less database renders exactly the reference home page (the first rendering, from before any layout was saved)', fresh.status === 200 && fresh.text === base);
   run('DROP TABLE homepage_layout');
   fresh = await freshHome();
   check('a missing or unreadable layout table shows the default layout, not an error', fresh.status === 200 && JSON.stringify(order(fresh.text)) === JSON.stringify(DEFAULT_ORDER));

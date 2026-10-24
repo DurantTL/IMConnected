@@ -62,7 +62,7 @@ function fillMissing(blocks: HomepageBlock[]): HomepageBlock[] {
 /** Strict: for saving. Refuses anything unknown, repeated, over the rail limit, or with an invalid section. Missing fixed blocks are added. */
 export function normalizeHomepageBlocks(value: unknown): HomepageBlock[] {
   if (!Array.isArray(value) || value.length > FIXED_BLOCKS.length + RAIL_LIMIT) throw new Error('The home page layout could not be read.');
-  const seen = new Set<string>(); let rails = 0;
+  const seen = new Set<string>(), railSections = new Set<string>(); let rails = 0;
   const blocks = value.map((raw): HomepageBlock => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Each home page block needs a key.');
     const r = raw as Record<string, unknown>;
@@ -73,6 +73,8 @@ export function normalizeHomepageBlocks(value: unknown): HomepageBlock[] {
       if (++rails > RAIL_LIMIT) throw new Error(`Use at most ${RAIL_LIMIT} section rails.`);
       const section = canonicalSectionKey(r.section);
       if (typeof section !== 'string' || !SECTIONS.some((s) => s.key === section)) throw new Error('Choose a valid section for each rail.');
+      if (railSections.has(section)) throw new Error('Each section can have only one rail.');
+      railSections.add(section);
       return { key: r.key, visible: r.visible, section };
     }
     if (!(FIXED_BLOCKS as readonly string[]).includes(r.key)) throw new Error('Each home page block must be known and appear once.');
@@ -86,15 +88,15 @@ export function normalizeHomepageBlocks(value: unknown): HomepageBlock[] {
 /** Lenient: for reading stored data. Drops unknown, repeated or invalid blocks and restores missing fixed ones; never throws. */
 export function readableHomepageBlocks(value: unknown): HomepageBlock[] {
   if (!Array.isArray(value)) return defaultBlocks();
-  const seen = new Set<string>(), kept: HomepageBlock[] = []; let rails = 0;
+  const seen = new Set<string>(), railSections = new Set<string>(), kept: HomepageBlock[] = []; let rails = 0;
   for (const raw of value) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     const r = raw as Record<string, unknown>;
     if (typeof r.key !== 'string' || seen.has(r.key) || typeof r.visible !== 'boolean') continue;
     if (isRailKey(r.key)) {
       const section = canonicalSectionKey(r.section);
-      if (typeof section !== 'string' || !SECTIONS.some((s) => s.key === section) || rails >= RAIL_LIMIT) continue;
-      rails++; seen.add(r.key); kept.push({ key: r.key, visible: r.visible, section });
+      if (typeof section !== 'string' || !SECTIONS.some((s) => s.key === section) || rails >= RAIL_LIMIT || railSections.has(section)) continue; // one rail per section: a later repeat is dropped
+      railSections.add(section); rails++; seen.add(r.key); kept.push({ key: r.key, visible: r.visible, section });
     } else if ((FIXED_BLOCKS as readonly string[]).includes(r.key)) { seen.add(r.key); kept.push({ key: r.key, visible: r.visible }); }
   }
   const full = fillMissing(kept);

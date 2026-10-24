@@ -11,8 +11,13 @@ export function readHomepageLayout(): HomepageLayout {
     const r = getDb().prepare('SELECT version,blocks FROM homepage_layout WHERE id=1').get() as { version: number; blocks: string } | undefined;
     if (!r) return defaultLayout();
     return { version: r.version, blocks: readableHomepageBlocks(JSON.parse(r.blocks)) };
-  } catch { return defaultLayout(); }
+  } catch {
+    const at = Date.now(); // one line (no data), at most once a minute, so a broken table does not flood the log
+    if (at - lastReadFailure > 60_000) { lastReadFailure = at; console.error('[homepage-layout] the saved layout could not be read; showing the default layout'); }
+    return defaultLayout();
+  }
 }
+let lastReadFailure = 0;
 
 /** Version-checked save. Returns false when `expected` is stale. Writes no story rows; audit carries counts and the version only. */
 export function saveHomepageLayout(blocks: unknown, expected: number, userId: number, ip: string): boolean {

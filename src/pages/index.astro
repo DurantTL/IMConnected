@@ -85,13 +85,13 @@ for (const b of layout.blocks) {
   else if (groups.at(-1)?.kind === 'run') groups.at(-1)!.keys.push(b.key);
   else groups.push({ kind: 'run', keys: [b.key] });
 }
-// With the introduction hidden the page still needs its one h1.
-const h1Group = on('intro') ? undefined : groups.find((g) => g.kind !== 'spotlight');
+// With the introduction hidden the page still has exactly one h1, a screen-reader-only one before every block (even when only the spotlight shows).
+const srTitle = !groups.some((g) => g.keys.includes('intro'));
 ---
 <Base current="home">
+  {srTitle && <h1 class="sr-only">{SITE.name}</h1>}
   {groups.map((g) => g.kind === 'spotlight' ? <EventSpotlight events={spotlight} /> : (
   <div class="wrap magazine-home">
-    {g === h1Group && <h1 class="sr-only">{SITE.name}</h1>}
     {g.keys.map((key) => (
       <>
     {key === 'intro' && (
