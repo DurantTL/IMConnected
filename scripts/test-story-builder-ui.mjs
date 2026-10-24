@@ -38,7 +38,7 @@ const openContent = async (pg) => { const current = pg.locator('#module-outline 
 const expandAll = async (locator) => { while (await locator.count()) { const handle = await locator.first().elementHandle(); await handle.click(); await handle.evaluate((el) => new Promise((resolve) => { const wait = () => el.getAttribute('aria-expanded') === 'true' ? resolve() : requestAnimationFrame(wait); wait(); })); } };
 const scrollSettled = (pg) => pg.evaluate(() => new Promise((resolve) => { let last = -1, still = 0; const tick = () => { if (scrollY === last) still++; else { still = 0; last = scrollY; } if (still >= 6) resolve(); else requestAnimationFrame(tick); }; tick(); }));
 const openPhotos = async (pg) => {
-  const card = pg.locator('#photos > details > summary');
+  const card = pg.locator('#photos [data-card-toggle]');
   if (await card.getAttribute('aria-expanded') === 'false') await card.click();
   await pg.locator('#photos').scrollIntoViewIfNeeded();
   await expandAll(pg.locator('.ed-photo-more > summary[aria-expanded=false]'));
@@ -933,7 +933,7 @@ try {
       if (fresh) { await page.evaluate((key) => { try { localStorage.removeItem(key); } catch {} }, GROUPS_KEY); await page.reload(); }
       await page.waitForSelector('.ed-tablist:not([hidden])');
     };
-    const expanded = (selector) => page.locator(`${selector} > summary`).getAttribute('aria-expanded');
+    const expanded = (selector) => page.locator(`${selector} > summary, ${selector} > .ed-card-head > [data-card-toggle]`).first().getAttribute('aria-expanded');
     const stored = () => page.evaluate((key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return 'unreadable'; } }, GROUPS_KEY);
     const noHScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
@@ -952,23 +952,29 @@ try {
     // 2. One scroll: the sidebar has no scroll area, sticks only while it fits, and keeps its tab row on top.
     await load(1440, 1000);
     await openTabRaw(page, 'history');
-    check('a short sidebar (History) fits the window, so it is sticky', await page.locator('.ed-sidebar').evaluate((el) => getComputedStyle(el).position === 'sticky') && await page.locator('.editor-studio').getAttribute('data-sidebar-fits') === 'true');
-    await openTabRaw(page, 'settings');
+    check('a short sidebar (History) fits the window: sticky, sticking a gap below the top', await page.locator('.ed-sidebar').evaluate((el) => getComputedStyle(el).position === 'sticky' && Math.abs(parseFloat(el.style.top) - 16) < 1) && await page.locator('.editor-studio').getAttribute('data-sidebar-fits') === 'true');
+    await openTab(page, 'settings');
     await expandAll(page.locator('[data-studio-panel=settings] > fieldset > details > summary[aria-expanded=false]:visible'));
     await page.setViewportSize({ width: 1440, height: 600 });
     await page.waitForFunction(() => document.querySelector('.editor-studio').dataset.sidebarFits === 'false');
     const overflow = await page.evaluate(() => [document.querySelector('.ed-sidebar'), ...document.querySelectorAll('.ed-tabpanel')].map((el) => { const style = getComputedStyle(el); return { y: style.overflowY, fits: el.scrollHeight <= el.clientHeight + 1 }; }));
     check('the sidebar and its panels have no overflow scroll area', overflow.every((o) => !['auto', 'scroll'].includes(o.y) && o.fits));
-    check('a sidebar taller than the window is not sticky', await page.locator('.ed-sidebar').evaluate((el) => getComputedStyle(el).position === 'relative'));
+    check('a sidebar taller than the window stays sticky but with a negative top, so it can stick by its bottom', await page.locator('.ed-sidebar').evaluate((el) => getComputedStyle(el).position === 'sticky' && parseFloat(el.style.top) < 0));
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     const topBefore = await page.locator('.ed-sidebar').evaluate((el) => el.getBoundingClientRect().top);
     await page.evaluate(() => window.scrollTo({ top: 300, behavior: 'instant' }));
     const topAfter = await page.locator('.ed-sidebar').evaluate((el) => el.getBoundingClientRect().top);
     check('...and scrolls with the page (one scrollbar)', topBefore - topAfter > 250 && await page.evaluate(() => document.scrollingElement.scrollHeight > innerHeight));
     check('the sidebar tab row stays visible at the top while the page scrolls', await page.locator('.ed-tablist').evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= -1 && r.top <= 2 && r.height > 0; }));
+    await page.evaluate(() => window.scrollTo({ top: document.scrollingElement.scrollHeight, behavior: 'instant' }));
+    await scrollSettled(page);
+    await openTabRaw(page, 'history'); await scrollSettled(page);
+    check('scrolled to the bottom, switching to another tab keeps its heading in the window', await page.locator('[data-studio-panel=history] .ed-panel-title').evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }));
+    await openTabRaw(page, 'settings'); await scrollSettled(page);
+    check('...and so does switching back to a long tab', await page.locator('[data-studio-panel=settings] .ed-panel-title').evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }));
     await page.setViewportSize({ width: 1440, height: 2000 });
     await page.waitForFunction(() => document.querySelector('.editor-studio').dataset.sidebarFits === 'true');
-    check('the sidebar becomes sticky again when the window is tall enough', await page.locator('.ed-sidebar').evaluate((el) => getComputedStyle(el).position === 'sticky'));
+    check('the sidebar sticks a gap below the top again when the window is tall enough', await page.locator('.ed-sidebar').evaluate((el) => Math.abs(parseFloat(el.style.top) - 16) < 1));
 
     // 3. Settings groups: defaults, toggle, keyboard, persistence.
     await load();
@@ -1030,9 +1036,9 @@ try {
     await page.locator('[data-group=photo-layout] > summary').click();
     await page.locator('input[name=photoLayout][value=stack]').check({ force: true });
     check('the layout name in the row follows the choice', await page.locator('[data-group=photo-layout] > summary').innerText() === 'Photo layout: ' + await page.locator('input[name=photoLayout][value=stack]').locator('xpath=..').locator('.lay-name').innerText());
-    await page.locator('#ed-photos-heading').click();
+    await page.locator('#photos [data-card-toggle]').click();
     check('a step card collapses from its header and shows a one-line summary', await expanded('[data-group=photos]') === 'false' && await page.locator('[data-card-summary=photos]').isVisible() && /^2 photos · /.test(await page.locator('[data-card-summary=photos]').innerText()) && await page.locator('.ed-photos').isHidden());
-    await page.locator('#ed-details-heading').click();
+    await page.locator('#ed-details [data-card-toggle]').click();
     check('the Story details card collapses too, summarising the headline', await page.locator('[data-card-summary=details]').innerText() === 'Synthetic groups story · 1 key point' && await page.locator('#f-title').isHidden());
     check('card state is remembered with the groups key (canvas scope) and survives a reload', (await stored())?.canvas?.photos === false && (await (async () => { await page.reload(); await page.waitForSelector('.ed-tablist:not([hidden])'); return expanded('[data-group=photos]'); })()) === 'false' && await expanded('[data-group=details]') === 'false' && await expanded('[data-group=story]') === 'true');
 
@@ -1049,9 +1055,9 @@ try {
     await page.locator('#f-author').fill('Synthetic Editor');
     await load(1440, 1000, false);
     check('the Story details card is still closed from before the reload', await expanded('[data-group=details]') === 'false');
-    await page.locator('#ed-details-heading').click();
+    await page.locator('#ed-details [data-card-toggle]').click();
     await page.locator('#f-title').fill('');
-    await page.locator('#ed-details-heading').click();
+    await page.locator('#ed-details [data-card-toggle]').click();
     await openTabRaw(page, 'review');
     await page.locator('[data-problem=title] a').click();
     check('a problem in a collapsed card opens the card and focuses the headline', await expanded('[data-group=details]') === 'true' && await page.evaluate(() => document.activeElement?.id === 'f-title'));
@@ -1062,6 +1068,53 @@ try {
     check('Publish stays visible while the schedule and reject sections start closed', await page.locator('#publish-form button').isVisible() && await expanded('#studio-schedule') === 'false' && await expanded('#reject-details') === 'false' && await page.locator('#schedule-form').isHidden() && await page.locator('#reject-form').isHidden());
     await page.locator('#studio-schedule > summary').click();
     check('opening the schedule section shows its form', await page.locator('#schedule-form').isVisible() && (await stored())?.review?.schedule === true);
+
+    // 7b. Review round: collapsed Story card, find-in-page, validation, key points, save problems, descriptions badge.
+    {
+      const ecreated = await post('/api/admin/drafts/new', new FormData());
+      const eid = Number(ecreated.headers.get('location').split('/').pop());
+      const eurl = BASE + `/admin/drafts/${eid}`;
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.goto(eurl);
+      await page.evaluate((key) => { try { localStorage.removeItem(key); } catch {} }, GROUPS_KEY);
+      await page.reload(); await page.waitForSelector('.ed-tablist:not([hidden])');
+      check('a module story with one module says "1 module"', await page.locator('[data-card-summary=story]').evaluate((el) => el.textContent.trim()) === '1 module');
+      await page.locator('#story-builder [data-card-toggle]').click();
+      check('the Story card collapses by a 44px disclosure button named Expand Story, with aria-expanded', await expanded('#story-builder') === 'false' && await page.locator('#story-builder [data-card-toggle]').evaluate((b) => b.getBoundingClientRect().height >= 43.5 && /^Expand Story/.test(b.textContent)) && await page.locator('#module-outline').isHidden());
+      check('a card heading sits outside any button or summary', await page.locator('#ed-story-heading').evaluate((h) => !h.closest('button, summary, a')) && await page.locator('#story-builder').getAttribute('aria-labelledby') === 'ed-story-heading');
+      await openTabRaw(page, 'review');
+      await page.locator('[data-problem=body] a').click();
+      check('the "Story text is missing" link opens the collapsed Story card and focuses inside it', await expanded('#story-builder') === 'true' && await page.evaluate(() => !!document.activeElement?.closest('#story-builder') && document.activeElement.matches('input,textarea,select,button')));
+      await page.locator('#story-builder [data-card-toggle]').click();
+      await page.evaluate(() => document.getElementById('studio-schedule').scrollIntoView());
+      await page.evaluate(() => { document.getElementById('schedule-form').requestSubmit(); });
+      check('a field that fails the browser\'s own validation opens its collapsed group (the schedule time)', await expanded('#studio-schedule') === 'true');
+      await openTabRaw(page, 'settings');
+      await page.evaluate(() => { document.querySelector('[data-group=church]').open = true; }); // what the browser\'s find-in-page does
+      await page.waitForTimeout(300);
+      check('a section opened by something other than the editor is shown open but not remembered', await expanded('[data-group=church]') === 'true' && (await stored())?.settings?.church === undefined);
+      await page.goto(eurl + '?e=save_invalid'); await page.waitForSelector('.ed-tablist:not([hidden])');
+      check('after a field problem on save the Key points row opens even with no key points set', await expanded('[data-group=keypoints]') === 'true');
+
+      await load();
+      check('a thumbnail without a description says so', await page.locator('[data-photo-noalt]:visible').count() === 2 && await page.locator('.ph-handle').first().evaluate((el) => getComputedStyle(el).whiteSpace === 'nowrap'));
+      await page.locator('.ed-photo').first().locator('details.ed-photo-more > summary').click();
+      await page.locator('.ed-photo').first().locator('input[name$="_alt"]').fill('Synthetic description');
+      check('...and the badge goes away as soon as a description is typed', await page.locator('[data-photo-noalt]:visible').count() === 1);
+      await page.locator('#ed-resize').focus(); await page.keyboard.press('Home');
+      check('at the narrowest sidebar (280px) the tab row does not scroll sideways', await page.evaluate(() => { const t = document.querySelector('.ed-tablist'); return Math.round(document.querySelector('.ed-sidebar').getBoundingClientRect().width) === 280 && t.scrollWidth <= t.clientWidth + 1; }));
+      await page.evaluate(() => { try { localStorage.removeItem('imc.storyEditor.layout.v1'); } catch {} });
+      await load(1440, 1000, false);
+      // A failed save is shown in full under the headline.
+      const failure = 'Synthetic problem: the story could not be saved because this long made-up message needs to stay fully readable on one screen.';
+      await page.route('**/api/admin/drafts/*/save', (route) => route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ ok: false, error: failure }) }));
+      await page.locator('#f-title').fill('Synthetic groups story, edited');
+      await page.locator('#save-btn').click();
+      await page.waitForFunction(() => document.getElementById('save-status').dataset.bad === 'true');
+      check('a failed save\'s message is fully visible (wrapped, not cut) and mirrored into its title', await page.evaluate((text) => { const el = document.getElementById('save-status'), r = el.getBoundingClientRect(); return el.textContent === text && el.title === text && getComputedStyle(el).whiteSpace === 'normal' && el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1 && r.width > 100 && r.left >= 0 && r.right <= innerWidth; }, failure));
+      await page.unroute('**/api/admin/drafts/*/save');
+      await page.locator('#f-title').fill('Synthetic groups story');
+    }
 
     // 8. Axe on the redesigned tabs.
     if (axePath && fs.existsSync(axePath)) {

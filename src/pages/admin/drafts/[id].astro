@@ -87,7 +87,7 @@ const wordCount = draft ? (draft.body.trim() ? draft.body.trim().split(/\s+/).le
 // One-line summaries shown on a collapsed step card (kept in step by the page script).
 const detailsSummary = draft ? [draft.title.trim() || 'No headline yet', keyPointCount ? `${keyPointCount} key ${keyPointCount === 1 ? 'point' : 'points'}` : ''].filter(Boolean).join(' · ') : '';
 const photosSummary = draft ? (photos.length ? `${photos.length} ${photos.length === 1 ? 'photo' : 'photos'} · ${layoutLabel}` : 'No photos yet') : '';
-const storySummary = draft ? (isModular ? `${countStoryBlocks(draft.storyBlocks ?? [])} modules` : hasBody ? `Markdown · ${wordCount} ${wordCount === 1 ? 'word' : 'words'}` : 'No text yet') : '';
+const storySummary = draft ? (isModular ? `${countStoryBlocks(draft.storyBlocks ?? [])} ${countStoryBlocks(draft.storyBlocks ?? []) === 1 ? 'module' : 'modules'}` : hasBody ? `Markdown · ${wordCount} ${wordCount === 1 ? 'word' : 'words'}` : 'No text yet') : '';
 const libraryGroups: [string, string][] = [['writing', 'Writing'], ['media', 'Images & video'], ['layout', 'Layout & structure'], ['actions', 'Links & buttons']];
 const notesTitle = isAgent ? 'AI agent' : 'Submitter & notes';
 const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draft.status === 'rejected' ? 'Rejected' : scheduledAt !== null ? `Scheduled for ${fmtChicago(scheduledAt)}` : draft.status === 'new' ? 'New' : 'In review · saved';
@@ -186,10 +186,13 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
           <form id="draft-form" method="post" action={`/api/admin/drafts/${draft.id}/save`} data-save={`/api/admin/drafts/${draft.id}/save`} data-preview={`/api/admin/drafts/${draft.id}/preview`} data-revisions={`/api/admin/drafts/${draft.id}/revisions`}>
             <input type="hidden" name="version" value={draft.updatedAt} />
             <fieldset disabled={!editable} class="ed ed-canvas-fields">
-              <section class="ed-card ed-step" id="ed-details" aria-labelledby="ed-details-heading">
-                <details class="ed-group ed-card-group" data-group="details" open>
-                <summary class="ed-card-head"><h2 id="ed-details-heading"><span class="ed-badge" aria-hidden="true">1</span> Story details</h2><span class="ed-card-summary" data-card-summary="details">{detailsSummary}</span></summary>
-                <div class="ed-group-body">
+              <section class="ed-card ed-step" id="ed-details" aria-labelledby="ed-details-heading" data-card-group data-group="details">
+                <div class="ed-card-head">
+                  <h2 id="ed-details-heading"><span class="ed-badge" aria-hidden="true">1</span> Story details</h2>
+                  <span class="ed-card-summary" data-card-summary="details">{detailsSummary}</span>
+                  <button type="button" class="ed-card-toggle" data-card-toggle data-js-only aria-expanded="true" aria-controls="ed-details-body" data-label="Story details"><span class="sr-only">Collapse Story details</span></button>
+                </div>
+                <div class="ed-group-body" id="ed-details-body" data-card-body>
                 <div class="ed-grid">
               <label class="full ed-big">Title <span class="hint">up to {LIMITS.title} characters</span>
                 <input type="text" id="f-title" name="title" value={draft.title} maxlength={LIMITS.title} autocomplete="off" />
@@ -199,7 +202,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               </label>
                 </div>
                 <p class="ed-summary-line" data-details-line><span data-details-text>{detailsLine}</span> <a href="#studio-panel-settings" data-open-panel="settings">Edit details</a></p>
-              <details class="ed-group ed-keypoints-group" data-group="keypoints" data-group-default="closed" data-group-auto-open={keyPointCount > 0 ? 'true' : undefined} open>
+              <details class="ed-group ed-keypoints-group" data-group="keypoints" data-group-default="closed" data-group-auto-open={keyPointCount > 0 || q.get('e') === 'save_invalid' ? 'true' : undefined} open>
               <summary class="ed-group-summary"><span>Key points (<span data-kp-count>{keyPointCount}</span>)</span></summary>
               <div class="ed-group-body">
               <fieldset class="ed-key-points"><legend>Key points <span class="hint">optional, up to 3 short lines of plain text (160 characters each); shown in a box above the story</span></legend>
@@ -209,13 +212,15 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               </div>
               </details>
                 </div>
-                </details>
               </section>
 
-              <section class="ed-card ed-step" id="photos" aria-labelledby="ed-photos-heading">
-                <details class="ed-group ed-card-group" data-group="photos" open>
-                <summary class="ed-card-head"><h2 id="ed-photos-heading"><span class="ed-badge" aria-hidden="true">2</span> Photos</h2><span class="ed-card-summary" data-card-summary="photos">{photosSummary}</span></summary>
-                <div class="ed-group-body">
+              <section class="ed-card ed-step" id="photos" aria-labelledby="ed-photos-heading" data-card-group data-group="photos">
+                <div class="ed-card-head">
+                  <h2 id="ed-photos-heading"><span class="ed-badge" aria-hidden="true">2</span> Photos</h2>
+                  <span class="ed-card-summary" data-card-summary="photos">{photosSummary}</span>
+                  <button type="button" class="ed-card-toggle" data-card-toggle data-js-only aria-expanded="true" aria-controls="ed-photos-body" data-label="Photos"><span class="sr-only">Collapse Photos</span></button>
+                </div>
+                <div class="ed-group-body" id="ed-photos-body" data-card-body>
             <p class="admin-note">The first photo leads the story. JPG, PNG, WebP or AVIF, up to {LIMITS.maxPhotoMB} MB each, up to {LIMITS.maxPhotos} photos.</p>
             {photos.length > 0 && (
               <p class="admin-note" id="photo-reorder-help">Reorder: use Up and Down on any device or keyboard. With a mouse or touch, drag a photo by its Drag handle onto a new place. Inline photo markers follow their photos.</p>
@@ -225,6 +230,7 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                   <li class="ed-photo" data-photo-item={p.id} data-photo-id={p.id}>
                     <div class="ed-photo-thumb">
                       {(p.path || p.url && safeImg(p.url)) ? <img src={p.path ? `/api/admin/photos/${p.id}` : p.url!} alt="" draggable="false" referrerpolicy="no-referrer" loading="lazy" data-photo-thumb={p.id} style={`object-position:${p.focalX ?? 50}% ${p.focalY ?? 50}%`} /> : <span class="ed-photo-nothumb" aria-hidden="true">No preview</span>}
+                      <span class="ed-photo-noalt" data-photo-noalt={p.id} hidden={!!p.alt.trim()}>No description</span>
                       <strong class="ed-photo-label">{i === 0 ? 'Lead photo' : `Photo ${i + 1}`}</strong>
                     </div>
                     <div class="ops ed-photo-move">
@@ -317,13 +323,15 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
               </div>
             </details>
                 </div>
-                </details>
               </section>
 
-              <section class="ed-card ed-step story-builder" id="story-builder" aria-labelledby="ed-story-heading">
-                <details class="ed-group ed-card-group" data-group="story" open>
-                <summary class="ed-card-head"><h2 id="ed-story-heading"><span class="ed-badge" aria-hidden="true">3</span> Story</h2><span class="ed-card-summary" data-card-summary="story">{storySummary}</span></summary>
-                <div class="ed-group-body">
+              <section class="ed-card ed-step story-builder" id="story-builder" aria-labelledby="ed-story-heading" data-card-group data-group="story">
+                <div class="ed-card-head">
+                  <h2 id="ed-story-heading"><span class="ed-badge" aria-hidden="true">3</span> Story</h2>
+                  <span class="ed-card-summary" data-card-summary="story">{storySummary}</span>
+                  <button type="button" class="ed-card-toggle" data-card-toggle data-js-only aria-expanded="true" aria-controls="ed-story-body" data-label="Story"><span class="sr-only">Collapse Story</span></button>
+                </div>
+                <div class="ed-group-body" id="ed-story-body" data-card-body>
             {draft.body.includes('<') && (
               <p class="admin-error" role="alert">This text contains “&lt;”, so it may hold raw HTML. Raw HTML is not kept: after you publish, it is shown to readers as plain text. Rewrite it in Markdown if you need the formatting.</p>
             )}
@@ -359,7 +367,6 @@ const chipText = !draft ? '' : draft.status === 'published' ? 'Published' : draf
                   <p id="module-status" class="admin-note" role="status" aria-live="polite"></p>
                 </div>
                 </div>
-                </details>
               </section>
             </fieldset>
           </form>

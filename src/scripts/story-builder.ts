@@ -18,7 +18,7 @@ if (form && blocksField) {
     const placement = (document.getElementById('inline-photo-placement') as HTMLSelectElement | null)?.value;
     const marker = `\n\n{{photo ${choice.value}${placement ? ` ${placement}` : ''}}}\n\n`;
     body.setRangeText(marker, body.selectionStart, body.selectionEnd, 'end');
-    body.dispatchEvent(new Event('input', { bubbles: true })); body.focus();
+    body.dispatchEvent(new Event('input', { bubbles: true })); (revealEditorTarget(body), body.focus());
   });
   document.getElementById('insert-inline-gallery')?.addEventListener('click', () => {
     const from = document.getElementById('gallery-photo-start') as HTMLSelectElement;
@@ -27,7 +27,7 @@ if (form && blocksField) {
     const message = document.getElementById('gallery-marker-status')!;
     if (body.readOnly || !from.value || Number(to.value) <= Number(from.value)) { message.textContent = 'Choose a range of at least two photos, in ascending order.'; from.focus(); return; }
     body.setRangeText(`\n\n{{gallery ${from.value}-${to.value} columns=${columns.value}}}\n\n`, body.selectionStart, body.selectionEnd, 'end');
-    body.dispatchEvent(new Event('input', { bubbles: true })); message.textContent = 'Gallery inserted.'; body.focus();
+    body.dispatchEvent(new Event('input', { bubbles: true })); message.textContent = 'Gallery inserted.'; (revealEditorTarget(body), body.focus());
   });
   const undo = document.getElementById('blocks-undo') as HTMLButtonElement;
   const redo = document.getElementById('blocks-redo') as HTMLButtonElement;
@@ -495,7 +495,7 @@ if (form && blocksField) {
     try { projection = storyBlocksToMarkdown(blocks); }
     catch (error) { announce(error instanceof Error ? error.message : 'Check the modules first.'); return; }
     remember(); body.value = projection; modular = false; blocks = []; selected = ''; render(); changed(); announce('Markdown mode enabled.');
-    body.focus();
+    (revealEditorTarget(body), body.focus());
   });
   for (const add of document.querySelectorAll<HTMLButtonElement>('[data-add-module]')) add.addEventListener('click', () => {
     if (!editable || !modular) return;

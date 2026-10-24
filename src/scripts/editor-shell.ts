@@ -2,7 +2,7 @@
 // preview dialog. Everything here is an enhancement: without JavaScript the page is the canvas followed by every sidebar
 // panel, and every form submits. The module builder (story-builder.ts) meets this file through editor-bus.ts.
 import { editorBus } from './editor-bus';
-import { revealEditorTarget } from './editor-groups';
+import { keepInView, revealEditorTarget } from './editor-groups';
 import {
   DEFAULT_EDITOR_LAYOUT, MIN_SIDEBAR_WIDTH, SIDEBAR_WIDTH_STEP, clearEditorLayout, displayedSidebarWidth, maxSidebarWidthFor,
   readEditorLayout, resizeKeys, widthFromPointer, writeEditorLayout, clampSidebarWidth, type EditorLayout,
@@ -31,7 +31,7 @@ if (root && form && body && sidebar) {
 
   root.setAttribute('data-js', '');
   for (const heading of sidebar.querySelectorAll<HTMLElement>('.ed-panel-title')) heading.tabIndex = -1;
-  for (const heading of canvas.querySelectorAll<HTMLElement>('.ed-step summary > h2')) heading.tabIndex = -1;
+  for (const heading of canvas.querySelectorAll<HTMLElement>('.ed-card-head h2')) heading.tabIndex = -1;
 
   // ---- layout: side, width and visibility, remembered in this browser ----
   let layout: EditorLayout = readEditorLayout();
@@ -78,12 +78,15 @@ if (root && form && body && sidebar) {
     onLayoutAction(control.dataset.layoutAction!);
     if (fromMenu) { setMenu(false); menuButton.focus(); }
   });
-  // One scroll (issue #150): the sidebar sticks under the top of the page only while all of it fits in the window. A taller
-  // sidebar is not sticky and scrolls with the page, so there is never a scrollbar inside it. Its height does not depend on
-  // whether it sticks, so measuring it cannot flip-flop.
+  // One scroll (issue #150): the sidebar is always sticky, but its `top` follows its height. One that fits sticks `gap` below the top;
+  // a taller one gets a negative top, so it scrolls with the page until its bottom reaches the window and then sticks by its
+  // bottom. There is never a scroll area inside it, and nothing jumps when its height changes while the page is scrolled.
   function updateSticky() {
-    const fits = wide.matches && sidebar!.offsetHeight + 24 <= window.innerHeight;
-    root!.dataset.sidebarFits = String(fits);
+    const gap = parseFloat(getComputedStyle(root!).getPropertyValue('--ed-gap')) || 16;
+    const height = sidebar!.offsetHeight;
+    // Only the side-by-side layout sticks; stacked below the canvas the sidebar must keep its natural place.
+    if (wide.matches) sidebar!.style.top = `${Math.min(gap, window.innerHeight - height - gap)}px`; else sidebar!.style.removeProperty('top');
+    root!.dataset.sidebarFits = String(wide.matches && height + gap * 2 <= window.innerHeight);
   }
   wide.addEventListener('change', () => { applyLayout(); updateSticky(); });
   window.addEventListener('resize', updateSticky);
@@ -143,6 +146,7 @@ if (root && form && body && sidebar) {
     if (focus) panels.find((p) => p.dataset.studioPanel === name)?.querySelector<HTMLElement>('.ed-panel-title')?.focus();
     if (ready) {
       if (!wide.matches) sidebar!.scrollIntoView({ block: 'start' });
+      else keepInView(panels.find((p) => p.dataset.studioPanel === name)?.querySelector('.ed-panel-title'));
       if (window.location.hash !== `#${name}`) window.history.replaceState(null, '', `#${name}`);
     }
   }
@@ -176,7 +180,7 @@ if (root && form && body && sidebar) {
     if (target.id === 'photos') focusTarget = Array.from(target.querySelectorAll<HTMLInputElement>('input[name^="photo_"][name$="_alt"]')).find((input) => !input.value.trim()) ?? target;
     // A field in a collapsed group or card is opened first, then focused.
     revealEditorTarget(focusTarget);
-    const heading = target.closest<HTMLElement>('[data-studio-panel], .ed-step')?.querySelector<HTMLElement>('.ed-panel-title, .ed-step summary > h2') ?? (target.matches('.ed-step') ? target.querySelector<HTMLElement>('h2') : null);
+    const heading = target.closest<HTMLElement>('[data-studio-panel], .ed-step')?.querySelector<HTMLElement>('.ed-panel-title, .ed-card-head h2') ?? (target.matches('.ed-step') ? target.querySelector<HTMLElement>('h2') : null);
     const visible = (el: HTMLElement) => el.getClientRects().length > 0;
     const inner = focusTarget.matches(FOCUSABLE) ? focusTarget : Array.from(focusTarget.querySelectorAll<HTMLElement>(FOCUSABLE)).find((el) => !el.matches('summary') && visible(el)) ?? heading;
     inner?.focus();
@@ -259,7 +263,7 @@ if (root && form && body && sidebar) {
       const modules = document.getElementById('module-count')?.textContent?.trim();
       const modular = document.getElementById('split')?.dataset.mode === 'modules';
       const words = bodyField.value.trim() ? bodyField.value.trim().split(/\s+/).length : 0;
-      story.textContent = modular ? `${modules || 0} modules` : words ? `Markdown · ${words} ${words === 1 ? 'word' : 'words'}` : 'No text yet';
+      story.textContent = modular ? `${modules || 0} ${modules === '1' ? 'module' : 'modules'}` : words ? `Markdown · ${words} ${words === 1 ? 'word' : 'words'}` : 'No text yet';
     }
   }
   const moduleCount = document.getElementById('module-count');
@@ -270,6 +274,14 @@ if (root && form && body && sidebar) {
   const syncAnnouncementGroup = () => { if (announcementGroup && kindSelect) announcementGroup.hidden = kindSelect.value === 'story'; };
   kindSelect?.addEventListener('change', syncAnnouncementGroup);
   syncAnnouncementGroup();
+  // A thumbnail without a description says so, and stops saying so as soon as one is typed.
+  form.addEventListener('input', (event) => {
+    const field = event.target as HTMLInputElement | null;
+    const match = field?.name?.match(/^photo_(\d+)_alt$/);
+    if (match) { const badge = canvas.querySelector<HTMLElement>(`[data-photo-noalt="${match[1]}"]`); if (badge) badge.hidden = !!field!.value.trim(); }
+  });
+  // A field that blocks the browser's own validation must never sit in a collapsed group where nothing says why.
+  document.addEventListener('invalid', (event) => { revealEditorTarget(event.target as Element); }, true);
   form.addEventListener('input', () => {
     refreshCardSummaries();
     const value = (name: string) => ((form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '').trim();
@@ -293,6 +305,7 @@ if (root && form && body && sidebar) {
   const notice = new URLSearchParams(location.search).get('n');
   applyLayout();
   updateSticky();
+  refreshCardSummaries(); // the builder may already have started an empty story with its first paragraph
   const wanted = location.hash.slice(1);
   let emptyStory = false;
   try { emptyStory = !!JSON.parse(document.getElementById('story-builder-data')?.textContent || '{}').emptyStory; } catch { /* the page still works */ }
@@ -300,5 +313,5 @@ if (root && form && body && sidebar) {
   showTab(initial);
   ready = true;
   // After a photo action the page comes back to the photos.
-  if (['photos', 'uploaded', 'photo_moved', 'photos_markers', 'photo_replaced', 'photo_unchanged'].includes(notice ?? '') && !location.hash) document.getElementById('photos')?.scrollIntoView({ block: 'start' });
+  if (['photos', 'uploaded', 'photo_moved', 'photos_markers', 'photo_replaced', 'photo_unchanged'].includes(notice ?? '') && !location.hash) { const photosCard = document.getElementById('photos'); revealEditorTarget(photosCard); photosCard?.scrollIntoView({ block: 'start' }); }
 }

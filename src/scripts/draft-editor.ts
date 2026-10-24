@@ -2,6 +2,7 @@
 // Everything the server renders works without it except the toolbar, the preview and autosave.
 import './story-builder';
 import './editor-shell';
+import { revealEditorTarget } from './editor-groups';
 
 const form = document.getElementById('draft-form') as HTMLFormElement | null;
 
@@ -30,7 +31,10 @@ if (form) {
   };
   const say = (msg: string, bad = false) => {
     statusEl.textContent = msg;
+    statusEl.title = msg;
+    statusEl.dataset.bad = bad ? 'true' : 'false'; // a problem is shown in full, a normal "Saved ..." may be cut short
     statusEl.style.color = bad ? '#8a1f11' : '';
+    if (bad && /key point/i.test(msg)) revealEditorTarget(document.querySelector('.ed-key-points'));
   };
 
   const revisionChoice = document.getElementById('draft-revision-choice') as HTMLSelectElement | null;
@@ -194,7 +198,7 @@ if (form) {
   };
   for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-md]')) {
     btn.addEventListener('click', () => {
-      body.focus();
+      revealEditorTarget(body); body.focus();
       actions[btn.dataset.md!]?.();
       dirty = true;
       schedulePreview();
