@@ -544,7 +544,11 @@ if (form && blocksField) {
     commit(plan, added, message) {
       remember(); blocks = plan.blocks; selected = plan.id;
       render(); changed(); announce(message);
-      if (added) { editorBus.showTab('module'); fields.querySelector<HTMLElement>('input,textarea,select,button')?.focus(); } // the new module's settings open, as with + Add
+      if (added) { // the new module's settings open, as with + Add
+        editorBus.showTab('module');
+        const first = fields.querySelector<HTMLElement>('input,textarea,select,button');
+        revealEditorTarget(first); first?.focus();
+      } else outline.querySelector<HTMLElement>(`[data-drag-handle="${CSS.escape(plan.id)}"]`)?.focus({ preventScroll: true }); // keyboard users keep their place after a pointer move
     },
   });
   undo.addEventListener('click', () => { if (!editable || !history.length) return; future.push(snapshot()); restore(history.pop()!); announce('Module change undone.'); });

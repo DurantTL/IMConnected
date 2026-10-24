@@ -1278,7 +1278,7 @@ try {
   {
     const para = (id, text) => ({ id, type: 'text', text });
     // `modules` is a list, or a function of the uploaded photo's id (an image module must name one of the draft's own photos).
-    const dndPage = async (modules, { photo = true, markdown = false, viewport = { width: 1440, height: 1000 }, reduced = false } = {}) => {
+    const dndPage = async (modules, { photo = true, markdown = false, viewport = { width: 1440, height: 1000 }, reduced = false, touch = false } = {}) => {
       const made = await post('/api/admin/drafts/new', new FormData());
       const dId = Number(/\/drafts\/(\d+)/.exec(made.headers.get('location'))[1]);
       const version = () => String(db.prepare('SELECT updated_at FROM drafts WHERE id=?').get(dId).updated_at);
@@ -1293,7 +1293,7 @@ try {
       for (const [name, value] of Object.entries({ version: version(), title: 'Synthetic drag and drop story', author: 'Synthetic Editor', section: 'news', area: 'conference', date: new Date().toISOString().slice(0, 10), body: markdown ? 'Synthetic Markdown body that stays Markdown, long enough to count as a story body.' : storyBlocksToMarkdown(list), photoLayout: 'one', photoCredit: 'Synthetic Photographer', storyBlocks: JSON.stringify(markdown ? [] : list) })) form.set(name, String(value));
       const saved = await post(`/api/admin/drafts/${dId}/save`, form);
       if (saved.status !== 200) assert.fail('synthetic drag draft save refused: ' + await saved.text());
-      const ctx = reduced ? await browser.newContext({ viewport, reducedMotion: 'reduce' }) : await browser.newContext({ viewport });
+      const ctx = await browser.newContext({ viewport, ...(reduced ? { reducedMotion: 'reduce' } : {}), ...(touch ? { hasTouch: true } : {}) });
       await ctx.addCookies([{ name: '__Host-imc_session', value: token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
       const pg = await ctx.newPage();
       pg.on('pageerror', (error) => pageErrors.push(String(error)));
@@ -1551,6 +1551,65 @@ try {
     {
       const { pg, ctx } = await dndPage([], { markdown: true });
       check('a Markdown story shows Split into modules, no drag handles and no drop zone', await pg.locator('#use-modules').isVisible() && await pg.locator('[data-drag-handle]').count() === 0 && await pg.locator('#module-canvas').isHidden() && await pg.locator('[data-library-item]:visible').count() === 0);
+      await ctx.close();
+    }
+    // cancelling by blur must not leave a click swallower behind; a real touch (CDP) drag from a library item inserts instead of scrolling
+    {
+      const { pg, ctx } = await dndPage(base);
+      const before = JSON.stringify(await order(pg));
+      await lift(pg, pg.locator('[data-drag-handle="c"]'));
+      await pg.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await pg.waitForTimeout(300);
+      check('blur cancels a drag without changing anything', JSON.stringify(await order(pg)) === before && await pg.locator('.sb-drag-ghost, .sb-drop-line').count() === 0 && (await status(pg)) === 'Move cancelled.');
+      await pg.mouse.up();
+      await pg.getByRole('button', { name: 'Move down, module 1', exact: true }).click();
+      check('after a blur cancel the next normal click works (no click swallower is left behind)', ids(await order(pg)).join() === 'b,a,c');
+      await lift(pg, pg.locator('[data-drag-handle="c"]'));
+      await pg.keyboard.press('Escape');
+      await pg.mouse.up();
+      await pg.waitForTimeout(150);
+      await pg.getByRole('button', { name: 'Move down, module 1', exact: true }).click();
+      check('after Escape the swallower ends with the release, so the next click works', ids(await order(pg)).join() === 'a,b,c');
+      await lift(pg, pg.locator('[data-drag-handle="c"]'));
+      await pg.keyboard.press('Escape');
+      await pg.getByRole('button', { name: 'Move down, module 1', exact: true }).click(); // a press while the first is still held (no release seen)
+      await pg.waitForTimeout(100);
+      check('a new pointer press after Escape clears the swallower too', ids(await order(pg)).join() === 'b,a,c');
+      await pg.mouse.up();
+      await pg.waitForTimeout(100);
+      await ctx.close();
+    }
+    {
+      const { pg, ctx } = await dndPage(base, { touch: true, viewport: { width: 1280, height: 800 } });
+      const cdp = await ctx.newCDPSession(pg);
+      const item = await libraryItem(pg, 'heading');
+      const b = await item.boundingBox();
+      const point = (x, y) => [{ x, y, id: 1 }];
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(b.x + b.width / 2, b.y + b.height / 2) });
+      await pg.waitForTimeout(350);
+      check('a real touch held on a library item starts the drag (ghost and lift)', await pg.locator('.sb-drag-ghost').count() === 1 && await item.evaluate((el) => el.classList.contains('is-lifted')));
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(b.x + b.width / 2, b.y + b.height / 2 - 12) });
+      await showCanvas(pg);
+      await pg.waitForTimeout(300);
+      const scrolled = await pg.evaluate(() => scrollY);
+      const t = await spot(pg, 'b', 'top');
+      for (const f of [0.25, 0.5, 0.75, 1]) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(b.x + (t.x - b.x) * f, b.y + (t.y - b.y) * f) }); await pg.waitForTimeout(40); }
+      await pg.waitForTimeout(250);
+      check('the page does not scroll under a touch drag that moves over the canvas', Math.abs(await pg.evaluate(() => scrollY) - scrolled) < 4);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await pg.waitForTimeout(250);
+      const list = await order(pg);
+      check('a real touch drag from a library item inserts the module where it was dropped', list.length === 4 && list[1].type === 'heading' && ids(list).filter((i) => ['a', 'b', 'c'].includes(i)).join() === 'a,b,c');
+      await ctx.close();
+    }
+    {
+      const { pg, ctx } = await dndPage(base);
+      await lift(pg, pg.locator('[data-drag-handle="c"]'));
+      const t = await spot(pg, 'a', 'top');
+      await over(pg, t.x, t.y);
+      await release(pg);
+      check('after a handle drag the moved module\'s handle has focus (keyboard users keep their place)', ids(await order(pg)).join() === 'c,a,b' && await pg.locator('[data-drag-handle="c"]').evaluate((el) => el === document.activeElement));
+      check('drag handles are at least 44px wide', (await pg.locator('[data-drag-handle="c"]').boundingBox()).width >= 44);
       await ctx.close();
     }
     // a series for the pull request: lift, line, drop, settle

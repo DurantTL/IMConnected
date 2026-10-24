@@ -23,7 +23,7 @@ check('insert between modules', plan.kind === 'ok' && ids(plan.blocks) === 'a,b,
 plan = planInsert(base, text('n'), root(3));
 check('insert at the end', plan.kind === 'ok' && ids(plan.blocks) === 'a,b,c,n');
 plan = planInsert(base, text('n'), root(99));
-check('an index past the end is clamped to the end', plan.kind === 'ok' && ids(plan.blocks) === 'a,b,c,n');
+check('an index past the end is clamped to the end (the reported slot too)', plan.kind === 'ok' && ids(plan.blocks) === 'a,b,c,n' && plan.slot.index === 3);
 plan = planInsert([text('a'), section], text('n'), { parentId: 's', column: 1, index: 0 });
 check('insert into an empty Section column', plan.kind === 'ok' && plan.blocks[1].content[1][0].id === 'n' && plan.position === 4);
 plan = planInsert([text('a'), section], text('n'), { parentId: 'gone', column: 0, index: 0 });

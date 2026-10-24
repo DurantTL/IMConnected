@@ -53,8 +53,9 @@ export function planInsert(blocks: StoryBlock[], block: StoryBlock, slot: DropSl
   const next = clone(blocks);
   const list = listFor(next, slot);
   if (!list) return { kind: 'nothing' };
-  list.splice(Math.min(Math.max(slot.index, 0), list.length), 0, block);
-  return finish(next, block.id, slot);
+  const at = Math.min(Math.max(slot.index, 0), list.length);
+  list.splice(at, 0, block);
+  return finish(next, block.id, { ...slot, index: at });
 }
 
 /**
