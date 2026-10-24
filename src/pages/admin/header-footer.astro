@@ -1,13 +1,14 @@
 ---
 import Admin from '../../layouts/Admin.astro';
-import { readChrome, saveChrome } from '../../lib/chrome-store';
+import { readChromeForAdmin, saveChrome } from '../../lib/chrome-store';
 import { defaultChrome, CHROME_LINK_LIMIT, type SiteChrome } from '../../lib/site-chrome';
 import { readFormLimited } from '../../lib/draft-http';
 import { clientIp } from '../../lib/request';
 export const prerender = false;
 const user = Astro.locals.user!;
 if (user.role !== 'admin') return new Response('Administrators only.', { status: 403 });
-let state = readChrome(), error = '', success = '';
+let { state, broken } = readChromeForAdmin();
+let error = '', success = '', staged = '';
 let shown: SiteChrome = { header: state.header, footer: state.footer };
 
 // Raw (unvalidated) values from the form, in the shape normalizeChrome() checks.
@@ -46,15 +47,21 @@ if (Astro.request.method === 'POST') {
     if (!form || form === 'too_big') throw new Error('The form is unreadable or too large.');
     const version = String(form.get('version') ?? '');
     if (!/^\d{1,12}$/.test(version)) throw new Error('Reload the page before saving.');
-    const reset = form.get('action') === 'reset';
-    const raw = reset ? defaultChrome() : fromForm(form);
-    if (!reset) { try { shown = raw as SiteChrome; } catch { /* keep stored */ } }
-    if (!saveChrome(raw, Number(version), user.id, clientIp(Astro.request, Astro.clientAddress))) {
-      Astro.response.status = 409; error = 'Someone else changed the header and footer. Review the current version below and apply your changes again.';
-      state = readChrome(); shown = { header: state.header, footer: state.footer };
+    if (form.get('action') === 'reset') {
+      // Staged, like the home page editor: the defaults are shown in the form and nothing is saved until Save.
+      const current = readChromeForAdmin();
+      if (current.state.version !== Number(version)) { Astro.response.status = 409; error = 'Someone else changed the header and footer. Review the current version below and apply your changes again.'; shown = { header: current.state.header, footer: current.state.footer }; }
+      else shown = defaultChrome();
+      state = current.state; broken = current.broken;
+      if (!error) staged = 'The default header and footer are loaded below. Unsaved: press Save header and footer to apply them.';
     } else {
-      success = reset ? 'Header and footer restored to the defaults.' : 'Header and footer saved. Public pages will use these settings.';
-      state = readChrome(); shown = { header: state.header, footer: state.footer };
+      const raw = fromForm(form);
+      shown = raw as SiteChrome;
+      const result = saveChrome(raw, Number(version), user.id, clientIp(Astro.request, Astro.clientAddress));
+      ({ state, broken } = readChromeForAdmin());
+      if (result === 'conflict') { Astro.response.status = 409; error = 'Someone else changed the header and footer. Review the current version below and apply your changes again.'; }
+      else { success = result === 'unchanged' ? 'No changes to save.' : 'Header and footer saved. Public pages will use these settings.'; }
+      shown = { header: state.header, footer: state.footer };
     }
   } catch (e) { Astro.response.status = 400; error = e instanceof Error ? e.message : 'The header and footer could not be saved.'; }
 }
@@ -67,6 +74,8 @@ const rows = Array.from({ length: CHROME_LINK_LIMIT }, (_, i) => links[i] ?? { l
   <div class="cms-bar admin-page-head"><div><p class="admin-eyebrow">Website settings</p><h1>Header and footer</h1><p class="admin-note">Edit the words, links and what shows at the top and bottom of every page. Everything is plain text. The website menu and the Sections list are edited elsewhere.</p></div></div>
   {error && <p class="admin-error" role="alert">{error}</p>}
   {success && <p class="admin-ok" role="status">{success}</p>}
+  {staged && <p class="admin-note chrome-staged" role="status">{staged}</p>}
+  {broken && <p class="admin-error" role="alert">The saved header and footer settings could not be read, so visitors see the defaults. The form shows the defaults: save to replace the damaged settings.</p>}
   <form method="post" class="chrome-editor">
     <input type="hidden" name="version" value={state.version} />
     <div class="chrome-actions"><button class="cms-btn" type="submit" name="action" value="save">Save header and footer</button><button class="cms-btn secondary" type="submit" name="action" value="reset" formnovalidate>Restore defaults</button></div>
@@ -112,10 +121,10 @@ const rows = Array.from({ length: CHROME_LINK_LIMIT }, (_, i) => links[i] ?? { l
       <div class="chrome-grid"><label>Get involved column heading<input type="text" name="f_involvedHeading" maxlength="40" value={f.involvedHeading} /></label></div>
       <p class="admin-note">Up to {CHROME_LINK_LIMIT} Get involved links. Use a public /page/ address or a full HTTPS link. Clear a row’s label and address to remove it.</p>
       <ol class="chrome-rows">{rows.map((l, i) => <li class="chrome-row">
-        <label>Position<input type="number" name={`order.${i}`} min="1" max={CHROME_LINK_LIMIT} value={i + 1} /></label>
-        <label>Link {i + 1} label<input type="text" name={`label.${i}`} maxlength="40" value={l.label} /></label>
-        <label>Link {i + 1} address<input type="text" name={`href.${i}`} maxlength="2048" value={l.url} placeholder="/page/ or https://…" /></label>
-        <div class="chrome-order"><button type="button" class="cms-btn secondary" data-chrome-move="-1" aria-label={`Move link ${i + 1} up`} disabled={i === 0}>↑</button><button type="button" class="cms-btn secondary" data-chrome-move="1" aria-label={`Move link ${i + 1} down`} disabled={i === CHROME_LINK_LIMIT - 1}>↓</button></div>
+        <label><span data-row-label="position">Link {i + 1} position</span><input type="number" name={`order.${i}`} min="1" max={CHROME_LINK_LIMIT} value={i + 1} /></label>
+        <label><span data-row-label="label">Link {i + 1} label</span><input type="text" name={`label.${i}`} maxlength="40" value={l.label} /></label>
+        <label><span data-row-label="address">Link {i + 1} address</span><input type="text" name={`href.${i}`} maxlength="2048" value={l.url} placeholder="/page/ or https://…" /></label>
+        <div class="chrome-order" hidden><button type="button" class="cms-btn secondary" data-chrome-move="-1" aria-label={`Move link ${i + 1} up`} disabled={i === 0}>↑</button><button type="button" class="cms-btn secondary" data-chrome-move="1" aria-label={`Move link ${i + 1} down`} disabled={i === CHROME_LINK_LIMIT - 1}>↓</button></div>
       </li>)}</ol>
       <div class="chrome-grid">
         <label>Contact email (leave empty to hide)<input type="email" name="f_contactEmail" maxlength="254" value={f.contactEmail} /></label>
@@ -127,14 +136,24 @@ const rows = Array.from({ length: CHROME_LINK_LIMIT }, (_, i) => links[i] ?? { l
   </form>
 </Admin>
 <script>
+  const rowsOf = () => Array.from(document.querySelectorAll<HTMLElement>('.chrome-row'));
+  const num = (r: HTMLElement) => r.querySelector<HTMLInputElement>('input[type=number]')!;
+  // Reorder controls are script-only: without JavaScript the Position numbers do the ordering.
+  const renumber = () => rowsOf().forEach((r, i) => {
+    num(r).value = String(i + 1);
+    for (const s of r.querySelectorAll<HTMLElement>('[data-row-label]')) s.textContent = `Link ${i + 1} ${s.dataset.rowLabel}`;
+    const c = r.querySelectorAll<HTMLButtonElement>('[data-chrome-move]');
+    c[0].disabled = i === 0; c[1].disabled = i === rowsOf().length - 1;
+    c[0].setAttribute('aria-label', `Move link ${i + 1} up`); c[1].setAttribute('aria-label', `Move link ${i + 1} down`);
+  });
+  for (const box of document.querySelectorAll<HTMLElement>('.chrome-order')) box.hidden = false;
+  // Show the rows in Position order first (a no-JavaScript form may have been posted with shuffled numbers).
+  rowsOf().sort((a, b) => Number(num(a).value) - Number(num(b).value)).forEach((r) => r.parentElement!.append(r)); renumber();
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-chrome-move]')) button.addEventListener('click', () => {
-    const row = button.closest<HTMLElement>('.chrome-row')!, rows = Array.from(document.querySelectorAll<HTMLElement>('.chrome-row')), next = rows[rows.indexOf(row) + Number(button.dataset.chromeMove)];
+    const row = button.closest<HTMLElement>('.chrome-row')!, rows = rowsOf(), next = rows[rows.indexOf(row) + Number(button.dataset.chromeMove)];
     if (!next) return;
-    const num = (r: HTMLElement) => r.querySelector<HTMLInputElement>('input[type=number]')!;
-    [num(row).value, num(next).value] = [num(next).value, num(row).value];
-    const ordered = [...rows].sort((a, b) => Number(num(a).value) - Number(num(b).value));
-    ordered.forEach((r, i) => { row.parentElement!.append(r); num(r).value = String(i + 1); const c = r.querySelectorAll<HTMLButtonElement>('[data-chrome-move]'); c[0].disabled = i === 0; c[1].disabled = i === ordered.length - 1; });
-    button.focus();
+    if (Number(button.dataset.chromeMove) < 0) next.before(row); else next.after(row);
+    renumber(); button.focus();
   });
 </script>
 <style>
@@ -146,9 +165,9 @@ const rows = Array.from({ length: CHROME_LINK_LIMIT }, (_, i) => links[i] ?? { l
   .chrome-grid label.wide{grid-column:1/-1}
   .chrome-grid input,.chrome-row input[type=text],.chrome-row input[type=number]{width:100%;min-height:44px;padding:9px;border:1px solid var(--line);border-radius:7px;font:inherit;color:var(--ink);background:var(--bg)}
   .chrome-check{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:600}
-  .chrome-check input{width:22px;height:22px}
+  .chrome-check input{width:22px;height:22px;flex-shrink:0}
   .chrome-rows{padding:0;list-style:none;display:grid;gap:10px;margin:0}
   .chrome-row{display:grid;grid-template-columns:90px minmax(120px,1fr) minmax(200px,2fr) auto;gap:12px;align-items:end;padding:12px;border:1px solid var(--line);border-radius:10px}
-  .chrome-order{display:flex;gap:6px}.chrome-order button{min-width:44px}
+  .chrome-order{display:flex;gap:6px}.chrome-order[hidden]{display:none}.chrome-order button{min-width:44px}
   @media(max-width:900px){.chrome-row{grid-template-columns:80px minmax(0,1fr)}.chrome-row label:nth-of-type(3){grid-column:1/-1}.chrome-order{justify-self:end}}
 </style>

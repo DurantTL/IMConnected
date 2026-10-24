@@ -5,7 +5,7 @@ import { readPublicChrome } from '../lib/chrome-store';
 import { defaultPublicChrome, splitIntro } from '../lib/site-chrome';
 const year = new Date().getFullYear();
 // Issue #156: editable text, links and visibility; prerendered pages render the defaults and refresh from the API (see Header.astro).
-const chrome = (Astro.isPrerendered ? defaultPublicChrome() : readPublicChrome()).footer;
+const chrome = (Astro.isPrerendered ? defaultPublicChrome() : readPublicChrome(Astro.request)).footer;
 const intro = chrome.intro ? splitIntro(chrome.intro) : null;
 ---
 <footer class="site-footer">

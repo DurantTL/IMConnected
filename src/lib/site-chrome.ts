@@ -4,7 +4,7 @@ import { SITE } from './site';
 import { navigationHref } from './site-navigation';
 
 export const CHROME_LINK_LIMIT = 8;
-export interface ChromeLink { label: string; url: string }
+export interface ChromeLink { label: string; url: string; /** the contact email entry */ contact?: true }
 export interface HeaderChrome {
   showTopLine: boolean; topLineText: string; topLineLinkLabel: string; topLineLinkUrl: string;
   showMastheadNote: boolean; mastheadNote: [string, string, string];
@@ -28,7 +28,7 @@ export function defaultChrome(): SiteChrome {
     header: {
       showTopLine: true, topLineText: 'Faith in action. Close to home.', topLineLinkLabel: 'Iowa-Missouri Conference', topLineLinkUrl: SITE.publisherUrl,
       showMastheadNote: true, mastheadNote: ['The stories.', 'The people.', 'Our community.'],
-      showStrip: true, stripText: 'Iowa-Missouri Conference', edition: 'Iowa + Missouri',
+      showStrip: true, stripText: STRIP_DEFAULT, edition: 'Iowa + Missouri',
       showSearch: true, showSubmit: true, submitLabel: 'Submit a Story',
     },
     footer: {
@@ -45,7 +45,10 @@ export function defaultChrome(): SiteChrome {
 }
 
 const LIMITS = { short: 80, line: 120, label: 40, intro: 240, heading: 40, copyright: 120, email: 254 };
-const EMAIL = /^[^\s@<>"'\\,;:()[\]]+@[^\s@<>"'\\,;:()[\]]+\.[^\s@<>"'\\,;:()[\]]+$/;
+// Plain address only: no quotes, comments, query or fragment characters, and a dotted ASCII domain.
+const EMAIL = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+/** The conference strip's default text: shown decoration-only (aria-hidden) beside the screen-reader publisher name. A different text is ordinary visible text. */
+export const STRIP_DEFAULT = 'Iowa-Missouri Conference';
 
 function text(v: unknown, name: string, max: number, required = true): string {
   if (typeof v !== 'string') throw new Error(`${name} needs text.`);
@@ -68,10 +71,11 @@ export function chromeHref(value: unknown, name = 'Link address'): string {
   if (/^https:\/\/[^/?#]+\/$/.test(h) && !/^https:\/\/[^/?#]+\/$/.test(v)) h = h.slice(0, -1);
   return h;
 }
-/** Browser-side check for API values: a chrome link or the contact mailto. */
-export function safeChromeUrl(value: unknown): string | null {
+/** Browser-side check for API values: a chrome link; `mailto:` only when `allowMailto` (the contact email entry). */
+export function safeChromeUrl(value: unknown, allowMailto = false): string | null {
   if (typeof value !== 'string') return null;
-  if (/^mailto:/i.test(value)) { const a = value.slice(7); return a.length <= LIMITS.email && EMAIL.test(a) ? value : null; }
+  if (/^mailto:/i.test(value)) {
+    if (!allowMailto) return null; const a = value.slice(7); return a.length <= LIMITS.email && EMAIL.test(a) ? value : null; }
   try { return chromeHref(value); } catch { return null; }
 }
 
@@ -138,7 +142,7 @@ export interface PublicChrome {
 export function publicChrome(c: SiteChromeState): PublicChrome {
   const h = c.header, f = c.footer;
   const links = f.involvedLinks.slice();
-  if (f.contactEmail) links.splice(Math.min(f.contactAfter, links.length), 0, { label: f.contactEmail, url: `mailto:${f.contactEmail}` });
+  if (f.contactEmail) links.splice(Math.min(f.contactAfter, links.length), 0, { label: f.contactEmail, url: `mailto:${f.contactEmail}`, contact: true });
   return {
     version: c.version,
     header: {

@@ -96,6 +96,9 @@ try {
     ['mailto: in a statement button', { f_statementButtonUrl: 'mailto:someone@example.invalid' }],
     ['admin path in a statement button', { f_statementButtonUrl: '/admin' }],
     ['not an email address', { f_contactEmail: 'not an email' }],
+    ['email with a query character', { f_contactEmail: 'a?subject=x@example.invalid' }],
+    ['email with a percent sign', { f_contactEmail: 'a%40b@example.invalid' }],
+    ['email without a dotted domain', { f_contactEmail: 'someone@example' }],
     ['mailto: scheme typed as the contact email', { f_contactEmail: 'mailto:a@example.invalid' }],
     ['top line text too long', { h_topLineText: 'x'.repeat(81) }],
     ['newline in a line', { h_note0: 'one\ntwo' }],
@@ -115,6 +118,8 @@ try {
   check('the cached page was invalidated and shows the new text', before !== after && ah.includes('Home &amp; Away') && af.includes('Topics'));
   check('script-like text renders as escaped text (header)', ah.includes('Top &lt;script&gt;alert(1)&lt;/script&gt; line') && !ah.includes('<script>alert') && ah.includes('Line &lt;b&gt;one&lt;/b&gt;') && ah.includes('Strip &lt;i&gt;text&lt;/i&gt;') && ah.includes('Send &lt;it&gt;') && ah.includes('Edition &quot;Q&quot; &amp; more'));
   check('script-like text renders as escaped text (footer)', af.includes('Statement &lt;one&gt;') && af.includes('Plain &lt;intro&gt; sentence.') && af.includes('Synthetic &lt;Holder&gt;') && af.includes('Give &lt;now&gt;'));
+  const stripBlock = ah.match(/<div class="conference-strip">[\s\S]*?<\/p>/)?.[0] ?? '';
+  check('a changed conference strip is ordinary visible text (no aria-hidden, no sr-only copy)', stripBlock.includes('<span>Strip &lt;i&gt;text&lt;/i&gt;</span>') && !/aria-hidden|sr-only/.test(stripBlock));
   check('links and the contact email keep the chosen order', af.includes('<li><a href="/give/">Give &lt;now&gt;</a></li><li><a href="mailto:hello@example.invalid">hello@example.invalid</a></li><li><a href="https://example.invalid/cal">Calendar</a></li><li><a href="/volunteer/">Volunteer</a></li>') && ah.includes('href="https://example.invalid/home"') && af.includes('href="/announcements/"'));
   const pub = await api();
   check('the API chrome carries the new visible values', pub.chrome.version === 2 && pub.chrome.header.submit === 'Send <it>' && pub.chrome.footer.involved.links.length === 4 && pub.version === 0);
@@ -133,7 +138,12 @@ try {
   check('the API drops hidden values', (await api()).chrome.header.topLine === null && (await api()).chrome.footer.involved === null && (await api()).chrome.footer.statement.button === null && (await api()).chrome.footer.editor === false);
 
   // 6. Restore defaults.
-  check('Restore defaults restores the default configuration', (await save({}, { version: 4, action: 'reset' })).status === 200 && await version() === 5);
+  const staged = await save({}, { version: 4, action: 'reset' }), stagedHtml = await staged.text();
+  check('Restore defaults only stages the defaults in the form (nothing saved until Save)', staged.status === 200 && stagedHtml.includes('Unsaved') && stagedHtml.includes('value="Faith in action. Close to home."') && await version() === 4 && (await get('/')).text.includes('Help out') === false);
+  check('saving the staged defaults restores the default configuration', (await save({}, { version: 4 })).status === 200 && await version() === 5);
+  const auditCount = () => row("SELECT COUNT(*) AS n FROM audit_log WHERE action='site_chrome.update'").n, n0 = auditCount();
+  const same = await save({}, { version: 5 });
+  check('a save with no change neither bumps the version nor writes an audit entry', same.status === 200 && (await same.text()).includes('No changes to save') && await version() === 5 && auditCount() === n0);
   const restored = (await get('/')).text;
   check('restored pages match today\'s markup again', TODAY_HEADER.every((s) => part(restored, 'header').includes(s)) && TODAY_FOOTER.every((s) => part(restored, 'footer').includes(s)));
 
@@ -149,13 +159,13 @@ try {
   await page.waitForFunction(() => document.querySelector('.site-footer h2')?.textContent === 'Topics');
   const dom = await page.evaluate(() => ({
     top: document.querySelector('.publication-line span')?.textContent, topLink: document.querySelector('.publication-line a')?.getAttribute('href'), topLabel: document.querySelector('.publication-line a')?.textContent.trim(),
-    note: document.querySelector('.masthead-note')?.textContent, noteTag: !!document.querySelector('.masthead-note b'), strip: document.querySelector('.conference-strip [aria-hidden]')?.textContent, edition: document.querySelector('.masthead-edition')?.textContent,
+    note: document.querySelector('.masthead-note')?.textContent, noteTag: !!document.querySelector('.masthead-note b'), strip: document.querySelector('.conference-strip p')?.textContent, stripPlain: !document.querySelector('.conference-strip [aria-hidden], .conference-strip .sr-only'), edition: document.querySelector('.masthead-edition')?.textContent,
     submit: document.querySelector('.header-submit')?.textContent, mobileSubmit: document.querySelector('#mobile-nav .btn')?.textContent,
     statement: document.querySelector('.footer-statement p')?.textContent, button: document.querySelector('.footer-statement .btn')?.textContent, buttonHref: document.querySelector('.footer-statement .btn')?.getAttribute('href'),
     intro: document.querySelector('.footer-intro')?.textContent, introTag: !!document.querySelector('.footer-intro intro'), headings: Array.from(document.querySelectorAll('.site-footer h2')).map((h) => h.textContent),
     links: Array.from(document.querySelectorAll('.site-footer [data-chrome-list] a')).map((a) => a.getAttribute('href') + '|' + a.textContent), copyright: document.querySelector('.footer-bottom .fine')?.textContent, injected: document.querySelectorAll('.site-header script, .site-footer script, .site-footer b, .site-header i').length,
   }));
-  check('API refresh updates header text, link and visibility on a prerendered page via textContent', dom.top === 'Top <script>alert(1)</script> line' && dom.topLink === 'https://example.invalid/home' && dom.topLabel === 'Home & Away' && dom.note === 'Line <b>one</b>The people.Our community.' && !dom.noteTag && dom.strip === 'Strip <i>text</i>' && dom.edition === 'Edition "Q" & more' && dom.submit === 'Send <it>' && dom.mobileSubmit === 'Send <it>');
+  check('API refresh updates header text, link and visibility on a prerendered page via textContent', dom.top === 'Top <script>alert(1)</script> line' && dom.topLink === 'https://example.invalid/home' && dom.topLabel === 'Home & Away' && dom.note === 'Line <b>one</b>The people.Our community.' && !dom.noteTag && dom.strip === 'Strip <i>text</i>' && dom.stripPlain && dom.edition === 'Edition "Q" & more' && dom.submit === 'Send <it>' && dom.mobileSubmit === 'Send <it>');
   check('API refresh updates footer statement, intro, headings, links and copyright', dom.statement === 'Statement <one>Statement two' && dom.button.trim() === 'Tell us ↗' && dom.buttonHref === '/announcements/' && dom.intro === 'Plain <intro> sentence.' && !dom.introTag && dom.headings.join() === 'Topics,Help out' && dom.links.join() === '/give/|Give <now>,mailto:hello@example.invalid|hello@example.invalid,https://example.invalid/cal|Calendar,/volunteer/|Volunteer' && dom.copyright === `© ${new Date().getFullYear()} Synthetic <Holder>. All rights reserved.` && dom.injected === 0);
   if (shots) { await page.setViewportSize({ width: 1280, height: 900 }); await page.screenshot({ path: path.join(shots, 'changed-submit-1280.png'), fullPage: true }); }
   check('(setup) hide parts again', (await save(hide, { version: 6, links: [] })).status === 200 && await version() === 7);
@@ -168,8 +178,41 @@ try {
   await page.goto(BASE + '/submit/'); await page.waitForFunction(() => !document.querySelector('.footer-editor'));
   check('no horizontal scroll at 390px on a changed page', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   if (shots) await page.screenshot({ path: path.join(shots, 'hidden-submit-390.png'), fullPage: true });
-  check('(setup) restore defaults', (await save({}, { version: 7, action: 'reset' })).status === 200 && await version() === 8);
+  check('(setup) restore defaults', (await save({}, { version: 7 })).status === 200 && await version() === 8);
 
+  // 7b. Layout when parts are hidden (1280px).
+  await page.setViewportSize({ width: 1280, height: 900 });
+  check('(setup) hide only the masthead note', (await save({ h_showMastheadNote: false }, { version: await version() })).status === 200);
+  await page.goto(BASE + '/');
+  const geo = await page.evaluate(() => { const b = document.querySelector('.site-header .brand').getBoundingClientRect(), a = document.querySelector('.masthead-actions').getBoundingClientRect(); return { mid: b.left + b.width / 2, w: innerWidth, brandRight: b.right, actionsLeft: a.left, actionsRight: a.right }; });
+  check('with the masthead note hidden the logo stays centred and the actions stay on the right', Math.abs(geo.mid - geo.w / 2) < 6 && geo.actionsLeft >= geo.brandRight - 1 && geo.actionsRight > geo.w - 60);
+  if (shots) await page.screenshot({ path: path.join(shots, 'note-hidden-1280.png'), clip: { x: 0, y: 0, width: 1280, height: 260 } });
+  check('(setup) hide only the Sections column', (await save({ f_showSections: false }, { version: await version() })).status === 200);
+  await page.goto(BASE + '/');
+  const cols = await page.evaluate(() => ({ tracks: getComputedStyle(document.querySelector('.site-footer .cols')).gridTemplateColumns.split(' ').length, kids: document.querySelector('.site-footer .cols').children.length }));
+  check('with the Sections column hidden the footer grid has no empty column', cols.kids === 2 && cols.tracks === 2);
+  if (shots) { await page.locator('.site-footer').scrollIntoViewIfNeeded(); await page.locator('.site-footer').screenshot({ path: path.join(shots, 'sections-hidden-1280.png') }); }
+  check('(setup) restore defaults again', (await save({}, { version: await version() })).status === 200);
+  // The client never trusts a mailto: outside the contact email entry.
+  await context.route('**/api/navigation', async (route) => { const res = await route.fetch(), j = await res.json(); j.chrome.footer.involved.links = [{ label: 'Bad', url: 'mailto:a@example.invalid' }]; await route.fulfill({ response: res, json: j }); });
+  await page.goto(BASE + '/submit/'); await delay(800);
+  check('a mailto: link that is not the contact entry is ignored by the client refresh', await page.locator('.site-footer [data-chrome-list] a').count() === 4 && !(await page.locator('.site-footer [data-chrome-list]').innerText()).includes('Bad'));
+  await context.unroute('**/api/navigation');
+  // A stored row that no longer validates: public pages show the defaults and the admin can always restore.
+  const putRow = (cfg, version = 50) => run('INSERT INTO site_chrome(id,version,config,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,config=excluded.config,updated_at=excluded.updated_at', version, JSON.stringify(cfg), Date.now());
+  putRow({ header: { stripText: 'Custom strip' }, footer: {} });
+  // A direct database write does not clear the page cache, so each case reads a section page nothing has fetched yet.
+  const partial = await get('/youth/');
+  check('a stored row missing fields is filled with the defaults', part(partial.text, 'header').includes('Custom strip') && part(partial.text, 'header').includes('Submit a Story') && partial.status === 200);
+  for (const [name, cfg, url] of [['over-long text', { header: { topLineText: 'x'.repeat(500) }, footer: {} }, '/news/'], ['a javascript: link', { header: {}, footer: { statementButtonUrl: 'javascript:alert(1)' } }, '/features/'], ['a wrong type', { header: { showSearch: 'yes' }, footer: {} }, '/kids/']]) {
+    putRow(cfg);
+    const pub = await get(url), adminBroken = await get('/admin/header-footer', 'admin');
+    check(`broken stored row (${name}): public pages show the defaults and the admin page still opens with a notice`, TODAY_HEADER.every((x) => part(pub.text, 'header').includes(x)) && adminBroken.status === 200 && adminBroken.text.includes('could not be read') && adminBroken.text.includes('value="50"'));
+  }
+  check('the API serves the defaults while the stored row is broken', (await api()).chrome.header.topLine.text === 'Faith in action. Close to home.');
+  const stagedBroken = await save({}, { version: 50, action: 'reset' });
+  check('Restore defaults works on a broken row (staged)', stagedBroken.status === 200 && (await stagedBroken.text()).includes('Unsaved'));
+  check('saving the defaults repairs a broken row (version bump, audited as repaired)', (await save({}, { version: 50 })).status === 200 && await version() === 51 && JSON.parse(rows("SELECT detail FROM audit_log WHERE action='site_chrome.update' ORDER BY id DESC LIMIT 1")[0].detail).repaired === true);
   // 8. The admin form: no horizontal scroll, Move up/down, and without JavaScript it still submits.
   await page.setViewportSize({ width: 1280, height: 900 }); await page.goto(BASE + '/admin/header-footer');
   await page.locator('[data-chrome-move="1"]').first().click();

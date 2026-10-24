@@ -4,14 +4,14 @@ import { SITE } from '../lib/site';
 import { defaultNavigation, currentNavigation } from '../lib/site-navigation';
 import { readNavigation } from '../lib/navigation-store';
 import { readPublicChrome } from '../lib/chrome-store';
-import { defaultPublicChrome } from '../lib/site-chrome';
+import { defaultPublicChrome, STRIP_DEFAULT } from '../lib/site-chrome';
 const { current } = Astro.props as { current?: string };
 let items = defaultNavigation();
 // Prerendered submission/search/error pages never open the database during a build.
 if (!Astro.isPrerendered) { try { items = readNavigation().items; } catch { /* retain safe default links if settings are temporarily unavailable */ } }
 const active = currentNavigation(items, Astro.url, current);
 // Issue #156: editable text, links and visibility; prerendered pages render the defaults and refresh from the API.
-const chrome = (Astro.isPrerendered ? defaultPublicChrome() : readPublicChrome()).header;
+const chrome = (Astro.isPrerendered ? defaultPublicChrome() : readPublicChrome(Astro.request)).header;
 ---
 <header class="site-header" data-navigation-section={current}>
   {chrome.topLine && <div class="publication-line" data-chrome="topline"><div class="wrap"><span data-chrome-text="topline">{chrome.topLine.text}</span><a href={chrome.topLine.link.url} data-chrome-link="topline">{chrome.topLine.link.label} <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M7 7h10v10" /></svg></a></div></div>}
@@ -33,7 +33,7 @@ const chrome = (Astro.isPrerendered ? defaultPublicChrome() : readPublicChrome()
       </div>
     </div>
   </div></div>
-  {chrome.strip && <div class="conference-strip" data-chrome="strip"><div class="wrap"><p><span aria-hidden="true" data-chrome-text="strip">{chrome.strip}</span><span class="sr-only">{SITE.publisher}</span></p></div></div>}
+  {chrome.strip && <div class="conference-strip" data-chrome="strip"><div class="wrap">{chrome.strip === STRIP_DEFAULT ? <p data-chrome-text="strip"><span aria-hidden="true">{chrome.strip}</span><span class="sr-only">{SITE.publisher}</span></p> : <p data-chrome-text="strip"><span>{chrome.strip}</span></p>}</div></div>}
   <div class="wrap">
     <div class="section-nav-row"><nav class="nav" aria-label="Sections" data-navigation-items>
       {items.filter((i) => i.visible).map((i) => <a href={i.href} aria-current={active === i.id ? 'page' : undefined}>{i.label}</a>)}

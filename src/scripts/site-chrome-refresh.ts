@@ -2,12 +2,12 @@
 // Only textContent and validated hrefs are written, never HTML. A part the configuration hides is removed; a part
 // the page does not have is left alone (a reload picks it up). Anything malformed leaves the page as rendered.
 import { SITE } from '../lib/site';
-import { safeChromeUrl, splitIntro, type PublicChrome } from '../lib/site-chrome';
+import { safeChromeUrl, splitIntro, STRIP_DEFAULT, type PublicChrome } from '../lib/site-chrome';
 
 const str = (v: unknown, max = 300): string | null => (typeof v === 'string' && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v) ? v : null);
 const link = (v: unknown): { label: string; url: string } | null => {
   if (!v || typeof v !== 'object') return null;
-  const r = v as Record<string, unknown>, label = str(r.label, 254), url = safeChromeUrl(r.url);
+  const r = v as Record<string, unknown>, label = str(r.label, 254), url = safeChromeUrl(r.url, r.contact === true); // mailto only for the contact email entry
   return label && url ? { label, url } : null;
 };
 const all = (doc: ParentNode, sel: string) => Array.from(doc.querySelectorAll<HTMLElement>(sel));
@@ -32,7 +32,11 @@ export function applyChrome(raw: unknown, doc: Document): void {
     if (a && b && d) all(doc, '[data-chrome="note"]').forEach((p) => { const s = doc.createElement('strong'); s.textContent = d; p.replaceChildren(a, doc.createElement('br'), b, doc.createElement('br'), s); });
   }
   if (h.strip === null) gone('strip');
-  else { const t = str(h.strip); if (t) all(doc, '[data-chrome-text="strip"]').forEach((e) => { e.textContent = t; }); }
+  else { const t = str(h.strip); if (t) all(doc, '[data-chrome-text="strip"]').forEach((p) => {
+    // The default wording stays decoration beside the screen-reader publisher name; any other wording is ordinary visible text.
+    const visible = doc.createElement('span'); visible.textContent = t;
+    if (t === STRIP_DEFAULT) { visible.setAttribute('aria-hidden', 'true'); const sr = doc.createElement('span'); sr.className = 'sr-only'; sr.textContent = SITE.publisher; p.replaceChildren(visible, sr); } else p.replaceChildren(visible);
+  }); }
   if (h.edition === '') gone('edition');
   else { const t = str(h.edition); if (t) all(doc, '[data-chrome="edition"]').forEach((e) => { e.textContent = t; }); }
   if (h.search === false) gone('search');
