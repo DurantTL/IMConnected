@@ -274,9 +274,39 @@ if (root && form && body && sidebar) {
   if (moduleCount) new MutationObserver(refreshCardSummaries).observe(moduleCount, { childList: true, characterData: true, subtree: true });
   // The Announcement section only applies to announcements and events; without JavaScript it is simply shown.
   const announcementGroup = root.querySelector<HTMLElement>('[data-announcement-group]');
-  const kindSelect = form.elements.namedItem('announcementKind') as HTMLSelectElement | null;
-  const syncAnnouncementGroup = () => { if (announcementGroup && kindSelect) announcementGroup.hidden = kindSelect.value === 'story'; };
-  kindSelect?.addEventListener('change', syncAnnouncementGroup);
+  const kindRadios = Array.from(form.querySelectorAll<HTMLInputElement>('input[type="radio"][name="announcementKind"]'));
+  const currentKind = () => kindRadios.find((r) => r.checked)?.value ?? 'story';
+  const syncAnnouncementGroup = () => { if (announcementGroup && kindRadios.length) announcementGroup.hidden = currentKind() === 'story'; };
+  const KIND_BACK: Record<string, [string, string]> = { story: ['/admin', 'Stories'], announcement: ['/admin/announcements', 'Announcements'], event: ['/admin/events', 'Events'] };
+  const syncKindBack = () => {
+    const back = document.querySelector<HTMLAnchorElement>('[data-kind-back]');
+    const [href, label] = KIND_BACK[currentKind()] ?? KIND_BACK.story;
+    if (back) { back.href = href; back.textContent = `\u2190 ${label}`; }
+  };
+  let lastKind = currentKind();
+  // Choosing Story clears the event details, so ask first. Runs in the capture phase so a "Cancel" stops autosave from ever seeing the change.
+  form.addEventListener('input', (event) => {
+    const radio = event.target as HTMLInputElement | null;
+    if (!radio || radio.name !== 'announcementKind' || radio.type !== 'radio') return;
+    if (radio.value === 'story' && lastKind !== 'story') {
+      if (!window.confirm('Change this to a story? The event date, location, links and video will be cleared. You can bring them back from History in Settings.')) {
+        kindRadios.forEach((r) => { r.checked = r.value === lastKind; });
+        kindRadios.find((r) => r.checked)?.focus();
+        event.stopImmediatePropagation();
+        return;
+      }
+      for (const name of ['eventDate', 'eventLocation', 'announcementVideo', ...[0, 1, 2].flatMap((i) => [`announcementLink${i}Label`, `announcementLink${i}Url`])]) {
+        const field = form.elements.namedItem(name) as HTMLInputElement | null; if (field) field.value = '';
+      }
+    }
+    lastKind = radio.value;
+    syncAnnouncementGroup(); syncKindBack();
+    if (radio.value === 'event') {
+      showTab('settings');
+      const date = form.elements.namedItem('eventDate') as HTMLInputElement | null;
+      if (date) { revealEditorTarget(date); date.focus(); }
+    }
+  }, true);
   syncAnnouncementGroup();
   // A thumbnail without a description says so, and stops saying so as soon as one is typed.
   form.addEventListener('input', (event) => {
@@ -304,7 +334,7 @@ if (root && form && body && sidebar) {
     const sectionText = sectionSelect?.value ? [sectionSelect.selectedOptions[0]?.textContent, area].filter(Boolean).join(' · ') : '';
     const line = [sectionText, value('author'), value('date'), value('church')].filter(Boolean).join(' · ');
     for (const el of document.querySelectorAll('[data-details-text]')) el.textContent = line || 'Section, author and date are set in Story settings.';
-    const missing: Record<string, boolean> = { title: !value('title'), author: !value('author'), section: !value('section'), date: !value('date'), body: !bodyField.value.trim() };
+    const missing: Record<string, boolean> = { title: !value('title'), author: !value('author'), section: !value('section'), date: !value('date'), body: !bodyField.value.trim(), eventDate: value('announcementKind') === 'event' && !value('eventDate') };
     for (const li of document.querySelectorAll<HTMLElement>('[data-problem]')) li.hidden = !missing[li.dataset.problem!];
     const list = document.querySelector<HTMLElement>('.ed-problems'), ok = document.querySelector<HTMLElement>('.ed-ok');
     if (list && ok) { const any = Array.from(list.children).some((li) => !(li as HTMLElement).hidden); list.hidden = !any; ok.hidden = any; }

@@ -1009,5 +1009,33 @@ if (browser) {
   }
 }
 
+// ================= content type (issue #154): radios submit like the select did; no JavaScript needed =================
+{
+  const T = idOf(await c1.form('/api/admin/drafts/new', {}));
+  const page = (await c1.get(`/admin/drafts/${T}`)).text;
+  check('the editor renders the Type radios (Story checked) and no select with the same name', /<input[^>]*type="radio"[^>]*name="announcementKind"[^>]*value="story"[^>]*checked/.test(page.replace(/\s+/g, ' ')) || /name="announcementKind"[^>]*value="story"[^>]*checked/.test(page.replace(/\s+/g, ' ')), page.slice(0, 80));
+  check('exactly three announcementKind inputs, all tied to draft-form, none a select', (page.match(/name="announcementKind"/g) || []).length === 3 && !/<select[^>]*announcementKind/.test(page) && (page.match(/form="draft-form"[^>]*name="announcementKind"|name="announcementKind"[^>]*form="draft-form"/g) || []).length === 3);
+  const post = (kind, extra = {}) => c1.form(`/api/admin/drafts/${T}/save`, { version: version(T), ...baseFields({ title: 'Synthetic Type Switch', body: 'Synthetic body for a type switch.' }), announcementKind: kind, ...extra });
+  let r = await post('event', { eventDate: '2027-04-04', eventLocation: 'Synthetic Hall' });
+  check('a native form post with announcementKind=event stores an event', (r.status === 303 || r.status === 200) && JSON.parse(draftRow(T).announcement).kind === 'event' && JSON.parse(draftRow(T).announcement).eventDate === '2027-04-04', `${r.status} ${draftRow(T).announcement}`);
+  check('the drafts list presets follow at once', (await c1.get('/admin/events')).text.includes('Synthetic Type Switch') && !(await c1.get('/admin/announcements')).text.includes('Synthetic Type Switch'));
+  const evPage = (await c1.get(`/admin/drafts/${T}`)).text.replace(/\s+/g, ' ');
+  check('an event reloads with the Event radio checked and the back link saying Events', /value="event"[^>]*checked|checked[^>]*value="event"/.test(evPage) && /href="\/admin\/events"[^>]*>\s*\u2190 Events/.test(evPage));
+  r = await post('announcement', { eventDate: '2027-04-04', eventLocation: 'Synthetic Hall' });
+  check('switching to Announcement keeps the details', JSON.parse(draftRow(T).announcement).kind === 'announcement' && JSON.parse(draftRow(T).announcement).location === 'Synthetic Hall');
+  r = await post('story');
+  check('switching to Story clears the announcement and the previous state is a revision', draftRow(T).announcement === null && q('SELECT COUNT(*) n FROM draft_revisions WHERE draft_id = ?', T)[0].n >= 2);
+  const rowBefore = JSON.stringify(draftRow(T));
+  r = await post('bogus');
+  check('an unknown type is refused with a client error (not saved)', r.status === 400 || r.status === 422 || (r.status === 303 && /e=save_invalid/.test(r.loc || '')), `${r.status} ${r.loc}`);
+  check('an unknown type leaves the row unchanged', JSON.stringify(draftRow(T)) === rowBefore);
+  // an agent draft is not touched by opening it
+  const now = Date.now();
+  const AG = Number(run("INSERT INTO drafts(status,source,title,section,area,author,date,body,announcement,created_at,updated_at) VALUES('new','agent','Synthetic Agent Notice','news','conference','Synthetic Author','2027-01-01','Synthetic agent body text for the notice.',?,?,?)", JSON.stringify({ kind: 'event', eventDate: '2027-06-06', links: [] }), now, now).lastInsertRowid);
+  const before = JSON.stringify(draftRow(AG));
+  const open = await c1.get(`/admin/drafts/${AG}`);
+  check('opening an agent event draft shows Event selected and changes nothing in the row', open.status === 200 && /value="event"[^>]*checked|checked[^>]*value="event"/.test(open.text.replace(/\s+/g, ' ')) && JSON.stringify(draftRow(AG)) === before);
+}
+
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
 process.exit(fails ? 1 : 0);

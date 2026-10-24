@@ -871,11 +871,12 @@ export function markUnpublished(slug: string, userId: number): void {
  * Unpublish returns it to review with the edited section, category, featured flag and date instead of stale ones. Call inside
  * the transaction that wrote the story. Open drafts are never touched (the bulk edit refuses those stories).
  */
-export function syncPublishedDraftFields(slug: string, draftId: number | undefined, f: { section: string; area: string; column: string; additionalSections: string[]; featured: boolean; date: string }): void {
+export function syncPublishedDraftFields(slug: string, draftId: number | undefined, f: { section: string; area: string; column: string; additionalSections: string[]; featured: boolean; date: string; announcement?: Announcement | null }): void {
   const now = Date.now();
+  // `announcement` undefined keeps the closed draft's value; null or an object (a bulk content-type change, issue #154) replaces it.
   getDb()
-    .prepare("UPDATE drafts SET section = ?, area = ?, story_column = ?, additional_sections = ?, featured = ?, date = ?, updated_at = MAX(?, updated_at + 1) WHERE status = 'published' AND (slug = ? OR id = ?)")
-    .run(f.section, f.area, '', JSON.stringify(f.additionalSections), f.featured ? 1 : 0, f.date, now, slug, draftId ?? -1);
+    .prepare("UPDATE drafts SET section = ?, area = ?, story_column = ?, additional_sections = ?, featured = ?, date = ?, announcement = CASE WHEN ? THEN ? ELSE announcement END, updated_at = MAX(?, updated_at + 1) WHERE status = 'published' AND (slug = ? OR id = ?)")
+    .run(f.section, f.area, '', JSON.stringify(f.additionalSections), f.featured ? 1 : 0, f.date, f.announcement === undefined ? 0 : 1, f.announcement === undefined ? null : announcementJson(f.announcement), now, slug, draftId ?? -1);
 }
 
 let lastCleanup = 0;

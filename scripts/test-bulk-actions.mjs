@@ -428,6 +428,60 @@ try {
     check('draft date change: only the date changes', draftRow(X1).date === '2026-11-11' && draftRow(X1).section === 'youth' && draftRow(X1).featured === 1);
     const closed = await c1.form('/admin/bulk', { action: 'edit', step: 'run', id: [D], [`v_${D}`]: version(D), tick_featured: '1', e_featured: 'on' });
     check('a rejected draft cannot be bulk edited', text(closed.text).includes('0 of 1 updated') && draftRow(D).featured === 0);
+    // ---- content type (issue #154) ----
+    const T1 = await mk('Bulk Tango Draft One', { section: 'news', area: 'churches', date: '2026-09-05' });
+    const T2 = await mk('Bulk Uniform Draft Two', { section: 'news', area: 'churches', date: '2026-09-06' });
+    run('UPDATE drafts SET announcement = ? WHERE id = ?', JSON.stringify({ kind: 'event', eventDate: '2027-01-15', location: 'Synthetic Hall', links: [] }), T2);
+    const ann = (id) => JSON.parse(draftRow(id).announcement || 'null');
+    const tv = { [T1]: version(T1), [T2]: version(T2) };
+    let tr = await c1.form('/admin/bulk', { action: 'edit', step: 'confirm', id: [T1], [`v_${T1}`]: tv[T1], tick_type: '1', e_type: 'event', e_event_date: 'not-a-date' });
+    check('content type: a malformed event date is refused at the fields step', tr.status === 400 && text(tr.text).includes('Enter a valid event date'), text(tr.text).slice(0, 200));
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'confirm', id: [T1], [`v_${T1}`]: tv[T1], tick_type: '1', e_type: 'bogus' });
+    check('content type: an unknown type is refused', tr.status === 400 && text(tr.text).includes('Choose Story, Announcement or Event'));
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'confirm', id: [T1], [`v_${T1}`]: tv[T1], tick_type: '1', e_type: 'event', e_event_date: '2027-02-02' });
+    check('content type: the confirmation names the type and the date and shows no contact details', tr.status === 200 && text(tr.text).includes('Content type: Event (items without an event date get 2027-02-02; an existing event date is kept)') && !/casey|bulk-mail|555-01/i.test(tr.text), text(tr.text).slice(0, 300));
+    const audT = q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.bulk_edit'")[0].n;
+    const t1Before = JSON.stringify(draftRow(T1));
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'run', id: [T1], [`v_${T1}`]: tv[T1], tick_type: '1', e_type: 'event' });
+    check('content type: an Event with no date anywhere is refused per item and changes nothing', text(tr.text).includes('0 of 1 updated') && text(tr.text).includes('An event needs a date') && JSON.stringify(draftRow(T1)) === t1Before);
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'run', id: [T1], [`v_${T1}`]: tv[T1], tick_type: '1', e_type: 'event', e_event_date: '2027-02-02' });
+    check('content type: story to Event with a date creates the event', text(tr.text).includes('1 of 1 updated') && ann(T1)?.kind === 'event' && ann(T1).eventDate === '2027-02-02' && draftRow(T1).status === 'in_review', JSON.stringify(draftRow(T1).announcement));
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'run', id: [T2], [`v_${T2}`]: tv[T2], tick_type: '1', e_type: 'event', e_event_date: '2030-01-01' });
+    check('content type: the bulk event date never replaces an existing event date', ann(T2).eventDate === '2027-01-15' && text(tr.text).includes('Already matched'), JSON.stringify(ann(T2)));
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'confirm', id: [T2], [`v_${T2}`]: version(T2), tick_type: '1' });
+    check('content type: ticking the field without choosing a type is refused (nothing pre-checked)', tr.status === 400 && text(tr.text).includes('Choose Story, Announcement or Event'));
+    const fieldsPage = (await c1.form('/admin/bulk', { action: 'edit', id: [T2], [`v_${T2}`]: version(T2) })).text;
+    check('content type: no type radio is pre-checked on the fields page', !/name="e_type"[^>]*checked/.test(fieldsPage) && /name="e_type"/.test(fieldsPage));
+    tv[T2] = version(T2);
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'run', id: [T2], [`v_${T2}`]: tv[T2], tick_type: '1', e_type: 'announcement' });
+    check('content type: Event to Announcement keeps the stored details', ann(T2)?.kind === 'announcement' && ann(T2).location === 'Synthetic Hall' && ann(T2).eventDate === '2027-01-15');
+    const evPage = (await c1.get('/admin/events')).text, anPage = (await c1.get('/admin/announcements')).text;
+    check('content type: the presets reflect the new type at once', anPage.includes('Bulk Uniform Draft Two') && evPage.includes('Bulk Tango Draft One') && !evPage.includes('Bulk Uniform Draft Two'));
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'run', id: [T1], [`v_${T1}`]: version(T1), tick_type: '1', e_type: 'story' });
+    check('content type: Story clears the announcement', ann(T1) === null && text(tr.text).includes('1 of 1 updated'));
+    tr = await c1.form('/admin/bulk', { action: 'edit', step: 'run', id: [T1], [`v_${T1}`]: version(T1), tick_type: '1', e_type: 'story' });
+    check('content type: setting the same type again changes nothing', text(tr.text).includes('Already matched'));
+    const lastT = q("SELECT detail FROM audit_log WHERE action = 'draft.bulk_edit' ORDER BY id DESC LIMIT 3").map((x) => x.detail);
+    check('content type: audit entries list the field name only', q("SELECT COUNT(*) n FROM audit_log WHERE action = 'draft.bulk_edit'")[0].n === audT + 3 && lastT.every((d) => d === '{"fields":["announcement"]}'), JSON.stringify(lastT));
+    // live stories (F is live with a closed draft; G gets an open draft below)
+    const LA = SH;
+    tr = await c1.form('/admin/bulk', { action: 'editstory', step: 'run', slug: [LA], tick_type: '1', e_type: 'event' });
+    check('content type (live): an Event with no date is refused and the story is unchanged', text(tr.text).includes('0 of 1 updated') && text(tr.text).includes('An event needs a date') && !JSON.parse(sRow(LA).announcement || 'null'));
+    const revBefore = sRow(LA).rev;
+    tr = await c1.form('/admin/bulk', { action: 'editstory', step: 'run', slug: [LA], tick_type: '1', e_type: 'event', e_event_date: '2027-03-03' });
+    const liveAnn = JSON.parse(sRow(LA).announcement || 'null');
+    check('content type (live): story to Event goes through the story writer (rev bumped, edited_at set)', text(tr.text).includes('1 of 1 updated') && liveAnn?.kind === 'event' && liveAnn.eventDate === '2027-03-03' && sRow(LA).rev === revBefore + 1 && !!sRow(LA).edited_at, JSON.stringify([liveAnn, sRow(LA).rev]));
+    check('content type (live): the closed draft follows, and the public page answers', JSON.parse(draftRow(H).announcement || 'null')?.kind === 'event' && (await anon.get(`/stories/${LA}/`)).status === 200);
+    const feed = JSON.parse((await anon.get('/stories.json')).text);
+    const entry = (feed.stories ?? feed).find((x) => JSON.stringify(x).includes('/stories/' + LA + '/'));
+    check('content type (live): /stories.json reports the event with its shape unchanged', !!entry && entry.announcement?.kind === 'event' && entry.announcement.eventDate === '2027-03-03', JSON.stringify(entry)?.slice(0, 300));
+    const lastS = q("SELECT detail FROM audit_log WHERE action = 'story.bulk_edit' ORDER BY id DESC LIMIT 1")[0].detail;
+    check('content type (live): the audit entry lists the field name only', lastS === '{"fields":["announcement"]}', lastS);
+    tr = await c1.form('/admin/bulk', { action: 'editstory', step: 'run', slug: [LA], tick_type: '1', e_type: 'story' });
+    check('content type (live): Story clears it again, on the story and its closed draft', JSON.parse(sRow(LA).announcement || 'null') === null && JSON.parse(draftRow(H).announcement || 'null') === null);
+    tr = await c1.form('/admin/bulk', { action: 'editstory', step: 'run', slug: [SF], tick_type: '1', e_type: 'announcement' });
+    check('content type (live): a live story with an open draft is refused (F has one)', text(tr.text).includes('0 of 1 updated') && text(tr.text).includes('An open draft exists'), text(tr.text).slice(0, 300));
+
   }
 } finally {
   /* browser section below runs after the HTTP checks */
