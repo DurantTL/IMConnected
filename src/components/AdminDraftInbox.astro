@@ -3,6 +3,7 @@ import Admin from '../layouts/Admin.astro';
 import '../styles/admin-lists.css';
 import { SECTIONS } from '../lib/site';
 import { DRAFT_SORTS, DRAFT_SOURCES, DRAFT_QUERY_MAX, PER_PAGE_CHOICES, SOURCE_LABEL, STATUS_FILTERS, STATUS_LABEL, cleanupRejectedPhotos, countDraftsByStatus, listDraftsPage, listRecentPublished, normalizeDraftFilter, type ContentKind, type DraftListItem } from '../lib/drafts';
+import { publishedKindCounts } from '../lib/story-store';
 import { listIssues } from '../lib/newsletter-issues';
 import { KIND_LABEL, listHref, pageWindow, sortLabel, type ListView } from '../lib/draft-list-ui';
 import { fmtTime, sectionLabel } from '../lib/admin-ui';
@@ -28,6 +29,12 @@ const DEFAULT_SORT_NOTE = { updated: 'recently updated', scheduled: 'soonest sch
 const queueTitle = kind === 'event' ? 'Events' : kind === 'announcement' ? 'Announcements' : kind === 'all' ? 'All drafts' : 'Stories';
 const newKind = kind === 'all' ? 'story' : kind;
 const counts = countDraftsByStatus(kind);
+// The Published card (issue #164): live items of this page's type; it opens the published list, it is not a draft status.
+const livePublishedKind = kind === 'all' ? 'all' : kind;
+// null when the stories table can't be read: the card shows a dash, never a false 0.
+let publishedLive: number | null = null;
+try { publishedLive = publishedKindCounts()[livePublishedKind]; } catch { publishedLive = null; }
+const publishedLink = livePublishedKind === 'all' ? '/admin/published' : `/admin/published?kind=${livePublishedKind}`;
 const issues = listIssues();
 const issueKnown = !f.issue || f.issue === 'none' || issues.some((i) => String(i.number) === f.issue);
 
@@ -100,6 +107,13 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
           </a>
         </li>
       ))}
+      <li>
+        <a class="adm-stat" href={publishedLink} aria-label={publishedLive === null ? 'Published, count unavailable, live on the site' : `Published, ${publishedLive}, live on the site`}>
+          <span class="adm-stat-label">Published</span>
+          <strong>{publishedLive ?? '–'}</strong>
+          <span class="adm-stat-note">Live on the site</span>
+        </a>
+      </li>
     </ul>
   </nav>
 
@@ -123,7 +137,7 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
       )}
     </section>
     <section class="admin-card" aria-labelledby="home-pub">
-      <h2 id="home-pub">Newest published</h2>
+      <h2 id="home-pub"><a class="adm-head-link" href="/admin/published">Newest published</a></h2>
       {recentPublished.length === 0 ? <p class="admin-note">Nothing published yet.</p> : (
         <ul>
           {recentPublished.map((d) => (

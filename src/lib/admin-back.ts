@@ -13,6 +13,7 @@ const BACK_MAX = 2000;
 /** The Published list address for a filter, leaving out every default. */
 export function publishedHref(g: PublishedFilter): string {
   const p = new URLSearchParams();
+  if (g.kind !== 'all') p.set('kind', g.kind);
   if (g.q) p.set('q', g.q);
   if (g.section) p.set('section', g.section);
   if (g.area) p.set('area', g.area);

@@ -67,6 +67,14 @@ try {
     S[i] = s;
     ins.run(s.slug, s.title, s.sec, s.area || null, `Synthetic Author ${(i % 3) + 1}`, s.church, s.date, s.body, 'live', s.pub, s.pub, s.featured, 0, s.extra, s.issue, s.edited);
   }
+  // Content types (issue #164): every 10th story is an event, every 10th+5 an announcement, story 2 (also in Youth) an
+  // announcement, story 7 has an announcement with an unknown kind (a story). The rest are plain stories.
+  const KIND = {};
+  for (let i = 1; i <= 66; i++) {
+    KIND[i] = i % 10 === 0 ? 'event' : i % 10 === 5 || i === 2 ? 'announcement' : 'story';
+    if (KIND[i] !== 'story') db.prepare('UPDATE stories SET announcement = ?, rev = rev + 1 WHERE slug = ?').run(JSON.stringify({ kind: KIND[i], eventDate: '2026-12-01' }), S[i].slug);
+  }
+  db.prepare('UPDATE stories SET announcement = ?, rev = rev + 1 WHERE slug = ?').run('{"kind":"bogus"}', S[7].slug);
   // Stories that must never be listed: two unpublished and one live story flagged draft.
   ins.run('synth-gone-1', 'Synthetic Unpublished One', 'news', 'conference', 'Synthetic Author 1', 'Synthetic Church 1', '2026-05-01', 'x', 'unpublished', now, now, 1, 0, '[]', 1, null);
   ins.run('synth-gone-2', 'Synthetic Unpublished Two', 'news', 'conference', 'Synthetic Author 1', 'Synthetic Church 1', '2026-05-02', 'x', 'unpublished', now, now, 0, 0, '[]', null, null);
@@ -92,7 +100,7 @@ try {
   };
   const rowsOf = (html) => [...html.matchAll(/<tr>\s*<td class="adm-pick"[\s\S]*?<\/tr>/g)].map((m) => m[0]);
   const slugsOf = (html) => rowsOf(html).map((r) => /name="slug" value="([^"]+)" form="bulk-form"/.exec(r)?.[1]);
-  const totalOf = (html) => Number(/<strong>(\d+)<\/strong> (?:story|stories) shown/.exec(html)?.[1] ?? -1);
+  const totalOf = (html) => Number(/<strong>(\d+)<\/strong> (?:story|stories|items?|announcements?|events?) shown/.exec(html)?.[1] ?? -1);
   const sl = (...ns) => ns.map((n) => S[n].slug);
   const allSlugs = Object.values(S).map((s) => s.slug);
   const live = (pred) => Object.values(S).filter(pred).map((s) => s.slug);
@@ -111,6 +119,56 @@ try {
   check('perPage=100 lists all 66 live stories exactly once', all100.length === 66 && new Set(all100).size === 66 && allSlugs.every((s) => all100.includes(s)), String(all100.length));
   check('the lists links to the public page with rel="noopener" and shows church and /stories/<slug>/', /href="http[^"]*\/stories\/synth-s03\/" rel="noopener"/.test(r.html) && rowsOf(r.html)[0].includes('/stories/synth-s03/') && rowsOf(r.html)[0].includes('Synthetic Church'));
   check('each row keeps Edit (to /api/admin/stories/edit) and Unpublish, and a bulk checkbox on the bulk form', rowsOf(r.html).every((x) => x.includes('action="/api/admin/stories/edit"') && x.includes('action="/api/admin/stories/unpublish"') && x.includes('form="bulk-form"')) && r.html.includes('id="bulk-form"') && r.html.includes('Unpublish selected') && r.html.includes('Edit fields'));
+
+  // ---------- content types (issue #164) ----------
+  const kindSlugs = (k) => Object.keys(S).filter((i) => k === 'all' || KIND[i] === k).map((i) => S[i].slug);
+  const KN = Object.fromEntries(['all', 'story', 'announcement', 'event'].map((k) => [k, kindSlugs(k).length]));
+  const shown = (html) => Number(/<strong>(\d+)<\/strong> (?:story|stories|announcements?|events?|items?) shown/.exec(html)?.[1] ?? -1);
+  const tab = (html, label) => { const m = new RegExp(`<a href="([^"]*)"( aria-current="page")?>${label} <span class="adm-kind-n">\\((\\d+)\\)</span></a>`).exec(html); return m && { href: m[1].replace(/&amp;/g, '&'), current: !!m[2], n: Number(m[3]) }; };
+  check('the fixture has all three types (sanity)', KN.story > 0 && KN.announcement > 0 && KN.event > 0 && KN.all === 66, JSON.stringify(KN));
+  for (const [k, label] of [['all', 'All'], ['story', 'Stories'], ['announcement', 'Announcements'], ['event', 'Events']]) {
+    const rk = await get(k === 'all' ? '' : `?kind=${k}&perPage=100`);
+    check(`tabs: ${label} shows the right count (${KN[k]}) and is the only aria-current="page" tab`, tab(rk.html, label)?.n === KN[k] && tab(rk.html, label)?.current && (/<nav class="adm-kind-tabs"[\s\S]*?<\/nav>/.exec(rk.html)[0].match(/aria-current="page"/g) || []).length === 1, JSON.stringify(tab(rk.html, label)));
+    if (k !== 'all') {
+      const got = slugsOf(rk.html);
+      check(`kind=${k}: lists exactly the ${KN[k]} live ${k} items`, got.length === KN[k] && kindSlugs(k).every((x) => got.includes(x)) && shown(rk.html) === KN[k], `${got.length} ${shown(rk.html)}`);
+      check(`kind=${k}: hidden kind field keeps the type on Apply, heading says which type, no row badges`, rk.html.includes(`<input type="hidden" name="kind" value="${k}"`) && /<h1>Published (stories|announcements|events)<\/h1>/.test(rk.html) && !/<span class="adm-badge kind-/.test(rk.html));
+    }
+  }
+  r = await get('?perPage=100');
+  check('kind=all: each row carries a type badge (Story / Announcement / Event) and the heading is "Published"', /<h1>Published<\/h1>/.test(r.html) && (r.html.match(/class="adm-badge kind-(story|announcement|event)">/g) || []).length === 66 && r.html.includes('kind-event">Event<') && r.html.includes('kind-announcement">Announcement<'));
+  check('an announcement with an unknown kind counts as a story', kindSlugs('story').includes(S[7].slug) && slugsOf((await get('?kind=story&perPage=100')).html).includes(S[7].slug));
+  for (const bad of ['bogus', 'EVENT', 'event%27%20OR%201%3D1--', 'story%00', '%27%3B%20DROP%20TABLE%20stories%3B--', 'announcement,event', '']) {
+    const rb = await get(`?kind=${bad}&perPage=100`);
+    check(`kind=${JSON.stringify(decodeURIComponent(bad))} falls back to all (66 shown, All tab current)`, rb.status === 200 && slugsOf(rb.html).length === 66 && tab(rb.html, 'All')?.current === true, `${rb.status} ${slugsOf(rb.html).length}`);
+  }
+  check('...and the stories table is untouched after the injection attempts', slugsOf((await get('?perPage=100')).html).length === 66);
+  r = await get('?kind=event&q=Synthetic&section=news&sort=title&perPage=50&page=1');
+  const t2 = tab(r.html, 'Announcements');
+  check('a tab keeps the other filters, resets the type', t2 && t2.href === '/admin/published?kind=announcement&q=Synthetic&section=news&sort=title&perPage=50', t2?.href);
+  r = await get('?kind=event&perPage=25&page=2');
+  check('a tab link drops page and "All" drops kind', tab(r.html, 'Stories')?.href === '/admin/published?kind=story' && tab(r.html, 'All')?.href === '/admin/published', `${tab(r.html, 'Stories')?.href} ${tab(r.html, 'All')?.href}`);
+  r = await get('?kind=announcement&featured=yes&perPage=100');
+  const featAnn = Object.keys(S).filter((i) => KIND[i] === 'announcement' && S[i].featured).length;
+  check('type combines with the other filters (featured announcements)', slugsOf(r.html).length === featAnn && featAnn > 0, `${slugsOf(r.html).length} vs ${featAnn}`);
+  r = await get('?kind=event');
+  const cardN = (html, label) => Number(new RegExp(`<span class="adm-stat-label">${label}[^<]*</span><strong>(\\d+)</strong>`).exec(html)?.[1] ?? -1);
+  check('summary cards are scoped to the type shown (events: All live and Featured)', cardN(r.html, 'All live') === KN.event && cardN(r.html, 'Featured') === Object.keys(S).filter((i) => KIND[i] === 'event' && S[i].featured).length, `${cardN(r.html, 'All live')} ${cardN(r.html, 'Featured')}`);
+  // Section counts: membership by primary or additional section, per type; empty sections still appear as (0).
+  const secOpt = (html, key) => new RegExp(`<option value="${key}"[^>]*>[^<]*\\((\\d+)\\)</option>`).exec(html)?.[1];
+  const memberN = (k, key) => Object.keys(S).filter((i) => (k === 'all' || KIND[i] === k) && (S[i].sec === key || JSON.parse(S[i].extra).includes(key))).length;
+  const secKeys = [...r.html.matchAll(/<select name="section">([\s\S]*?)<\/select>/g)][0][1].match(/value="[a-z-]+"/g).map((x) => x.slice(7, -1)).filter(Boolean);
+  for (const k of ['all', 'story', 'announcement', 'event']) {
+    const rk = await get(k === 'all' ? '' : `?kind=${k}`);
+    const bad = secKeys.filter((key) => Number(secOpt(rk.html, key)) !== memberN(k, key));
+    check(`section counts for ${k} follow membership (${secKeys.length} sections)`, secKeys.length > 3 && bad.length === 0, bad.join(','));
+  }
+  const ann = await get('?kind=announcement');
+  check('story 2 (Features, also listed in Youth) counts once under Features and once under Youth', Number(secOpt(ann.html, 'youth')) === memberN('announcement', 'youth') && memberN('announcement', 'youth') >= 1 && Number(secOpt(ann.html, 'features')) === memberN('announcement', 'features') && memberN('announcement', 'features') >= 1);
+  const zeroes = secKeys.filter((key) => memberN('all', key) === 0);
+  check(`sections with no live items still appear with (0) (${zeroes.length} here)`, zeroes.every((key) => secOpt(r.html, key) === '0'));
+  r = await get('?kind=event&section=youth&perPage=100');
+  check('Section filter + kind: events in Youth (primary or listed)', slugsOf(r.html).length === memberN('event', 'youth'), String(slugsOf(r.html).length));
 
   // ---------- summary cards ----------
   const featuredN = live((s) => s.featured).length;
@@ -237,7 +295,7 @@ try {
   x = await get('?page=99');
   check('a page past the end shows the last page', slugsOf(x.html).length === 16 && x.html.includes('Showing 51 to 66 of 66'));
   x = await get('?q=zzzz-no-such-story');
-  check('no matches says so, with no table and a clear-filters link', totalOf(x.html) === 0 && x.html.includes('No published stories match these filters.') && x.html.includes('Clear filters') && !x.html.includes('class="adm-table"'));
+  check('no matches says so, with no table and a clear-filters link', totalOf(x.html) === 0 && x.html.includes('No published items match these filters.') && x.html.includes('Clear filters') && !x.html.includes('class="adm-table"'));
 
   // ---------- invalid parameters fall back to the default ----------
   const base66 = slugsOf((await get()).html).join();
@@ -302,6 +360,14 @@ try {
   r = await post('/api/admin/stories/unpublish', { slug: S[43].slug, back: 'sort=bogus&perPage=7&page=abc&q=%0Ahello%0D&section=nope' });
   check('back is rebuilt from the parsed filter: bad values drop to defaults, the search text is kept clean', r.location === '/admin/published?q=hello&n=unpublished', r.location);
 
+  // Content type survives the back round trip (issue #164).
+  r = await post('/api/admin/stories/unpublish', { slug: S[50].slug, back: '/admin/published?kind=event&sort=title&page=1' });
+  check('unpublish with back keeps kind=event', r.location === '/admin/published?kind=event&sort=title&n=unpublished', r.location);
+  r = await post('/api/admin/stories/unpublish', { slug: S[40].slug, back: 'kind=announcement%27%20OR%201=1&section=news' });
+  check('an injected or unknown kind in back falls back to all', r.location === '/admin/published?section=news&n=unpublished', r.location);
+  r = await post('/admin/bulk', { action: 'unpublish', slug: S[20].slug, back: '/admin/published?kind=event&sort=title' });
+  check('bulk confirmation carries kind=event in Cancel and the form', r.status === 200 && r.html.includes('href="/admin/published?kind=event&amp;sort=title"') && r.html.includes('name="back" value="/admin/published?kind=event&amp;sort=title"'), r.status);
+
   const bulkEnv = { back: '/admin/published?section=news&sort=title&page=2' };
   r = await post('/admin/bulk', { action: 'unpublish', slug: S[44].slug, ...bulkEnv });
   check('bulk Unpublish confirmation: Cancel and the form carry the rebuilt view', r.status === 200 && r.html.includes('href="/admin/published?section=news&amp;sort=title&amp;page=2"') && r.html.includes('name="back" value="/admin/published?section=news&amp;sort=title&amp;page=2"'), r.status);
@@ -339,7 +405,7 @@ try {
           const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
           check(`${width}px ${name}: no horizontal page scroll`, over <= 0, `scrollWidth overflow ${over}px: ` + (over > 0 ? await page.evaluate(() => [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > document.documentElement.clientWidth + 1 && !e.closest('.adm-table-wrap')).slice(0, 4).map((e) => e.tagName + '.' + e.className).join(' ')) : ''));
           const small = await page.evaluate(() => {
-            const sel = ['.adm-search select', '.adm-search input[type=search]', '.adm-apply', '.adm-table .bulk-pick', '.adm-actions .cms-btn', '.adm-pager nav a', '.adm-chip a'];
+            const sel = ['.adm-search select', '.adm-search input[type=search]', '.adm-apply', '.adm-table .bulk-pick', '.adm-actions .cms-btn', '.adm-pager nav a', '.adm-chip a', '.adm-kind-tabs a'];
             return sel.flatMap((q) => [...document.querySelectorAll(q)].filter((e) => e.offsetParent !== null).map((e) => { const r = e.getBoundingClientRect(); return r.width < 43.5 || r.height < 43.5 ? `${q} ${Math.round(r.width)}x${Math.round(r.height)}` : null; })).filter(Boolean);
           });
           check(`${width}px ${name}: controls are at least 44px`, small.length === 0, small.slice(0, 4).join('; '));

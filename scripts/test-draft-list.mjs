@@ -83,6 +83,16 @@ try {
       `Submitter Person ${i}`, `submitter${i}@contacts.invalid`, `555-0100-${String(i).padStart(2, '0')}`, d.submitterChurch, d.issue, d.publishAt, d.created, d.updated, i % 3 === 0 ? 1 : 0,
     );
   }
+  // ---- live stories for the Published cards (issue #164): 4 stories, 3 announcements, 2 events; plus rows that never count ----
+  const LIVE = { story: 4, announcement: 3, event: 2 };
+  let ln = 0;
+  const liveIns = (kind, status, draft) => {
+    ln++;
+    run("INSERT INTO stories(slug,title,dek,section,area,author,church,date,body,status,source,published_at,updated_at,featured,draft,additional_sections,announcement) VALUES(?,?,'Synthetic summary.','news',NULL,'Synthetic Author','Synthetic Church','2026-06-01','Synthetic body.',?,'editor',?,?,0,?,'[]',?)",
+      `synth-live-${ln}`, `Synthetic Live ${ln}`, status, now, now, draft, kind === 'story' ? null : JSON.stringify({ kind, eventDate: '2026-12-01' }));
+  };
+  for (const [k, n] of Object.entries(LIVE)) for (let j = 0; j < n; j++) liveIns(k, 'live', 0);
+  liveIns('event', 'unpublished', 0); liveIns('announcement', 'live', 1);
   const ids = (list) => list.map((d) => d.i);
   const open = (d) => d.status === 'new' || d.status === 'in_review';
   const by = (cmp) => (list) => [...list].sort((a, b) => cmp(a, b) || a.i - b.i);
@@ -159,6 +169,19 @@ try {
   check('/admin/announcements and /admin/events are kind presets', sameSet((await list('status=all&perPage=100', '/admin/announcements')).ids, ids(D.filter((d) => d.kind === 'announcement'))) && sameSet((await list('status=all&perPage=100', '/admin/events')).ids, ids(D.filter((d) => d.kind === 'event'))));
   check('...and the preset path wins over a kind parameter', sameSet((await list('status=all&kind=all&perPage=100', '/admin/events')).ids, ids(D.filter((d) => d.kind === 'event'))));
   check('...their own links stay on the preset path', (await get('/admin/events?status=all&perPage=100')).text.includes('href="/admin/events?status=rejected&amp;perPage=100"'));
+
+  // ---- Published card (issue #164) ----
+  for (const [pth, k] of [['/admin', 'story'], ['/admin/announcements', 'announcement'], ['/admin/events', 'event']]) {
+    const t = (await get(pth)).text;
+    const m = t.match(/<a class="adm-stat" href="([^"]*)" aria-label="([^"]*)">\s*<span class="adm-stat-label">Published<\/span>\s*<strong>(\d+)<\/strong>\s*<span class="adm-stat-note">([^<]*)<\/span>/);
+    check(`${pth}: Published card shows ${LIVE[k]} live ${k} items`, m && Number(m[3]) === LIVE[k], m ? m[3] : 'no card');
+    check(`${pth}: Published card links to the published list for ${k}, says it is live, reads well to screen readers`, m && m[1].replace(/&amp;/g, '&') === (k === 'story' ? '/admin/published?kind=story' : `/admin/published?kind=${k}`) && m[4] === 'Live on the site' && m[2] === `Published, ${LIVE[k]}, live on the site`, m ? `${m[1]} ${m[2]}` : '');
+    check(`${pth}: the Published card is not a draft status (no status= in its link, not aria-current)`, m && !m[1].includes('status=') && !/class="adm-stat"[^>]*href="[^"]*published\?[^"]*"[^>]*aria-current/.test(t));
+  }
+  r = await list('kind=all&status=all&perPage=100');
+  check('/admin?kind=all: the Published card counts every type and opens the whole list', />\s*<strong>9<\/strong>\s*<span class="adm-stat-note">Live on the site/.test(r.text) && r.text.includes('href="/admin/published"'));
+  check('the draft status filters are unchanged: status=published is still the drafts table, not the live stories', sameSet((await list('kind=all&status=published&perPage=100')).ids, ids(D.filter((d) => d.status === 'published'))));
+  check('Newest published heading links to the whole published list (the panel shows every type)', (await get('/admin')).text.includes('<h2 id="home-pub"><a class="adm-head-link" href="/admin/published">Newest published</a></h2>'));
 
   // ---- section, source, issue, dates ----
   const base = 'kind=all&status=all&perPage=100';

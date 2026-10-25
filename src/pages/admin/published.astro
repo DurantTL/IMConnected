@@ -1,7 +1,7 @@
 ---
 import Admin from '../../layouts/Admin.astro';
 import '../../styles/admin-published.css';
-import { listStoriesPage, parsePublishedFilter, publishedCounts, publishedFacets, PUBLISHED_PER_PAGE, type PublishedFilter, type PublishedRow } from '../../lib/story-store';
+import { listStoriesPage, parsePublishedFilter, publishedCounts, publishedFacets, publishedKindCounts, publishedSectionCounts, PUBLISHED_PER_PAGE, type PublishedFilter, type PublishedRow } from '../../lib/story-store';
 import { SECTIONS, getSection } from '../../lib/site';
 import { noticeText, fmtTime, sectionLabel } from '../../lib/admin-ui';
 import { errorText } from '../../lib/messages';
@@ -20,12 +20,16 @@ let items: PublishedRow[] = [];
 let total = 0, page = 1, pages = 1;
 let counts = { all: 0, featured: 0, openDraft: 0, editedThisMonth: 0, thisYear: 0, year: '' };
 let facets: { issues: number[]; years: string[] } = { issues: [], years: [] };
+let kindCounts = { all: 0, story: 0, announcement: 0, event: 0 };
+let sectionCounts: Record<string, number> = {};
 let loadFailed = false;
 try {
   const res = listStoriesPage(f);
   ({ items, total, page, pages } = res);
-  counts = publishedCounts();
+  counts = publishedCounts(Date.now(), f.kind);
   facets = publishedFacets();
+  kindCounts = publishedKindCounts();
+  sectionCounts = publishedSectionCounts(f.kind);
 } catch (err) {
   loadFailed = true;
   console.error('[admin] could not read the story list', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
@@ -42,6 +46,14 @@ function href(over: Partial<PublishedFilter> & { edited?: boolean } = {}, keep =
   return publishedHref(g);
 }
 // Row and bulk actions return to this same view; the server rebuilds the address from it (never the raw text).
+// The type tabs keep every other filter but go back to page 1.
+const tabHref = (kind: PublishedFilter['kind']) => href({ kind, page: 1 });
+const KIND_TABS: { kind: PublishedFilter['kind']; label: string }[] = [
+  { kind: 'all', label: 'All' }, { kind: 'story', label: 'Stories' }, { kind: 'announcement', label: 'Announcements' }, { kind: 'event', label: 'Events' },
+];
+const KIND_BADGE = { story: 'Story', announcement: 'Announcement', event: 'Event' } as const;
+const KIND_TITLE = { all: 'Published', story: 'Published stories', announcement: 'Published announcements', event: 'Published events' } as const;
+const noun = f.kind === 'announcement' ? ['announcement', 'announcements'] : f.kind === 'event' ? ['event', 'events'] : f.kind === 'story' ? ['story', 'stories'] : ['item', 'items'];
 const backValue = Astro.url.pathname + Astro.url.search;
 
 const anyFilter = !!(f.q || f.section || f.issue !== null || f.year || f.featured || f.openDraft || f.editedThisMonth);
@@ -50,7 +62,7 @@ const other = !!(f.q || f.section || f.issue !== null || (f.year && f.year !== c
 // A card is current when its filter is the only one in use.
 const only = (k: keyof typeof flags) => !other && (Object.keys(flags) as (keyof typeof flags)[]).every((x) => flags[x] === (x === k));
 const cards = [
-  { label: 'All live', n: counts.all, link: href({}, false), active: !anyFilter },
+  { label: f.kind === 'all' ? 'All live' : `All live ${noun[1]}`, n: counts.all, link: href({}, false), active: !anyFilter },
   { label: 'Featured', n: counts.featured, link: href({ featured: true }, false), active: only('featured') },
   { label: 'With an open draft', n: counts.openDraft, link: href({ openDraft: true }, false), active: only('openDraft') },
   { label: 'Edited this month', n: counts.editedThisMonth, link: href({ editedThisMonth: true }, false), active: only('edited') },
@@ -76,11 +88,11 @@ for (let n = 1; n <= pages; n++) if (n === 1 || n === pages || Math.abs(n - page
 const fmtDay = (ms: number) => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: 'short', day: 'numeric' });
 const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d); return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' }) : d; };
 ---
-<Admin title="Published" current="published" wide>
+<Admin title={KIND_TITLE[f.kind]} current="published" wide>
   <div class="admin-page-head">
     <div>
       <p class="admin-eyebrow">Stories</p>
-      <h1>Published</h1>
+      <h1>{KIND_TITLE[f.kind]}</h1>
       <p class="admin-note">Editing loads the story's current text into a draft. Publishing that draft overwrites the same story, and the change is live at once.</p>
     </div>
   </div>
@@ -89,17 +101,23 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
   {loadFailed && <p class="admin-error" role="alert">The story list could not be read. Please reload in a minute.</p>}
   {!loadFailed && (
     <>
+    <nav class="adm-kind-tabs" aria-label="Content type">
+      {KIND_TABS.map((t) => (
+        <a href={tabHref(t.kind)} aria-current={f.kind === t.kind ? 'page' : undefined}>{t.label} <span class="adm-kind-n">({kindCounts[t.kind]})</span></a>
+      ))}
+    </nav>
     <nav class="adm-stat-cards" aria-label="Show by group">
       {cards.map((c) => (
         <a class="adm-stat" href={c.link} aria-current={c.active ? 'true' : undefined}><span class="adm-stat-label">{c.label}</span><strong>{c.n}</strong></a>
       ))}
     </nav>
     <form class="adm-search" method="get" action="/admin/published" role="search">
+      {f.kind !== 'all' && <input type="hidden" name="kind" value={f.kind} />}
       <label class="adm-q">Search<input type="search" name="q" value={f.q} maxlength="200" placeholder="Title, church, author or text" /></label>
       <label>Section
         <select name="section">
           <option value="">All sections</option>
-          {SECTIONS.map((s) => <option value={s.key} selected={f.section === s.key}>{s.label}</option>)}
+          {SECTIONS.map((s) => <option value={s.key} selected={f.section === s.key}>{s.label} ({sectionCounts[s.key] ?? 0})</option>)}
         </select>
       </label>
       <label>Area
@@ -140,18 +158,18 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
       <button class="adm-apply" type="submit">Apply</button>
     </form>
     <div class="adm-summary">
-      <span><strong>{total}</strong> {total === 1 ? 'story' : 'stories'} shown{anyFilter ? ` of ${counts.all} live` : ''}</span>
+      <span><strong>{total}</strong> {total === 1 ? noun[0] : noun[1]} shown{anyFilter || f.kind !== 'all' ? ` of ${kindCounts[f.kind]} live` : ''}</span>
       {chips.map((c) => <span class="adm-chip">{c.label} <a href={c.remove} aria-label={`Remove filter ${c.label}`}>&times;</a></span>)}
       {anyFilter && <a class="adm-clear" href={href({}, false)}>Clear filters</a>}
     </div>
     {total === 0 ? (
-      <p class="admin-note">{anyFilter ? 'No published stories match these filters.' : 'No published stories yet.'}</p>
+      <p class="admin-note">{anyFilter ? `No published ${noun[1]} match these filters.` : `No published ${noun[1]} yet.`}</p>
     ) : (
       <>
       <BulkBar action="unpublish" label="Unpublish selected" noun="stories" back={backValue} more={[{ action: "editstory", label: "Edit fields" }]} />
       <div class="adm-table-wrap">
       <table class="adm-table">
-        <caption class="adm-sr">Published stories, {from} to {to} of {total}</caption>
+        <caption class="adm-sr">{KIND_TITLE[f.kind]}, {from} to {to} of {total}</caption>
         <thead>
           <tr>
             <th scope="col"><span class="adm-sr">Select</span></th>
@@ -173,7 +191,7 @@ const fmtStoryDate = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec
               </td>
               <td class="adm-story" data-label="">
                 <a class="adm-title" href={`${base}/stories/${r.slug}/`} rel="noopener">{r.title || r.slug}</a>
-                <span class="adm-sub">{r.church ? `${r.church} · ` : ''}/stories/{r.slug}/</span>
+                <span class="adm-sub">{f.kind === 'all' && <span class={`adm-badge kind-${r.kind}`}>{KIND_BADGE[r.kind]}</span>}{f.kind === 'all' ? ' ' : ''}{r.church ? `${r.church} · ` : ''}/stories/{r.slug}/</span>
               </td>
               <td data-label="State">
                 <span class="adm-badge live">Live</span>
