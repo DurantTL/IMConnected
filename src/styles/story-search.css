@@ -11,7 +11,7 @@
 .story-search .search-form .btn { min-height: 50px; border-radius: 3px; gap: 20px; }
 .search-tools { display: flex; gap: 12px 24px; justify-content: space-between; align-items: baseline; margin-top: 16px; }
 .search-tools p { margin: 0; font-size: .8125rem; color: var(--ink-3); }
-.search-text-button { flex: none; min-height: 44px; padding: 8px 0; border: 0; background: transparent; font: 600 .8rem var(--sans); color: var(--brand-text); text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
+.search-text-button { flex: none; min-height: 44px; padding: 8px 0; border: 0; background: transparent; font: 600 .875rem var(--sans); color: var(--brand-text); text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
 .search-feedback { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 24px 0 12px; }
 .story-search .search-status { margin: 0; overflow-wrap: anywhere; font-size: .88rem; }
 .story-search .search-results { max-width: 900px; margin: 0; }

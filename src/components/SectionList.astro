@@ -49,6 +49,7 @@ const base = area ? `/${section.key}/${area.key}/` : `/${section.key}/`;
             <StoryCard story={lead} variant="feature" kickerMode={kickerMode} pageSection={section.key} />
           </div>
         )}
+        {rest.length > 0 && lead && <h2 class="sr-only">More stories in {area ? area.label : section.label}</h2>}
         {rest.length > 0 && (
           <div class="grid sec-grid">
             {rest.map((s) => <StoryCard story={s} variant="row" heading={lead ? 'h3' : 'h2'} kickerMode={kickerMode} pageSection={section.key} />)}
