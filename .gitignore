@@ -13,3 +13,6 @@ public/images/zz-test-*
 .build-commits
 src/content/stories/*zz-test-*
 public/images/stories/*zz-test-*
+
+# design-taste-frontend working files (screenshots, inspector output)
+.taste-skill/

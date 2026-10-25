@@ -44,6 +44,17 @@ it must pass with no errors), and for changes to the submit form, publishing or
 `scripts/test-editor-drafts.mjs`, `scripts/test-public-pages.mjs`, `scripts/test-story-store.mjs`;
 they use a throwaway `DATA_DIR` and need no GitHub token or mock).
 
+## Design polish of the public site
+
+One design skill is installed: `.claude/skills/design-taste-frontend/` (Taste Skill, vendored). Use it
+for layout, spacing and hierarchy work on the public pages, and read its `IMCONNECTED.md` first: it
+sets the owner's dials (variance low, motion low, density medium), the restyle-only flow (audit
+first, never a rebrand or a new direction), the hard rules (no Inter, gradients, generic card grids or
+glass; navy and the current type system stay; mobile first; 44px tap targets; never hover-only) and
+the pre-ship gate (the skill's inspector, Vercel's web-interface-guidelines audit, then a preview the
+owner reviews). Do not install `ui-ux-pro-max` or any other design skill alongside it. Bulk screenshot
+reading still goes to the **explorer**.
+
 ## Keeping usage down
 
 These rules keep cost in proportion to the work. They change how work is
