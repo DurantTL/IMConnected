@@ -75,6 +75,36 @@ if (Astro.request.method === 'POST') {
       audit('auth.sessions_revoked', { userId: user.id, ip, detail: { scope: 'others', reason: 'password_change' } });
       message = 'Password changed. Every other session was signed out.';
     }
+  } else if (action === 'password_set') {
+    // For an editor who joined with Google or Microsoft and has no password yet. Same rules as a password change, but there is no
+    // current password to check, so the fresh second factor is the proof.
+    const next = field(form, 'next', 1024);
+    const confirm = field(form, 'confirm', 1024);
+    const has = db.prepare('SELECT 1 FROM password_credentials WHERE user_id = ?').get(user.id);
+    const problem = passwordProblem(next, user.email);
+    if (has) {
+      error = 'You already have a password. Use Change password.';
+      Astro.response.status = 409;
+    } else if (problem) {
+      error = problem;
+    } else if (next !== confirm) {
+      error = 'The two new passwords don’t match.';
+    } else if (await fresh(form)) {
+      const hash = await hashPassword(next);
+      const done = db.prepare('INSERT OR IGNORE INTO password_credentials (user_id, hash, updated_at) VALUES (?, ?, ?)').run(user.id, hash, Date.now());
+      if (Number(done.changes) !== 1) {
+        error = 'You already have a password. Use Change password.';
+        Astro.response.status = 409;
+      } else {
+        const rotated = rotateSession(session.id, { mfaPassed: true, cookies: Astro.cookies });
+        if (!rotated) return Astro.redirect('/admin/login', 303);
+        session = rotated.session;
+        revokeAllForUser(user.id, session.id);
+        audit('auth.password_set', { userId: user.id, ip });
+        audit('auth.sessions_revoked', { userId: user.id, ip, detail: { scope: 'others', reason: 'password_set' } });
+        message = 'Password set. You can now sign in with your email and password too. Every other session was signed out.';
+      }
+    }
   } else if (action === 'recovery') {
     if (await fresh(form)) {
       codes = generateRecoveryCodes(user.id);
@@ -179,6 +209,7 @@ const passkeyList = listPasskeys(user.id);
 const passkeysOn = passkeysEnabled();
 const hasPk = passkeyList.length > 0 && passkeysOn;
 const links = listLinks(user.id);
+const hasPassword = !!db.prepare('SELECT 1 FROM password_credentials WHERE user_id = ?').get(user.id);
 const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 ---
 <Admin title="My account" current="account">
@@ -206,6 +237,25 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
     </form>
   </section>
 
+  {!hasPassword && (
+    <section class="admin-card" aria-labelledby="pws">
+      <h2 id="pws">Set a password</h2>
+      <p class="admin-note">You sign in with a linked Google or Microsoft account and have no password. You can add one as another way in (you still need your second step). It needs a fresh authenticator or recovery code{hasPk ? ', or a passkey' : ''}.</p>
+      <form method="post" action="/admin/account" data-fresh-form data-has-passkeys={hasPk ? '' : undefined}>
+        <input type="hidden" name="action" value="password_set" />
+        <input type="hidden" name="assertion" value="" />
+        <label for="pws-next">New password</label>
+        <input id="pws-next" name="next" type="password" autocomplete="new-password" required minlength="12" maxlength="256" />
+        <label for="pws-confirm">Confirm new password</label>
+        <input id="pws-confirm" name="confirm" type="password" autocomplete="new-password" required minlength="12" maxlength="256" />
+        <label for="pws-code">Authenticator or recovery code{hasPk ? ' (leave empty to confirm with a passkey)' : ''}</label>
+        <input id="pws-code" name="code" type="text" autocomplete="one-time-code" required={!hasPk} maxlength="40" />
+        <button type="submit">Set password</button>
+      </form>
+    </section>
+  )}
+
+  {hasPassword && (
   <section class="admin-card" aria-labelledby="pw">
     <h2 id="pw">Change password</h2>
     <form method="post" action="/admin/account" data-fresh-form data-has-passkeys={hasPk ? '' : undefined}>
@@ -222,6 +272,7 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
       <button type="submit">Change password</button>
     </form>
   </section>
+  )}
 
   <section class="admin-card" aria-labelledby="rc">
     <h2 id="rc">Recovery codes</h2>
@@ -287,7 +338,7 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
   {links.length > 0 && (
     <section class="admin-card" aria-labelledby="oa">
       <h2 id="oa">Linked sign-in accounts</h2>
-      <p class="admin-note">These accounts can sign you in as the first step. You still need your second step. Unlinking needs a fresh code or passkey, and you can’t unlink your only way to sign in.</p>
+      <p class="admin-note">These accounts can sign you in as the first step. You still need your second step. Unlinking needs a fresh code or passkey, and you can’t unlink your only way to sign in. Set a password or add a passkey first if this is your only one.</p>
       <ul class="session-list">
         {links.map((l) => (
           <li>

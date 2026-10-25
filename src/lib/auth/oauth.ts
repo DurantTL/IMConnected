@@ -1,11 +1,13 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AstroCookies } from 'astro';
-import { CodeChallengeMethod, OAuth2Client, decodeIdToken, generateCodeVerifier, generateState } from 'arctic';
 import { getDb } from '../db';
+import { GUID, PERSONAL_TID, validateClaims as checkClaims } from './oauth-claims.mjs';
 
 // Google and Microsoft 365 sign-in (issue #11), invite-only. This module holds the provider configuration, the
-// short-lived state cookie, the ID-token claim checks and the link table helpers. The routes are
-// src/pages/admin/oauth/[provider]/index.ts (start) and callback.ts (which also holds the invite-only matching). Nothing here ever logs or stores a token, a code, a client secret or a PKCE verifier beyond the cookie.
+// short-lived state cookie, the code exchange (node:crypto + fetch only, no OAuth library, like src/lib/db/gdrive.mjs),
+// the claim-check wrapper (the pure rules are in oauth-claims.mjs) and the link table helpers. The routes are
+// src/pages/admin/oauth/[provider]/index.ts (start) and callback.ts (which also holds the invite-only matching).
+// Nothing here ever logs or stores a token, a code or a client secret; the PKCE verifier lives only in the state cookie.
 
 export type Provider = 'google' | 'microsoft';
 export const PROVIDERS: Provider[] = ['google', 'microsoft'];
@@ -16,28 +18,54 @@ export const OAUTH_COOKIE = '__Host-imc_oauth';
 export const OAUTH_COOKIE_MS = 10 * 60 * 1000;
 export const SCOPES = ['openid', 'email', 'profile'];
 
-const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 // ---- configuration ----
 
+const env = (n: string) => (process.env[n] || '').trim();
+
+/** An endpoint must be https, or http on a loopback host (tests); anything else is never contacted. */
+export function safeEndpoint(v: string): boolean {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'https:' || (u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Endpoint overrides exist ONLY so tests can point at scripts/mock-oidc.mjs. They are never documented as a setting for
- * a real site, and a warning is logged at startup when one is set under NODE_ENV=production.
+ * Endpoint overrides exist ONLY so tests can point at scripts/mock-oidc.mjs. Under NODE_ENV=production they are ignored
+ * unless OAUTH_TEST_ENDPOINTS=1 is also set (tests only; never documented for a real site), and an override that is not
+ * https or loopback http makes the provider unconfigured.
  */
 const OVERRIDE_VARS = [
   'OAUTH_GOOGLE_AUTH_URL', 'OAUTH_GOOGLE_TOKEN_URL', 'OAUTH_GOOGLE_ISSUER',
   'OAUTH_MICROSOFT_AUTH_URL', 'OAUTH_MICROSOFT_TOKEN_URL', 'OAUTH_MICROSOFT_ISSUER',
 ];
-export function overridesInUse(): string[] {
-  return OVERRIDE_VARS.filter((n) => (process.env[n] || '').trim());
+export const overridesInUse = (): string[] => OVERRIDE_VARS.filter((n) => env(n));
+const overridesAllowed = () => process.env.NODE_ENV !== 'production' || env('OAUTH_TEST_ENDPOINTS') === '1';
+
+/** '' = no override (use the real endpoint); null = an override that is not allowed (provider off); else the URL. */
+function override(name: string): string | null {
+  const v = env(name);
+  if (!v || !overridesAllowed()) return '';
+  return safeEndpoint(v) ? v : null;
 }
+
 let warned = false;
+/** Once per process, at startup: test overrides in production, and a Microsoft setup that is switched off. No secrets. */
 export function warnIfOverridden(): void {
   if (warned) return;
   warned = true;
   const used = overridesInUse();
   if (used.length && process.env.NODE_ENV === 'production') {
-    console.warn(`[oauth] WARNING: ${used.join(', ')} ${used.length > 1 ? 'are' : 'is'} set while NODE_ENV=production. These overrides are for tests only; unset them so sign-in talks to the real Google and Microsoft endpoints.`);
+    console.warn(
+      overridesAllowed()
+        ? `[oauth] WARNING: ${used.join(', ')} ${used.length > 1 ? 'are' : 'is'} set with OAUTH_TEST_ENDPOINTS=1 under NODE_ENV=production, so sign-in talks to a test endpoint. These are for tests only; unset them on a real site.`
+        : `[oauth] WARNING: ${used.join(', ')} ${used.length > 1 ? 'are' : 'is'} set under NODE_ENV=production and ${used.length > 1 ? 'are' : 'is'} ignored (test-only settings). Unset ${used.length > 1 ? 'them' : 'it'}.`,
+    );
+  }
+  if ((env('MICROSOFT_CLIENT_ID') || env('MICROSOFT_CLIENT_SECRET')) && microsoftTenant() === null) {
+    console.warn('[oauth] Microsoft sign-in is OFF: MICROSOFT_TENANT_ID must be your tenant (directory) id, a GUID. organizations, common, consumers and an empty value are not supported.');
   }
 }
 
@@ -49,6 +77,12 @@ function siteOrigin(): string | null {
   }
 }
 
+/** The configured Microsoft tenant GUID (lower case), or null: Microsoft is single-tenant only. */
+export function microsoftTenant(): string | null {
+  const t = env('MICROSOFT_TENANT_ID').toLowerCase();
+  return GUID.test(t) && t !== PERSONAL_TID ? t : null;
+}
+
 export interface ProviderConfig {
   provider: Provider;
   clientId: string;
@@ -56,18 +90,20 @@ export interface ProviderConfig {
   redirectUri: string;
   authUrl: string;
   tokenUrl: string;
-  /** The tenant for Microsoft (`organizations` by default); empty for Google. */
+  /** The Microsoft tenant GUID; empty for Google. */
   tenant: string;
   /** Set only by the test override. */
   issuerOverride: string;
 }
 
-const env = (n: string) => (process.env[n] || '').trim();
-
-/** The provider's settings, or null when its env vars are missing, SITE_URL is unusable or (Microsoft) the tenant is `consumers`. */
+/** The provider's settings, or null when its env vars are missing, SITE_URL is unusable, an override is refused or (Microsoft) no tenant GUID is set. */
 export function providerConfig(provider: Provider): ProviderConfig | null {
   const origin = siteOrigin();
   if (!origin) return null;
+  const authO = override(provider === 'google' ? 'OAUTH_GOOGLE_AUTH_URL' : 'OAUTH_MICROSOFT_AUTH_URL');
+  const tokenO = override(provider === 'google' ? 'OAUTH_GOOGLE_TOKEN_URL' : 'OAUTH_MICROSOFT_TOKEN_URL');
+  const issuerO = override(provider === 'google' ? 'OAUTH_GOOGLE_ISSUER' : 'OAUTH_MICROSOFT_ISSUER');
+  if (authO === null || tokenO === null || issuerO === null) return null;
   if (provider === 'google') {
     const clientId = env('GOOGLE_CLIENT_ID');
     const clientSecret = env('GOOGLE_CLIENT_SECRET');
@@ -75,28 +111,25 @@ export function providerConfig(provider: Provider): ProviderConfig | null {
     return {
       provider, clientId, clientSecret, tenant: '',
       redirectUri: `${origin}/admin/oauth/google/callback`,
-      authUrl: env('OAUTH_GOOGLE_AUTH_URL') || 'https://accounts.google.com/o/oauth2/v2/auth',
-      tokenUrl: env('OAUTH_GOOGLE_TOKEN_URL') || 'https://oauth2.googleapis.com/token',
-      issuerOverride: env('OAUTH_GOOGLE_ISSUER'),
+      authUrl: authO || 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: tokenO || 'https://oauth2.googleapis.com/token',
+      issuerOverride: issuerO,
     };
   }
   const clientId = env('MICROSOFT_CLIENT_ID');
   const clientSecret = env('MICROSOFT_CLIENT_SECRET');
-  const tenant = env('MICROSOFT_TENANT_ID') || 'organizations';
-  if (!clientId || !clientSecret) return null;
-  if (!/^[A-Za-z0-9.-]{1,100}$/.test(tenant) || tenant.toLowerCase() === 'consumers') return null; // personal accounts are not supported
+  const tenant = microsoftTenant();
+  if (!clientId || !clientSecret || !tenant) return null;
   return {
     provider, clientId, clientSecret, tenant,
     redirectUri: `${origin}/admin/oauth/microsoft/callback`,
-    authUrl: env('OAUTH_MICROSOFT_AUTH_URL') || `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`,
-    tokenUrl: env('OAUTH_MICROSOFT_TOKEN_URL') || `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
-    issuerOverride: env('OAUTH_MICROSOFT_ISSUER'),
+    authUrl: authO || `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`,
+    tokenUrl: tokenO || `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+    issuerOverride: issuerO,
   };
 }
 
 export const enabledProviders = (): Provider[] => PROVIDERS.filter((p) => providerConfig(p) !== null);
-
-const client = (c: ProviderConfig) => new OAuth2Client(c.clientId, c.clientSecret, c.redirectUri);
 
 // ---- the state cookie ----
 
@@ -105,15 +138,28 @@ interface Pending { p: Provider; state: string; verifier: string; nonce: string;
 // SameSite=Lax (not Strict): the provider sends the browser back with a cross-site top-level GET, which must carry it.
 const cookieOptions = { httpOnly: true, secure: true, sameSite: 'lax', path: '/' } as const;
 
-/** Start a flow: store state, the PKCE verifier and a nonce in the 10-minute cookie, return the provider URL to redirect to. */
+const random = () => randomBytes(32).toString('base64url');
+
+/**
+ * Start a flow: store state, the PKCE verifier and a nonce in the 10-minute cookie and return the provider URL to redirect to:
+ * response_type=code, client_id, redirect_uri, scope "openid email profile", state, nonce, code_challenge (S256) and, for Google,
+ * prompt=select_account. The client secret is never in this URL.
+ */
 export function beginFlow(c: ProviderConfig, cookies: AstroCookies): string {
-  const state = generateState();
-  const verifier = generateCodeVerifier();
-  const nonce = randomBytes(24).toString('base64url');
+  const state = random();
+  const verifier = random();
+  const nonce = random();
   const pending: Pending = { p: c.provider, state, verifier, nonce, exp: Date.now() + OAUTH_COOKIE_MS };
   cookies.set(OAUTH_COOKIE, Buffer.from(JSON.stringify(pending)).toString('base64url'), { ...cookieOptions, maxAge: OAUTH_COOKIE_MS / 1000 });
-  const url = client(c).createAuthorizationURLWithPKCE(c.authUrl, state, CodeChallengeMethod.S256, verifier, SCOPES);
+  const url = new URL(c.authUrl);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('client_id', c.clientId);
+  url.searchParams.set('redirect_uri', c.redirectUri);
+  url.searchParams.set('scope', SCOPES.join(' '));
+  url.searchParams.set('state', state);
   url.searchParams.set('nonce', nonce);
+  url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'));
+  url.searchParams.set('code_challenge_method', 'S256');
   if (c.provider === 'google') url.searchParams.set('prompt', 'select_account');
   return url.toString();
 }
@@ -151,70 +197,53 @@ export interface Claims {
   email?: unknown; email_verified?: unknown; preferred_username?: unknown; tid?: unknown; oid?: unknown;
 }
 
+const MAX_TOKEN_RESPONSE = 100_000;
+
+/** Base64url-decode an ID token's payload. No signature check: see exchangeCode(). */
+export function decodeIdTokenPayload(idToken: string): Claims | null {
+  const parts = idToken.split('.');
+  if (parts.length !== 3 || idToken.length > 12_000) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return payload && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Claims) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Exchange the code (PKCE verifier included) and read the ID token's claims. The ID token comes straight from the token
- * endpoint over TLS in answer to our authenticated request, so its signature is not re-checked (OpenID Connect Core 3.1.3.7);
- * issuer, audience, expiry and nonce are checked in validateClaims().
+ * Exchange the code at the token endpoint: POST over HTTPS (or loopback http in tests), form body with grant_type, code,
+ * redirect_uri and the PKCE code_verifier, the client id and secret in an HTTP Basic header (never in a URL), no redirects,
+ * 10 second timeout. The ID token's payload is read from that response; it comes straight from the provider over TLS in
+ * answer to our authenticated request, so its signature is not re-checked (OpenID Connect Core 3.1.3.7); issuer, audience,
+ * expiry and nonce are checked in validateClaims(). Returns null on any failure and never surfaces the provider's body.
  */
 export async function exchangeCode(c: ProviderConfig, code: string, verifier: string): Promise<Claims | null> {
+  if (!safeEndpoint(c.tokenUrl)) return null;
   try {
-    const tokens = await client(c).validateAuthorizationCode(c.tokenUrl, code, verifier);
-    return decodeIdToken(tokens.idToken()) as Claims;
+    const body = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: c.redirectUri, code_verifier: verifier });
+    const basic = Buffer.from(`${encodeURIComponent(c.clientId)}:${encodeURIComponent(c.clientSecret)}`).toString('base64');
+    const res = await fetch(c.tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Authorization: `Basic ${basic}` },
+      body,
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (text.length > MAX_TOKEN_RESPONSE) return null;
+    const data = JSON.parse(text) as { id_token?: unknown };
+    return typeof data.id_token === 'string' ? decodeIdTokenPayload(data.id_token) : null;
   } catch {
-    return null; // never surface the provider's error body: it can echo the code
+    return null;
   }
 }
 
 export type ClaimResult = { ok: true; subject: string; email: string } | { ok: false; reason: 'claims' | 'tenant' | 'no_email' | 'unverified' };
 
-const str = (v: unknown): string => (typeof v === 'string' ? v : '');
-const emailish = (v: unknown): string => {
-  const s = str(v).trim().toLowerCase();
-  return s.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(s) ? s : '';
-};
-
-/**
- * Whether the ID token proves a provider account and a verified email.
- *  - All: audience is our client id, not expired, nonce equals the one in the cookie, issuer is the provider's.
- *  - Google: `email_verified` must be true (boolean or the string "true"); the subject is `sub`.
- *  - Microsoft, a specific tenant id (a GUID): `tid` must equal it; the address is `email`, else `preferred_username`.
- *  - Microsoft, `organizations` or `common` (or a tenant given as a domain): the `email` claim is required;
- *    `preferred_username` is never used because any tenant can set it to anything. The subject is `<tid>:<oid>`.
- */
-export function validateClaims(c: ProviderConfig, claims: Claims | null, nonce: string, now = Date.now()): ClaimResult {
-  if (!claims || typeof claims !== 'object') return { ok: false, reason: 'claims' };
-  const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (!aud.includes(c.clientId)) return { ok: false, reason: 'claims' };
-  if (typeof claims.exp !== 'number' || claims.exp * 1000 <= now) return { ok: false, reason: 'claims' };
-  if (typeof claims.nonce !== 'string' || !safeEqual(claims.nonce, nonce)) return { ok: false, reason: 'claims' };
-  const iss = str(claims.iss);
-
-  if (c.provider === 'google') {
-    const issuers = c.issuerOverride ? [c.issuerOverride] : ['https://accounts.google.com', 'accounts.google.com'];
-    if (!issuers.includes(iss)) return { ok: false, reason: 'claims' };
-    const sub = str(claims.sub);
-    if (!sub || sub.length > 190) return { ok: false, reason: 'claims' };
-    const email = emailish(claims.email);
-    if (!email) return { ok: false, reason: 'no_email' };
-    if (!(claims.email_verified === true || claims.email_verified === 'true')) return { ok: false, reason: 'unverified' };
-    return { ok: true, subject: sub, email };
-  }
-
-  const tid = str(claims.tid).toLowerCase();
-  const oid = str(claims.oid).toLowerCase();
-  if (!GUID.test(tid) || !GUID.test(oid)) return { ok: false, reason: 'claims' };
-  const expectedIss = c.issuerOverride || `https://login.microsoftonline.com/${tid}/v2.0`;
-  if (iss.toLowerCase() !== expectedIss.toLowerCase()) return { ok: false, reason: 'claims' };
-  let email: string;
-  if (GUID.test(c.tenant)) {
-    if (tid !== c.tenant.toLowerCase()) return { ok: false, reason: 'tenant' };
-    email = emailish(claims.email) || emailish(claims.preferred_username);
-  } else {
-    email = emailish(claims.email);
-  }
-  if (!email) return { ok: false, reason: 'no_email' };
-  return { ok: true, subject: `${tid}:${oid}`, email };
-}
+/** The claim rules (audience, expiry, nonce, issuer, verified email, Microsoft tenant) are in oauth-claims.mjs. */
+export const validateClaims = (c: ProviderConfig, claims: Claims | null, nonce: string, now = Date.now()): ClaimResult => checkClaims(c, claims, nonce, now) as ClaimResult;
 
 // ---- links ----
 
@@ -224,7 +253,7 @@ export function listLinks(userId: number): LinkRow[] {
   return getDb().prepare('SELECT id, provider, email_at_link, created_at FROM oauth_accounts WHERE user_id = ? ORDER BY created_at').all(userId) as unknown as LinkRow[];
 }
 
-/** First-factor methods the user has besides the given link: a password, a passkey (when passkeys work here) or another configured provider. */
+/** First-factor methods the user has besides the given provider's link: a password, a passkey (when passkeys work here) or another configured provider. */
 export function otherFirstFactors(userId: number, exceptProvider: Provider, passkeysOn: boolean): number {
   const db = getDb();
   let n = 0;

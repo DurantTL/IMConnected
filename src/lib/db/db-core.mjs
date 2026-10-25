@@ -88,8 +88,10 @@ export function resetTwoFactor(db, userId) {
   const k = db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(userId);
   db.prepare('DELETE FROM webauthn_challenges WHERE user_id = ?').run(userId);
   const r = db.prepare('DELETE FROM recovery_codes WHERE user_id = ?').run(userId);
+  // Google / Microsoft links go too (issue #11): a first factor someone else may still hold is cleared along with the second factor.
+  const o = db.prepare('DELETE FROM oauth_accounts WHERE user_id = ?').run(userId);
   const s = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
-  return { authenticators: Number(t.changes), passkeys: Number(k.changes), recoveryCodes: Number(r.changes), sessions: Number(s.changes) };
+  return { authenticators: Number(t.changes), passkeys: Number(k.changes), recoveryCodes: Number(r.changes), oauthLinks: Number(o.changes), sessions: Number(s.changes) };
 }
 
 /**

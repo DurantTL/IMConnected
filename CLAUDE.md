@@ -42,6 +42,8 @@ yourself before pushing: `npm run build` (the Astro build;
 it must pass with no errors), and for changes to the submit form, publishing or
 `src/lib/`, the end-to-end suite that covers it (`scripts/test-editor-submissions.mjs`,
 `scripts/test-editor-drafts.mjs`, `scripts/test-public-pages.mjs`, `scripts/test-story-store.mjs`;
+for editor sign-in `scripts/test-editor-auth.mjs`, `scripts/test-editor-passkeys.mjs`, `scripts/test-editor-accounts.mjs` and
+`scripts/test-editor-oauth.mjs`, which starts the committed local mock provider `scripts/mock-oidc.mjs`;
 they use a throwaway `DATA_DIR` and need no GitHub token or mock).
 
 ## Design polish of the public site

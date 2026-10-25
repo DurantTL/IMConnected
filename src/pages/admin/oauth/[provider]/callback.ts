@@ -29,17 +29,20 @@ export const GET: APIRoute = async ({ params, url, cookies, request, clientAddre
   const code = url.searchParams.get('code') || '';
   const flow = readFlow(cookies, provider, state);
   clearFlowCookie(cookies); // single use, whatever happens next
+  // A callback without a valid state (no cookie, wrong state or provider, expired) can be forged cross-site by anyone, so it
+  // is neither counted against the IP nor audited. Otherwise a web page could lock an editor's IP out of sign-in, or flood
+  // the audit log, with hidden requests.
+  if (typeof flow === 'string') return fail(flow === 'expired' ? 'expired' : 'failed');
   if (!cfg) return fail('unavailable');
+  // A locked IP gets the lockout message without an audit row per request (like the password step).
+  if (isIpLocked(ip)) return fail('locked');
+  // The state is valid: count the attempt before the first await (the code exchange) and release it on success.
+  const attempt = reserveIpAttempt(ip);
 
   const failed = (reason: string, userId: number | null = null, shown = 'failed') => {
     audit('auth.oauth_failed', { userId, ip, detail: { provider, reason } });
     return fail(shown);
   };
-  if (isIpLocked(ip)) return failed('locked', null, 'locked');
-  // Counted before the first await (the code exchange) and released on success, like the password step.
-  const attempt = reserveIpAttempt(ip);
-
-  if (typeof flow === 'string') return failed(`state_${flow}`, null, flow === 'expired' ? 'expired' : 'failed');
   if (url.searchParams.get('error')) return failed('provider_error'); // declined or refused; the provider's text is not shown
   if (!code || code.length > 2000 || !state || state.length > 500) return failed('bad_callback');
 
@@ -47,7 +50,6 @@ export const GET: APIRoute = async ({ params, url, cookies, request, clientAddre
   if (!claims) return failed('exchange');
   const result = validateClaims(cfg, claims, flow.nonce);
   if (!result.ok) return failed(`claims_${result.reason}`, null, result.reason === 'unverified' ? 'unverified' : result.reason === 'tenant' ? 'no_account' : 'failed');
-  if (isAccountLocked(result.email)) return failed('locked', null, 'locked');
 
   const db = getDb();
   const finish = (userId: number, destination: string, extra: Record<string, unknown> = {}) => {
@@ -62,14 +64,16 @@ export const GET: APIRoute = async ({ params, url, cookies, request, clientAddre
 
   // 1. An existing link.
   const linked = db
-    .prepare('SELECT o.user_id, u.status FROM oauth_accounts o JOIN users u ON u.id = o.user_id WHERE o.provider = ? AND o.provider_user_id = ?')
-    .get(provider, result.subject) as { user_id: number; status: string } | undefined;
+    .prepare('SELECT o.user_id, u.status, u.email FROM oauth_accounts o JOIN users u ON u.id = o.user_id WHERE o.provider = ? AND o.provider_user_id = ?')
+    .get(provider, result.subject) as { user_id: number; status: string; email: string } | undefined;
   if (linked) {
     if (linked.status !== 'active') return failed('link_inactive', linked.user_id, 'no_account');
+    if (isAccountLocked(linked.email)) return failed('locked', linked.user_id, 'locked'); // the editor's stored address, not the provider's
     return finish(linked.user_id, '/admin/2fa');
   }
 
   // 2. An active or invited editor with this verified email. Link (and activate an invite) in one transaction.
+  if (isAccountLocked(result.email)) return failed('locked', null, 'locked'); // matching is by this address, so it is the stored one
   const outcome = linkByEmail(provider, result.subject, result.email);
   if (outcome.kind === 'none') return failed('no_match', null, 'no_account');
   audit('auth.oauth_linked', { userId: outcome.userId, ip, detail: { provider, via: outcome.kind } });
@@ -93,6 +97,12 @@ function linkByEmail(provider: Provider, subject: string, email: string): { kind
       return { kind: 'none' };
     }
     if (user.status === 'invited') {
+      // An invited editor matches only while an unused, unexpired invite exists: an expired or revoked invite is not accepted here either.
+      const open = db.prepare('SELECT 1 FROM invites WHERE user_id = ? AND used_at IS NULL AND expires_at > ?').get(user.id, now);
+      if (!open) {
+        db.exec('ROLLBACK');
+        return { kind: 'none' };
+      }
       const activated = db.prepare("UPDATE users SET status = 'active', updated_at = ? WHERE id = ? AND status = 'invited'").run(now, user.id);
       if (Number(activated.changes) !== 1) {
         db.exec('ROLLBACK');

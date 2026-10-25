@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { audit } from '../../../../lib/auth/audit';
 import { beginFlow, isProvider, providerConfig, warnIfOverridden } from '../../../../lib/auth/oauth';
-import { isIpLocked } from '../../../../lib/auth/ratelimit';
+import { isIpLocked, reserveOauthStart } from '../../../../lib/auth/ratelimit';
 import { clientIp } from '../../../../lib/request';
 
 export const prerender = false;
@@ -18,7 +18,8 @@ export const GET: APIRoute = ({ params, cookies, request, clientAddress }) => {
   const cfg = providerConfig(provider);
   if (!cfg) return back('unavailable');
   const ip = clientIp(request, clientAddress);
-  if (isIpLocked(ip)) return back('locked');
+  // No audit row for a locked IP, and starts are counted per IP, so a flood can neither fill the audit log nor lock anyone out.
+  if (isIpLocked(ip) || !reserveOauthStart(ip)) return back('locked');
   const location = beginFlow(cfg, cookies);
   audit('auth.oauth_started', { ip, detail: { provider } });
   return new Response(null, { status: 303, headers: { Location: location, 'Cache-Control': 'no-store' } });

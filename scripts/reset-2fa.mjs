@@ -4,7 +4,7 @@
 //   Docker: docker compose exec imconnected node scripts/reset-2fa.mjs <email>
 // A PERSON runs this on the server, only after confirming the editor's identity out of band (for
 // example a call), and right before the editor signs in. It deletes the authenticator, the passkeys, the recovery
-// codes and every session of that user, in one transaction. The editor's password stays; at the next
+// codes, any linked Google or Microsoft account and every session of that user, in one transaction. The editor's password stays; at the next
 // sign-in they enroll a new authenticator and get new recovery codes.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,7 +33,7 @@ try {
     Date.now(), 'admin.reset_2fa', `user:${user.id}`, JSON.stringify(n),
   );
   db.exec('COMMIT');
-  console.log(`Reset two-factor for user ${user.id}: removed ${n.authenticators} authenticator, ${n.passkeys} passkeys, ${n.recoveryCodes} recovery codes, ${n.sessions} sessions. They enroll a new authenticator or passkey at their next sign-in.`);
+  console.log(`Reset two-factor for user ${user.id}: removed ${n.authenticators} authenticator, ${n.passkeys} passkeys, ${n.recoveryCodes} recovery codes, ${n.oauthLinks} linked Google/Microsoft accounts, ${n.sessions} sessions. They enroll a new authenticator or passkey at their next sign-in.`);
 } catch (err) {
   db.exec('ROLLBACK');
   throw err;

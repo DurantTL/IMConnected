@@ -23,6 +23,8 @@ export interface EditorRow {
   recoveryCodes: number;
   lastSignIn: number | null;
   inviteExpiresAt: number | null;
+  /** Linked Google / Microsoft accounts (issue #11): provider, date and the address the editor linked; no tokens. */
+  links: { provider: 'google' | 'microsoft'; createdAt: number; email: string }[];
 }
 
 export function listEditors(): EditorRow[] {
@@ -37,7 +39,9 @@ export function listEditors(): EditorRow[] {
          FROM users u ORDER BY (u.status = 'disabled'), u.role, lower(u.name)`,
     )
     .all(Date.now()) as { id: number; name: string; email: string; role: Role; status: Status; totp: number; passkeys: number; recovery: number; last_sign_in: number | null; invite_expires: number | null }[];
+  const links = getDb().prepare('SELECT user_id, provider, email_at_link, created_at FROM oauth_accounts ORDER BY created_at').all() as { user_id: number; provider: 'google' | 'microsoft'; email_at_link: string; created_at: number }[];
   return rows.map((r) => ({
+    links: links.filter((l) => l.user_id === r.id).map((l) => ({ provider: l.provider, createdAt: l.created_at, email: l.email_at_link })),
     id: r.id, name: r.name, email: r.email, role: r.role, status: r.status,
     totp: r.totp === 1, passkeys: Number(r.passkeys), recoveryCodes: Number(r.recovery),
     lastSignIn: r.last_sign_in, inviteExpiresAt: r.invite_expires,
@@ -200,6 +204,26 @@ export function resetUserTwoFactor(actor: { id: number }, targetId: number, ip: 
     }
     const n = resetTwoFactor(db, targetId);
     audit('admin.reset_2fa', { userId: actor.id, target: `user:${targetId}`, ip, detail: n });
+    db.exec('COMMIT');
+    return { ok: true };
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* already closed */ }
+    throw err;
+  }
+}
+
+/** Remove one linked Google / Microsoft account from an editor (an administrator's action; audited with the actor, never an address). */
+export function unlinkOauth(actor: { id: number }, targetId: number, provider: string, ip: string): ChangeResult {
+  if (provider !== 'google' && provider !== 'microsoft') return { ok: false, error: 'Choose a provider.', status: 400 };
+  const db = getDb();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const gone = db.prepare('DELETE FROM oauth_accounts WHERE user_id = ? AND provider = ?').run(targetId, provider);
+    if (Number(gone.changes) !== 1) {
+      db.exec('ROLLBACK');
+      return { ok: false, error: 'That linked account was not found.', status: 404 };
+    }
+    audit('auth.oauth_unlinked', { userId: actor.id, target: `user:${targetId}`, ip, detail: { provider, by: 'admin' } });
     db.exec('COMMIT');
     return { ok: true };
   } catch (err) {
