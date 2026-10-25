@@ -10,13 +10,14 @@ import { fmtTime, sectionLabel } from '../lib/admin-ui';
 import { fmtChicago } from '../lib/scheduled-publish';
 import { siteUrl } from '../lib/draft-http';
 import BulkBar from './BulkBar.astro';
+import AdminLiveList from './AdminLiveList.astro';
 import { driveConfig } from '../lib/db/gdrive.mjs';
 
 cleanupRejectedPhotos();
 // /admin/announcements and /admin/events are presets of this same page: their content type is fixed by the path.
 const { fixedKind } = Astro.props as { fixedKind?: ContentKind; basePath?: string };
 const q = Astro.url.searchParams;
-const raw = Object.fromEntries(['q', 'status', 'section', 'source', 'issue', 'from', 'to', 'sort', 'perPage', 'page'].map((k) => [k, q.get(k)]));
+const raw = Object.fromEntries(['q', 'status', 'section', 'source', 'issue', 'from', 'to', 'sort', 'perPage', 'page', 'livePage'].map((k) => [k, q.get(k)]));
 const filter = normalizeDraftFilter({ ...raw, kind: fixedKind ?? q.get('kind') }, 'story');
 const result = listDraftsPage(filter);
 const f = result.filter;
@@ -34,7 +35,9 @@ const livePublishedKind = kind === 'all' ? 'all' : kind;
 // null when the stories table can't be read: the card shows a dash, never a false 0.
 let publishedLive: number | null = null;
 try { publishedLive = publishedKindCounts()[livePublishedKind]; } catch { publishedLive = null; }
-const publishedLink = livePublishedKind === 'all' ? '/admin/published' : `/admin/published?kind=${livePublishedKind}`;
+// On the Announcements and Events pages the live section is on the page itself (issue #168), so the card scrolls to it.
+const hasLive = fixedKind === 'announcement' || fixedKind === 'event';
+const publishedLink = hasLive ? '#live' : livePublishedKind === 'all' ? '/admin/published' : `/admin/published?kind=${livePublishedKind}`;
 const issues = listIssues();
 const issueKnown = !f.issue || f.issue === 'none' || issues.some((i) => String(i.number) === f.issue);
 
@@ -235,9 +238,10 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
     <div class="adm-table-card"><p class="adm-empty">No drafts match. {chips.length > 0 ? <a href={clearHref}>Clear filters</a> : 'Items of this content type will appear here.'}</p></div>
   ) : (
     <>
-    {canBulk && <BulkBar action="publish" label="Publish selected" noun="drafts" back={Astro.url.pathname + Astro.url.search} more={[{ action: "edit", label: "Edit fields" }, { action: "reject", label: "Reject selected", danger: true }]} />}
+    {canBulk && <BulkBar ariaLabel={hasLive ? "Bulk actions for drafts" : "Bulk actions"} action="publish" label="Publish selected" noun="drafts" back={Astro.url.pathname + Astro.url.search} more={[{ action: "edit", label: "Edit fields" }, { action: "reject", label: "Reject selected", danger: true }]} />}
     <div class="adm-table-card">
     <table class="adm-table">
+      <caption class="visually-hidden">Drafts, {first} to {last} of {result.total}</caption>
       <thead>
         <tr>
           {canBulk && <th scope="col" class="adm-col-pick"><span class="visually-hidden">Select</span></th>}
@@ -312,6 +316,7 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
     </div>
     </>
   )}
+  {hasLive && <AdminLiveList kind={fixedKind as 'announcement' | 'event'} view={view} back={Astro.url.pathname + Astro.url.search} />}
 </Admin>
 <script is:inline>
   document.querySelectorAll('time[data-local]').forEach(function (t) {

@@ -121,3 +121,12 @@
 
 /* A heading that is also a link ("Newest published") keeps a 44px tap target. */
 .adm-head-link { display: inline-flex; align-items: center; min-height: 44px; color: inherit; text-underline-offset: 3px; }
+
+/* "Live on the site" section on the Announcements and Events pages (issue #168) */
+.adm-live { margin: 28px 0 0; scroll-margin-top: 16px; }
+.adm-live h2 { margin: 0 0 4px; }
+.adm-live-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.adm-live-actions form { margin: 0; }
+.adm-live-actions .cms-btn { min-height: 44px; display: inline-flex; align-items: center; }
+.adm-live .adm-pager a { display: inline-flex; align-items: center; min-height: 44px; }
+.adm-live .adm-pager li span.adm-disabled { opacity: 1; color: var(--adm-muted, #536872); border-style: dashed; }

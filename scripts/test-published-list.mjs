@@ -101,6 +101,7 @@ try {
   const rowsOf = (html) => [...html.matchAll(/<tr>\s*<td class="adm-pick"[\s\S]*?<\/tr>/g)].map((m) => m[0]);
   const slugsOf = (html) => rowsOf(html).map((r) => /name="slug" value="([^"]+)" form="bulk-form"/.exec(r)?.[1]);
   const totalOf = (html) => Number(/<strong>(\d+)<\/strong> (?:story|stories|items?|announcements?|events?) shown/.exec(html)?.[1] ?? -1);
+  const sameSet = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
   const sl = (...ns) => ns.map((n) => S[n].slug);
   const allSlugs = Object.values(S).map((s) => s.slug);
   const live = (pred) => Object.values(S).filter(pred).map((s) => s.slug);
@@ -151,6 +152,12 @@ try {
   r = await get('?kind=announcement&featured=yes&perPage=100');
   const featAnn = Object.keys(S).filter((i) => KIND[i] === 'announcement' && S[i].featured).length;
   check('type combines with the other filters (featured announcements)', slugsOf(r.html).length === featAnn && featAnn > 0, `${slugsOf(r.html).length} vs ${featAnn}`);
+  // Issue #168: the `event` sort (soonest upcoming, then past, then undated); the fixture's events all share one date, so the order falls back to newest published.
+  r = await get('?kind=event&sort=event&perPage=100');
+  const evDefault = slugsOf((await get('?kind=event&perPage=100')).html);
+  check('sort=event is whitelisted: 200, the same events, offered in the Sort menu and selected', r.status === 200 && slugsOf(r.html).length === KN.event && sameSet(slugsOf(r.html), evDefault) && /<option value="event" selected>Event date/.test(r.html), `${r.status} ${slugsOf(r.html).length}`);
+  check('...tied event dates keep the published-newest-first order, and links keep sort=event', slugsOf(r.html).join() === evDefault.join() && /href="\/admin\/published\?kind=event&amp;sort=event[^"]*"/.test(r.html));
+  check('an unknown sort such as "eventually" is the default order', (await get('?kind=event&sort=eventually&perPage=100')).html.includes('<option value="" selected>Default order'));
   r = await get('?kind=event');
   const cardN = (html, label) => Number(new RegExp(`<span class="adm-stat-label">${label}[^<]*</span><strong>(\\d+)</strong>`).exec(html)?.[1] ?? -1);
   check('summary cards are scoped to the type shown (events: All live and Featured)', cardN(r.html, 'All live') === KN.event && cardN(r.html, 'Featured') === Object.keys(S).filter((i) => KIND[i] === 'event' && S[i].featured).length, `${cardN(r.html, 'All live')} ${cardN(r.html, 'Featured')}`);

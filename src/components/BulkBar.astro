@@ -3,29 +3,37 @@
 // so without JavaScript the bar is still a normal form that posts to the confirmation step. JavaScript only adds the
 // "select all" checkbox and the "N selected" count. Each button carries its own action, so one selection can be
 // published, rejected or edited (drafts), or unpublished or edited (live stories).
-interface Props { action: string; label: string; noun: string; back?: string; more?: { action: string; label: string; danger?: boolean }[] }
-const { action, label, noun, back = '', more = [] } = Astro.props;
+interface Props { action: string; label: string; noun: string; back?: string; id?: string; ariaLabel?: string; more?: { action: string; label: string; danger?: boolean }[] }
+// `id` and `ariaLabel` let a page carry two bars (issue #168: drafts and live items); each bar only drives the checkboxes that point at it.
+const { action, label, noun, back = '', more = [], id = 'bulk-form', ariaLabel = 'Bulk actions' } = Astro.props;
+// The default bar keeps its original element ids (bulk-all, bulk-count, bulk-help); any other bar prefixes them with its own id.
+const pre = id === 'bulk-form' ? 'bulk' : id;
 const buttons = [{ action, label, danger: action === 'unpublish' }, ...more];
 ---
-<form class="bulk-bar" id="bulk-form" method="post" action="/admin/bulk" aria-label="Bulk actions">
+<form class="bulk-bar" id={id} data-pre={pre} method="post" action="/admin/bulk" aria-label={ariaLabel}>
   {back && <input type="hidden" name="back" value={back} />}
-  <label class="bulk-all" id="bulk-all-label" hidden><input type="checkbox" id="bulk-all" /> Select all on this page</label>
-  <p class="bulk-count" id="bulk-count" role="status" hidden>0 selected</p>
+  <label class="bulk-all" id={`${pre}-all-label`} hidden><input type="checkbox" id={`${pre}-all`} /> Select all on this page</label>
+  <p class="bulk-count" id={`${pre}-count`} role="status" hidden>0 selected</p>
   <div class="bulk-buttons">
     {buttons.map((b) => <button class={`cms-btn${b.danger ? ' danger' : ''}`} type="submit" name="action" value={b.action}>{b.label}</button>)}
   </div>
-  <p class="bulk-help" id="bulk-help">Tick the {noun} you want, then choose an action. You will confirm on the next page. Up to 50 at a time.</p>
+  <p class="bulk-help" id={`${pre}-help`}>Tick the {noun} you want, then choose an action. You will confirm on the next page. Up to 50 at a time.</p>
 </form>
 <script is:inline>
   // The list follows this bar in the page, so wait until it exists.
   document.addEventListener('DOMContentLoaded', function () {
-    var form = document.getElementById('bulk-form');
-    var all = document.getElementById('bulk-all');
-    var count = document.getElementById('bulk-count');
-    var items = Array.prototype.slice.call(document.querySelectorAll('input.bulk-item'));
-    if (!form || !all || !count || !items.length) return;
+    Array.prototype.slice.call(document.querySelectorAll('form.bulk-bar')).forEach(initBulkBar);
+  });
+  function initBulkBar(form) {
+    if (form.getAttribute('data-ready')) return;
+    var id = form.getAttribute('id'), pre = form.getAttribute('data-pre');
+    var all = document.getElementById(pre + '-all');
+    var count = document.getElementById(pre + '-count');
+    var items = Array.prototype.slice.call(document.querySelectorAll('input.bulk-item')).filter(function (i) { return i.getAttribute('form') === id; });
+    if (!all || !count || !items.length) return;
+    form.setAttribute('data-ready', 'yes');
     var MAX = 50;
-    document.getElementById('bulk-all-label').hidden = false;
+    document.getElementById(pre + '-all-label').hidden = false;
     count.hidden = false;
     var buttons = Array.prototype.slice.call(form.querySelectorAll('button[type=submit]'));
     function update() {
@@ -41,7 +49,7 @@ const buttons = [{ action, label, danger: action === 'unpublish' }, ...more];
       update();
     });
     items.forEach(function (i) { i.addEventListener('change', update); });
-    if (items.length > MAX) document.getElementById('bulk-help').textContent += ' "Select all" picks the first ' + MAX + ' on the page.';
+    if (items.length > MAX) document.getElementById(pre + '-help').textContent += ' "Select all" picks the first ' + MAX + ' on the page.';
     update();
-  });
+  }
 </script>

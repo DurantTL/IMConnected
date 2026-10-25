@@ -55,7 +55,7 @@ export function safePublishedBack(raw: unknown): string {
 }
 
 const DRAFT_PATHS: readonly string[] = Object.values(KIND_PATH);
-const DRAFT_KEYS = ['q', 'status', 'section', 'source', 'issue', 'from', 'to', 'sort', 'perPage', 'page'] as const;
+const DRAFT_KEYS = ['q', 'status', 'section', 'source', 'issue', 'from', 'to', 'sort', 'perPage', 'page', 'livePage'] as const;
 
 /**
  * The canonical drafts list address for a `back` value: one of /admin, /admin/announcements, /admin/events plus a query
@@ -70,4 +70,22 @@ export function safeDraftBack(raw: unknown): string {
   const asked = input.sort;
   const view: ListView = { filter, sortParam: DRAFT_SORTS.some((o) => o.value === asked) ? (asked as ListView['sortParam']) : '' };
   return listHref(view);
+}
+
+/**
+ * Where a row or bulk action on a live story returns to (issue #168). The Published list's own address first, then one of
+ * the drafts list pages (the live section on /admin/announcements and /admin/events), otherwise the plain Published list.
+ * Both results are rebuilt from a parsed filter; the raw value is never echoed.
+ */
+export function safeLiveBack(raw: unknown): string {
+  const pub = splitBack(raw, [PUBLISHED_PATH]);
+  if (pub.ok && (pub.path === PUBLISHED_PATH || pub.path === '')) return safePublishedBack(raw);
+  if (splitBack(raw, DRAFT_PATHS).ok) return safeDraftBack(raw);
+  return PUBLISHED_PATH;
+}
+
+/** True when a rebuilt back address is the Announcements or Events page, whose live section (#live) the action came from. */
+export function isLiveSectionPage(rebuilt: string): boolean {
+  const path = rebuilt.split('?')[0];
+  return path === '/admin/announcements' || path === '/admin/events';
 }

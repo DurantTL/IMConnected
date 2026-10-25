@@ -36,9 +36,12 @@ export function listHref(view: ListView, over: Overrides = {}): string {
   if (f.to) params.set('to', f.to);
   if (sortParam) params.set('sort', sortParam);
   if (f.perPage !== 25) params.set('perPage', String(f.perPage));
-  const changedOnlyPage = Object.keys(over).every((k) => k === 'page');
-  const page = changedOnlyPage ? (over.page ?? view.filter.page) : 1;
+  // Moving between pages keeps the other table's page; any other change goes back to page 1 of both.
+  const onlyPaging = Object.keys(over).every((k) => k === 'page' || k === 'livePage');
+  const page = onlyPaging ? (over.page ?? view.filter.page) : 1;
+  const livePage = onlyPaging ? (over.livePage ?? view.filter.livePage) : 1;
   if (page > 1) params.set('page', String(page));
+  if (livePage > 1 && (f.kind === 'announcement' || f.kind === 'event')) params.set('livePage', String(livePage));
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
 }
