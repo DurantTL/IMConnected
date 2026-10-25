@@ -234,13 +234,31 @@ try {
           check(`${tag}: loads, no horizontal scroll, no script errors`, res.status() === 200 && dim.s <= dim.w && errors.length === 0, `${res.status()} ${JSON.stringify(dim)} ${errors}`);
           const ragged = await page.evaluate(() => {
             const rows = new Map();
-            for (const card of document.querySelectorAll('main .grid > .card')) {
+            for (const card of document.querySelectorAll('main .grid > .card.with-photo')) { // text-only cards have no picture block, so only cards with a photo share a headline line (issue #162)
               const key = `${[...card.parentElement.parentElement.children].indexOf(card.parentElement)}:${card.offsetTop}`;
               (rows.get(key) || rows.set(key, []).get(key)).push(card);
             }
             return [...rows.values()].filter((row) => row.length > 1).flatMap((row) => new Set(row.map((c) => c.querySelector('h2,h3').offsetTop)).size > 1 ? [row.map((c) => c.querySelector('h2,h3').textContent).join(' | ')] : []);
           });
           check(`${tag}: card headlines line up across each row`, ragged.length === 0, ragged.join(' || '));
+          const uneven = await page.evaluate(() => {
+              // Every card in a grid row starts at the row's top (a short text-only card is top-aligned, never centred or pushed down),
+              // and a text-only card is as tall as its text and padding, never a tall empty box (issue #162).
+              const bad = [];
+              for (const grid of document.querySelectorAll('main .grid')) {
+                const cards = [...grid.children].filter((c) => c.classList.contains('card')).sort((a, b) => a.offsetTop - b.offsetTop);
+                let row = [];
+                const flush = () => { if (row.length > 1 && Math.max(...row.map((c) => c.offsetTop)) - Math.min(...row.map((c) => c.offsetTop)) > 1) bad.push('tops: ' + row.map((c) => c.querySelector('h2,h3').textContent).join(' | ')); row = []; };
+                for (const c of cards) { if (row.length && c.offsetTop - row[0].offsetTop > 40) flush(); row.push(c); }
+                flush();
+              }
+              for (const c of document.querySelectorAll('main .grid > .card.without-photo')) {
+                const copy = c.querySelector('.card-copy');
+                if (c.offsetHeight > copy.offsetHeight + 56) bad.push('tall: ' + c.querySelector('h2,h3').textContent + ' ' + c.offsetHeight + '/' + copy.offsetHeight);
+              }
+              return bad;
+            });
+          check(`${tag}: every card in a row starts at the row's top and text-only cards are as short as their text`, uneven.length === 0, uneven.join(' || '));
           const small = await page.evaluate(() => [...document.querySelectorAll('main a, main button')].filter((a) => { const r = a.getBoundingClientRect(); return r.width > 0 && !a.classList.contains('card') && getComputedStyle(a).display !== 'inline' && r.height < 43.5; }).map((a) => `${a.className}:${Math.round(a.getBoundingClientRect().height)}`));
           check(`${tag}: the issue, step and heading links are at least 44px tall`, small.length === 0, small.join());
           if (axePath && !noJs) {

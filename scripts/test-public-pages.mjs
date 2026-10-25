@@ -481,6 +481,8 @@ try {
     for (let i = 1; i <= 44; i++) add(`synthetic-paging-${nn(i)}`, 'kids', null, day(i));
     add('synthetic-paging-extra', 'youth', null, day(22), '["kids"]', now + 60000); // dated like story 22
     for (let i = 1; i <= 23; i++) add(`synthetic-camp-${nn(i)}`, 'news', 'camp', day(i));
+    add('synthetic-listed-area', 'news', 'churches', day(30), '["youth"]'); // primary News / Churches, also listed in youth
+    add('synthetic-listed-noarea', 'news', null, day(31), '["youth"]'); // primary News, no area, also listed in youth
     await startServer(pdir);
     const slugsOn = (t) => [...mainOf(t).matchAll(/href="\/stories\/([^"/]+)\/"/g)].map((m) => m[1]);
     const pg = async (u) => { const r = await get(u); return { ...r, slugs: slugsOn(r.text) }; };
@@ -490,6 +492,11 @@ try {
     const expected = q("SELECT slug FROM stories WHERE status = 'live' AND (section = 'kids' OR additional_sections LIKE '%\"kids\"%') ORDER BY date DESC, published_at DESC, slug ASC").map((r) => r.slug);
     check('(paging) newest first across the pages, boundaries are exact (20|21 and 40|41), and every story appears exactly once', all.length === 45 && new Set(all).size === 45 && all.join() === expected.join() && p1.slugs[19] === expected[19] && p2.slugs[0] === expected[20] && p3.slugs[0] === expected[40], all.slice(0, 3).join());
     check('(paging) a story that only has kids as an additional section shows once', all.filter((s) => s === 'synthetic-paging-extra').length === 1);
+    // issue #162: the newest story leads page 1 only; stories without a photo are text only (no placeholder tile) anywhere
+    const leads = (t) => (mainOf(t).match(/class="sec-lead"/g) ?? []).length;
+    check('(paging) page 1 of a section has one lead story (the newest, h2) and pages 2 and 3 have none', leads(p1.text) === 1 && leads(p2.text) === 0 && leads(p3.text) === 0 && p1.slugs[0] === expected[0] && /<div class="sec-lead">\s*<a class="card feature[^>]*href="\/stories\/[^"]+\/"/.test(p1.text) && !mainOf(p2.text).includes('card feature'), [leads(p1.text), leads(p2.text), leads(p3.text)].join());
+    check('(paging) a story without a photo renders no placeholder tile on section pages (lead or list)', [p1, p2, p3].every((p) => !/class="placeholder"|class="media"/.test(mainOf(p.text).replace(/<header class="page-head">[\s\S]*?<\/header>/, ''))) && !p1.text.includes('placeholder'));
+    check('(paging) section page kickers: none for a story with no area in its own section, and the page head has no IMConnected eyebrow', !/class="kicker"/.test(mainOf(p1.text)) && !/<header class="page-head">\s*<span class="kicker">/.test(p1.text));
     // the canonical and prev/next links use SITE_URL from the build, so only their paths are compared
     const toPath = (h) => (h ? new URL(h).pathname : null);
     const linkRel = (t, rel) => toPath(t.match(new RegExp(`<link rel="${rel}" href="([^"]+)"`))?.[1]);
@@ -518,6 +525,12 @@ try {
     check('(paging) two stories with the same date are ordered by published_at (the later one first), not by slug', expected.indexOf('synthetic-paging-extra') < expected.indexOf('synthetic-paging-22') && all.indexOf('synthetic-paging-extra') < all.indexOf('synthetic-paging-22'), `${expected.indexOf('synthetic-paging-extra')} ${expected.indexOf('synthetic-paging-22')}`);
     const a1 = await pg('/news/camp/'), a2 = await pg('/news/camp/page/2/');
     check('(paging) area pages page too: 23 camp stories are 20 + 3, newest first, only that area', a1.slugs.length === 20 && a2.slugs.length === 3 && [...a1.slugs, ...a2.slugs].every((s, i) => s === `synthetic-camp-${nn(i + 1)}`) && canon(a2.text) === `/news/camp/page/2/` && linkRel(a2.text, 'prev') === `/news/camp/` && linkRel(a1.text, 'next') === `/news/camp/page/2/`, `${a1.slugs.length} ${a2.slugs.length}`);
+    check('(paging) an area page has a lead on page 1 only and no kicker on any card', leads(a1.text) === 1 && leads(a2.text) === 0 && !/class="kicker"/.test(mainOf(a1.text)) && !/class="kicker"/.test(mainOf(a2.text)));
+    // issue #162 review fixes: kickers of additional-section stories, and the heading outline of page 1
+    const kickerOf = (t, slug) => { const card = mainOf(t).match(new RegExp(`<a class="card[^>]*href="/stories/${slug}/"[\\s\\S]*?</a>`))?.[0]; if (!card) return undefined; const k = card.match(/<span class="kicker">([\s\S]*?)<\/span>(?=\s*<h[23])/)?.[1]; return k === undefined ? null : k.replace(/<span class="sep">\/<\/span>/, ' / ').replace(/<[^>]+>/g, '').trim(); };
+    const yp = await get('/youth/');
+    check('(paging) a story listed in /youth/ through additionalSections shows "News / Churches", never a bare area (and no area: "News"); a youth story with no area shows no kicker', kickerOf(yp.text, 'synthetic-listed-area') === 'News / Churches' && kickerOf(yp.text, 'synthetic-listed-noarea') === 'News' && kickerOf(yp.text, 'synthetic-paging-extra') === null, [kickerOf(yp.text, 'synthetic-listed-area'), kickerOf(yp.text, 'synthetic-listed-noarea'), kickerOf(yp.text, 'synthetic-paging-extra')].join(' | '));
+    check('(paging) page 1 has a visually hidden h2 "More stories in ..." before the rows (rows stay h3); page 2 has none and its rows are h2', /<h2 class="sr-only">More stories in Kids<\/h2>/.test(p1.text) && /class="card row[^>]*>[\s\S]*?<h3>/.test(mainOf(p1.text)) && !/sr-only">More stories/.test(p2.text) && /class="card row[^>]*>[\s\S]*?<h2>/.test(mainOf(p2.text)) && !/<h3>/.test(mainOf(p2.text)));
     const ar1 = await get('/news/camp/page/1/');
     check('(paging) /news/camp/page/1/ redirects to /news/camp/', ar1.status === 301 && new URL(ar1.loc, BASE).pathname === '/news/camp/', `${ar1.status} ${ar1.loc}`);
     const again = await get('/kids/page/3/');

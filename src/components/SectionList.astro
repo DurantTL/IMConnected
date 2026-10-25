@@ -17,6 +17,10 @@ interface Props {
 const { section, area, stories, page = 1, pages = 1 } = Astro.props;
 const baseTitle = area ? `${area.label} · ${section.label}` : section.label;
 const title = page > 1 ? `${baseTitle} — page ${page}` : baseTitle;
+// The newest story leads the first page only; later pages are a plain list.
+const lead = page === 1 ? stories[0] : undefined;
+const rest = lead ? stories.slice(1) : stories;
+const kickerMode = area ? 'none' : 'area';
 const base = area ? `/${section.key}/${area.key}/` : `/${section.key}/`;
 ---
 <Base title={title} description={section.blurb} current={section.key}>
@@ -26,7 +30,6 @@ const base = area ? `/${section.key}/${area.key}/` : `/${section.key}/`;
   </Fragment>
   <div class="wrap" data-sec={section.key}>
     <header class="page-head">
-      {area ? <a class="kicker" href={`/${section.key}/`}>{section.label}</a> : <span class="kicker">IMConnected</span>}
       <h1>{area ? area.label : section.label}</h1>
       <p>{section.blurb}</p>
       {section.areas && (
@@ -40,9 +43,19 @@ const base = area ? `/${section.key}/${area.key}/` : `/${section.key}/`;
     </header>
 
     {stories.length ? (
-      <div class="grid cols-3">
-        {stories.map((s) => <StoryCard story={s} />)}
-      </div>
+      <>
+        {lead && (
+          <div class="sec-lead">
+            <StoryCard story={lead} variant="feature" kickerMode={kickerMode} pageSection={section.key} />
+          </div>
+        )}
+        {rest.length > 0 && lead && <h2 class="sr-only">More stories in {area ? area.label : section.label}</h2>}
+        {rest.length > 0 && (
+          <div class="grid sec-grid">
+            {rest.map((s) => <StoryCard story={s} variant="row" heading={lead ? 'h3' : 'h2'} kickerMode={kickerMode} pageSection={section.key} />)}
+          </div>
+        )}
+      </>
     ) : (
       <p class="empty-state">No stories here yet. <a href="/submit/">Submit one?</a></p>
     )}
