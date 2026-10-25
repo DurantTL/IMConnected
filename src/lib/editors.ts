@@ -23,6 +23,8 @@ export interface EditorRow {
   recoveryCodes: number;
   lastSignIn: number | null;
   inviteExpiresAt: number | null;
+  /** The account was active at some point (it is only 'invited' again after a reset): revoking its invite disables it instead of deleting it. */
+  everActive: boolean;
   /** Linked Google / Microsoft accounts (issue #11): provider, date and the address the editor linked; no tokens. */
   links: { provider: 'google' | 'microsoft'; createdAt: number; email: string }[];
 }
@@ -34,17 +36,17 @@ export function listEditors(): EditorRow[] {
               EXISTS (SELECT 1 FROM totp_credentials t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL) AS totp,
               (SELECT COUNT(*) FROM passkeys p WHERE p.user_id = u.id) AS passkeys,
               (SELECT COUNT(*) FROM recovery_codes r WHERE r.user_id = u.id AND r.used_at IS NULL) AS recovery,
-              u.last_login_at AS last_sign_in,
+              u.last_login_at AS last_sign_in, u.activated_at AS activated_at,
               (SELECT MAX(i.expires_at) FROM invites i WHERE i.user_id = u.id AND i.used_at IS NULL AND i.expires_at > ?) AS invite_expires
          FROM users u ORDER BY (u.status = 'disabled'), u.role, lower(u.name)`,
     )
-    .all(Date.now()) as { id: number; name: string; email: string; role: Role; status: Status; totp: number; passkeys: number; recovery: number; last_sign_in: number | null; invite_expires: number | null }[];
+    .all(Date.now()) as { id: number; name: string; email: string; role: Role; status: Status; totp: number; passkeys: number; recovery: number; last_sign_in: number | null; activated_at: number | null; invite_expires: number | null }[];
   const links = getDb().prepare('SELECT user_id, provider, email_at_link, created_at FROM oauth_accounts ORDER BY created_at').all() as { user_id: number; provider: 'google' | 'microsoft'; email_at_link: string; created_at: number }[];
   return rows.map((r) => ({
     links: links.filter((l) => l.user_id === r.id).map((l) => ({ provider: l.provider, createdAt: l.created_at, email: l.email_at_link })),
     id: r.id, name: r.name, email: r.email, role: r.role, status: r.status,
     totp: r.totp === 1, passkeys: Number(r.passkeys), recoveryCodes: Number(r.recovery),
-    lastSignIn: r.last_sign_in, inviteExpiresAt: r.invite_expires,
+    lastSignIn: r.last_sign_in, inviteExpiresAt: r.invite_expires, everActive: r.activated_at !== null,
   }));
 }
 
@@ -130,7 +132,7 @@ export async function resendInvite(actor: { id: number; name: string }, targetId
   return { ok: true, userId: targetId, resent: true, ...sent };
 }
 
-export type ChangeResult = { ok: true; reinvite?: boolean } | { ok: false; error: string; status: number };
+export type ChangeResult = { ok: true; reinvite?: boolean; disabled?: boolean } | { ok: false; error: string; status: number };
 
 /**
  * Change a role, or disable/enable, in ONE transaction that also protects the last active admin:
@@ -186,9 +188,18 @@ export function disableUser(actor: { id: number }, targetId: number, ip: string)
 }
 
 export function enableUser(actor: { id: number }, targetId: number, ip: string): ChangeResult {
-  return change(actor, targetId, ip, (t) =>
-    t.status !== 'disabled' ? { error: 'That account is not disabled.' } : { status: 'active', action: 'admin.enabled' },
-  );
+  return change(actor, targetId, ip, (t) => {
+    if (t.status !== 'disabled') return { error: 'That account is not disabled.' };
+    // A disabled editor with no first factor at all (no password, no linked Google/Microsoft account, no passkey) could never sign in, so
+    // they come back as Invited and an administrator sends a new invite; everyone else is simply active again.
+    const db = getDb();
+    const hasFirstFactor = [
+      'SELECT 1 FROM password_credentials WHERE user_id = ?',
+      'SELECT 1 FROM oauth_accounts WHERE user_id = ?',
+      'SELECT 1 FROM passkeys WHERE user_id = ?',
+    ].some((sql) => !!db.prepare(sql).get(targetId));
+    return hasFirstFactor ? { status: 'active', action: 'admin.enabled' } : { status: 'invited', action: 'admin.enabled', detail: { reinvite: true } };
+  });
 }
 
 /** Remove TOTP, passkeys, recovery codes, pending challenges and sessions (same code as scripts/reset-2fa.mjs). */
@@ -234,24 +245,32 @@ export function unlinkOauth(actor: { id: number }, targetId: number, provider: s
 }
 
 /**
- * Cancel an invite that was never accepted: in one transaction the unused invites and the never-activated
- * user row are deleted (the address can then be invited again, e.g. after a typo). Accepted accounts are
- * disabled instead, never deleted.
+ * Cancel an invite, in one transaction. A NEVER-activated account (`activated_at IS NULL`: an invite nobody accepted) has its invites and
+ * user row deleted, so the address can be invited again, e.g. after a typo. An account that WAS active (it is `invited` again only because
+ * "Reset two-step sign-in" put a password-less editor back to Invited) is never deleted: deleting it would null `updated_by`, `created_by`,
+ * `published_by`, the draft revisions' and audit entries' user, and drop their layouts (and `updated_by IS NULL` lets the agent overwrite a
+ * draft a person already touched). It has its invites removed and is set to `disabled` instead (audited with `disabled: true`).
  */
 export function revokeInvite(actor: { id: number }, targetId: number, ip: string): ChangeResult {
   const db = getDb();
   db.exec('BEGIN IMMEDIATE');
   try {
-    const t = db.prepare("SELECT role FROM users WHERE id = ? AND status = 'invited'").get(targetId) as { role: Role } | undefined;
+    const t = db.prepare("SELECT role, activated_at FROM users WHERE id = ? AND status = 'invited'").get(targetId) as { role: Role; activated_at: number | null } | undefined;
     if (!t) {
       db.exec('ROLLBACK');
       return { ok: false, error: 'That person has already accepted, or does not exist.', status: 400 };
     }
     db.prepare('DELETE FROM invites WHERE user_id = ?').run(targetId);
-    db.prepare("DELETE FROM users WHERE id = ? AND status = 'invited'").run(targetId);
-    audit('admin.invite_revoked', { userId: actor.id, target: `user:${targetId}`, ip, detail: { role: t.role } });
+    const disable = t.activated_at !== null;
+    if (disable) {
+      db.prepare("UPDATE users SET status = 'disabled', updated_at = ? WHERE id = ? AND status = 'invited'").run(Date.now(), targetId);
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+    } else {
+      db.prepare("DELETE FROM users WHERE id = ? AND status = 'invited' AND activated_at IS NULL").run(targetId);
+    }
+    audit('admin.invite_revoked', { userId: actor.id, target: `user:${targetId}`, ip, detail: disable ? { role: t.role, disabled: true } : { role: t.role } });
     db.exec('COMMIT');
-    return { ok: true };
+    return { ok: true, disabled: disable };
   } catch (err) {
     try { db.exec('ROLLBACK'); } catch { /* already closed */ }
     throw err;

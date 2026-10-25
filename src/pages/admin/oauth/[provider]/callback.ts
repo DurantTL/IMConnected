@@ -129,7 +129,7 @@ function acceptInvite(provider: Provider, subject: string, email: string): numbe
       db.exec('ROLLBACK');
       return null;
     }
-    const activated = db.prepare("UPDATE users SET status = 'active', updated_at = ? WHERE id = ? AND status = 'invited'").run(now, user.id);
+    const activated = db.prepare("UPDATE users SET status = 'active', activated_at = COALESCE(activated_at, ?), updated_at = ? WHERE id = ? AND status = 'invited'").run(now, now, user.id);
     if (Number(activated.changes) !== 1) {
       db.exec('ROLLBACK');
       return null;

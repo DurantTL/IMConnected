@@ -12,3 +12,10 @@ CREATE TABLE oauth_accounts (
 ) STRICT;
 -- An editor links at most one account per provider.
 CREATE UNIQUE INDEX oauth_accounts_user_provider ON oauth_accounts(user_id, provider);
+
+-- When an account first became active (an invite accepted). It is never cleared, so an editor who is later reset to 'invited' (a
+-- password-less editor after "Reset two-step sign-in") can be told apart from a never-activated invite: only the latter may be deleted by
+-- "Revoke invite", because deleting a person who has worked on drafts would null updated_by/created_by/published_by, draft revisions and
+-- audit entries (and let the agent overwrite a draft a person touched). Everyone who is not 'invited' today was activated at some point.
+ALTER TABLE users ADD COLUMN activated_at INTEGER;
+UPDATE users SET activated_at = created_at WHERE status <> 'invited';

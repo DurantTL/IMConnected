@@ -8,7 +8,7 @@
 // Microsoft off) and a third (PORT + 2) with an override that is not https or loopback (Google off). The OAUTH_* endpoint
 // overrides and OAUTH_TEST_ENDPOINTS=1 are for this test only; they are set with NODE_ENV=production on purpose, to check the
 // startup warnings. All names, addresses and secrets are made up; no real Google or Microsoft endpoint is contacted.
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,6 +30,7 @@ const OIDC = `http://localhost:${OIDC_PORT}`;
 const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
 // Must match scripts/mock-oidc.mjs. They contain +, space, % and : on purpose: the client sends them form-urlencoded in a Basic header
 // (RFC 6749 2.3.1) and the mock refuses anything else, so an encoding regression breaks every sign-in here.
+const AGENT_TOKEN = 'e2e-agent-token-0123456789abcdefghijklmnopqr'; // made up; the agent route is only used against this local build
 const G_ID = 'mock google+client:id%1';
 const G_SECRET = 'mock+google secret:%s/x';
 const M_ID = 'mock ms+client:id%2';
@@ -144,7 +145,7 @@ const adminId = addUser(ADMINU, 'Alice Admin', 'invited', 'admin');
 const pre = { users: count('SELECT COUNT(*) n FROM users') };
 
 const baseEnv = {
-  DATA_DIR, HOST: '127.0.0.1', AUTH_SECRET: 'e2e-oauth-secret-0123456789abcdefghijkl', TRUST_PROXY: 'true', NODE_ENV: 'production',
+  DATA_DIR, HOST: '127.0.0.1', AUTH_SECRET: 'e2e-oauth-secret-0123456789abcdefghijkl', AGENT_API_TOKEN: AGENT_TOKEN, TRUST_PROXY: 'true', NODE_ENV: 'production',
   GOOGLE_CLIENT_ID: G_ID, GOOGLE_CLIENT_SECRET: G_SECRET,
   MICROSOFT_CLIENT_ID: M_ID, MICROSOFT_CLIENT_SECRET: M_SECRET,
   OAUTH_GOOGLE_AUTH_URL: `${OIDC}/google/authorize`, OAUTH_GOOGLE_TOKEN_URL: `${OIDC}/google/token`, OAUTH_GOOGLE_ISSUER: `${OIDC}/google`,
@@ -609,6 +610,96 @@ try {
   const r2 = await ivyAgain.get('/admin/2fa');
   check('...and she signs in with her password and is sent to enrollment, as before', r.status === 303 && r.loc === '/admin/2fa' && r2.status === 302 && r2.loc === '/admin/2fa/setup', `${r.status} ${r.loc} ${r2.loc}`);
 
+  // ---- the signature has one canonical spelling ----
+  const cs = new Client('10.8.8.3');
+  await setIdentity(googleId(TAMPER));
+  const cst = await cs.get('/admin/oauth/google');
+  const cback = new URL((await fetch(cst.loc, { redirect: 'manual' })).headers.get('location'));
+  if (cback.searchParams.get('code')) seenCodes.push(cback.searchParams.get('code'));
+  const goodCookie = cs.jar['__Host-imc_oauth'];
+  const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const lastChar = goodCookie.slice(-1);
+  const sibling = ALPHA[ALPHA.indexOf(lastChar) ^ 1]; // the last base64url character carries 2 unused bits: same bytes, different text
+  check('(setup) the sibling spelling decodes to the same MAC bytes', Buffer.from(goodCookie.slice(goodCookie.indexOf('.') + 1), 'base64url').equals(Buffer.from(goodCookie.slice(goodCookie.indexOf('.') + 1, -1) + sibling, 'base64url')));
+  const failN = count("SELECT COUNT(*) n FROM audit_log WHERE action = 'auth.oauth_failed'");
+  for (const [label, cookie] of [['a non-canonical spelling of the right MAC', goodCookie.slice(0, -1) + sibling], ['a signature with a stray character appended', goodCookie + '='], ['a signature with padding', goodCookie + '==']]) {
+    cs.jar['__Host-imc_oauth'] = cookie;
+    const bad = await finishLink(cs, cback);
+    check(`${label} is refused like a missing cookie (no session, no audit row)`, bad.loc === '/admin/login?oauth=failed' && !cs.hasSession() && count("SELECT COUNT(*) n FROM audit_log WHERE action = 'auth.oauth_failed'") === failN, `${bad.loc}`);
+  }
+  cs.jar['__Host-imc_oauth'] = goodCookie;
+  const goodRes = await finishLink(cs, cback);
+  check('...while the genuine cookie still works with the same (unspent) code', goodRes.loc === '/admin/2fa' && cs.hasSession(), `${goodRes.loc}`);
+
+  // ---- "Revoke invite" never deletes a person who was active ----
+  const WREN = 'wren.worker@example.test';
+  addUser(WREN, 'Wren Worker', 'invited');
+  const wren = new Client('10.8.9.1');
+  res = await signIn(wren, 'google', googleId(WREN));
+  const wrenRow = q('SELECT id, activated_at FROM users WHERE email = ?', WREN)[0];
+  check('accepting an invite through Google sets activated_at', res.cb.loc === '/admin/2fa/setup' && wrenRow.activated_at > 0, `${res.cb.loc} ${wrenRow.activated_at}`);
+  r = await wren.get('/admin/2fa/setup');
+  const wSecret = (/class="totp-secret[^>]*>([^<]+)</.exec(r.text) || [])[1]?.replace(/\s/g, '');
+  await wren.post('/admin/2fa/setup', { code: totp(wSecret) });
+  const agentPost = (over = {}) => fetch(BASE + '/api/agent/stories', {
+    method: 'POST', headers: { Authorization: `Bearer ${AGENT_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Example Pathfinder Club Hosts Fall Campout', body: 'Pathfinders from several clubs gathered at a camp for a weekend of knot tying, cooking and worship.', section: 'youth', area: 'pathfinders', author: 'Staff Writer', date: '2026-10-12', sourceUrl: 'https://www.facebook.com/example-page/posts/2001', ...over }),
+  }).then(async (x) => ({ status: x.status, data: await x.json().catch(() => ({})) }));
+  const created = await agentPost();
+  const draftId = created.data.id;
+  const upd = Number(q('SELECT updated_at u FROM drafts WHERE id = ?', draftId)[0].u);
+  r = await wren.post(`/api/admin/drafts/${draftId}/save`, { version: String(upd), title: 'Edited by Wren', section: 'youth', area: 'pathfinders', date: '2026-10-12', body: 'Edited body text.' });
+  check('(setup) the OAuth-only editor edits an agent draft, so updated_by is set', created.status === 201 && r.status === 200 && q('SELECT updated_by u FROM drafts WHERE id = ?', draftId)[0].u === wrenRow.id, `${created.status} ${r.status} ${r.text.slice(0, 120)}`);
+  r = await alice.post('/admin/editors', { action: 'reset2fa', id: String(wrenRow.id) });
+  check('(setup) an admin resets their two-step sign-in: no password, so they are back to Invited (activated_at kept)', r.status === 200 && q('SELECT status, activated_at FROM users WHERE id = ?', wrenRow.id)[0].status === 'invited' && q('SELECT activated_at a FROM users WHERE id = ?', wrenRow.id)[0].a === wrenRow.activated_at, `${r.status} ${r.error}`);
+  r = await alice.get('/admin/editors');
+  check('the Editors page says Revoke invite will disable, not delete, this account', /disabled, not deleted/.test(unesc(r.text)));
+  r = await alice.post('/admin/editors', { action: 'revoke', id: String(wrenRow.id) });
+  const wrenAfter = q('SELECT status FROM users WHERE id = ?', wrenRow.id)[0];
+  const rv = JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'admin.invite_revoked' ORDER BY id DESC LIMIT 1")[0].detail);
+  check('Revoke invite on a person who was active: the row still exists and is disabled, never deleted (audited disabled:true)', r.status === 200 && /disabled, not deleted/.test(r.ok) && wrenAfter && wrenAfter.status === 'disabled' && rv.disabled === true && count('SELECT COUNT(*) n FROM invites WHERE user_id = ?', wrenRow.id) === 0, `${r.status} ${r.error} ${r.ok}`);
+  check('...their drafts, history and layouts stay attached: updated_by is unchanged', q('SELECT updated_by u FROM drafts WHERE id = ?', draftId)[0].u === wrenRow.id && count('SELECT COUNT(*) n FROM audit_log WHERE user_id = ?', wrenRow.id) >= 1);
+  const again = await agentPost({ title: 'Agent tries to overwrite' });
+  check('...so an agent update to that draft still gets 409 already_reviewed', again.status === 409 && again.data.error === 'already_reviewed' && q('SELECT title t FROM drafts WHERE id = ?', draftId)[0].t === 'Edited by Wren', `${again.status} ${JSON.stringify(again.data).slice(0, 160)}`);
+  r = await alice.post('/admin/editors', { action: 'enable', id: String(wrenRow.id) });
+  check('re-enabling such an account with no way to sign in brings it back as Invited, not Active', r.status === 200 && q('SELECT status FROM users WHERE id = ?', wrenRow.id)[0].status === 'invited' && /no way to sign in yet/.test(r.ok), `${r.status} ${r.ok}`);
+  const NIA = 'nia.neveractive@example.test';
+  const niaId = addUser(NIA, 'Nia NeverActive', 'invited');
+  r = await alice.post('/admin/editors', { action: 'revoke', id: String(niaId) });
+  const rv2 = JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'admin.invite_revoked' ORDER BY id DESC LIMIT 1")[0].detail);
+  check('Revoke invite on a never-activated invite still deletes the pending account (as before)', r.status === 200 && count('SELECT COUNT(*) n FROM users WHERE id = ?', niaId) === 0 && count('SELECT COUNT(*) n FROM invites WHERE user_id = ?', niaId) === 0 && rv2.disabled === undefined, `${r.status} ${r.error}`);
+  pre.users += 2; // Wren and Nia were added here (Nia is gone again, so only Wren stays)
+  pre.users -= 1;
+
+  // ---- scripts/reset-2fa.mjs refuses to strand the last administrator ----
+  const DATA2 = DATA_DIR + '-script';
+  fs.rmSync(DATA2, { recursive: true, force: true });
+  fs.mkdirSync(DATA2, { recursive: true });
+  const db2 = (fn) => { const d = new DatabaseSync(path.join(DATA2, 'imconnected.db')); d.exec('PRAGMA busy_timeout = 5000'); try { return fn(d); } finally { d.close(); } };
+  execFileSync('node', ['scripts/create-admin.mjs', 'last.admin@example.test', 'Last Admin'], { env: { ...process.env, DATA_DIR: DATA2 } });
+  db2((d) => {
+    const u = d.prepare("SELECT id FROM users WHERE email = 'last.admin@example.test'").get();
+    d.prepare("UPDATE users SET status = 'active', activated_at = ? WHERE id = ?").run(Date.now(), u.id);
+    d.prepare("INSERT INTO oauth_accounts (provider, provider_user_id, user_id, email_at_link, created_at) VALUES ('google', 'g-last', ?, 'last.admin@example.test', ?)").run(u.id, Date.now());
+  });
+  const reset = (...args) => spawnSync('node', ['scripts/reset-2fa.mjs', ...args], { env: { ...process.env, DATA_DIR: DATA2 }, encoding: 'utf8' });
+  let sr = reset('last.admin@example.test');
+  const lastState = () => db2((d) => ({ status: d.prepare("SELECT status FROM users WHERE email = 'last.admin@example.test'").get().status, links: Number(d.prepare('SELECT COUNT(*) n FROM oauth_accounts').get().n) }));
+  check('reset-2fa.mjs on the only active administrator with no password aborts with a warning and changes nothing', sr.status === 2 && /only active administrator/.test(sr.stderr) && /--yes-last-admin/.test(sr.stderr) && lastState().status === 'active' && lastState().links === 1, `${sr.status} ${sr.stderr}`);
+  sr = reset('last.admin@example.test', '--bogus');
+  check('...an unknown flag is a usage error', sr.status === 1 && /Usage/.test(sr.stderr));
+  sr = reset('last.admin@example.test', '--yes-last-admin');
+  check('...with --yes-last-admin it proceeds, says create-admin.mjs is needed, and the account is Invited', sr.status === 0 && /NOBODY can sign in now/.test(sr.stdout) && /create-admin\.mjs/.test(sr.stdout) && lastState().status === 'invited' && lastState().links === 0, `${sr.status} ${sr.stdout} ${sr.stderr}`);
+  db2((d) => { // a second active administrator: no flag needed
+    const now = Date.now();
+    d.prepare("INSERT INTO users (id, email, name, role, status, created_at, updated_at, activated_at) VALUES (900, 'second.admin@example.test', 'Second Admin', 'admin', 'active', ?, ?, ?)").run(now, now, now);
+    d.prepare("UPDATE users SET status = 'active' WHERE email = 'last.admin@example.test'").run();
+    d.prepare("INSERT INTO oauth_accounts (provider, provider_user_id, user_id, email_at_link, created_at) VALUES ('google', 'g-last2', (SELECT id FROM users WHERE email = 'last.admin@example.test'), 'last.admin@example.test', ?)").run(now);
+  });
+  sr = reset('last.admin@example.test');
+  check('with another active administrator the same reset needs no flag (and says to send a new invite)', sr.status === 0 && /back to Invited/.test(sr.stdout) && !/NOBODY/.test(sr.stdout) && lastState().status === 'invited', `${sr.status} ${sr.stdout} ${sr.stderr}`);
+  fs.rmSync(DATA2, { recursive: true, force: true });
+
   // ---- rate limiting and flooding ----
   const junk = new Client('10.8.7.1');
   const auditBefore = count('SELECT COUNT(*) n FROM audit_log');
@@ -668,6 +759,8 @@ try {
   const allAudit = JSON.stringify(q('SELECT action, target, detail FROM audit_log'));
   check('no token, authorization code, secret or address of a stranger in the audit log', !leaks(allAudit) && !/code_verifier|stranger\.person/.test(allAudit) && seenCodes.length > 20 && !seenCodes.some((c) => allAudit.includes(c)), String(seenCodes.length));
   check('no token, authorization code, secret or stranger address in any server log', !leaks(serverLog()) && !/stranger\.person/.test(serverLog()) && !seenCodes.some((c) => serverLog().includes(c)));
+  const mlog = await (await fetch(OIDC + '/__log')).json();
+  check('no token request carried an Authorization header (client_secret_post only; the mock refuses any)', !mlog.some((e) => e.event === 'token_refused_auth_header') && mlog.filter((e) => e.event === 'token_ok').length > 20, JSON.stringify(mlog.filter((e) => e.event === 'token_refused_auth_header')));
   check('the only users added are the seeded ones (nothing was created by a rejected sign-in)', count('SELECT COUNT(*) n FROM users') === pre.users);
 } finally {
   stopAll();

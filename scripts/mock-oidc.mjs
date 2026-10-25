@@ -54,15 +54,17 @@ http.createServer(async (req, res) => {
       return send(res, 302, '', { Location: back.toString() });
     }
     // token endpoint
+    // client_secret_post only: ANY Authorization header on a token request is refused (so a regression to Basic auth is caught).
+    if (req.headers.authorization) {
+      log.push({ event: 'token_refused_auth_header', provider });
+      return send(res, 400, { error: 'invalid_client' });
+    }
     const form = new URLSearchParams(await readBody(req));
-    // client_secret_post: the id and secret must be in the form body. A Basic header is not used (and one that disagrees with the body is refused).
     const id = form.get('client_id');
     const secret = form.get('client_secret');
-    const basic = /^Basic (.+)$/.exec(req.headers.authorization || '');
-    const basicBad = basic && Buffer.from(basic[1], 'base64').toString() !== `${id}:${secret}`;
     const entry = codes.get(form.get('code') || '');
     codes.delete(form.get('code') || ''); // single use
-    if (!entry || entry.provider !== provider || id !== CLIENTS[provider].id || secret !== CLIENTS[provider].secret || basicBad) {
+    if (!entry || entry.provider !== provider || id !== CLIENTS[provider].id || secret !== CLIENTS[provider].secret) {
       log.push({ event: 'token_refused', provider });
       return send(res, 400, { error: 'invalid_grant' });
     }

@@ -97,7 +97,8 @@ export function resetTwoFactor(db, userId) {
   let reinvite = false;
   const u = db.prepare('SELECT status FROM users WHERE id = ?').get(userId);
   if (u && u.status === 'active' && !db.prepare('SELECT 1 FROM password_credentials WHERE user_id = ?').get(userId)) {
-    db.prepare("UPDATE users SET status = 'invited', updated_at = ? WHERE id = ? AND status = 'active'").run(Date.now(), userId);
+    // activated_at is kept (set here too if an old row never had it) so "Revoke invite" later disables this account instead of deleting it.
+    db.prepare("UPDATE users SET status = 'invited', activated_at = COALESCE(activated_at, created_at), updated_at = ? WHERE id = ? AND status = 'active'").run(Date.now(), userId);
     db.prepare('DELETE FROM invites WHERE user_id = ?').run(userId);
     reinvite = true;
   }

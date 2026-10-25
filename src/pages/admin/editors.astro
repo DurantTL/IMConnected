@@ -23,6 +23,8 @@ if (Astro.request.method === 'POST' && !isAdmin) {
   return new Response('Administrators only.', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
+const statusOf = (id: number) => listEditors().find((p) => p.id === id)?.status;
+
 function showInvite(r: InviteResult, verb: string) {
   if (!r.ok) {
     error = r.error;
@@ -78,7 +80,7 @@ if (Astro.request.method === 'POST') {
           // Own account: don't render the admin view for someone who may no longer be an admin or signed in.
           if (targetId === user.id && action === 'disable') return Astro.redirect('/admin/login', 303);
           if (targetId === user.id && action === 'role' && field(form!, 'role', 20) !== 'admin') return Astro.redirect('/admin/editors', 303);
-          message = action === 'role' ? 'Role changed.' : action === 'disable' ? 'Account disabled and signed out everywhere.' : action === 'enable' ? 'Account re-enabled.' : action === 'revoke' ? 'Invite revoked. The link no longer works.' : action === 'oauth_unlink' ? 'Linked account removed. They were signed out everywhere.' : r.reinvite ? 'Two-step sign-in reset. They have no password, so they are back to Invited: send them a new invite (Manage, then Send a new invite).' : 'Two-step sign-in reset. They set it up again at their next sign-in.';
+          message = action === 'role' ? 'Role changed.' : action === 'disable' ? 'Account disabled and signed out everywhere.' : action === 'enable' ? (statusOf(targetId) === 'invited' ? 'Account re-enabled, but they have no way to sign in yet: they are back to Invited, so send them a new invite (Manage, then Send a new invite).' : 'Account re-enabled.') : action === 'revoke' ? (r.disabled ? 'Invite revoked. This person has worked here before, so the account was disabled, not deleted.' : 'Invite revoked. The link no longer works.') : action === 'oauth_unlink' ? 'Linked account removed. They were signed out everywhere.' : r.reinvite ? 'Two-step sign-in reset. They have no password, so they are back to Invited: send them a new invite (Manage, then Send a new invite).' : 'Two-step sign-in reset. They set it up again at their next sign-in.';
         } else {
           error = r.error;
           Astro.response.status = r.status;
@@ -188,7 +190,9 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="action" value="revoke" />
                     <input type="hidden" name="id" value={p.id} />
                     <input type="hidden" name="assertion" value="" />
-                    <p class="admin-note">Cancels the invite and removes this pending account, for example after a typo. You can invite the address again.</p>
+                    {p.everActive
+                      ? <p class="admin-note">Cancels the invite. This person has worked here before, so the account is <strong>disabled, not deleted</strong>: their drafts and history stay attached to it. You can re-enable it later.</p>
+                      : <p class="admin-note">Cancels the invite and removes this pending account, for example after a typo. You can invite the address again.</p>}
                     {needFresh && <FreshField id={`rev-code-${p.id}`} hasPasskeys={hasPk} />}
                     <button type="submit" class="cms-btn danger">Revoke invite</button>
                   </form>

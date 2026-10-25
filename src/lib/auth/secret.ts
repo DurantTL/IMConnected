@@ -43,8 +43,11 @@ export function verifyToken(purpose: string, token: string): Record<string, unkn
   const dot = token.indexOf('.');
   if (dot < 1 || token.indexOf('.', dot + 1) !== -1) return null;
   const body = token.slice(0, dot);
-  const given = Buffer.from(token.slice(dot + 1), 'base64url');
-  const expected = createHmac('sha256', subkey(purpose)).update(body).digest();
+  const sig = token.slice(dot + 1);
+  if (!/^[A-Za-z0-9_-]{43}$/.test(sig)) return null; // one canonical spelling of a SHA-256 MAC: 43 base64url characters
+  // Compare the base64url TEXT of the expected MAC (equal lengths), so a non-canonical spelling of the same bytes can't verify.
+  const expected = Buffer.from(createHmac('sha256', subkey(purpose)).update(body).digest('base64url'));
+  const given = Buffer.from(sig);
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
   try {
     const v = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
