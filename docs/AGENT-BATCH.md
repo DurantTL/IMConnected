@@ -14,7 +14,7 @@ machine-to-machine API as `POST /api/agent/stories`: bearer `AGENT_API_TOKEN`, n
     {
       "title": "Example Club Hosts Fall Campout",
       "dek": "A synthetic summary.",
-      "body": "Synthetic body text.\n\nSecond paragraph.",
+      "body": "Synthetic body text for the example story.\n\nSecond paragraph.",
       "section": "youth",
       "area": "pathfinders",
       "church": "Example Hills Church",
@@ -63,6 +63,7 @@ checks, `{{photo N}}` marker check (the optional `wide`, `full`, `left` or `righ
 
 ## Limits
 
+- `body`: 50 to 20,000 characters (after trimming) for every item, the same as a single `POST /api/agent/stories`. A shorter body fails only that item with `body_too_short` (the rest of the batch is written); `GET /api/agent/sections` reports `limits.bodyMin`. The public submit form keeps its own 200-character minimum.
 - Each batch request is **one** call against the shared 60/hour limit.
 - Separate ceiling: **300 stories per hour per server process**, counting every story in every batch that was attempted. If a batch would go over the remaining budget, the **whole batch** is rejected with `429` and `Retry-After` and nothing is written (no partial batch). An identical replay of an already answered batch uses no budget. `AGENT_BATCH_ITEMS_PER_HOUR` overrides the 300; it exists for tests and operations, leave it unset normally.
 - Both counters are per process: a restart resets them.

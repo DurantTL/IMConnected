@@ -100,7 +100,7 @@ try {
     check(ext + ' Studio data-photo publish writes the canonical extension', studio.response.status === 200 && studioLive?.image.endsWith('.' + ext));
   }
   const countBefore = row('SELECT COUNT(*) n FROM drafts').n;
-  const invalid = await json('/api/agent/stories', { title: 'Invalid synthetic AVIF', section: 'news', area: 'conference', body: 'Synthetic invalid photo.', photos: [{ data: 'data:image/avif;base64,' + ftyp('heic').toString('base64') }] });
+  const invalid = await json('/api/agent/stories', { title: 'Invalid synthetic AVIF', section: 'news', area: 'conference', body: 'Synthetic invalid photo, with a neutral padding sentence added.', photos: [{ data: 'data:image/avif;base64,' + ftyp('heic').toString('base64') }] });
   check('an AVIF MIME label cannot smuggle an unrelated format into drafts', invalid.response.status === 400 && invalid.data.error === 'photo_not_image' && row('SELECT COUNT(*) n FROM drafts').n === countBefore);
   for (const url of ['/media/%252e%252e/secret.avif', '/api/studio-photo?src=' + encodeURIComponent('/media/../uploads/secret.avif')]) {
     const response = await fetch(base + url, { headers: studioHeaders }); check('AVIF paths retain traversal protection', response.status === 404);
