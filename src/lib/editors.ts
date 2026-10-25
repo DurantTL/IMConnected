@@ -163,7 +163,9 @@ function change(actor: { id: number }, targetId: number, ip: string, apply: (t: 
         return { ok: false, error: 'You can’t do that: this is the last active administrator. Make someone else an administrator first.', status: 409 };
       }
     }
-    db.prepare('UPDATE users SET role = ?, status = ?, updated_at = ? WHERE id = ?').run(role, status, Date.now(), targetId);
+    // activated_at is never cleared and is set whenever an account becomes active, so Revoke invite can never delete someone who worked here.
+    const now = Date.now();
+    db.prepare("UPDATE users SET role = ?, status = ?, updated_at = ?, activated_at = CASE WHEN ? = 'active' THEN COALESCE(activated_at, ?) ELSE activated_at END WHERE id = ?").run(role, status, now, status, now, targetId);
     if (status === 'disabled') db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId); // signed out at once
     audit(next.action, { userId: actor.id, target: `user:${targetId}`, ip, detail: next.detail });
     db.exec('COMMIT');

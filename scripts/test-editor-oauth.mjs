@@ -28,9 +28,9 @@ const BASE2 = `http://localhost:${PORT2}`;
 const BASE3 = `http://localhost:${PORT3}`;
 const OIDC = `http://localhost:${OIDC_PORT}`;
 const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
-// Must match scripts/mock-oidc.mjs. They contain +, space, % and : on purpose: the client sends them form-urlencoded in a Basic header
-// (RFC 6749 2.3.1) and the mock refuses anything else, so an encoding regression breaks every sign-in here.
 const AGENT_TOKEN = 'e2e-agent-token-0123456789abcdefghijklmnopqr'; // made up; the agent route is only used against this local build
+// Must match scripts/mock-oidc.mjs. They contain +, space, % and : on purpose: the client sends them in the token request's form body
+// (client_secret_post), the mock refuses any Authorization header, so an encoding regression breaks every sign-in here.
 const G_ID = 'mock google+client:id%1';
 const G_SECRET = 'mock+google secret:%s/x';
 const M_ID = 'mock ms+client:id%2';
