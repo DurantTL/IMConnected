@@ -563,8 +563,10 @@ body:not(.admin) .site-footer .footer-bottom { border-top-color:#52716d; }
 body:not(.admin) .section-nav-row .nav{flex:1;flex-wrap:wrap;gap:6px 22px;min-width:0}body:not(.admin) .section-nav-row .nav a{max-width:18em;overflow-wrap:anywhere}body:not(.admin) .masthead-edition{flex-shrink:0}
 
 /* Publication brand: the newsletter's teal, navy, aqua and mint on warm paper. */
-.brand-wordmark { display:block; width:360px; max-width:100%; aspect-ratio:5; overflow:hidden; background:#36383A; border-radius:2px; }
-.brand-wordmark img { display:block; width:100%; height:100%; object-fit:cover; object-position:center; }
+/* The wordmark is a transparent vector (cyan IM, white Connected), so it sits on any dark band without a box.
+   Widths are 0.88 of the old boxed image's, which keeps the letters the same size. */
+.brand-wordmark { display:block; width:316px; max-width:100%; }
+.brand-wordmark img { display:block; width:100%; height:auto; }
 body:not(.admin) .site-header { background:#0B3954; color:#fff; border:0; }
 body:not(.admin) .publication-line { background:#072c42; color:#E0F5F7; }
 /* Masthead as in the newsletter email: the wordmark on a full-width charcoal band (the image's own background), then a navy conference strip. */
@@ -648,7 +650,7 @@ body:not(.admin) .article .key-points li { margin:0 0 6px; line-height:1.5; }
 .article-reading { display:flex; align-items:center; gap:18px; color:var(--ink-3); font:600 .75rem/1.5 var(--sans); margin-top:16px; }
 .article-reading a { display:inline-flex; align-items:center; min-height:44px; color:var(--brand-text); text-underline-offset:4px; }
 body:not(.admin) .article .share { max-width:66ch; margin-inline:auto; }
-body:not(.admin) .site-footer .brand-wordmark { width:280px; }
+body:not(.admin) .site-footer .brand-wordmark { width:246px; }
 body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 
 /* Immersive event stage. Flyers retain their entire image; text always has a solid backdrop. */
@@ -703,7 +705,7 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 /* Shared publication identity in the separate editor app. */
 @media(max-width:920px) {
   body:not(.admin) .site-header .bar { min-height:80px; }
-  .site-header .brand-wordmark { width:290px; }
+  .site-header .brand-wordmark { width:254px; }
   .spotlight-copy { padding:6px var(--gutter) 18px; }
   .spotlight-flyer { padding:14px; }
   .spotlight-symbol svg { width:80px; height:80px; }
@@ -712,7 +714,7 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 }
 @media(max-width:650px) {
   body:not(.admin) .site-header .bar { min-height:66px; gap:10px; }
-  .site-header .brand-wordmark { width:210px; }
+  .site-header .brand-wordmark { width:184px; }
   body:not(.admin) .home-intro { padding:12px 0 6px; gap:4px 28px; }
   body:not(.admin) .home-intro h1 { font-size:1.6rem; max-width:22ch; }
   body:not(.admin) .home-intro-note { display:none; }
@@ -744,7 +746,7 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 
 @media(max-width:360px) {
   /* The wordmark, Search and the menu button together are 326px wide at 210px; narrow the mark so 320px phones do not scroll sideways. */
-  .site-header .brand-wordmark { width:180px; }
+  .site-header .brand-wordmark { width:158px; }
 }
 
 .article-categories { display:flex; flex-wrap:wrap; align-items:center; gap:10px 12px; }

@@ -4,7 +4,7 @@ Issue #77 applies the supplied IMConnected branding and the colors read from the
 
 ## Brand and color
 
-The header, footer and editor use one local IMConnected wordmark. The artwork was prepared from the conference's existing public IMConnected artwork: an image-generation crop removed its unrelated generated subtitle and retained the cyan IM / white Connected lettering on charcoal. The resulting opaque asset was encoded as a 34 KB WebP at `public/images/brand/imconnected-wordmark.webp`. It makes no third-party image request. `BrandMark.astro` supplies the accessible name once inside each brand link.
+The header, footer and editor use one local IMConnected wordmark. The artwork was prepared from the conference's existing public IMConnected artwork: an image-generation crop removed its unrelated generated subtitle and retained the cyan IM / white Connected lettering on charcoal (`public/images/brand/imconnected-wordmark.webp`, kept for reference). On 2026-10-25 it was traced into a transparent vector with no background box (`imconnected-wordmark.svg`: IM in the artwork's own cyan `#1FC2CE`, Connected in white, about 10 KB gzipped), so it sits cleanly on the charcoal masthead and the navy footer; `imconnected-wordmark-ink.svg` is the same mark with a navy Connected for light backgrounds. The script lettering is traced from the artwork's curves and the IM block letters as straight-edged shapes; nothing was redrawn by hand. It makes no third-party image request. `BrandMark.astro` supplies the accessible name once inside each brand link.
 
 The newsletter palette is shared by public and editor screens:
 
