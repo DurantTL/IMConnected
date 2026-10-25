@@ -580,7 +580,7 @@ try {
       r = await fpost({ sourceUrl: SRC, ...bad });
       check(`required fields cannot be cleared: ${JSON.stringify(bad)} is 400 ${code}`, r.status === 400 && r.data.error === code && JSON.stringify(snap()) === JSON.stringify(s3));
     }
-    r = await fpost({ sourceUrl: 'https://www.facebook.com/example-page/posts/8004', body: 'Body only.' });
+    r = await fpost({ sourceUrl: 'https://www.facebook.com/example-page/posts/8004', body: 'Body only, with a neutral synthetic padding sentence added.' });
     check('a create without a title is 400 title_required and creates nothing', r.status === 400 && r.data.error === 'title_required' && qf("SELECT COUNT(*) c FROM drafts WHERE source_url = 'https://www.facebook.com/example-page/posts/8004'")[0].c === 0);
     r = await fpost({ sourceUrl: 'https://www.facebook.com/example-page/posts/8004', title: 'Title only' });
     check('a create without a body is 400 body_required', r.status === 400 && r.data.error === 'body_required');
@@ -746,31 +746,31 @@ try {
     // {{photo N}} markers
     const nPhotos = () => qg('SELECT COUNT(*) c FROM draft_photos WHERE draft_id = ?', id)[0].c;
     const bodyOf = () => qg('SELECT body FROM drafts WHERE id = ?', id)[0].body;
-    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 2}}\n\nMore text.' });
+    r = await gpost({ sourceUrl: SRC, body: 'Intro with a neutral synthetic padding sentence.\n\n{{photo 2}}\n\nMore text.' });
     check('update: a marker for an existing photo is accepted', r.status === 201 && bodyOf().includes('{{photo 2}}'));
     const bodyBefore = bodyOf();
-    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 3}}\n\nMore.' });
+    r = await gpost({ sourceUrl: SRC, body: 'Intro with a neutral synthetic padding sentence.\n\n{{photo 3}}\n\nMore.' });
     check('update: a marker past the photo count is 400 bad_photo_marker naming it', r.status === 400 && r.data.error === 'bad_photo_marker' && r.data.message.includes('{{photo 3}}') && bodyOf() === bodyBefore, r.text.slice(0, 200));
-    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 2 left}}\n\nMore text.' });
+    r = await gpost({ sourceUrl: SRC, body: 'Intro with a neutral synthetic padding sentence.\n\n{{photo 2 left}}\n\nMore text.' });
     check('update: a marker with a size/alignment option is accepted and stored verbatim (issue #86)', r.status === 201 && bodyOf().includes('{{photo 2 left}}'), r.text.slice(0, 200));
     const optBefore = bodyOf();
-    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 3 wide}}\n\nMore.' });
+    r = await gpost({ sourceUrl: SRC, body: 'Intro with a neutral synthetic padding sentence.\n\n{{photo 3 wide}}\n\nMore.' });
     check('update: an optioned marker past the photo count is 400 bad_photo_marker too', r.status === 400 && r.data.error === 'bad_photo_marker' && bodyOf() === optBefore, r.text.slice(0, 200));
-    r = await gpost({ sourceUrl: SRC, body: 'Intro.\n\n{{photo 3}}\n\nMore.', photos: [{ data: dataUrl(PNG_A) }, { data: dataUrl(PNG_B) }, { data: dataUrl(PNG_A) }] });
+    r = await gpost({ sourceUrl: SRC, body: 'Intro with a neutral synthetic padding sentence.\n\n{{photo 3}}\n\nMore.', photos: [{ data: dataUrl(PNG_A) }, { data: dataUrl(PNG_B) }, { data: dataUrl(PNG_A) }] });
     check('update: the count after the request is what matters (body and 3 new photos together)', r.status === 201 && nPhotos() === 3);
     r = await gpost({ sourceUrl: SRC, photos: [{ data: dataUrl(PNG_A) }] });
     check('update: shrinking the photos below a stored marker is 400 bad_photo_marker', r.status === 400 && r.data.error === 'bad_photo_marker' && nPhotos() === 3);
     r = await gpost({ sourceUrl: SRC, body: 'Example:\n\n```\n{{photo 9}}\n```\n\n    {{photo 8}}\n\n`{{photo 7}}`\n\n> {{photo 5}}\n\n- {{photo 4}}\n\nPlain text {{photo 9}} inline.' });
     check('update: markers in code fences, indented code, spans, quotes, lists or inline stay literal and are not validated', r.status === 201, r.text.slice(0, 200));
-    r = await gpost({ sourceUrl: SRC, body: 'x\n\n\\{{photo 6}}' });
+    r = await gpost({ sourceUrl: SRC, body: 'A neutral synthetic padding sentence for this example.\n\n\\{{photo 6}}' });
     check('update: a backslash-escaped marker line is a literal example and is not validated (the renderer never renders it as a photo)', r.status === 201, r.text.slice(0, 200));
-    r = await gpost({ sourceUrl: SRC, body: 'x\n\n~~~\n{{photo 9}}\n~~~\n\n{{photo 4}}' });
+    r = await gpost({ sourceUrl: SRC, body: 'A neutral synthetic padding sentence for this example.\n\n~~~\n{{photo 9}}\n~~~\n\n{{photo 4}}' });
     check('update: a marker after a closed fence is validated again', r.status === 400 && r.data.error === 'bad_photo_marker' && r.data.message.includes('{{photo 4}}'));
-    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', body: 'Story.\n\n{{photo 3}}\n\nEnd.' }));
+    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', body: 'Story with a neutral synthetic padding sentence.\n\n{{photo 3}}\n\nEnd.' }));
     check('create: a marker past the two photos is 400 bad_photo_marker and no draft is made', r.status === 400 && r.data.error === 'bad_photo_marker' && qg("SELECT COUNT(*) c FROM drafts WHERE source_url LIKE '%9102'")[0].c === 0);
-    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', photos: undefined, body: 'Story.\n\n{{photo 1}}\n\nEnd.' }));
+    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', photos: undefined, body: 'Story with a neutral synthetic padding sentence.\n\n{{photo 1}}\n\nEnd.' }));
     check('create: a marker with no photos at all is refused', r.status === 400 && r.data.error === 'bad_photo_marker');
-    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', body: 'Story.\n\n{{photo 2}}\n\n```\n{{photo 6}}\n```' }));
+    r = await gpost(base({ sourceUrl: 'https://www.facebook.com/example-page/posts/9102', body: 'Story with a neutral synthetic padding sentence.\n\n{{photo 2}}\n\n```\n{{photo 6}}\n```' }));
     check('create: a valid marker plus a fenced one is accepted', r.status === 201);
 
     // capabilities
@@ -800,7 +800,7 @@ try {
     const countFiles = () => { let n = 0; const walk = (d) => { if (!fs.existsSync(d)) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) e.isDirectory() ? walk(path.join(d, e.name)) : n++; }; walk(path.join(SCRATCH, 'data-h', 'uploads')); return n; };
 
     // two pre-existing drafts through the single endpoint: one stays untouched (to be updated), one gets an editor's hands on it
-    let r = await hpost(item(100, { body: 'Original body that an update must keep.' }));
+    let r = await hpost(item(100, { body: 'Original body that an update must keep, padded with a neutral synthetic sentence.' }));
     const updId = r.data.id;
     r = await hpost(item(101));
     const touchedId = r.data.id;
@@ -816,8 +816,8 @@ try {
     items.push(item(15, { photos: [{ data: 'data:image/png;base64,' + Buffer.from('not an image at all').toString('base64'), alt: 'x' }] })); // 15
     items.push(item(16, { title: '' })); // 16
     items.push('not an object'); // 17
-    items.push(item(18, { body: 'Line one.\n\n{{photo 3}}', photos: [{ data: dataUrl(PNG_A), alt: 'A' }] })); // 18: marker beyond photos
-    items.push(item(19, { title: 'Tom & <i>Jerry</i> Fair', body: 'Hello <script>alert(1)</script> world.' })); // 19: escaping
+    items.push(item(18, { body: 'Line one with a neutral synthetic padding sentence.\n\n{{photo 3}}', photos: [{ data: dataUrl(PNG_A), alt: 'A' }] })); // 18: marker beyond photos
+    items.push(item(19, { title: 'Tom & <i>Jerry</i> Fair', body: 'Hello <script>alert(1)</script> world, with a neutral synthetic padding sentence.' })); // 19: escaping
     const ENV = { requestId: 'batch-0001-first-run', stories: items };
     const draftsBefore = qh("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c;
     const uploadsBefore = countFiles();
@@ -832,7 +832,7 @@ try {
     const draftsAfter = qh("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c;
     check('database: exactly 13 new agent drafts, none for the failed items', draftsAfter === draftsBefore + 13 && qh('SELECT COUNT(*) c FROM drafts WHERE source_url IN (?, ?, ?, ?)', SRC(14), SRC(15), SRC(16), SRC(18))[0].c === 0);
     const upd = qh('SELECT title, body FROM drafts WHERE id = ?', updId)[0];
-    check('...the update changed the title and kept the omitted body', upd.title === 'Batch Update Of Existing Draft' && upd.body === 'Original body that an update must keep.', JSON.stringify(upd));
+    check('...the update changed the title and kept the omitted body', upd.title === 'Batch Update Of Existing Draft' && upd.body === 'Original body that an update must keep, padded with a neutral synthetic sentence.', JSON.stringify(upd));
     check('...the editor-touched draft is unchanged', qh('SELECT title FROM drafts WHERE id = ?', touchedId)[0].title === 'Batch Story Number 101');
     const esc = qh('SELECT title, body, status FROM drafts WHERE id = ?', res[19].id)[0];
     check('...the body is escaped like the single endpoint (no raw <script>) and the draft is "new"', !esc.body.includes('<script>') && esc.body.includes('&lt;script') && esc.status === 'new', esc.body);
@@ -930,7 +930,7 @@ try {
     const qi = (sql, ...args) => { const db = new DatabaseSync(IDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
     await fetch(I + '/admin/login');
     const ipost = (json) => call(I, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json });
-    const mk = (n, count) => ({ requestId: `ceil-${String(n).padStart(4, '0')}-ceiling`, stories: Array.from({ length: count }, (_, k) => ({ title: `Ceiling Story ${n}-${k}`, body: 'Synthetic body.', sourceUrl: `https://www.facebook.com/example-page/posts/${n * 100 + k}` })) });
+    const mk = (n, count) => ({ requestId: `ceil-${String(n).padStart(4, '0')}-ceiling`, stories: Array.from({ length: count }, (_, k) => ({ title: `Ceiling Story ${n}-${k}`, body: 'Synthetic body with a neutral synthetic padding sentence.', sourceUrl: `https://www.facebook.com/example-page/posts/${n * 100 + k}` })) });
     const first = mk(1, 20);
     let x = await ipost(first);
     check('hourly story ceiling (lowered to 25 for the test): the first 20 stories pass', x.status === 200 && x.data.results.filter((y) => y.status === 'created').length === 20, x.text.slice(0, 200));
@@ -954,7 +954,7 @@ try {
     const JDB = path.join(SCRATCH, 'data-j', 'imconnected.db');
     const qj = (sql, ...args) => { const db = new DatabaseSync(JDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
     await fetch(J + '/admin/login');
-    const mkj = (n, count) => ({ requestId: `jceil-${String(n).padStart(4, '0')}-ceiling`, stories: Array.from({ length: count }, (_, k) => ({ title: `Small Ceiling Story ${n}-${k}`, body: 'Synthetic body.', sourceUrl: `https://www.facebook.com/example-page/posts/${n * 100 + k}` })) });
+    const mkj = (n, count) => ({ requestId: `jceil-${String(n).padStart(4, '0')}-ceiling`, stories: Array.from({ length: count }, (_, k) => ({ title: `Small Ceiling Story ${n}-${k}`, body: 'Synthetic body with a neutral synthetic padding sentence.', sourceUrl: `https://www.facebook.com/example-page/posts/${n * 100 + k}` })) });
     let x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(1, 11) });
     check('ceiling below the batch size (10): a batch of 11 is 400 too_many_stories naming the ceiling, nothing written', x.status === 400 && x.data.error === 'too_many_stories' && /10/.test(x.data.message) && !x.headers.get('retry-after') && qj("SELECT COUNT(*) c FROM drafts WHERE source = 'agent'")[0].c === 0 && qj('SELECT COUNT(*) c FROM agent_batches')[0].c === 0, `${x.status} ${x.text.slice(0, 200)}`);
     x = await call(J, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: mkj(2, 10) });
@@ -998,7 +998,7 @@ try {
     await fetch(K + '/admin/login');
     const post = (json) => call(K, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json });
     const read = (id) => call(K, 'GET', `/api/agent/stories/${id}`, { token: AGENT_TOKEN });
-    const mk = (n, over = {}) => ({ title: `Synthetic Issue Story ${n}`, body: 'Synthetic body for an archive story.', sourceUrl: `https://www.facebook.com/example-page/posts/98${n}`, ...over });
+    const mk = (n, over = {}) => ({ title: `Synthetic Issue Story ${n}`, body: 'Synthetic body for an archive story, with a padding sentence.', sourceUrl: `https://www.facebook.com/example-page/posts/98${n}`, ...over });
     const issues = () => qk('SELECT number, date, title FROM newsletter_issues ORDER BY number');
 
     await call(K, 'GET', '/stories.json'); // the first public request adopts the built archive
@@ -1023,7 +1023,7 @@ try {
     check('...nothing was written (no draft, issue unchanged)', qk('SELECT COUNT(*) c FROM drafts')[0].c === draftsBefore && issues()[0].date === '2026-09-14');
     r = await post(mk(3, { newsletterIssue: { number: 12, date: '2026-09-14', title: 'A Different Title' } }));
     check('a different non-empty title: 400 newsletter_issue_conflict, nothing written', r.status === 400 && r.data.error === 'newsletter_issue_conflict' && qk('SELECT COUNT(*) c FROM drafts')[0].c === draftsBefore && issues()[0].title === 'September Roundup');
-    r = await post(mk(3, { newsletterIssue: { number: 13, date: '2026-09-21' }, body: 'Synthetic body.\n\n{{photo 3}}' }));
+    r = await post(mk(3, { newsletterIssue: { number: 13, date: '2026-09-21' }, body: 'Synthetic body with a neutral synthetic padding sentence.\n\n{{photo 3}}' }));
     check('a refused story (bad photo marker) creates no issue', r.status === 400 && !issues().some((i) => i.number === 13), `${r.status} ${r.text.slice(0, 160)}`);
 
     for (const [label, ni] of [
@@ -1067,6 +1067,38 @@ try {
     const body = (await read(id2)).text;
     check('read-back carries no contacts', !/@e2e-mail|submitter/i.test(body));
     check('the agent cannot publish: creating issues changed nothing public', qk('SELECT COUNT(*) c FROM stories')[0].c === storiesBefore && qk('SELECT COUNT(*) c FROM stories WHERE newsletter_issue IS NOT NULL')[0].c === 0 && !(await call(K, 'GET', '/stories.json')).text.includes('Synthetic Issue Story'));
+
+    // Body floor: 50 characters after trimming for every agent submission (single, batch item, reopen), never for the public form.
+    {
+      const exact = (n) => { let t = ''; while (t.length < n) t += 'synthetic '; t = t.slice(0, n - 1).trimEnd(); return t.padEnd(n - 1, 'x') + '.'; };
+      check('GET /api/agent/sections reports limits.bodyMin === 50', (await call(K, 'GET', '/api/agent/sections', { token: AGENT_TOKEN })).data.limits?.bodyMin === 50);
+      const bm = (n, body, over = {}) => mk(500 + n, { body, ...over });
+      const draftsNow = () => qk('SELECT COUNT(*) c FROM drafts')[0].c;
+      let before = draftsNow();
+      r = await post(bm(1, exact(49)));
+      check('a 49-character body is 400 body_too_short and creates nothing', exact(49).length === 49 && r.status === 400 && r.data.error === 'body_too_short' && draftsNow() === before, `${r.status} ${r.text.slice(0, 160)}`);
+      r = await post(bm(2, exact(50)));
+      check('a 50-character body is accepted', exact(50).length === 50 && r.status === 201 && draftsNow() === before + 1, `${r.status} ${r.text.slice(0, 160)}`);
+      before = draftsNow();
+      r = await post(bm(3, '     ' + exact(40) + '     '));
+      check('whitespace padding does not count: 40 characters plus spaces is 400 body_too_short', r.status === 400 && r.data.error === 'body_too_short' && draftsNow() === before, `${r.status} ${r.text.slice(0, 160)}`);
+      r = await post(bm(4, '\n\n  ' + exact(50) + '  \n'));
+      check('...and a 50-character body with surrounding whitespace is accepted (length is measured after trim)', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+      for (const n of [89, 132]) {
+        r = await post(bm(10 + n, exact(n), { newsletterIssue: { number: 9001, date: '2026-09-28', title: 'Archive Notices' } }));
+        check(`a ${n}-character synthetic notice with newsletterIssue is accepted as a single POST`, exact(n).length === n && r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+      }
+      before = draftsNow();
+      const br = await call(K, 'POST', '/api/agent/stories/batch', { token: AGENT_TOKEN, json: { requestId: 'batch-body-floor-0001', stories: [
+        bm(21, exact(89), { newsletterIssue: { number: 9001, date: '2026-09-28' } }),
+        bm(22, exact(132), { newsletterIssue: { number: 9001, date: '2026-09-28' } }),
+        bm(23, exact(30)),
+        bm(24, exact(50)),
+      ] } });
+      const res = br.data.results || [];
+      check('batch: the 89- and 132-character items are created, the 50-character one too', br.status === 200 && res[0]?.ok === true && res[1]?.ok === true && res[3]?.ok === true, br.text.slice(0, 300));
+      check('batch: the 30-character item fails only itself with body_too_short', res[2]?.ok === false && res[2]?.error === 'body_too_short' && draftsNow() === before + 3, br.text.slice(0, 300));
+    }
   }
 
   // ================= key points (issue #117) =================
@@ -1077,7 +1109,7 @@ try {
     await fetch(M + '/admin/login');
     const post = (json) => call(M, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json });
     const read = (id) => call(M, 'GET', `/api/agent/stories/${id}`, { token: AGENT_TOKEN });
-    const mk = (n, over = {}) => ({ title: `Synthetic Key Points Story ${n}`, body: 'Synthetic body for a key points story.', sourceUrl: `https://www.facebook.com/example-page/posts/117${n}`, ...over });
+    const mk = (n, over = {}) => ({ title: `Synthetic Key Points Story ${n}`, body: 'Synthetic body for a key points story, with a padding sentence.', sourceUrl: `https://www.facebook.com/example-page/posts/117${n}`, ...over });
     const kpRow = (id) => JSON.parse(qm('SELECT key_points k FROM drafts WHERE id = ?', id)[0].k);
     let r = await call(M, 'GET', '/api/agent/sections', { token: AGENT_TOKEN });
     check('GET /api/agent/sections documents keyPoints (limits, semantics) and lists it for reopen', r.status === 200 && r.data.keyPoints?.field === 'keyPoints' && r.data.keyPoints.maxItems === 3 && r.data.keyPoints.maxLength === 160 && /bad_key_points/.test(r.data.keyPoints.semantics) && r.data.reopen.changesFields.includes('keyPoints'), r.text.slice(0, 300));
@@ -1124,7 +1156,7 @@ try {
     const M = `http://localhost:${P.m}`;
     const MDB = path.join(SCRATCH, 'data-m', 'imconnected.db');
     const qm = (sql, ...args) => { const db = new DatabaseSync(MDB); db.exec('PRAGMA busy_timeout = 5000'); try { return db.prepare(sql).all(...args); } finally { db.close(); } };
-    const mk = (n, over = {}) => ({ title: `Synthetic Merged Column ${n}`, body: 'Synthetic body for a merged column story.', sourceUrl: `https://www.facebook.com/example-page/posts/136${n}`, ...over });
+    const mk = (n, over = {}) => ({ title: `Synthetic Merged Column ${n}`, body: 'Synthetic body for a merged column story, with a padding sentence.', sourceUrl: `https://www.facebook.com/example-page/posts/136${n}`, ...over });
     let r = await call(M, 'POST', '/api/agent/stories', { token: AGENT_TOKEN, json: mk(1, { section: 'columns', additionalSections: ['columns', 'youth'] }) });
     const row1 = qm('SELECT section, area, additional_sections FROM drafts WHERE id = ?', r.data.id)[0];
     check('agent create with section "columns" is accepted and stored as features (the old extra "columns" is dropped)', r.status === 201 && row1?.section === 'features' && !row1.area && row1.additional_sections === '["youth"]', r.text.slice(0, 200) + JSON.stringify(row1));

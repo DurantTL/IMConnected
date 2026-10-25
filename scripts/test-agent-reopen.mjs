@@ -59,7 +59,7 @@ try {
   // Issue #117: stories that already carry key points, and ones without.
   for (const slug of ['synthetic-kp-keep', 'synthetic-kp-clear', 'synthetic-kp-null']) { seed(slug); exec('UPDATE stories SET key_points=?,rev=rev+1 WHERE slug=?', JSON.stringify(['Synthetic point one.', 'Synthetic point two.']), slug); }
   for (const slug of ['synthetic-kp-set', 'synthetic-kp-bad']) seed(slug);
-  for (const slug of ['synthetic-patch-youth', 'synthetic-patch-features', 'synthetic-patch-areabad', 'synthetic-patch-samesec', 'synthetic-patch-columns']) seed(slug);
+  for (const slug of ['synthetic-patch-youth', 'synthetic-patch-features', 'synthetic-patch-areabad', 'synthetic-patch-samesec', 'synthetic-patch-columns', 'synthetic-patch-short']) seed(slug);
   const expandedBody = '\n  ' + '&lt;'.repeat(6000) + '\n';
   exec('UPDATE stories SET body=?,author=?,rev=rev+1 WHERE slug=?', expandedBody, 'A'.repeat(150), 'synthetic-escaped');
   for (const status of ['new', 'in_review', 'rejected']) seed(`synthetic-${status.replace('_', '-')}`, { linked: true, status });
@@ -113,7 +113,7 @@ try {
   for (const photos of [[{ url: 'http://169.254.169.254/latest/' }], [{ data: 'data:image/svg+xml;base64,PHN2Zz4=' }]]) check('remote/nonimage photos cannot be appended', (await call(request('synthetic-agent-story', { photos }))).status === 400);
   const full = await call(request('synthetic-full', { photos: [{ data: PHOTO }] }));
   check('combined old and new photo limit is atomic', full.status === 400 && full.data.error === 'too_many_photos' && !draftFor('synthetic-full'));
-  const bodyConflict = await call(request('synthetic-modules', { changes: { body: 'Replacement' } }));
+  const bodyConflict = await call(request('synthetic-modules', { changes: { body: 'Replacement body, padded with a neutral synthetic sentence to pass the floor.' } }));
   check('body replacement cannot silently discard editor modules', bodyConflict.status === 409 && bodyConflict.data.error === 'module_body_conflict' && bodyConflict.data.reason === 'module_body_conflict' && !!bodyConflict.data.message && !draftFor('synthetic-modules'));
   const payload = request('synthetic-agent-story', { photos: [{ data: PHOTO, alt: 'New synthetic photo' }], note: 'Synthetic agent update note' });
   const first = await call(payload), d = draftFor(payload.slug), pp = draftPhotos(d.id);
@@ -218,11 +218,18 @@ try {
   check('reopen: a non-boolean featured is 400 bad_field', r81.status === 400 && r81.data.error === 'bad_field' && !draftFor('synthetic-patch-misc'));
   r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { authorTitle: 'x'.repeat(121) } }));
   check('reopen: authorTitle over 120 is 400', r81.status === 400 && r81.data.error === 'author_title_too_long');
-  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { body: 'Intro.\n\n{{photo 4}}\n\nEnd.' }, photos: [{ data: PHOTO }] }));
+  const beforeShort = row('SELECT COUNT(*) c FROM drafts').c;
+  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { body: 'x'.repeat(49) } }));
+  check('reopen: changes.body of 49 characters is 400 body_too_short and creates no draft', r81.status === 400 && r81.data.error === 'body_too_short' && row('SELECT COUNT(*) c FROM drafts').c === beforeShort, r81.raw.slice(0, 200));
+  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { body: '        ' + 'x'.repeat(40) + '        ' } }));
+  check('reopen: whitespace padding does not count toward the 50-character floor', r81.status === 400 && r81.data.error === 'body_too_short', r81.raw.slice(0, 200));
+  r81 = await call81(reopenReq('synthetic-patch-short', { changes: { body: 'x'.repeat(50) } }));
+  check('reopen: changes.body of exactly 50 characters is accepted', r81.status === 201, r81.raw.slice(0, 200));
+  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { body: 'Intro with a neutral synthetic padding sentence.\n\n{{photo 4}}\n\nEnd.' }, photos: [{ data: PHOTO }] }));
   check('reopen: a marker past existing + appended photos is 400 bad_photo_marker naming it, no draft', r81.status === 400 && r81.data.error === 'bad_photo_marker' && r81.data.message.includes('{{photo 4}}') && !draftFor('synthetic-patch-misc'));
-  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { body: 'Intro.\n\n{{photo 3}}\n\nEnd.' } }));
+  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { body: 'Intro with a neutral synthetic padding sentence.\n\n{{photo 3}}\n\nEnd.' } }));
   check('reopen: ...and also without any appended photos', r81.status === 400 && r81.data.error === 'bad_photo_marker');
-  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { authorTitle: 'Pastor <b>Synthetic</b>', photoCredit: '', featured: false, body: 'Intro.\n\n{{photo 4}}\n\n```\n{{photo 9}}\n```' }, photos: [{ data: PHOTO, alt: 'Cropped', caption: 'Appended <b>caption</b>', focalX: 10, focalY: 90, zoom: 2.5, fit: 'contain', fitFill: 'paper' }, { data: PHOTO, alt: 'Plain' }] }));
+  r81 = await call81(reopenReq('synthetic-patch-misc', { changes: { authorTitle: 'Pastor <b>Synthetic</b>', photoCredit: '', featured: false, body: 'Intro with a neutral synthetic padding sentence.\n\n{{photo 4}}\n\n```\n{{photo 9}}\n```' }, photos: [{ data: PHOTO, alt: 'Cropped', caption: 'Appended <b>caption</b>', focalX: 10, focalY: 90, zoom: 2.5, fit: 'contain', fitFill: 'paper' }, { data: PHOTO, alt: 'Plain' }] }));
   const misc = draftFor('synthetic-patch-misc'), miscPhotos = misc ? draftPhotos(misc.id) : [];
   check('reopen: valid marker, fenced markers, crops and author fields are accepted', r81.status === 201 && !!misc && misc.status === 'in_review', r81.raw.slice(0, 200));
   check('reopen: authorTitle stored as typed ("<" kept, like author), photoCredit cleared by "", featured turned off, omitted fields kept', misc.author_title === 'Pastor <b>Synthetic</b>' && misc.photo_credit === '' && misc.featured === 0 && misc.title === 'Synthetic published title' && misc.author === 'Synthetic Author');

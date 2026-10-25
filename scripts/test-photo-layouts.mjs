@@ -345,14 +345,14 @@ try {
   check('/rss.xml is unchanged in shape (no photoLayout element)', rss.status === 200 && !/photoLayout/i.test(rss.text));
 
   // ---- AI agent API ----
-  const agentStory = (over = {}) => ({ title: 'Zz agent layout story', body: 'Synthetic text from the agent test.', section: 'news', area: 'churches', author: 'Staff Writer', sourceUrl: 'https://example.test/posts/1', photos: [{ data: dataUrl(PICS[0]), alt: 'A' }, { data: dataUrl(PICS[1]), alt: 'B' }], ...over });
+  const agentStory = (over = {}) => ({ title: 'Zz agent layout story', body: 'Synthetic text from the agent test, with a neutral padding sentence.', section: 'news', area: 'churches', author: 'Staff Writer', sourceUrl: 'https://example.test/posts/1', photos: [{ data: dataUrl(PICS[0]), alt: 'A' }, { data: dataUrl(PICS[1]), alt: 'B' }], ...over });
   const a1 = await agentPost(agentStory({ photoLayout: 'stack' }));
   check('the agent API accepts photoLayout and stores it on the new draft', a1.status < 300 && a1.data.ok === true && q("SELECT photo_layout p, source FROM drafts WHERE source = 'agent'")[0]?.p === 'stack', `${a1.status} ${a1.text.slice(0, 200)}`);
   const a2 = await agentPost(agentStory({ photoLayout: 'filmstrip', sourceUrl: 'https://example.test/posts/2' }));
   check('...an unknown photoLayout is a 400 (bad_photo_layout) and creates no draft', a2.status === 400 && a2.data.error === 'bad_photo_layout' && q("SELECT COUNT(*) AS n FROM drafts WHERE source_url = 'https://example.test/posts/2'")[0].n === 0, `${a2.status} ${a2.text.slice(0, 200)}`);
   const a2b = await agentPost(agentStory({ photoLayout: 7, sourceUrl: 'https://example.test/posts/2' }));
   check('...a non-text photoLayout is a 400 too', a2b.status === 400 && a2b.data.error === 'bad_photo_layout', `${a2b.status}`);
-  const a3 = await agentPost(agentStory({ body: 'Synthetic text, edited by the agent.' }));
+  const a3 = await agentPost(agentStory({ body: 'Synthetic text, edited by the agent, with a neutral padding sentence.' }));
   check('...an update that leaves photoLayout out keeps the draft\'s layout', a3.status < 300 && a3.data.status === 'updated' && q("SELECT photo_layout p FROM drafts WHERE source = 'agent'")[0].p === 'stack', `${a3.status} ${a3.text.slice(0, 200)}`);
   const a4 = await agentPost(agentStory({ photoLayout: 'twoUp' }));
   check('...and one that sends it changes it', a4.status < 300 && q("SELECT photo_layout p FROM drafts WHERE source = 'agent'")[0].p === 'twoUp');
