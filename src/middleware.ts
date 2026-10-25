@@ -16,6 +16,9 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 // Reachable with no session. Invite links are exactly /admin/invite/<token> (one segment), so a
 // future /admin/invite page (an admin inviting an editor) stays behind sign-in.
+// Google / Microsoft sign-in start and return (GET only; the callback checks its own state cookie). Also reachable
+// with a half-signed-in session, like /admin/login, so a leftover one never blocks a new sign-in.
+const OAUTH_PATH = /^\/admin\/oauth\/(google|microsoft)(\/callback)?$/;
 const OPEN_PAGES = ['/admin/login'];
 const INVITE_PATH = /^\/admin\/invite\/[^/]+$/;
 // Reachable with a session that has passed the first factor but not 2FA yet. EXACT paths only: the
@@ -32,8 +35,8 @@ const MFA_API = [
 const OPEN_API = ['/api/admin/logout', '/api/admin/passkeys/login/options'];
 
 const isOpen = (kind: 'page' | 'api', path: string) =>
-  kind === 'page' ? OPEN_PAGES.includes(path) || INVITE_PATH.test(path) : OPEN_API.includes(path);
-const mfaPending = (kind: 'page' | 'api', path: string) => (kind === 'page' ? MFA_PAGES.includes(path) : MFA_API.includes(path));
+  kind === 'page' ? OPEN_PAGES.includes(path) || INVITE_PATH.test(path) || OAUTH_PATH.test(path) : OPEN_API.includes(path);
+const mfaPending = (kind: 'page' | 'api', path: string) => (kind === 'page' ? MFA_PAGES.includes(path) || OAUTH_PATH.test(path) : MFA_API.includes(path));
 
 function guardedKind(path: string): 'page' | 'api' | null {
   if (path === '/admin' || path.startsWith('/admin/')) return 'page';

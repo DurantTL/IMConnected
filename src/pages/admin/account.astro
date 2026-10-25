@@ -11,6 +11,7 @@ import { audit } from '../../lib/auth/audit';
 import { field, readForm } from '../../lib/auth/form';
 import { clientIp } from '../../lib/request';
 import { getDb } from '../../lib/db';
+import { PROVIDER_LABEL, isProvider, listLinks, otherFirstFactors } from '../../lib/auth/oauth';
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -117,6 +118,37 @@ if (Astro.request.method === 'POST') {
         Astro.response.status = 409;
       } else error = 'That passkey was not found.';
     }
+  } else if (action === 'oauth_unlink') {
+    // Check before spending a code: an unlink may never leave the account with no first-factor method.
+    const provider = field(form, 'provider', 20);
+    const link = isProvider(provider) ? listLinks(user.id).find((l) => l.provider === provider) : undefined;
+    if (!isProvider(provider) || !link) {
+      error = 'That linked account was not found.';
+      Astro.response.status = 404;
+    } else if (otherFirstFactors(user.id, provider, passkeysEnabled()) < 1) {
+      audit('auth.oauth_unlink_refused', { userId: user.id, ip, detail: { provider, reason: 'last_first_factor' } });
+      error = `You can’t unlink ${PROVIDER_LABEL[provider]}: it is your only way to sign in. Set a password or add a passkey first.`;
+      Astro.response.status = 409;
+    } else if (await fresh(form)) {
+      // Re-check in the delete itself (the factor check awaited), so a concurrent change can't leave no method.
+      db.exec('BEGIN IMMEDIATE');
+      let removed = false;
+      try {
+        if (otherFirstFactors(user.id, provider, passkeysEnabled()) >= 1) removed = Number(db.prepare('DELETE FROM oauth_accounts WHERE id = ? AND user_id = ?').run(link.id, user.id).changes) === 1;
+        db.exec('COMMIT');
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+      if (removed) {
+        audit('auth.oauth_unlinked', { userId: user.id, ip, detail: { provider } });
+        message = `${PROVIDER_LABEL[provider]} was unlinked.`;
+      } else {
+        audit('auth.oauth_unlink_refused', { userId: user.id, ip, detail: { provider, reason: 'last_first_factor' } });
+        error = `You can’t unlink ${PROVIDER_LABEL[provider]}: it is your only way to sign in.`;
+        Astro.response.status = 409;
+      }
+    }
   } else if (action === 'revoke') {
     // Sessions are named by the first 16 characters of their id, and only the user's own can match.
     const ref = field(form, 'ref', 40);
@@ -146,6 +178,7 @@ const remaining = remainingRecoveryCodes(user.id);
 const passkeyList = listPasskeys(user.id);
 const passkeysOn = passkeysEnabled();
 const hasPk = passkeyList.length > 0 && passkeysOn;
+const links = listLinks(user.id);
 const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 ---
 <Admin title="My account" current="account">
@@ -248,6 +281,32 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
           <p class="admin-note" data-passkey-unsupported hidden>This browser can’t use passkeys.</p>
         </form>
       )}
+    </section>
+  )}
+
+  {links.length > 0 && (
+    <section class="admin-card" aria-labelledby="oa">
+      <h2 id="oa">Linked sign-in accounts</h2>
+      <p class="admin-note">These accounts can sign you in as the first step. You still need your second step. Unlinking needs a fresh code or passkey, and you can’t unlink your only way to sign in.</p>
+      <ul class="session-list">
+        {links.map((l) => (
+          <li>
+            <div>
+              <strong>{PROVIDER_LABEL[l.provider]}</strong>
+              <span class="admin-note"> · linked {when(l.created_at)}</span>
+              <div class="admin-note">{l.email_at_link}</div>
+            </div>
+            <form method="post" action="/admin/account" class="passkey-inline" data-fresh-form data-has-passkeys={hasPk ? '' : undefined}>
+              <input type="hidden" name="action" value="oauth_unlink" />
+              <input type="hidden" name="provider" value={l.provider} />
+              <input type="hidden" name="assertion" value="" />
+              <label class="visually-hidden" for={`ul-${l.provider}`}>Authenticator or recovery code{hasPk ? ' (leave empty to use a passkey)' : ''}</label>
+              <input id={`ul-${l.provider}`} name="code" type="text" autocomplete="one-time-code" maxlength="40" required={!hasPk} placeholder={hasPk ? 'Code, or leave empty to use a passkey' : 'Authenticator or recovery code'} />
+              <button type="submit">Unlink</button>
+            </form>
+          </li>
+        ))}
+      </ul>
     </section>
   )}
 

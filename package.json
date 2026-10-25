@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "IMConnected \u2014 story magazine for the Iowa-Missouri Conference of Seventh-day Adventists",
+  "description": "IMConnected — story magazine for the Iowa-Missouri Conference of Seventh-day Adventists",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
@@ -19,6 +19,7 @@
     "@astrojs/node": "11.1.8",
     "@simplewebauthn/browser": "14.0.0",
     "@simplewebauthn/server": "14.0.2",
+    "arctic": "3.7.0",
     "astro": "7.4.0",
     "otpauth": "9.5.2",
     "qrcode": "1.5.4",

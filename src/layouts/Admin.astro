@@ -265,7 +265,9 @@ const crumb = trail || title;
   .session-list { list-style: none; padding: 0; margin: 0 0 8px; }
   .session-list li { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
   .session-list form button { margin-top: 0; }
-  .passkey-card { margin-top: 24px; }
+  .passkey-card, .admin-card.oauth-card { margin-top: 24px; }
+  .oauth-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  .oauth-button { display: block; text-align: center; }
   .passkey-inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 100%; }
   .passkey-inline input { flex: 1 1 200px; min-width: 0; padding: 8px 10px; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
   .passkey-inline button { margin-top: 0; padding: 8px 14px; font: inherit; font-weight: 600; border: 0; border-radius: 8px; background: var(--brand); color: var(--brand-ink); cursor: pointer; }
