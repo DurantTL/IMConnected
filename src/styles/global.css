@@ -451,7 +451,7 @@ body:not(.admin) .topic-directory-label { font-family:var(--serif); font-size:1.
 body:not(.admin) .topic-directory>a { text-decoration:none; border-left:1px solid var(--line); display:grid; gap:5px; padding:3px 18px; min-height:44px; font-size:.8rem; font-weight:700; }
 body:not(.admin) .topic-directory>a:hover>span:first-child { text-decoration:underline; text-underline-offset:4px; }
 body:not(.admin) .topic-count { display:flex; justify-content:space-between; gap:8px; color:var(--ink-3); font-size:.65rem; font-weight:500; }
-body:not(.admin) .block { padding-top:var(--home-gap); padding-bottom:0; }
+body:not(.admin) .block { padding-top:48px; }
 body:not(.admin) .block-head { border-top:0; padding:0; align-items:end; margin-bottom:24px; }
 body:not(.admin) .block-head h2 { font-size:clamp(1.6rem,2.8vw,2.1rem); letter-spacing:-.035em; font-weight:600; }
 body:not(.admin) .block-head p:not(.eyebrow) { max-width:52ch; font-size:.83rem; }
@@ -597,6 +597,7 @@ html body:not(.admin) .spotlight-heading .eyebrow { font-size:.875rem; font-weig
 @media (min-width: 621px) { .magazine-home { --home-gap: 56px; } }
 body:not(.admin) .magazine-home .hero { padding-top: 20px; }
 body:not(.admin) .magazine-home .cta { margin-top: var(--home-gap); }
+body:not(.admin) .magazine-home .block { padding-top: var(--home-gap); padding-bottom: 0; }
 /* "Read the story" and the other home read links: sentence case, 15px, no tracking. Focus draws on the whole link (.featured-link, .card). */
 html body:not(.admin) .magazine-home .card-read { text-transform: none; letter-spacing: 0; font-size: .9375rem; }
 html body:not(.admin) .magazine-home .home-news-heading > a,
@@ -608,14 +609,13 @@ html body:not(.admin) .magazine-home .block-head a.more { font-size: .9375rem; }
   body:not(.admin) .home-intro > .home-intro-note { grid-area:note; }
   body:not(.admin) .home-intro > .home-intro-meta { grid-area:meta; }
 }
-@media (min-width: 861px) { body:not(.admin) .featured-link:not(.without-photo) .featured-copy { justify-content: flex-start; padding-top: 24px; } }
+@media (min-width: 861px) { body:not(.admin) .featured-link:not(.without-photo) .featured-copy { justify-content: flex-start; padding-top: 12px; } }
 /* Section rails on a phone: the first card stays whole; the others are compact rows (title, byline and date, a thumbnail of 96px at most on the right, no summary). The whole row is the link. */
-@media (max-width: 619px) {
+@media (max-width: 620px) {
   body:not(.admin) .home-rail { gap: 0; }
   body:not(.admin) .home-rail .card.default:not(:first-child) { flex-direction: row-reverse; align-items: flex-start; gap: 14px; min-height: 44px; padding: 12px 0; background: none; border: 0; border-top: 1px solid var(--line); border-radius: 0; overflow: visible; }
   body:not(.admin) .home-rail .card.default:first-child { margin-bottom: 4px; }
   body:not(.admin) .home-rail .card.default:not(:first-child) .media { flex: 0 0 96px; width: 96px; aspect-ratio: 1; border-radius: 3px; }
-  body:not(.admin) .home-rail .card.default.without-photo:not(:first-child) .media { display: none; }
   body:not(.admin) .home-rail .card.default:not(:first-child) .card-copy { padding: 0; gap: 4px; flex: 1; min-width: 0; }
   body:not(.admin) .home-rail .card.default:not(:first-child) .kicker,
   body:not(.admin) .home-rail .card.default:not(:first-child) p.dek { display: none; }
@@ -683,12 +683,12 @@ body:not(.admin) .footer-statement .btn { color:#0B3954; background:#2DD4BF; }
 .spotlight-symbol span { font:600 2.1rem/1.1 var(--serif); }
 .spotlight-navigation { max-width:var(--wrap); margin:auto; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:8px 16px; padding:0 var(--gutter) 6px; position:relative; }
 .spotlight-navigation[hidden] { display:none; }
-/* Issue #161: from 1200px the numbered choices share the heading row (the row is already 56px tall), so the band has no controls row of its own. */
+/* Issue #161: from 1200px the numbered choices sit on the bottom row of the band, to the right of the first slide's Explore button, so the band needs no controls row of its own.
+   They stay after the track in the DOM, so Tab order and visual order agree (controls, track and its links, then the choices). */
 @media (min-width:1200px) {
-  .event-spotlight { display:grid; grid-template-columns:minmax(0,1fr); }
-  .event-spotlight > .spotlight-heading { grid-row:1; grid-column:1; width:100%; box-sizing:border-box; }
-  .event-spotlight > .spotlight-track { grid-row:2; grid-column:1; }
-  .event-spotlight > .spotlight-navigation { grid-row:1; grid-column:1; justify-self:center; align-self:center; width:auto; margin:0; padding:0; }
+  .event-spotlight { position:relative; }
+  .event-spotlight > .spotlight-navigation { position:absolute; left:calc(max(var(--gutter),(100vw - var(--wrap))/2 + var(--gutter)) + 224px); bottom:18px; width:auto; max-width:none; margin:0; padding:0; z-index:1; }
+  .event-spotlight + .magazine-home .featured-panel:first-child { margin-top:48px; }
 }
 .spotlight-choices { display:flex; flex-wrap:wrap; gap:8px; }
 .spotlight-choices button { min-width:44px; min-height:44px; border:0; border-bottom:3px solid #799dac; background:transparent; color:#E0F5F7; font:600 .8rem/1 var(--sans); cursor:pointer; }

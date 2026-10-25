@@ -43,7 +43,7 @@ Below the story blocks and above the submit call to action, "From the archive" (
 - The intro's counts line and "Latest issue" line share one meta line (`.home-intro-meta`) and wrap on a phone (intro 183px at 390px). From 861px the tagline note takes a right-hand column.
 - One spacing scale between home blocks, set by `--home-gap` on `.magazine-home`: 32px on a phone, 56px from 621px. Each block carries its own top space, so a hidden, reordered or empty block leaves no gap.
 - Home eyebrows keep their words and read as sentence-case labels at 14px with no tracking in the muted ink colour. The featured panel has one kicker, "Featured story · <section label>"; "Read the story" and similar links are sentence case at 15px.
-- Under 620px each section rail keeps its first card whole; the others are compact rows (title, byline and date, a 96px thumbnail on the right, no summary) that are one link at least 44px tall.
+- At 620px and narrower each section rail keeps its first card whole; the others are compact rows (title, byline and date, a 96px thumbnail on the right, no summary) that are one link at least 44px tall.
 - The decorative numbers beside the "From around our conference" list are gone (the list is still an `<ol>`). Stories without a photo are text only (issue #162).
 
 ## Section and area pages (issue #162)
