@@ -181,7 +181,7 @@ try {
   r = await list('kind=all&status=all&perPage=100');
   check('/admin?kind=all: the Published card counts every type and opens the whole list', />\s*<strong>9<\/strong>\s*<span class="adm-stat-note">Live on the site/.test(r.text) && r.text.includes('href="/admin/published"'));
   check('the draft status filters are unchanged: status=published is still the drafts table, not the live stories', sameSet((await list('kind=all&status=published&perPage=100')).ids, ids(D.filter((d) => d.status === 'published'))));
-  check('Newest published heading links to the published list for stories', (await get('/admin')).text.includes('<h2 id="home-pub"><a href="/admin/published?kind=story">Newest published</a></h2>'));
+  check('Newest published heading links to the whole published list (the panel shows every type)', (await get('/admin')).text.includes('<h2 id="home-pub"><a class="adm-head-link" href="/admin/published">Newest published</a></h2>'));
 
   // ---- section, source, issue, dates ----
   const base = 'kind=all&status=all&perPage=100';

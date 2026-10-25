@@ -118,3 +118,6 @@
 
 .adm-summary > a, .adm-perpage a, .adm-empty a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
 .adm-perpage a { min-width: 44px; justify-content: center; }
+
+/* A heading that is also a link ("Newest published") keeps a 44px tap target. */
+.adm-head-link { display: inline-flex; align-items: center; min-height: 44px; color: inherit; text-underline-offset: 3px; }

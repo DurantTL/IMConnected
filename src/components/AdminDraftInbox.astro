@@ -31,8 +31,9 @@ const newKind = kind === 'all' ? 'story' : kind;
 const counts = countDraftsByStatus(kind);
 // The Published card (issue #164): live items of this page's type; it opens the published list, it is not a draft status.
 const livePublishedKind = kind === 'all' ? 'all' : kind;
-let publishedLive = 0;
-try { publishedLive = publishedKindCounts()[livePublishedKind]; } catch { publishedLive = 0; }
+// null when the stories table can't be read: the card shows a dash, never a false 0.
+let publishedLive: number | null = null;
+try { publishedLive = publishedKindCounts()[livePublishedKind]; } catch { publishedLive = null; }
 const publishedLink = livePublishedKind === 'all' ? '/admin/published' : `/admin/published?kind=${livePublishedKind}`;
 const issues = listIssues();
 const issueKnown = !f.issue || f.issue === 'none' || issues.some((i) => String(i.number) === f.issue);
@@ -107,9 +108,9 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
         </li>
       ))}
       <li>
-        <a class="adm-stat" href={publishedLink} aria-label={`Published, ${publishedLive}, live on the site`}>
+        <a class="adm-stat" href={publishedLink} aria-label={publishedLive === null ? 'Published, count unavailable, live on the site' : `Published, ${publishedLive}, live on the site`}>
           <span class="adm-stat-label">Published</span>
-          <strong>{publishedLive}</strong>
+          <strong>{publishedLive ?? '–'}</strong>
           <span class="adm-stat-note">Live on the site</span>
         </a>
       </li>
@@ -136,7 +137,7 @@ const homeBadge = (st: string) => (st === 'published' ? 'live' : st === 'rejecte
       )}
     </section>
     <section class="admin-card" aria-labelledby="home-pub">
-      <h2 id="home-pub"><a href="/admin/published?kind=story">Newest published</a></h2>
+      <h2 id="home-pub"><a class="adm-head-link" href="/admin/published">Newest published</a></h2>
       {recentPublished.length === 0 ? <p class="admin-note">Nothing published yet.</p> : (
         <ul>
           {recentPublished.map((d) => (
