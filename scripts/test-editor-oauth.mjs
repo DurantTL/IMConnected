@@ -27,6 +27,13 @@ const BASE2 = `http://localhost:${PORT2}`;
 const BASE3 = `http://localhost:${PORT3}`;
 const OIDC = `http://localhost:${OIDC_PORT}`;
 const DB_FILE = path.join(DATA_DIR, 'imconnected.db');
+// Must match scripts/mock-oidc.mjs. They contain +, space, % and : on purpose: the client sends them form-urlencoded in a Basic header
+// (RFC 6749 2.3.1) and the mock refuses anything else, so an encoding regression breaks every sign-in here.
+const G_ID = 'mock google+client:id%1';
+const G_SECRET = 'mock+google secret:%s/x';
+const M_ID = 'mock ms+client:id%2';
+const M_SECRET = 'mock+ms secret:%s/y';
+const leaks = (text) => [G_SECRET, M_SECRET].some((x) => [x, encodeURIComponent(x), new URLSearchParams({ v: x }).toString().slice(2), Buffer.from(x).toString('base64')].some((f) => text.includes(f))) || /mock-access|id_token/.test(text);
 const TENANT = '11111111-2222-4333-8444-555555555555';
 const OTHER_TENANT = '99999999-8888-4777-8666-555555555555';
 const OID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -137,8 +144,8 @@ const pre = { users: count('SELECT COUNT(*) n FROM users') };
 
 const baseEnv = {
   DATA_DIR, HOST: '127.0.0.1', AUTH_SECRET: 'e2e-oauth-secret-0123456789abcdefghijkl', TRUST_PROXY: 'true', NODE_ENV: 'production',
-  GOOGLE_CLIENT_ID: 'mock-google-client', GOOGLE_CLIENT_SECRET: 'mock-google-secret',
-  MICROSOFT_CLIENT_ID: 'mock-ms-client', MICROSOFT_CLIENT_SECRET: 'mock-ms-secret',
+  GOOGLE_CLIENT_ID: G_ID, GOOGLE_CLIENT_SECRET: G_SECRET,
+  MICROSOFT_CLIENT_ID: M_ID, MICROSOFT_CLIENT_SECRET: M_SECRET,
   OAUTH_GOOGLE_AUTH_URL: `${OIDC}/google/authorize`, OAUTH_GOOGLE_TOKEN_URL: `${OIDC}/google/token`, OAUTH_GOOGLE_ISSUER: `${OIDC}/google`,
   OAUTH_MICROSOFT_AUTH_URL: `${OIDC}/microsoft/authorize`, OAUTH_MICROSOFT_TOKEN_URL: `${OIDC}/microsoft/token`, OAUTH_MICROSOFT_ISSUER: `${OIDC}/microsoft`,
 };
@@ -173,6 +180,17 @@ async function signIn(client, provider, identity, { tamper, keepCookie = true } 
   if (!keepCookie) Object.assign(client.jar, { '__Host-imc_oauth': saved['__Host-imc_oauth'] });
   return { start, cb, back, auth };
 }
+/** An active editor links a provider from My account: POST (with a code) -> provider -> callback. Returns what each step answered. */
+async function linkStart(client, provider, identity, code) {
+  await setIdentity(identity);
+  const st = await client.post('/admin/account', { action: 'oauth_link', provider, code });
+  if (st.status !== 303 || !st.loc?.startsWith(OIDC)) return { st };
+  const auth = await fetch(st.loc, { redirect: 'manual' });
+  const back = new URL(auth.headers.get('location'));
+  if (back.searchParams.get('code')) seenCodes.push(back.searchParams.get('code'));
+  return { st, back, cookie: client.jar['__Host-imc_oauth'] };
+}
+const finishLink = (client, back) => client.get(back.pathname + back.search);
 const audits = (action) => q('SELECT * FROM audit_log WHERE action = ?', action);
 const lastFailReason = () => JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'auth.oauth_failed' ORDER BY id DESC LIMIT 1")[0].detail).reason;
 const oauthRows = () => count('SELECT COUNT(*) n FROM oauth_accounts');
@@ -183,7 +201,7 @@ try {
   // ---- configuration and the login page ----
   check('startup warns about test-only endpoint overrides under NODE_ENV=production (with OAUTH_TEST_ENDPOINTS=1)', /\[oauth\] WARNING: .*OAUTH_GOOGLE_AUTH_URL.*OAUTH_TEST_ENDPOINTS=1/.test(logs[1]), logs[1].slice(0, 300));
   check('without OAUTH_TEST_ENDPOINTS=1 the overrides are ignored, and the startup log says so', /\[oauth\] WARNING: .*OAUTH_GOOGLE_AUTH_URL.*ignored/.test(logs[2]), logs[2].slice(0, 300));
-  check('a non-GUID MICROSOFT_TENANT_ID switches Microsoft off with one startup note (no secret in it)', /Microsoft sign-in is OFF/.test(logs[2]) && !/mock-ms-secret/.test(logs[2]));
+  check('a non-GUID MICROSOFT_TENANT_ID switches Microsoft off with one startup note (no secret in it)', /Microsoft sign-in is OFF/.test(logs[2]) && !leaks(logs[2]));
   const s2 = new Client('10.8.1.3', BASE2);
   r = await s2.get('/admin/login');
   check('server 2: Google button yes, Microsoft button no (tenant "organizations")', r.text.includes('href="/admin/oauth/google"') && !r.text.includes('/admin/oauth/microsoft'));
@@ -208,9 +226,9 @@ try {
   const authUrl = new URL(st.loc);
   const oc = flow.setCookies.find((c) => c.startsWith('__Host-imc_oauth='));
   check('start redirects to the provider with PKCE S256, state, nonce and scope "openid email profile"',
-    st.status === 303 && authUrl.searchParams.get('code_challenge_method') === 'S256' && !!authUrl.searchParams.get('code_challenge') && authUrl.searchParams.get('state')?.length >= 32 && !!authUrl.searchParams.get('nonce') && authUrl.searchParams.get('scope') === 'openid email profile' && authUrl.searchParams.get('redirect_uri') === `${BASE}/admin/oauth/google/callback`, st.loc);
+    st.status === 303 && authUrl.searchParams.get('code_challenge_method') === 'S256' && !!authUrl.searchParams.get('code_challenge') && authUrl.searchParams.get('state')?.length >= 32 && !!authUrl.searchParams.get('nonce') && authUrl.searchParams.get('scope') === 'openid email profile' && authUrl.searchParams.get('redirect_uri') === `${BASE}/admin/oauth/google/callback` && authUrl.searchParams.get('client_id') === G_ID && authUrl.searchParams.get('prompt') === 'select_account', st.loc);
   check('state cookie: __Host- name, HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age=600, no Domain', !!oc && /HttpOnly/i.test(oc) && /Secure/i.test(oc) && /SameSite=Lax/i.test(oc) && /Path=\//i.test(oc) && /Max-Age=600/i.test(oc) && !/Domain=/i.test(oc), oc);
-  check('the authorization URL carries no client secret and the cookie does not hold it', !st.loc.includes('mock-google-secret') && !Buffer.from(flow.jar['__Host-imc_oauth'], 'base64url').toString().includes('mock-google-secret'));
+  check('the authorization URL carries no client secret and the cookie does not hold it', !leaks(st.loc) && !leaks(Buffer.from(flow.jar['__Host-imc_oauth'], 'base64url').toString()));
 
   // ---- invited email -> account activated, linked, enrollment, no dashboard without a second factor ----
   const ivy = new Client('10.8.3.1');
@@ -319,6 +337,15 @@ try {
     check(`${label} is rejected`, res.cb.loc === '/admin/login?oauth=failed' && lastFailReason() === 'claims_claims' && !c6.hasSession(), `${res.cb.loc} ${lastFailReason()}`);
   }
 
+  // a misbehaving token endpoint fails closed: reason code `exchange`, no session, no secret anywhere (checked by the log checks below)
+  const tk = new Client('10.8.4.8');
+  for (const [mode, label] of [['redirect', 'a redirect from the token endpoint'], ['big', 'an oversized token response (Content-Length over 100 KB)'], ['big_chunked', 'an oversized token response with no Content-Length (running byte count)']]) {
+    res = await signIn(tk, 'google', googleId(TAMPER, { token_mode: mode }));
+    check(`${label} fails closed`, res.cb.loc === '/admin/login?oauth=failed' && lastFailReason() === 'exchange' && !tk.hasSession(), `${res.cb.loc} ${lastFailReason()}`);
+  }
+  const t0 = Date.now();
+  res = await signIn(tk, 'google', googleId(TAMPER, { token_mode: 'slow' }));
+  check('a token response that does not finish within 10 s fails closed (timeout)', res.cb.loc === '/admin/login?oauth=failed' && lastFailReason() === 'exchange' && !tk.hasSession() && Date.now() - t0 < 12_500 && Date.now() - t0 >= 9_000, `${res.cb.loc} ${Date.now() - t0}ms`);
   // disabled editor with a link
   run('INSERT INTO oauth_accounts (provider, provider_user_id, user_id, email_at_link, created_at) VALUES (?, ?, ?, ?, ?)', 'google', 'g-disabled', disabledId, DISABLED, Date.now());
   const c7 = new Client('10.8.4.7');
@@ -359,31 +386,47 @@ try {
   }
   const g2 = new Client('10.8.5.4');
   res = await signIn(g2, 'google', googleId(INVITEE, { sub: 'g-a-second-ivy-account' }));
-  check('a second Google account with an already-linked editor\'s email is not matched', res.cb.loc === '/admin/login?oauth=no_account' && lastFailReason() === 'no_match' && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ? AND provider = 'google'", ivyRow.id) === 1 && !g2.hasSession());
+  check('an ACTIVE editor with a matching verified email but no link for that account is not matched (email matching is for invites only)', res.cb.loc === '/admin/login?oauth=no_account' && lastFailReason() === 'no_match' && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ? AND provider = 'google'", ivyRow.id) === 1 && !g2.hasSession());
 
   // ---- My account: linked providers and unlinking ----
   const acc = new Client('10.8.6.1');
   await signIn(acc, 'google', googleId(INVITEE)); // Ivy: linked to Google, authenticator enrolled, no password, no passkey
   r = await acc.post('/admin/2fa', { code: recovery[0] });
   check('(setup) Ivy signs in with Google plus a recovery code', r.status === 303 && r.loc === '/admin');
+  const startedBefore = audits('auth.oauth_started').length;
+  const sessionBefore = acc.jar['__Host-imc_session'];
+  r = await acc.get('/admin/oauth/google');
+  check('L1: the sign-in start link redirects a fully signed-in editor to /admin without touching the session or starting a flow', r.status === 303 && r.loc === '/admin' && acc.jar['__Host-imc_session'] === sessionBefore && !('__Host-imc_oauth' in acc.jar) && audits('auth.oauth_started').length === startedBefore, `${r.status} ${r.loc}`);
   r = await acc.get('/admin/account');
-  check('My account lists the linked provider with an Unlink button', r.text.includes('Linked sign-in accounts') && r.text.includes('Google') && r.text.includes('value="oauth_unlink"') && !r.text.includes('Microsoft 365</strong>'));
+  check('My account offers "Link Microsoft 365 account" for a provider that is not linked, and no Link button for the linked one', r.text.includes('Link Microsoft 365 account') && !r.text.includes('Link Google account'));
+  check('My account lists the linked provider with an Unlink button', r.text.includes('Linked sign-in accounts') && r.text.includes('Google') && r.text.includes('value="oauth_unlink"'));
   r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'google', code: recovery[1] });
   check('unlinking the only first-factor method is refused (and no code is spent)', r.status === 409 && /only way to sign in/.test(r.error) && count("SELECT COUNT(*) n FROM oauth_accounts WHERE provider = 'google' AND user_id = ?", ivyRow.id) === 1, `${r.status} ${r.error}`);
   check('...the refusal is audited', audits('auth.oauth_unlink_refused').length === 1);
-  // give Ivy a second provider by signing in with Microsoft using her email (specific tenant, preferred_username)
-  const ivyMs = new Client('10.8.6.2');
-  await signIn(ivyMs, 'microsoft', { tid: TENANT, oid: 'ffffffff-0000-4111-8222-333333333333', email: INVITEE });
-  check('(setup) a second provider links to the same active editor by verified email', count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?", ivyRow.id) === 2);
+  // Ivy links Microsoft herself from My account: a fresh factor and her full session. The provider email need not match her account email.
+  const IVY_MS = { tid: TENANT, oid: 'ffffffff-0000-4111-8222-333333333333', email: 'ivy.at.work@example.test' };
+  let lk = await linkStart(acc, 'microsoft', IVY_MS, '');
+  check('linking needs a fresh second factor: with no code nothing starts and no cookie is set', lk.st.status === 401 && !('__Host-imc_oauth' in acc.jar) && count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', ivyRow.id) === 1, `${lk.st.status}`);
+  lk = await linkStart(acc, 'microsoft', IVY_MS, '12345678');
+  check('...and a wrong code starts nothing either', lk.st.status === 401 && !('__Host-imc_oauth' in acc.jar));
+  lk = await linkStart(acc, 'microsoft', IVY_MS, recovery[1]);
+  const lkc = lk.cookie ? JSON.parse(Buffer.from(lk.cookie, 'base64url').toString()) : {};
+  check('with a fresh recovery code the flow starts: a link-intent cookie bound to her user id and the provider', lk.st.status === 303 && lkc.i === 'link' && lkc.u === ivyRow.id && lkc.p === 'microsoft', JSON.stringify(lkc));
+  const sessionBeforeLink = acc.jar['__Host-imc_session'];
+  const lcb = await finishLink(acc, lk.back);
+  check('the callback links the account and returns to My account; the session is unchanged', lcb.status === 303 && lcb.loc === '/admin/account?oauth=linked' && acc.jar['__Host-imc_session'] === sessionBeforeLink && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ? AND provider = 'microsoft' AND email_at_link = 'ivy.at.work@example.test'", ivyRow.id) === 1, `${lcb.status} ${lcb.loc}`);
+  const linkAudit = q("SELECT user_id, detail FROM audit_log WHERE action = 'auth.oauth_linked' ORDER BY id DESC LIMIT 1")[0];
+  check('...audited with the editor as actor (via account), and the page shows the notice', linkAudit.user_id === ivyRow.id && /account/.test(linkAudit.detail) && /Account linked/.test((await acc.get('/admin/account?oauth=linked')).ok));
   r = await acc.get('/admin/account');
   check('My account lists both providers', r.text.includes('Google') && r.text.includes('Microsoft 365'));
   r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'google', code: '' });
   check('unlinking without a fresh second factor is refused', r.status === 401 && count("SELECT COUNT(*) n FROM oauth_accounts WHERE provider = 'google' AND user_id = ?", ivyRow.id) === 1, `${r.status} ${r.error}`);
   r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'google', code: '12345678' });
   check('unlinking with a wrong code is refused', r.status === 401 && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?", ivyRow.id) === 2);
+  run('DELETE FROM login_attempts'); // the wrong-code checks above count toward the account lockout (5); start the next checks clean
   r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'github', code: recovery[1] });
   check('an unknown provider is refused', r.status === 404);
-  r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'google', code: recovery[1] });
+  r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'google', code: recovery[2] });
   check('with a fresh recovery code and another provider left, unlink works', r.status === 200 && /unlinked/.test(r.ok) && count("SELECT COUNT(*) n FROM oauth_accounts WHERE provider = 'google' AND user_id = ?", ivyRow.id) === 0, `${r.status} ${r.error} ${r.ok}`);
   r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'microsoft', code: recovery[2] });
   check('...and the last remaining provider can then not be unlinked', r.status === 409 && count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', ivyRow.id) === 1);
@@ -401,14 +444,14 @@ try {
   check('set a password: the existing password rules apply', r.error !== '' && count('SELECT COUNT(*) n FROM password_credentials WHERE user_id = ?', ivyRow.id) === 0, r.error);
   r = await acc.post('/admin/account', { action: 'password_set', next: GOOD, confirm: GOOD, code: '' });
   check('set a password: needs a fresh second factor', r.status === 401 && count('SELECT COUNT(*) n FROM password_credentials WHERE user_id = ?', ivyRow.id) === 0, `${r.status} ${r.error}`);
-  r = await acc.post('/admin/account', { action: 'password_set', next: GOOD, confirm: GOOD, code: recovery[2] });
+  r = await acc.post('/admin/account', { action: 'password_set', next: GOOD, confirm: GOOD, code: recovery[3] });
   check('set a password: works with a fresh recovery code, audited', r.status === 200 && /Password set/.test(r.ok) && count('SELECT COUNT(*) n FROM password_credentials WHERE user_id = ?', ivyRow.id) === 1 && audits('auth.password_set').length === 1, `${r.status} ${r.error} ${r.ok}`);
   r = await acc.get('/admin/account');
   check('...the page now offers Change password instead', r.text.includes('<h2 id="pw">Change password</h2>') && !r.text.includes('<h2 id="pws">'));
   const pw = new Client('10.8.6.4');
   r = await pw.post('/admin/login', { email: INVITEE, password: GOOD });
   check('...and the new password signs in (first step)', r.status === 303 && r.loc === '/admin/2fa', `${r.status} ${r.loc}`);
-  r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'microsoft', code: recovery[3] });
+  r = await acc.post('/admin/account', { action: 'oauth_unlink', provider: 'microsoft', code: recovery[4] });
   check('with a password set, the last provider can now be unlinked', r.status === 200 && /unlinked/.test(r.ok) && count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', ivyRow.id) === 0, `${r.status} ${r.error} ${r.ok}`);
 
   // ---- administrators: see and remove links; 2FA reset clears them ----
@@ -417,10 +460,45 @@ try {
   r = await alice.get('/admin/2fa/setup');
   const aSecret = (/class="totp-secret[^>]*>([^<]+)</.exec(r.text) || [])[1]?.replace(/\s/g, '');
   r = await alice.post('/admin/2fa/setup', { code: totp(aSecret) });
+  const aRecovery = [...r.text.matchAll(/<code>([A-Z0-9-]+)<\/code>/g)].map((m) => m[1]);
   check('(setup) an administrator invited through Google enrolls an authenticator', res.cb.loc === '/admin/2fa/setup' && (await alice.get('/admin/editors')).status === 200);
   r = await alice.get('/admin/editors');
   check('Editors lists linked providers with the date and an Unlink action (admin)', /Linked sign-in: Microsoft 365 \(since \d{4}-\d\d-\d\d\)/.test(unesc(r.text)) && r.text.includes('Unlink Microsoft 365') && r.text.includes('Unlink Google'));
   const orlaId = q('SELECT id FROM users WHERE email = ?', ORGUSER)[0].id;
+  const aliceRow = q('SELECT id FROM users WHERE email = ?', ADMINU)[0];
+  // Linking from My account: a subject that already belongs to another editor is refused, a free one is linked, a linked provider can't be started again.
+  const rowsBeforeTaken = oauthRows();
+  lk = await linkStart(alice, 'microsoft', { tid: TENANT, oid: OID, email: 'someone@example.test' }, aRecovery[0]); // OID is Mo's subject
+  const taken = await finishLink(alice, lk.back);
+  check('linking a subject that is already linked to another editor is refused, nothing created', taken.loc === '/admin/account?oauth=taken' && oauthRows() === rowsBeforeTaken && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ? AND provider = 'microsoft'", aliceRow.id) === 0, `${taken.loc}`);
+  check('...with generic text on the page', /can’t be linked/.test((await alice.get('/admin/account?oauth=taken')).error));
+  lk = await linkStart(alice, 'microsoft', { tid: TENANT, oid: 'cccccccc-0000-4111-8222-444444444444', email: 'alice.work@example.test' }, aRecovery[1]);
+  const aliceSession = alice.jar['__Host-imc_session'];
+  const okLink = await finishLink(alice, lk.back);
+  check('an administrator links a free Microsoft account from My account; the session is unchanged', okLink.loc === '/admin/account?oauth=linked' && alice.jar['__Host-imc_session'] === aliceSession && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ? AND provider = 'microsoft'", aliceRow.id) === 1, `${okLink.loc}`);
+  r = await alice.post('/admin/account', { action: 'oauth_link', provider: 'microsoft', code: aRecovery[2] });
+  check('starting a link for a provider that is already linked is refused (409), no code spent', r.status === 409 && !('__Host-imc_oauth' in alice.jar));
+  r = await alice.post('/admin/account', { action: 'oauth_link', provider: 'github', code: aRecovery[2] });
+  check('an unknown provider cannot be linked', r.status === 404);
+
+  // A link-intent cookie cannot be used by another session or user, or with no session.
+  lk = await linkStart(acc, 'google', googleId('ivy.google.two@example.test', { sub: 'g-ivy-two' }), recovery[5]);
+  const rowsBeforeReplay = oauthRows();
+  alice.jar['__Host-imc_oauth'] = lk.cookie; // another fully signed-in editor replays Ivy's cookie and callback URL
+  const byAlice = await finishLink(alice, lk.back);
+  check('a link cookie replayed by another signed-in editor links nothing', byAlice.loc === '/admin/account?oauth=failed' && oauthRows() === rowsBeforeReplay && !('__Host-imc_oauth' in alice.jar), `${byAlice.loc}`);
+  check('...and the refusal is audited', JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'auth.oauth_failed' ORDER BY id DESC LIMIT 1")[0].detail).reason === 'link_session');
+  const nobody = new Client('10.8.6.6');
+  nobody.jar['__Host-imc_oauth'] = lk.cookie;
+  const byNobody = await finishLink(nobody, lk.back);
+  check('a link cookie replayed with no session links nothing and creates no session', byNobody.loc === '/admin/login?oauth=failed' && oauthRows() === rowsBeforeReplay && !nobody.hasSession(), `${byNobody.loc}`);
+  const mid = new Client('10.8.6.7'); // a half-signed-in session (first factor only) is not enough either
+  await signIn(mid, 'google', googleId(TAMPER)); // TAMPER is linked: first factor only, mfa_passed = 0
+  mid.jar['__Host-imc_oauth'] = lk.cookie;
+  const byMid = await finishLink(mid, lk.back);
+  check('...nor a session that has not passed 2FA', oauthRows() === rowsBeforeReplay && byMid.loc.startsWith('/admin/login?oauth='), `${byMid.loc}`);
+  const own = await finishLink(acc, lk.back);
+  check('Ivy\'s own callback still works afterwards (the genuine one)', own.loc === '/admin/account?oauth=linked' && oauthRows() === rowsBeforeReplay + 1, `${own.loc}`);
   run("UPDATE users SET role = 'editor' WHERE id = ?", ivyRow.id); // create-admin.mjs made Ivy an administrator; from here on she is an ordinary editor
   r = await acc.post('/admin/editors', { action: 'oauth_unlink', id: String(orlaId), provider: 'microsoft' });
   check('an editor (not an admin) cannot unlink anyone else', r.status === 403 && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?", orlaId) === 1, String(r.status));
@@ -429,12 +507,20 @@ try {
   check('an administrator unlinks it (fresh sign-in covers the factor), audited with the actor', r.status === 200 && /Linked account removed/.test(r.ok) && count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', orlaId) === 0 && ul.user_id === adminId && ul.target === `user:${orlaId}` && /admin/.test(ul.detail), `${r.status} ${r.error} ${r.ok}`);
   r = await alice.post('/admin/editors', { action: 'oauth_unlink', id: String(orlaId), provider: 'microsoft' });
   check('unlinking a link that is not there is a 404', r.status === 404);
+  const rowsBeforeOrla = oauthRows();
+  const orla2 = new Client('10.8.6.8');
+  res = await signIn(orla2, 'microsoft', { tid: TENANT, oid: OID.replace('eeee', 'dddd'), email: ORGUSER });
+  check('after an admin unlink, the same provider identity signing in again gets no_account and creates nothing', res.cb.loc === '/admin/login?oauth=no_account' && lastFailReason() === 'no_match' && oauthRows() === rowsBeforeOrla && !orla2.hasSession(), `${res.cb.loc} ${lastFailReason()}`);
   const moId = q('SELECT id FROM users WHERE email = ?', MSONLY)[0].id;
   check('(setup) another editor has a link and a session', count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', moId) === 1 && count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', moId) >= 1);
   r = await alice.post('/admin/editors', { action: 'reset2fa', id: String(moId) });
   const rz = q("SELECT detail FROM audit_log WHERE action = 'admin.reset_2fa' ORDER BY id DESC LIMIT 1")[0];
   check('Reset two-step sign-in also removes that editor\'s linked accounts (same transaction, audited)', r.status === 200 && count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', moId) === 0 && count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', moId) === 0 && JSON.parse(rz.detail).oauthLinks === 1, `${r.status} ${r.error} ${rz.detail}`);
   r = await alice.get('/admin/editors');
+  const mo2 = new Client('10.8.6.9');
+  const rowsBeforeMo = oauthRows();
+  res = await signIn(mo2, 'microsoft', { tid: TENANT, oid: OID, email: MSONLY });
+  check('after Reset two-step sign-in, the same provider identity gets no_account and creates nothing (no hand-over to enrollment)', res.cb.loc === '/admin/login?oauth=no_account' && oauthRows() === rowsBeforeMo && !mo2.hasSession() && count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', moId) === 0, `${res.cb.loc}`);
   check('...and the reset confirmation text says so', /any linked Google or Microsoft 365 account/.test(unesc(r.text)));
 
   // ---- rate limiting and flooding ----
@@ -494,8 +580,8 @@ try {
   // ---- audit ----
   check('links, sign-ins and failures are audited', audits('auth.oauth_linked').length >= 4 && audits('auth.oauth_login').length >= 4 && audits('auth.oauth_failed').length >= 10 && audits('auth.oauth_unlinked').length === 3 && audits('auth.oauth_started').length >= 5);
   const allAudit = JSON.stringify(q('SELECT action, target, detail FROM audit_log'));
-  check('no token, authorization code, secret or address of a stranger in the audit log', !/mock-access|mock-google-secret|mock-ms-secret|code_verifier|id_token|stranger\.person/.test(allAudit) && seenCodes.length > 20 && !seenCodes.some((c) => allAudit.includes(c)), String(seenCodes.length));
-  check('no token, authorization code, secret or stranger address in any server log', !/mock-access|mock-google-secret|mock-ms-secret|id_token|stranger\.person/.test(serverLog()) && !seenCodes.some((c) => serverLog().includes(c)));
+  check('no token, authorization code, secret or address of a stranger in the audit log', !leaks(allAudit) && !/code_verifier|stranger\.person/.test(allAudit) && seenCodes.length > 20 && !seenCodes.some((c) => allAudit.includes(c)), String(seenCodes.length));
+  check('no token, authorization code, secret or stranger address in any server log', !leaks(serverLog()) && !/stranger\.person/.test(serverLog()) && !seenCodes.some((c) => serverLog().includes(c)));
   check('the only users added are the seeded ones (nothing was created by a rejected sign-in)', count('SELECT COUNT(*) n FROM users') === pre.users);
 } finally {
   stopAll();

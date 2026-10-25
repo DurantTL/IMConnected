@@ -11,10 +11,13 @@ export const prerender = false;
 // middleware keeps it reachable without a session by exact path).
 const back = (code: string) => new Response(null, { status: 303, headers: { Location: `/admin/login?oauth=${code}`, 'Cache-Control': 'no-store' } });
 
-export const GET: APIRoute = ({ params, cookies, request, clientAddress }) => {
+export const GET: APIRoute = ({ params, cookies, request, clientAddress, locals }) => {
   warnIfOverridden();
   const provider = params.provider;
   if (!isProvider(provider)) return new Response('Not found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+  // An editor who has already passed 2FA is simply sent on (like /admin/login): a cross-site link can't sign them down or start a flow.
+  // Linking a provider is a separate, fresh-factor POST from My account.
+  if (locals.session?.mfaPassed) return new Response(null, { status: 303, headers: { Location: '/admin', 'Cache-Control': 'no-store' } });
   const cfg = providerConfig(provider);
   if (!cfg) return back('unavailable');
   const ip = clientIp(request, clientAddress);

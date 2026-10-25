@@ -133,7 +133,9 @@ export const enabledProviders = (): Provider[] => PROVIDERS.filter((p) => provid
 
 // ---- the state cookie ----
 
-interface Pending { p: Provider; state: string; verifier: string; nonce: string; exp: number }
+/** `i` is the intent: 'login' (sign-in start) or 'link' (an editor linking a provider from My account, with `u` the editor's user id). */
+interface Pending { p: Provider; state: string; verifier: string; nonce: string; exp: number; i?: 'login' | 'link'; u?: number }
+export type FlowIntent = { intent: 'login' } | { intent: 'link'; uid: number };
 
 // SameSite=Lax (not Strict): the provider sends the browser back with a cross-site top-level GET, which must carry it.
 const cookieOptions = { httpOnly: true, secure: true, sameSite: 'lax', path: '/' } as const;
@@ -142,14 +144,14 @@ const random = () => randomBytes(32).toString('base64url');
 
 /**
  * Start a flow: store state, the PKCE verifier and a nonce in the 10-minute cookie and return the provider URL to redirect to:
- * response_type=code, client_id, redirect_uri, scope "openid email profile", state, nonce, code_challenge (S256) and, for Google,
+ * response_type=code, client_id, redirect_uri, scope "openid email profile", state, nonce, code_challenge (S256) and
  * prompt=select_account. The client secret is never in this URL.
  */
-export function beginFlow(c: ProviderConfig, cookies: AstroCookies): string {
+export function beginFlow(c: ProviderConfig, cookies: AstroCookies, intent: FlowIntent = { intent: 'login' }): string {
   const state = random();
   const verifier = random();
   const nonce = random();
-  const pending: Pending = { p: c.provider, state, verifier, nonce, exp: Date.now() + OAUTH_COOKIE_MS };
+  const pending: Pending = { p: c.provider, state, verifier, nonce, exp: Date.now() + OAUTH_COOKIE_MS, i: intent.intent, ...(intent.intent === 'link' ? { u: intent.uid } : {}) };
   cookies.set(OAUTH_COOKIE, Buffer.from(JSON.stringify(pending)).toString('base64url'), { ...cookieOptions, maxAge: OAUTH_COOKIE_MS / 1000 });
   const url = new URL(c.authUrl);
   url.searchParams.set('response_type', 'code');
@@ -160,7 +162,7 @@ export function beginFlow(c: ProviderConfig, cookies: AstroCookies): string {
   url.searchParams.set('nonce', nonce);
   url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'));
   url.searchParams.set('code_challenge_method', 'S256');
-  if (c.provider === 'google') url.searchParams.set('prompt', 'select_account');
+  url.searchParams.set('prompt', 'select_account'); // both providers: always let the person pick the account
   return url.toString();
 }
 
@@ -175,7 +177,7 @@ const safeEqual = (a: string, b: string) => {
 };
 
 /** Read and validate the cookie against the `state` the provider returned. The cookie is single use: callers clear it. */
-export function readFlow(cookies: AstroCookies, provider: Provider, returnedState: string): { verifier: string; nonce: string } | 'missing' | 'expired' | 'mismatch' {
+export function readFlow(cookies: AstroCookies, provider: Provider, returnedState: string): ({ verifier: string; nonce: string } & ({ intent: 'login' } | { intent: 'link'; uid: number })) | 'missing' | 'expired' | 'mismatch' {
   const raw = cookies.get(OAUTH_COOKIE)?.value;
   if (!raw || raw.length > 1000) return 'missing';
   let pending: Pending;
@@ -187,7 +189,11 @@ export function readFlow(cookies: AstroCookies, provider: Provider, returnedStat
   if (!pending || typeof pending.state !== 'string' || typeof pending.verifier !== 'string' || typeof pending.nonce !== 'string' || typeof pending.exp !== 'number') return 'mismatch';
   if (pending.exp < Date.now()) return 'expired';
   if (pending.p !== provider || !returnedState || !safeEqual(pending.state, returnedState)) return 'mismatch';
-  return { verifier: pending.verifier, nonce: pending.nonce };
+  if (pending.i === 'link') {
+    if (!Number.isInteger(pending.u) || (pending.u as number) < 1) return 'mismatch';
+    return { verifier: pending.verifier, nonce: pending.nonce, intent: 'link', uid: pending.u as number };
+  }
+  return { verifier: pending.verifier, nonce: pending.nonce, intent: 'login' };
 }
 
 // ---- code exchange and claims ----
@@ -197,7 +203,10 @@ export interface Claims {
   email?: unknown; email_verified?: unknown; preferred_username?: unknown; tid?: unknown; oid?: unknown;
 }
 
-const MAX_TOKEN_RESPONSE = 100_000;
+const MAX_TOKEN_RESPONSE = 100_000; // bytes
+
+/** application/x-www-form-urlencoded encoding of one value (RFC 6749 section 2.3.1 asks for it before the Basic header's base64). */
+const formEncode = (v: string) => new URLSearchParams({ v }).toString().slice(2);
 
 /** Base64url-decode an ID token's payload. No signature check: see exchangeCode(). */
 export function decodeIdTokenPayload(idToken: string): Claims | null {
@@ -211,10 +220,32 @@ export function decodeIdTokenPayload(idToken: string): Claims | null {
   }
 }
 
+/** Read a response body with a running byte limit; null when it is over the limit. */
+async function readLimited(res: Response, max: number): Promise<string | null> {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) return null;
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 /**
  * Exchange the code at the token endpoint: POST over HTTPS (or loopback http in tests), form body with grant_type, code,
- * redirect_uri and the PKCE code_verifier, the client id and secret in an HTTP Basic header (never in a URL), no redirects,
- * 10 second timeout. The ID token's payload is read from that response; it comes straight from the provider over TLS in
+ * redirect_uri and the PKCE code_verifier, the client id and secret (each form-urlencoded, per RFC 6749 2.3.1) in an HTTP Basic
+ * header (never in a URL), no redirects, 10 second timeout for the whole response, body capped at 100 KB (Content-Length first,
+ * then a running byte count). The ID token's payload is read from that response; it comes straight from the provider over TLS in
  * answer to our authenticated request, so its signature is not re-checked (OpenID Connect Core 3.1.3.7); issuer, audience,
  * expiry and nonce are checked in validateClaims(). Returns null on any failure and never surfaces the provider's body.
  */
@@ -222,7 +253,7 @@ export async function exchangeCode(c: ProviderConfig, code: string, verifier: st
   if (!safeEndpoint(c.tokenUrl)) return null;
   try {
     const body = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: c.redirectUri, code_verifier: verifier });
-    const basic = Buffer.from(`${encodeURIComponent(c.clientId)}:${encodeURIComponent(c.clientSecret)}`).toString('base64');
+    const basic = Buffer.from(`${formEncode(c.clientId)}:${formEncode(c.clientSecret)}`).toString('base64');
     const res = await fetch(c.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Authorization: `Basic ${basic}` },
@@ -231,8 +262,8 @@ export async function exchangeCode(c: ProviderConfig, code: string, verifier: st
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return null;
-    const text = await res.text();
-    if (text.length > MAX_TOKEN_RESPONSE) return null;
+    const text = await readLimited(res, MAX_TOKEN_RESPONSE);
+    if (text === null) return null;
     const data = JSON.parse(text) as { id_token?: unknown };
     return typeof data.id_token === 'string' ? decodeIdTokenPayload(data.id_token) : null;
   } catch {

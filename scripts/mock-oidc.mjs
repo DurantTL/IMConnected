@@ -11,7 +11,14 @@ import crypto from 'node:crypto';
 
 const PORT = Number(process.env.MOCK_OIDC_PORT || 4417);
 const BASE = `http://localhost:${PORT}`;
-const CLIENTS = { google: { id: 'mock-google-client', secret: 'mock-google-secret' }, microsoft: { id: 'mock-ms-client', secret: 'mock-ms-secret' } };
+// Made-up ids and secrets with characters that must survive form-urlencoding (+, space, %, :), so an encoding regression is caught.
+const CLIENTS = {
+  google: { id: 'mock google+client:id%1', secret: 'mock+google secret:%s/x' },
+  microsoft: { id: 'mock ms+client:id%2', secret: 'mock+ms secret:%s/y' },
+};
+// application/x-www-form-urlencoded, exactly as RFC 6749 2.3.1 requires before the Basic header's base64.
+const formEncode = (v) => new URLSearchParams({ v }).toString().slice(2);
+const formDecode = (v) => new URLSearchParams(`v=${v}`).get('v');
 
 const codes = new Map(); // code -> { provider, challenge, nonce, identity, redirect_uri }
 let nextIdentity = null;
@@ -53,7 +60,13 @@ http.createServer(async (req, res) => {
     let id = form.get('client_id');
     let secret = form.get('client_secret');
     const basic = /^Basic (.+)$/.exec(req.headers.authorization || '');
-    if (basic) [id, secret] = Buffer.from(basic[1], 'base64').toString().split(':').map(decodeURIComponent);
+    if (basic) {
+      // Strict RFC 6749 2.3.1: base64( formEncode(id) + ':' + formEncode(secret) ). The raw parts must be EXACTLY the form encoding of the
+      // decoded values, so a client that sends encodeURIComponent output or no encoding is refused when a value has special characters.
+      const parts = Buffer.from(basic[1], 'base64').toString().split(':');
+      const strict = parts.length === 2 && parts.every((x) => formEncode(formDecode(x)) === x);
+      [id, secret] = strict ? parts.map(formDecode) : [null, null];
+    }
     const entry = codes.get(form.get('code') || '');
     codes.delete(form.get('code') || ''); // single use
     if (!entry || entry.provider !== provider || id !== CLIENTS[provider].id || secret !== CLIENTS[provider].secret) {
@@ -83,9 +96,24 @@ http.createServer(async (req, res) => {
       name: 'Mock Person',
     };
     for (const k of i.omit || []) delete claims[k];
-    log.push({ event: 'token_ok', provider });
+    log.push({ event: 'token_ok', provider, mode: i.token_mode || 'normal' });
     const idToken = `${b64({ alg: 'none', typ: 'JWT' })}.${b64(claims)}.`;
-    return send(res, 200, { token_type: 'Bearer', access_token: 'mock-access', expires_in: 3600, id_token: idToken });
+    const ok = { token_type: 'Bearer', access_token: 'mock-access', expires_in: 3600, id_token: idToken };
+    // Misbehaving token endpoints, for the "fail closed" tests: a redirect, an oversized body, a response that never finishes in time.
+    if (i.token_mode === 'redirect') return send(res, 302, '', { Location: `${BASE}/__log` });
+    if (i.token_mode === 'big') return send(res, 200, { ...ok, padding: 'x'.repeat(200_000) });
+    if (i.token_mode === 'big_chunked') {
+      res.writeHead(200, { 'Content-Type': 'application/json' }); // no Content-Length: the client must count bytes
+      res.write('{"padding":"');
+      for (let n = 0; n < 40; n++) res.write('x'.repeat(5_000));
+      return res.end(`","id_token":${JSON.stringify(idToken)}}`);
+    }
+    if (i.token_mode === 'slow') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.write('{"token_type":"Bearer",');
+      return void setTimeout(() => { try { res.end(`"id_token":${JSON.stringify(idToken)}}`); } catch { /* client gone */ } }, 13_000);
+    }
+    return send(res, 200, ok);
   } catch (err) {
     send(res, 500, { error: String(err.message || err) });
   }

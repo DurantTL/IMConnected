@@ -11,7 +11,7 @@ import { audit } from '../../lib/auth/audit';
 import { field, readForm } from '../../lib/auth/form';
 import { clientIp } from '../../lib/request';
 import { getDb } from '../../lib/db';
-import { PROVIDER_LABEL, isProvider, listLinks, otherFirstFactors } from '../../lib/auth/oauth';
+import { PROVIDER_LABEL, beginFlow, enabledProviders, isProvider, listLinks, otherFirstFactors, providerConfig } from '../../lib/auth/oauth';
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -21,6 +21,23 @@ const db = getDb();
 
 let message = '';
 let error = '';
+// Result of linking a provider (the callback redirects here with ?oauth=<code>; only fixed text is ever shown).
+const OAUTH_NOTICE: Record<string, string> = {
+  linked: 'Account linked. It can now sign you in as the first step.',
+  failed: 'That account couldn’t be linked. Please try again.',
+  unverified: 'That provider hasn’t verified an email address for that account, so it can’t be linked.',
+  exists: 'You already have an account linked for that provider. Unlink it first to link a different one.',
+  taken: 'That account can’t be linked.',
+  expired: 'That request expired. Please try again.',
+  locked: LOCKED_MESSAGE,
+  unavailable: 'That sign-in method isn’t available on this site.',
+};
+const oauthCode = Astro.request.method === 'GET' ? Astro.url.searchParams.get('oauth') || '' : '';
+if (oauthCode) {
+  const text = Object.hasOwn(OAUTH_NOTICE, oauthCode) ? OAUTH_NOTICE[oauthCode] : OAUTH_NOTICE.failed;
+  if (oauthCode === 'linked') message = text;
+  else error = text;
+}
 let codes: string[] | null = null;
 
 /** Sensitive actions need a fresh second factor (TOTP, recovery code or a passkey), under the sign-in rate limits. */
@@ -148,6 +165,22 @@ if (Astro.request.method === 'POST') {
         Astro.response.status = 409;
       } else error = 'That passkey was not found.';
     }
+  } else if (action === 'oauth_link') {
+    // Link a Google or Microsoft account to THIS editor. A fresh second factor starts it; the cookie made here is bound to this
+    // editor's id and the provider, and the callback only links for this same fully signed-in editor. The session is not changed.
+    const provider = field(form, 'provider', 20);
+    const cfg = isProvider(provider) ? providerConfig(provider) : null;
+    if (!isProvider(provider) || !cfg) {
+      error = OAUTH_NOTICE.unavailable;
+      Astro.response.status = 404;
+    } else if (listLinks(user.id).some((l) => l.provider === provider)) {
+      error = `${PROVIDER_LABEL[provider]} is already linked. Unlink it first to link a different account.`;
+      Astro.response.status = 409;
+    } else if (await fresh(form)) {
+      const location = beginFlow(cfg, Astro.cookies, { intent: 'link', uid: user.id });
+      audit('auth.oauth_link_started', { userId: user.id, ip, detail: { provider } });
+      return Astro.redirect(location, 303);
+    }
   } else if (action === 'oauth_unlink') {
     // Check before spending a code: an unlink may never leave the account with no first-factor method.
     const provider = field(form, 'provider', 20);
@@ -209,6 +242,7 @@ const passkeyList = listPasskeys(user.id);
 const passkeysOn = passkeysEnabled();
 const hasPk = passkeyList.length > 0 && passkeysOn;
 const links = listLinks(user.id);
+const linkable = enabledProviders().filter((p) => !links.some((l) => l.provider === p));
 const hasPassword = !!db.prepare('SELECT 1 FROM password_credentials WHERE user_id = ?').get(user.id);
 const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 ---
@@ -335,10 +369,11 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
     </section>
   )}
 
-  {links.length > 0 && (
+  {(links.length > 0 || linkable.length > 0) && (
     <section class="admin-card" aria-labelledby="oa">
       <h2 id="oa">Linked sign-in accounts</h2>
-      <p class="admin-note">These accounts can sign you in as the first step. You still need your second step. Unlinking needs a fresh code or passkey, and you can’t unlink your only way to sign in. Set a password or add a passkey first if this is your only one.</p>
+      <p class="admin-note">A linked Google or Microsoft 365 account can sign you in as the first step. You still need your second step. Linking and unlinking need a fresh code or passkey, and you can’t unlink your only way to sign in. Set a password or add a passkey first if this is your only one.</p>
+      {links.length === 0 && <p>No accounts linked yet.</p>}
       <ul class="session-list">
         {links.map((l) => (
           <li>
@@ -354,6 +389,19 @@ const when = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
               <label class="visually-hidden" for={`ul-${l.provider}`}>Authenticator or recovery code{hasPk ? ' (leave empty to use a passkey)' : ''}</label>
               <input id={`ul-${l.provider}`} name="code" type="text" autocomplete="one-time-code" maxlength="40" required={!hasPk} placeholder={hasPk ? 'Code, or leave empty to use a passkey' : 'Authenticator or recovery code'} />
               <button type="submit">Unlink</button>
+            </form>
+          </li>
+        ))}
+        {linkable.map((p) => (
+          <li>
+            <div><strong>{PROVIDER_LABEL[p]}</strong><span class="admin-note"> · not linked</span></div>
+            <form method="post" action="/admin/account" class="passkey-inline" data-fresh-form data-has-passkeys={hasPk ? '' : undefined}>
+              <input type="hidden" name="action" value="oauth_link" />
+              <input type="hidden" name="provider" value={p} />
+              <input type="hidden" name="assertion" value="" />
+              <label class="visually-hidden" for={`lk-${p}`}>Authenticator or recovery code{hasPk ? ' (leave empty to use a passkey)' : ''}</label>
+              <input id={`lk-${p}`} name="code" type="text" autocomplete="one-time-code" maxlength="40" required={!hasPk} placeholder={hasPk ? 'Code, or leave empty to use a passkey' : 'Authenticator or recovery code'} />
+              <button type="submit">Link {PROVIDER_LABEL[p]} account</button>
             </form>
           </li>
         ))}
