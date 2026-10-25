@@ -569,7 +569,7 @@ body:not(.admin) .section-nav-row .nav{flex:1;flex-wrap:wrap;gap:6px 22px;min-wi
 .brand-wordmark img { display:block; width:100%; height:auto; }
 body:not(.admin) .site-header { background:#0B3954; color:#fff; border:0; }
 body:not(.admin) .publication-line { background:#072c42; color:#E0F5F7; }
-/* Masthead as in the newsletter email: the wordmark on a full-width charcoal band (the image's own background), then a navy conference strip. */
+/* Masthead as in the newsletter email: the wordmark on a full-width charcoal band (it matches the email masthead), then a navy conference strip. */
 body:not(.admin) .masthead-band { background:#36383A; }
 .conference-strip { background:#0B3853; color:#C9D6DC; border-bottom:1px solid #ffffff1f; }
 .conference-strip p { margin:0; padding:4px 0; text-align:center; font:500 .65rem/1.4 var(--sans); letter-spacing:.24em; text-transform:uppercase; }
