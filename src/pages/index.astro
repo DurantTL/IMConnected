@@ -101,8 +101,10 @@ const srTitle = !groups.some((g) => g.keys.includes('intro'));
         <h1 id="home-title">A connected community.<br /><em>A living faith.</em></h1>
       </div>
       <p class="home-intro-note">{SITE.tagline}.<br /><a class="intro-link" href="/news/">Discover what’s happening <span aria-hidden="true">→</span></a></p>
-      {statlineText && <p class="home-statline">{statlineText}</p>}
-      {latest && <p class="latest-issue-line"><a href={issueHref(latest.number)}>Latest issue: No. {latest.number} · <time datetime={latest.date}>{sentOn}</time></a></p>}
+      {(statlineText || latest) && <div class="home-intro-meta">
+        {statlineText && <p class="home-statline">{statlineText}</p>}
+        {latest && <p class="latest-issue-line"><a href={issueHref(latest.number)}>Latest issue: No. {latest.number} · <time datetime={latest.date}>{sentOn}</time></a></p>}
+      </div>}
     </section>
     )}
 
@@ -116,7 +118,7 @@ const srTitle = !groups.some((g) => g.keys.includes('intro'));
         <StoryCard story={lead} variant="lead" />
         <aside class="hero-side" aria-labelledby="latest-title">
           <div class="latest-heading"><span class="eyebrow">The latest</span><h2 id="latest-title">From around our conference</h2></div>
-          <ol class="latest-stories">{side.map((s, i) => <li><span class="latest-number" aria-hidden="true">0{i + 1}</span><StoryCard story={s} variant="compact" /></li>)}</ol>
+          <ol class="latest-stories">{side.map((s) => <li><StoryCard story={s} variant="compact" /></li>)}</ol>
           <a class="intro-link" href="/news/">All conference news <span aria-hidden="true">→</span></a>
         </aside>
       </section>
@@ -153,7 +155,7 @@ const srTitle = !groups.some((g) => g.keys.includes('intro'));
           <div><h2>{railByKey.get(key)!.section.label}</h2><p>{railByKey.get(key)!.section.blurb}</p></div>
           <a class="more" href={`/${railByKey.get(key)!.section.key}/`}>{railMoreLabel(railByKey.get(key)!.section.key)} →</a>
         </div>
-        <div class="grid cols-3">{railByKey.get(key)!.items.map((s) => <StoryCard story={s} />)}</div>
+        <div class="grid cols-3 home-rail">{railByKey.get(key)!.items.map((s) => <StoryCard story={s} />)}</div>
       </section>
     )}
 

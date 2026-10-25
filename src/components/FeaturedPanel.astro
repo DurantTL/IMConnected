@@ -1,5 +1,5 @@
 ---
-import { getSection, areaLabel, formatDate } from '../lib/site';
+import { getSection, formatDate } from '../lib/site';
 import { storyUrl, type PublicStory } from '../lib/stories';
 import { photoFocusStyle, photoFrameAttrs } from '../lib/story-blocks';
 
@@ -7,7 +7,6 @@ interface Props { story?: PublicStory; /** The panel is the first thing under th
 const { story, eager = false } = Astro.props;
 const d = story?.data;
 const section = d && getSection(d.section);
-const sub = d && (areaLabel(d.section, d.area));
 ---
 {story && d && (
   <section class="featured-panel" aria-labelledby="featured-title" data-featured-panel>
@@ -18,8 +17,7 @@ const sub = d && (areaLabel(d.section, d.area));
         </div>
       )}
       <div class="featured-copy">
-        <span class="eyebrow">Featured story</span>
-        <span class="kicker" data-sec={d.section}>{section?.label}{sub && <><span class="sep">/</span>{sub}</>}</span>
+        <span class="kicker" data-sec={d.section}>Featured story · {section?.label}</span>
         <h2 id="featured-title">{d.title}</h2>
         {d.dek && <p class="dek">{d.dek}</p>}
         <span class="meta">{d.church ? `${d.church} · ` : ''}{formatDate(d.date)}</span>
