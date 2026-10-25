@@ -5,29 +5,47 @@ import { photoFocusStyle, photoFrameAttrs } from '../lib/story-blocks';
 
 interface Props {
   story: PublicStory;
-  variant?: 'default' | 'lead' | 'compact' | 'text';
+  variant?: 'default' | 'lead' | 'compact' | 'text' | 'feature' | 'row';
   showDek?: boolean;
   showKicker?: boolean;
   /** Keep only the section label in the kicker, leaving out the area or column. */
   hideArea?: boolean;
+  /**
+   * What the kicker says. 'full' (default) is "Section / Area"; 'area' is for a section page
+   * (the area only, or the primary section when the story is listed here as an additional
+   * section); 'none' is for an area page.
+   */
+  kickerMode?: 'full' | 'area' | 'none';
+  /** The section whose page this card is on (used by kickerMode 'area'). */
+  pageSection?: string;
+  /** Heading level override (a list with no lead story under the h1 uses h2). */
+  heading?: 'h2' | 'h3';
 }
-const { story, variant = 'default', showDek = variant !== 'compact', showKicker = true, hideArea = false } = Astro.props;
+const { story, variant = 'default', showDek = variant !== 'compact', showKicker = true, hideArea = false, kickerMode = 'full', pageSection, heading } = Astro.props;
 const d = story.data;
 const section = getSection(d.section);
 const sub = hideArea ? '' : areaLabel(d.section, d.area);
-const Heading = variant === 'lead' ? 'h2' : 'h3';
+const Heading = heading ?? (variant === 'lead' || variant === 'feature' ? 'h2' : 'h3');
+// Kicker parts: "Section / Area" everywhere except the section and area pages.
+let kickerSection: string | undefined = section?.label;
+let kickerSub: string | undefined = sub;
+if (kickerMode === 'area') {
+  kickerSection = !sub && pageSection && d.section !== pageSection ? section?.label : undefined;
+  if (sub) kickerSection = undefined;
+} else if (kickerMode === 'none') {
+  kickerSection = undefined;
+  kickerSub = undefined;
+}
+const kickerShown = showKicker && !!(kickerSection || kickerSub);
 ---
 <a class:list={['card', variant, { 'with-photo': !!d.image, 'without-photo': !d.image }]} href={storyUrl(story)} data-sec={d.section} data-reveal>
   {variant !== 'text' && d.image && (
     <div class="media" {...(photoFrameAttrs(d.photoFocus?.[0], d.image) ?? {})}>
-        <img src={d.image} alt={d.imageAlt ?? ''} loading={variant === 'lead' ? 'eager' : 'lazy'} style={photoFocusStyle(d.photoFocus?.[0])} />
+        <img src={d.image} alt={d.imageAlt ?? ''} loading={variant === 'lead' || variant === 'feature' ? 'eager' : 'lazy'} style={photoFocusStyle(d.photoFocus?.[0])} />
     </div>
   )}
-  {variant === 'default' && !d.image && (
-    <div class="media" aria-hidden="true"><div class="placeholder"><span>{section?.label}</span></div></div>
-  )}
   <div class="card-copy">
-    {showKicker && <span class="kicker">{section?.label}{sub && <><span class="sep">/</span>{sub}</>}</span>}
+    {kickerShown && <span class="kicker">{kickerSection}{kickerSection && kickerSub && <span class="sep">/</span>}{kickerSub}</span>}
     <Heading>{d.title}</Heading>
     {showDek && d.dek && <p class="dek">{d.dek}</p>}
     <span class="meta">{d.author}{d.church ? ` · ${d.church}` : ''} · {formatDate(d.date)}</span>
