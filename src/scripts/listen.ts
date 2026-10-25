@@ -1,6 +1,9 @@
 // "Listen to this story" (issue #118): reads the visible article aloud with the browser's own speech synthesis.
 // No dependency, nothing is sent anywhere, and nothing starts without a click. The control stays hidden unless the
-// browser has speechSynthesis and SpeechSynthesisUtterance.
+// browser has speechSynthesis and SpeechSynthesisUtterance. Voice and speed (issue #165): voices are ranked by
+// src/lib/listen-voices.ts and the reader's choice is kept in this browser's localStorage (`imc.listen.v1`).
+
+import { rankVoices, parseSettings, SPEEDS, DEFAULT_RATE, SETTINGS_KEY, SAMPLE_TEXT, type ListenSettings } from '../lib/listen-voices';
 
 const SKIP_TAGS = new Set(['FIGURE', 'FIGCAPTION', 'BUTTON', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'NAV', 'FORM', 'IFRAME', 'DIALOG', 'SVG', 'IMG', 'VIDEO', 'AUDIO', 'SELECT', 'TEXTAREA', 'INPUT']);
 const BLOCK_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'UL', 'OL', 'DIV', 'BLOCKQUOTE', 'SECTION', 'ASIDE', 'ARTICLE', 'HEADER', 'FOOTER', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH', 'PRE', 'DL', 'DT', 'DD', 'DETAILS', 'SUMMARY', 'HR']);
@@ -107,16 +110,45 @@ function init(): void {
 
   // Voices load late in some browsers: ask once now and again when the list changes.
   let voices: SpeechSynthesisVoice[] = [];
-  const loadVoices = () => { try { voices = synth.getVoices() || []; } catch { voices = []; } };
+  let ranked: SpeechSynthesisVoice[] = [];
+  let settings: ListenSettings = { voice: '', rate: DEFAULT_RATE };
+  const voiceSel = box.querySelector<HTMLSelectElement>('[data-listen-voice]');
+  const rateSel = box.querySelector<HTMLSelectElement>('[data-listen-rate]');
+  const tryBtn = box.querySelector<HTMLButtonElement>('[data-listen-try]');
+  const readSaved = () => { try { settings = parseSettings(localStorage.getItem(SETTINGS_KEY)); } catch { settings = parseSettings(null); } };
+  const save = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* not saved */ } };
+  // The chosen voice when the device still has it, otherwise the recommended (first ranked) one.
+  const pickVoice = (): SpeechSynthesisVoice | undefined => ranked.find((v) => v.name === settings.voice) || ranked[0] || voices.find((v) => v.default);
+  const fillVoices = () => {
+    if (!voiceSel) return;
+    voiceSel.textContent = '';
+    ranked.forEach((v, i) => {
+      const o = document.createElement('option');
+      o.value = v.name;
+      o.textContent = i === 0 ? v.name + ' (recommended)' : v.name;
+      voiceSel.appendChild(o);
+    });
+    const chosen = pickVoice();
+    if (chosen) voiceSel.value = chosen.name;
+    voiceSel.disabled = ranked.length === 0;
+  };
+  const loadVoices = () => {
+    try { voices = synth.getVoices() || []; } catch { voices = []; }
+    ranked = rankVoices(voices, lang);
+    fillVoices();
+  };
+  readSaved();
+  if (rateSel) {
+    rateSel.textContent = '';
+    for (const sp of SPEEDS) { const o = document.createElement('option'); o.value = String(sp.rate); o.textContent = sp.label; rateSel.appendChild(o); }
+    rateSel.value = String(settings.rate);
+  }
   loadVoices();
   try { synth.addEventListener?.('voiceschanged', loadVoices); } catch { /* the default voice is used */ }
+  // Changes apply from the next sentence: speak() reads the settings for every chunk. Focus stays where it is.
+  voiceSel?.addEventListener('change', () => { settings.voice = voiceSel.value; save(); });
+  rateSel?.addEventListener('change', () => { const r = Number(rateSel.value); settings.rate = SPEEDS.some((sp) => sp.rate === r) ? r : DEFAULT_RATE; save(); });
 
-  const norm = (v: SpeechSynthesisVoice) => v.lang.toLowerCase().replace('_', '-');
-  const pickVoice = (): SpeechSynthesisVoice | undefined => {
-    const want = base === 'en' || !voices.some((v) => norm(v).startsWith(base)) ? 'en' : base;
-    const match = voices.filter((v) => norm(v).startsWith(want));
-    return match.find((v) => norm(v) === lang.toLowerCase() && v.localService) || match.find((v) => norm(v) === lang.toLowerCase()) || match.find((v) => v.default) || match[0];
-  };
   const show = (state: 'idle' | 'playing' | 'paused', message: string) => {
     start.hidden = state !== 'idle';
     pause.hidden = state === 'idle';
@@ -130,18 +162,21 @@ function init(): void {
     try { synth.resume(); } catch { /* ignore */ }
     try { synth.cancel(); } catch { /* nothing to stop */ }
   };
-  const stop = (message = 'Stopped.') => {
+  const stop = (message = 'Stopped.', refocus = true) => {
     run++; paused = false; held = false; current = undefined; clearWatchdog();
     cancelSpeech();
     const hadFocus = box.contains(document.activeElement);
     show('idle', message);
-    if (hadFocus) start.focus();
+    if (hadFocus && refocus) start.focus();
   };
 
   const speak = (text: string, mine: number) => {
     const u = new SpeechSynthesisUtterance(text);
+    voice = pickVoice(); // read for every chunk, so a change applies from the next sentence
     u.lang = voice?.lang || lang;
     if (voice) u.voice = voice;
+    u.rate = settings.rate;
+    u.pitch = 1;
     current = u;
     u.onend = () => { if (mine !== run || u !== current) return; if (paused) held = true; else next(); };
     u.onerror = (e: SpeechSynthesisErrorEvent) => { if (mine !== run || u !== current || e.error === 'canceled' || e.error === 'interrupted') return; stop('Speech stopped.'); };
@@ -158,7 +193,6 @@ function init(): void {
     current = undefined; clearWatchdog();
     cancelSpeech();
     run++; paused = false; held = false; index = 0;
-    voice = pickVoice();
     show('playing', 'Reading the story aloud.');
     next();
     pause.focus();
@@ -188,6 +222,18 @@ function init(): void {
     }
   });
   stopBtn.addEventListener('click', () => stop());
+  // "Try voice" says one neutral sentence (no story text) with the chosen voice and speed. It replaces any story
+  // reading in progress, and focus stays on the button.
+  tryBtn?.addEventListener('click', () => {
+    stop('', false);
+    const u = new SpeechSynthesisUtterance(SAMPLE_TEXT);
+    const v = pickVoice();
+    u.lang = v?.lang || lang;
+    if (v) u.voice = v;
+    u.rate = settings.rate;
+    u.pitch = 1;
+    synth.speak(u);
+  });
   window.addEventListener('pagehide', () => stop(''));
   window.addEventListener('pageshow', (e) => { if (e.persisted) show('idle', ''); });
 

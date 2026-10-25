@@ -85,6 +85,16 @@ const announcementDetails = await renderAnnouncementDetails(d.announcement);
         <button type="button" data-listen-pause hidden>Pause</button>
         <button type="button" data-listen-stop hidden aria-label="Stop listening">Stop</button>
         <span class="listen-status" data-listen-status role="status" aria-live="polite"></span>
+        <details class="listen-settings" data-listen-settings>
+          <summary>Voice and speed</summary>
+          <div class="listen-panel">
+            <label for="listen-voice">Voice</label>
+            <select id="listen-voice" data-listen-voice></select>
+            <label for="listen-rate">Speed</label>
+            <select id="listen-rate" data-listen-rate></select>
+            <button type="button" data-listen-try>Try voice</button>
+          </div>
+        </details>
       </div>
       </header>
 
