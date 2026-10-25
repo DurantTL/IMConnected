@@ -8,6 +8,7 @@ import { audit } from '../../lib/auth/audit';
 import { field, readForm } from '../../lib/auth/form';
 import { clientIp } from '../../lib/request';
 import { getDb } from '../../lib/db';
+import { PROVIDER_LABEL, enabledProviders } from '../../lib/auth/oauth';
 export const prerender = false;
 
 // Step 1 of sign-in: email + password. Success starts a session with mfa_passed=0 and goes to /admin/2fa.
@@ -17,6 +18,24 @@ let error = '';
 let passkeyError = '';
 let email = '';
 const passkeys = passkeysEnabled();
+// Google / Microsoft sign-in (issue #11). A button shows only for a configured provider. Failures arrive as ?oauth=<code>
+// and map to fixed text here; nothing from the URL is ever printed.
+const providers = enabledProviders();
+const OAUTH_TEXT: Record<string, string> = {
+  no_account: "This account isn't set up for IMConnected. Ask an admin for an invite",
+  unverified: 'That provider hasn’t verified this email address, so it can’t be used to sign in.',
+  locked: LOCKED_MESSAGE,
+  expired: 'That sign-in request expired. Please try again.',
+  unavailable: 'That sign-in method isn’t available on this site.',
+  failed: 'Sign-in with that provider didn’t work. Please try again.',
+};
+const oauthCode = Astro.url.searchParams.get('oauth') || '';
+let oauthError = '';
+if (Astro.request.method === 'GET' && oauthCode) {
+  oauthError = Object.hasOwn(OAUTH_TEXT, oauthCode) ? OAUTH_TEXT[oauthCode] : OAUTH_TEXT.failed;
+  if (oauthCode === 'locked') Astro.response.status = 429;
+  else if (oauthCode === 'no_account' || oauthCode === 'unverified') Astro.response.status = 401;
+}
 
 const existing = readSession(Astro.cookies.get(SESSION_COOKIE)?.value);
 if (Astro.request.method === 'GET' && existing?.session.mfaPassed) return Astro.redirect('/admin');
@@ -95,6 +114,7 @@ if (Astro.request.method === 'POST') {
 ---
 <Admin title="Sign in">
   <h1>Editor sign-in</h1>
+  {oauthError && <p class="admin-error" role="alert">{oauthError}</p>}
   <form class="admin-card" method="post" action="/admin/login">
     {error && <p class="admin-error" role="alert">{error}</p>}
     <p class="admin-note">Accounts are by invitation only.</p>
@@ -104,6 +124,15 @@ if (Astro.request.method === 'POST') {
     <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" />
     <button type="submit">Continue</button>
   </form>
+  {providers.length > 0 && (
+    <div class="admin-card oauth-card" role="group" aria-labelledby="oauth-h">
+      <h2 id="oauth-h">Sign in with your work account</h2>
+      <p class="admin-note">Only for editors who have been invited. You will still need your second step.</p>
+      <ul class="oauth-list">
+        {providers.map((p) => <li><a class="admin-button oauth-button" href={`/admin/oauth/${p}`}>Sign in with {PROVIDER_LABEL[p]}</a></li>)}
+      </ul>
+    </div>
+  )}
   {passkeys && (
     <form class="admin-card passkey-card" method="post" action="/admin/login">
       <input type="hidden" name="passkey" value="" />

@@ -87,6 +87,18 @@ export function reserveOptionsRequest(ip: string): boolean {
   return true;
 }
 
+// Starting a Google / Microsoft sign-in (GET /admin/oauth/<provider>) is open to anyone and writes an audit row, so it is
+// counted per IP under its own key, separate from the failure counters (it can never lock anyone out of the password step).
+export const MAX_OAUTH_STARTS_PER_IP = 30;
+const oauthStartKey = (ip: string) => `oauthstart:${ip}`;
+
+/** Count one start; false (and not counted) once the IP has made 30 in the last 15 minutes. */
+export function reserveOauthStart(ip: string): boolean {
+  if (failures(oauthStartKey(ip)) >= MAX_OAUTH_STARTS_PER_IP) return false;
+  getDb().prepare('INSERT INTO login_attempts (key, at, ok) VALUES (?, ?, 0)').run(oauthStartKey(ip), Date.now());
+  return true;
+}
+
 /** A completed passkey sign-in from this IP clears its options requests. */
 export function clearOptionsRequests(ip: string): void {
   getDb().prepare('DELETE FROM login_attempts WHERE key = ?').run(optionsKey(ip));

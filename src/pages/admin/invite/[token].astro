@@ -40,7 +40,7 @@ if (!invite) {
       // Both updates must hit exactly one row (unused and unexpired invite, user still 'invited'), or nothing is kept.
       const used = db.prepare('UPDATE invites SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?').run(now, tokenHash, now);
       const activated = Number(used.changes) === 1
-        ? db.prepare("UPDATE users SET status = 'active', name = ?, updated_at = ? WHERE id = ? AND status = 'invited'").run(name, now, invite.user_id)
+        ? db.prepare("UPDATE users SET status = 'active', name = ?, activated_at = COALESCE(activated_at, ?), updated_at = ? WHERE id = ? AND status = 'invited'").run(name, now, now, invite.user_id)
         : null;
       if (activated && Number(activated.changes) === 1) {
         db.prepare('INSERT OR REPLACE INTO password_credentials (user_id, hash, updated_at) VALUES (?, ?, ?)').run(invite.user_id, hash, now);

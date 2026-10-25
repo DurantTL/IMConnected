@@ -9,11 +9,12 @@ import { fileURLToPath } from 'node:url';
 // src/lib/schedule-start.ts, which starts the scheduled-publish timer (issue #124).
 const backupStart = fileURLToPath(new URL('./src/lib/backup-start.ts', import.meta.url));
 const scheduleStart = fileURLToPath(new URL('./src/lib/schedule-start.ts', import.meta.url));
+const oauthStart = fileURLToPath(new URL('./src/lib/auth/oauth-start.ts', import.meta.url)); // warns when test-only OAuth overrides are set in production
 const backupStartPlugin = {
   name: 'backup-start',
   enforce: /** @type {const} */ ('post'),
   transform(/** @type {string} */ code, /** @type {string} */ id) {
-    if (/@astrojs[\\/]node[\\/]dist[\\/]server\.js$/.test(id.split('?')[0])) return { code: `${code}\nimport ${JSON.stringify(backupStart)};\nimport ${JSON.stringify(scheduleStart)};\n`, map: null };
+    if (/@astrojs[\\/]node[\\/]dist[\\/]server\.js$/.test(id.split('?')[0])) return { code: `${code}\nimport ${JSON.stringify(backupStart)};\nimport ${JSON.stringify(scheduleStart)};\nimport ${JSON.stringify(oauthStart)};\n`, map: null };
   },
 };
 

@@ -81,15 +81,28 @@ export function readMigrationsFromDir(dir) {
  * Remove every second factor of one user: authenticator, passkeys, recovery codes, pending WebAuthn
  * challenges and all their sessions. Shared by scripts/reset-2fa.mjs and the admin Editors page.
  * The caller wraps it (and its audit entry) in a transaction. Their password stays; with no factor
- * left, the next sign-in is sent to enrollment. Returns what was removed.
+ * left, the next sign-in is sent to enrollment (an editor with no password goes back to 'invited': see below). Returns what was removed.
  */
 export function resetTwoFactor(db, userId) {
   const t = db.prepare('DELETE FROM totp_credentials WHERE user_id = ?').run(userId);
   const k = db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(userId);
   db.prepare('DELETE FROM webauthn_challenges WHERE user_id = ?').run(userId);
   const r = db.prepare('DELETE FROM recovery_codes WHERE user_id = ?').run(userId);
+  // Google / Microsoft links go too (issue #11): a first factor someone else may still hold is cleared along with the second factor.
+  const o = db.prepare('DELETE FROM oauth_accounts WHERE user_id = ?').run(userId);
   const s = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
-  return { authenticators: Number(t.changes), passkeys: Number(k.changes), recoveryCodes: Number(r.changes), sessions: Number(s.changes) };
+  // An editor with no password now has no first factor at all (their links and passkeys just went), and only an `invited` account can be
+  // re-invited. So such an active editor goes back to 'invited' (name, role and audit history stay) and any old invite rows are removed;
+  // an administrator then uses "Resend invite", and accepting it through the link, Google or Microsoft works as for a new editor.
+  let reinvite = false;
+  const u = db.prepare('SELECT status FROM users WHERE id = ?').get(userId);
+  if (u && u.status === 'active' && !db.prepare('SELECT 1 FROM password_credentials WHERE user_id = ?').get(userId)) {
+    // activated_at is kept (set here too if an old row never had it) so "Revoke invite" later disables this account instead of deleting it.
+    db.prepare("UPDATE users SET status = 'invited', activated_at = COALESCE(activated_at, created_at), updated_at = ? WHERE id = ? AND status = 'active'").run(Date.now(), userId);
+    db.prepare('DELETE FROM invites WHERE user_id = ?').run(userId);
+    reinvite = true;
+  }
+  return { authenticators: Number(t.changes), passkeys: Number(k.changes), recoveryCodes: Number(r.changes), oauthLinks: Number(o.changes), sessions: Number(s.changes), reinvite };
 }
 
 /**
