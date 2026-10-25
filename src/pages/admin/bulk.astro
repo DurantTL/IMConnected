@@ -10,7 +10,7 @@ import { validSlug } from '../../lib/story-publish';
 import { intParam } from '../../lib/draft-form';
 import { BULK_MAX, bulkReason, publishDraftItem, rejectDraftItem, unpublishStoryItem } from '../../lib/bulk-actions';
 import { EDIT_FORM_KEYS, describeChanges, editDraftItem, editStoryItem, parseEditChanges, type EditChanges } from '../../lib/bulk-edit';
-import { safeDraftBack, safeLiveBack } from '../../lib/admin-back';
+import { isLiveSectionPage, safeDraftBack, safeLiveBack } from '../../lib/admin-back';
 import { SECTIONS } from '../../lib/site';
 import { readFormLimited } from '../../lib/draft-http';
 import { clientIp } from '../../lib/request';
@@ -69,6 +69,8 @@ if (!form || form === 'too_big') {
 // The list view the person came from (filters, sort, page), rebuilt from the parsed filter; never the raw `back` text.
 const rawBack = form && form !== 'too_big' ? form.get('back') : null;
 const back = draftBased(action) ? safeDraftBack(rawBack) : safeLiveBack(rawBack);
+// Visible "Back to the list" links return to the live section they came from; hidden `back` fields stay fragment-free.
+const backLink = !draftBased(action) && isLiveSectionPage(back) ? `${back}#live` : back;
 const verb = { publish: 'Publish', unpublish: 'Unpublish', reject: 'Reject', edit: 'Edit', editstory: 'Edit' }[action];
 const past = { publish: 'published', unpublish: 'unpublished', reject: 'rejected', edit: 'updated', editstory: 'updated' }[action];
 const badgeOk = { publish: 'Published', unpublish: 'Unpublished', reject: 'Rejected', edit: 'Updated', editstory: 'Updated' }[action];
@@ -130,7 +132,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
     <>
       <h1 id="bulk-heading" tabindex="-1">Bulk {action === 'editstory' ? 'edit' : action} not done</h1>
       <p class="admin-error" role="alert">{problem}</p>
-      <p><a class="cms-btn secondary" href={back}>Back to the list</a></p>
+      <p><a class="cms-btn secondary" href={backLink}>Back to the list</a></p>
     </>
   ) : done ? (
     <>
@@ -168,7 +170,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
             ))}
           </ul>
           {retryable.length > 0 && <button class="cms-btn" type="submit">Review the {retryable.length} selected to try again</button>}
-          <a class="cms-btn secondary" href={back}>Back to the list</a>
+          <a class="cms-btn secondary" href={backLink}>Back to the list</a>
         </form>
       ) : (
         <>
@@ -177,7 +179,7 @@ const pairOptions = SECTIONS.flatMap((s) => (s.areas ? s.areas.map((a) => ({ val
               <li class="cms-item"><span class="title">{i.title}</span><div class="cms-meta"><span class="cms-badge ok">{badgeOk}</span></div>{i.note && <p class="admin-note">{i.note}</p>}</li>
             ))}
           </ul>
-          <a class="cms-btn secondary" href={back}>Back to the list</a>
+          <a class="cms-btn secondary" href={backLink}>Back to the list</a>
         </>
       )}
     </>

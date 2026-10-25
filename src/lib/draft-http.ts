@@ -8,7 +8,7 @@ export function jsonResponse(status: number, payload: Record<string, unknown>): 
 }
 
 /** 303 back to a page. Only fixed codes travel in the query string (n = a notice in NOTICES, e = an error in ERRORS). */
-export function redirectTo(path: string, params: { n?: string; e?: ErrorCode; pos?: string; of?: string; photo?: string; focus?: string } = {}): Response {
+export function redirectTo(path: string, params: { n?: string; e?: ErrorCode; pos?: string; of?: string; photo?: string; focus?: string; hash?: 'live' } = {}): Response {
   const q = new URLSearchParams();
   if (params.n) q.set('n', params.n);
   if (params.e) q.set('e', params.e);
@@ -19,7 +19,9 @@ export function redirectTo(path: string, params: { n?: string; e?: ErrorCode; po
   const qs = q.toString();
   // `path` may already carry a rebuilt list query (see admin-back.ts); the notice is appended to it.
   const joiner = path.includes('?') ? '&' : '?';
-  return new Response(null, { status: 303, headers: { Location: qs ? `${path}${joiner}${qs}` : path, ...NO_STORE } });
+  // A fixed fragment only (never taken from input), placed after the query.
+  const hash = params.hash === 'live' ? '#live' : '';
+  return new Response(null, { status: 303, headers: { Location: (qs ? `${path}${joiner}${qs}` : path) + hash, ...NO_STORE } });
 }
 
 export function siteUrl(): string {

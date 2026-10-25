@@ -447,13 +447,13 @@ try {
   };
   const stat = (slug) => rows('SELECT status FROM stories WHERE slug = ?', slug)[0]?.status;
   let u = await postForm('/api/admin/stories/unpublish', { slug: EV.old, back: '/admin/events?status=all&sort=title&perPage=50&livePage=2&kind=all&junk=1' });
-  check('Unpublish from the live section returns to /admin/events with the rebuilt view (kind and junk dropped) and a notice', u.status === 303 && u.location === '/admin/events?status=all&sort=title&perPage=50&livePage=2&n=unpublished' && stat(EV.old) === 'unpublished', u.location);
+  check('Unpublish from the live section returns to /admin/events with the rebuilt view (kind and junk dropped) and a notice, landing on the live section', u.status === 303 && u.location === '/admin/events?status=all&sort=title&perPage=50&livePage=2&n=unpublished#live' && stat(EV.old) === 'unpublished', u.location);
   LIVE.event--;
   u = await postForm('/api/admin/stories/unpublish', { slug: ANN_EXTRA[0], back: '/admin/announcements?status=scheduled' });
-  check('...and an Announcements back address goes to /admin/announcements', u.status === 303 && u.location === '/admin/announcements?status=scheduled&n=unpublished' && stat(ANN_EXTRA[0]) === 'unpublished', u.location);
+  check('...and an Announcements back address goes to /admin/announcements', u.status === 303 && u.location === '/admin/announcements?status=scheduled&n=unpublished#live' && stat(ANN_EXTRA[0]) === 'unpublished', u.location);
   LIVE.announcement--;
   u = await postForm('/api/admin/stories/unpublish', { slug: 'synth-no-such-story', back: '/admin/events?livePage=3' });
-  check('a failed Unpublish returns to the same view with an error code', u.status === 303 && u.location === '/admin/events?livePage=3&e=story_missing', u.location);
+  check('a failed Unpublish returns to the same view with an error code', u.status === 303 && u.location === '/admin/events?livePage=3&e=story_missing#live', u.location);
   u = await postForm('/api/admin/stories/unpublish', { slug: EV.yesterday, back: '/admin/published?kind=event&sort=event&perPage=50' });
   check('a Published list back address is still tried first and returns to the Published list', u.status === 303 && u.location === '/admin/published?kind=event&sort=event&perPage=50&n=unpublished' && stat(EV.yesterday) === 'unpublished', u.location);
   LIVE.event--;
@@ -474,7 +474,7 @@ try {
   bl = await bulkLive({ action: 'editstory', slug: EV.soon, back: '/admin/events?livePage=2&status=all' });
   check('bulk Edit fields page keeps the events view', bl.status === 200 && cancelOf(bl.text).includes(wantEv) && backsOf(bl.text).every((v) => v === wantEv), `${cancelOf(bl.text)}`);
   bl = await bulkLive({ action: 'unpublish', step: 'run', slug: EV.soon, back: '/admin/events?livePage=2&status=all' });
-  check('bulk Unpublish result: "Back to the list" returns to /admin/events?…', bl.status === 200 && /1 of 1 unpublished/.test(bl.text) && cancelOf(bl.text).includes(wantEv) && stat(EV.soon) === 'unpublished', `${cancelOf(bl.text)}`);
+  check('bulk Unpublish result: "Back to the list" returns to /admin/events?…', bl.status === 200 && /1 of 1 unpublished/.test(bl.text) && bl.text.includes('href="' + wantEv.replace(/&/g, '&amp;') + '#live"') && stat(EV.soon) === 'unpublished', `${cancelOf(bl.text)}`);
   LIVE.event--;
   bl = await bulkLive({ action: 'unpublish', slug: EV.far, back: '/admin/announcements?status=all&page=3&livePage=2' });
   check('a drafts page parameter and livePage both survive the back round trip', cancelOf(bl.text).includes('/admin/announcements?status=all&page=3&livePage=2'), `${cancelOf(bl.text)}`);

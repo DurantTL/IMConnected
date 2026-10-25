@@ -83,3 +83,9 @@ export function safeLiveBack(raw: unknown): string {
   if (splitBack(raw, DRAFT_PATHS).ok) return safeDraftBack(raw);
   return PUBLISHED_PATH;
 }
+
+/** True when a rebuilt back address is the Announcements or Events page, whose live section (#live) the action came from. */
+export function isLiveSectionPage(rebuilt: string): boolean {
+  const path = rebuilt.split('?')[0];
+  return path === '/admin/announcements' || path === '/admin/events';
+}

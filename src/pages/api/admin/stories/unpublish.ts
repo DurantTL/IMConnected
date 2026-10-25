@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro';
 import { validSlug } from '../../../../lib/story-publish';
 import { unpublishStoryItem } from '../../../../lib/bulk-actions';
 import { readFormLimited, redirectTo } from '../../../../lib/draft-http';
-import { safeLiveBack } from '../../../../lib/admin-back';
+import { isLiveSectionPage, safeLiveBack } from '../../../../lib/admin-back';
 import { clientIp } from '../../../../lib/request';
 
 export const prerender = false;
@@ -17,7 +17,9 @@ export const POST: APIRoute = async ({ request, locals, clientAddress }) => {
   const back = safeLiveBack(form && form !== 'too_big' ? form.get('back') : null);
   const slugValue = form && form !== 'too_big' ? form.get('slug') : null;
   const slug = typeof slugValue === 'string' ? slugValue : '';
-  if (!validSlug(slug)) return redirectTo(back, { e: 'slug_bad' });
+  // Back on the Announcements or Events page, land on its live section rather than the top of the page.
+  const hash = isLiveSectionPage(back) ? 'live' as const : undefined;
+  if (!validSlug(slug)) return redirectTo(back, { e: 'slug_bad', hash });
   const out = unpublishStoryItem(slug, user.id, clientIp(request, clientAddress));
-  return out.ok ? redirectTo(back, { n: 'unpublished' }) : redirectTo(back, { e: out.code });
+  return out.ok ? redirectTo(back, { n: 'unpublished', hash }) : redirectTo(back, { e: out.code, hash });
 };
