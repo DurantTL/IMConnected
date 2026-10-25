@@ -22,7 +22,7 @@
   --sec-kids: #0B3954;
 
   --serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
-  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --sans: 'Source Sans 3', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 
   --radius: 14px;
   --wrap: 1320px;
@@ -799,3 +799,72 @@ body:not(.admin) .cta-pair .cta-half h2 { font-size: clamp(1.4rem, 2.4vw, 1.9rem
 .type-choice small { display: block; font-weight: 400; font-size: 0.82rem; color: var(--ink-3); }
 @media (max-width: 620px) { .type-choice { grid-template-columns: 1fr; } }
 .form [hidden] { display: none !important; }
+
+/* Readability floor (issue #160). Source Sans 3 reads smaller than Inter at the
+   same size, so small public text is one step larger: nothing renders under 13px,
+   bylines and dates are 14px or more, card deks 16px or more on a phone, and the
+   letter-spaced uppercase labels that stay are 13px with tracking of 0.08em at
+   most. Declared last so it wins over the earlier per-breakpoint sizes; admin
+   styles keep their own --adm-* tokens and are untouched. */
+body:not(.admin) .publication-line,
+body:not(.admin) .conference-strip p,
+body:not(.admin) .masthead-edition,
+body:not(.admin) .masthead-note,
+body:not(.admin) .kicker,
+body:not(.admin) .article .kicker,
+body:not(.admin) .eyebrow,
+body:not(.admin) .block-head .eyebrow,
+body:not(.admin) .home-intro .eyebrow,
+body:not(.admin) .latest-heading .eyebrow,
+body:not(.admin) .latest-stories .card.compact .kicker,
+.spotlight-heading .eyebrow,
+.spotlight-number,
+.placeholder span,
+.site-footer h2,
+.card-read,
+body:not(.admin) .card-read,
+body:not(.admin) .topic-count,
+.spotlight-status { font-size: .8125rem; }
+body:not(.admin) .publication-line,
+body:not(.admin) .kicker,
+body:not(.admin) .article .kicker,
+body:not(.admin) .eyebrow,
+body:not(.admin) .block-head .eyebrow,
+body:not(.admin) .home-intro .eyebrow,
+body:not(.admin) .latest-heading .eyebrow,
+.spotlight-heading .eyebrow,
+body:not(.admin) .masthead-edition,
+body:not(.admin) .conference-strip p,
+.spotlight-number,
+.placeholder span,
+.site-footer h2 { letter-spacing: .08em; }
+body:not(.admin) .card .meta,
+body:not(.admin) .card.lead.without-photo .meta,
+body:not(.admin) .latest-stories .card.compact .meta,
+body:not(.admin) .area-col .card .meta,
+.featured-copy .meta,
+body:not(.admin) .article .byline,
+body:not(.admin) .article-reading,
+.home-statline,
+.latest-issue-line,
+.spotlight-details,
+.spotlight-read,
+.home-intro-note,
+body:not(.admin) .home-intro-note,
+.intro-link,
+body:not(.admin) .home-intro-note .intro-link,
+body:not(.admin) .hero-side>.intro-link,
+.home-news-heading>a,
+.spotlight-controls>a,
+.spotlight-choices button,
+.featured-copy .card-read,
+body:not(.admin) .topic-directory>a,
+body:not(.admin) .area-invitation>a,
+.area-title a,
+body:not(.admin) .footer-statement .btn,
+.footer-editor,
+.site-footer .fine,
+body:not(.admin) .block-head p:not(.eyebrow),
+.footer-bottom .fine { font-size: .875rem; }
+body:not(.admin) .card p.dek,
+.card p.dek { font-size: 1rem; }

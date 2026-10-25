@@ -19,6 +19,10 @@ The newsletter palette is shared by public and editor screens:
 
 Small links and category labels use navy on light backgrounds to meet text contrast requirements; primary teal remains available for buttons and larger accents. Mint outlines show keyboard focus on navy headers. The publication keeps these colors under either operating-system color preference.
 
+## Typography
+
+On 2026-10-25 the owner chose Source Sans 3 (weights 400 to 700, loaded from Google Fonts in `Base.astro`, `--sans` in `global.css`) to replace Inter; Source Serif 4 is unchanged. Because it reads smaller at the same size, public text has a floor: nothing under 13px, bylines and dates at least 14px, card summaries at least 16px on a phone, and the letter-spaced uppercase labels that remain (kickers, eyebrows) at 13px with tracking of 0.08em at most. The floor is the last block of `global.css` (issue #160); the admin keeps its own `--adm-*` tokens.
+
 ## Homepage and article layout
 
 The full-width event stage gives the flyer and invitation room above the news. A larger lead story, latest-story rail, strong sans-serif headlines and warm content surfaces establish the publication hierarchy. Article headlines and photography occupy a wider frame while the serif reading column stays around 66 characters wide. Article metadata adds estimated reading time and a jump to the story body. Primary and additional section links remain available.
