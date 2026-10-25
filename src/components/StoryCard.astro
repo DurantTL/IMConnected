@@ -30,8 +30,9 @@ const Heading = heading ?? (variant === 'lead' || variant === 'feature' ? 'h2' :
 let kickerSection: string | undefined = section?.label;
 let kickerSub: string | undefined = sub;
 if (kickerMode === 'area') {
-  kickerSection = !sub && pageSection && d.section !== pageSection ? section?.label : undefined;
-  if (sub) kickerSection = undefined;
+  // Listed here as an additional section: say where it primarily lives ("News / Camp", or the section alone),
+  // so an area name never reads like an area of this page's section.
+  kickerSection = pageSection && d.section !== pageSection ? section?.label : undefined;
 } else if (kickerMode === 'none') {
   kickerSection = undefined;
   kickerSub = undefined;

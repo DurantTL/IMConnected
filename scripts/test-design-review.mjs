@@ -153,6 +153,24 @@ try {
         });
         if (ragged.length) console.log('ragged rows:', ragged);
         check(`${name} at ${width}px lines up headlines across each card row`, ragged.length === 0);
+        const uneven = await page.evaluate(() => {
+          // Every card in a grid row starts at the row's top (a short text-only card is top-aligned, never centred or pushed down),
+          // and a text-only card is as tall as its text and padding, never a tall empty box (issue #162).
+          const bad = [];
+          for (const grid of document.querySelectorAll('main .grid')) {
+            const cards = [...grid.children].filter((c) => c.classList.contains('card')).sort((a, b) => a.offsetTop - b.offsetTop);
+            let row = [];
+            const flush = () => { if (row.length > 1 && Math.max(...row.map((c) => c.offsetTop)) - Math.min(...row.map((c) => c.offsetTop)) > 1) bad.push('tops: ' + row.map((c) => c.querySelector('h2,h3').textContent).join(' | ')); row = []; };
+            for (const c of cards) { if (row.length && c.offsetTop - row[0].offsetTop > 40) flush(); row.push(c); }
+            flush();
+          }
+          for (const c of document.querySelectorAll('main .grid > .card.without-photo')) {
+            const copy = c.querySelector('.card-copy');
+            if (c.offsetHeight > copy.offsetHeight + 56) bad.push('tall: ' + c.querySelector('h2,h3').textContent + ' ' + c.offsetHeight + '/' + copy.offsetHeight);
+          }
+          return bad;
+        });
+        check(`${name} at ${width}px top-aligns every card in a row and keeps text-only cards as short as their text`, uneven.length === 0, uneven.join(' || '));
       }
       if (width === 1440 && ['home', 'section', 'story', 'submit', 'search'].includes(name)) {
         const current = await page.evaluate(() => ({
