@@ -234,7 +234,7 @@ try {
           check(`${tag}: loads, no horizontal scroll, no script errors`, res.status() === 200 && dim.s <= dim.w && errors.length === 0, `${res.status()} ${JSON.stringify(dim)} ${errors}`);
           const ragged = await page.evaluate(() => {
             const rows = new Map();
-            for (const card of document.querySelectorAll('main .grid > .card')) {
+            for (const card of document.querySelectorAll('main .grid > .card.with-photo')) { // text-only cards have no picture block, so only cards with a photo share a headline line (issue #162)
               const key = `${[...card.parentElement.parentElement.children].indexOf(card.parentElement)}:${card.offsetTop}`;
               (rows.get(key) || rows.set(key, []).get(key)).push(card);
             }

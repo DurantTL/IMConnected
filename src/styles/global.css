@@ -130,7 +130,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .card .media img { width: 100%; height: 100%; object-fit: cover; transition: transform .35s ease; }
 .card:hover .media img { transform: scale(1.03); }
 .card h3 { margin: 0; font-family: var(--serif); font-size: 1.22rem; line-height: 1.25; letter-spacing: -0.005em; }
-.card:hover h3 { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.card:hover :is(h2, h3) { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .card p.dek { margin: 0; color: var(--ink-2); font-size: 0.95rem; }
 .card .meta { font-size: 0.8rem; color: var(--ink-3); }
 .card.lead h3 { font-size: clamp(1.6rem, 3.2vw, 2.35rem); line-height: 1.13; letter-spacing: -.025em; }
@@ -138,12 +138,6 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .card.compact { flex-direction: row; gap: 14px; align-items: flex-start; }
 .card.compact .media { flex: 0 0 120px; aspect-ratio: 4 / 3; }
 .card.compact h3 { font-size: 1.05rem; }
-
-/* placeholder art when a story has no photo */
-.placeholder { width: 100%; height: 100%; display: grid; place-items: center; background:
-  radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--sec, var(--brand-text)) 35%, transparent), transparent 60%),
-  linear-gradient(135deg, var(--sec, var(--brand-text)), color-mix(in srgb, var(--sec, var(--brand-text)) 65%, #000)); color: #fff; }
-.placeholder span { font: 700 0.75rem/1 var(--sans); letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.9; }
 
 /* across the conference list */
 .area-col { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: flex; flex-direction: column; gap: 16px; box-shadow: var(--shadow-sm); min-width: 0; }
@@ -158,14 +152,50 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 @media (max-width: 700px) { .cta { grid-template-columns: 1fr; } }
 
 /* ---------- Section pages ---------- */
-.page-head { padding: 36px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 28px; }
-.page-head h1 { margin: 6px 0 6px; font-family: var(--serif); font-size: clamp(2rem, 4.4vw, 2.8rem); letter-spacing: -0.015em; }
-.page-head p { margin: 0; color: var(--ink-2); max-width: 60ch; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-.chip { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; font-size: 0.86rem; font-weight: 600; padding: 7px 13px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); }
-.chip:hover { color: var(--ink); border-color: var(--ink-3); }
-.chip[aria-current='page'] { background: var(--sec, var(--brand-text)); border-color: var(--sec, var(--brand-text)); color: var(--brand-ink); }
+.page-head { padding: clamp(20px, 4vw, 36px) 0 16px; border-bottom: 1px solid var(--line); margin-bottom: clamp(20px, 3vw, 28px); }
+.page-head h1 { margin: 0 0 8px; font-family: var(--serif); font-size: clamp(2rem, 4.4vw, 2.8rem); letter-spacing: -0.015em; }
+.page-head p { margin: 0; color: var(--ink-2); max-width: 60ch; font-size: 1.125rem; line-height: 1.5; }
+.chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.chip { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; font-size: 1rem; font-weight: 600; padding: 7px 16px; border-radius: 999px; background: var(--surface-2); color: var(--ink); }
+.chip:hover { background: #dedbd3; }
+.chip[aria-current] { background: var(--sec, var(--brand-text)); color: var(--brand-ink); }
 .empty-state { padding: 48px 0; color: var(--ink-3); text-align: center; }
+
+/* Section and area pages (issue #162): one lead story, then compact rows on a phone and a calm grid from 768px.
+   No outlines or shadows: items are separated by space, the photo edge and a tone step on text-only cards. */
+.sec-lead { margin-bottom: 24px; }
+body:not(.admin) .card.feature { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; align-items: start; }
+body:not(.admin) .card.feature .media { aspect-ratio: 16 / 10; border-radius: 4px; }
+body:not(.admin) .card.feature .card-copy { gap: 10px; padding: 16px 0 0; }
+body:not(.admin) .card.feature h2 { margin: 0; font-family: var(--serif); font-weight: 600; font-size: clamp(1.75rem, 3.4vw, 2.5rem); line-height: 1.14; letter-spacing: -.02em; }
+body:not(.admin) .card.feature:hover h2 { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+body:not(.admin) .card.feature p.dek { font-size: 1.125rem; line-height: 1.5; max-width: 60ch; }
+body:not(.admin) .card.feature.without-photo { background: var(--surface-2); border-radius: 4px; }
+body:not(.admin) .card.feature.without-photo .card-copy { padding: 24px; }
+@media (min-width: 1024px) {
+  body:not(.admin) .card.feature.with-photo { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 32px; align-items: center; }
+  body:not(.admin) .card.feature.with-photo .card-copy { padding: 0; gap: 14px; }
+  body:not(.admin) .card.feature.without-photo .card-copy { padding: 40px; }
+}
+.sec-grid { gap: 24px; grid-template-columns: minmax(0, 1fr); }
+body:not(.admin) .card.row { flex-direction: row-reverse; align-items: flex-start; justify-content: space-between; gap: 16px; min-height: 44px; }
+body:not(.admin) .card.row .media { flex: 0 0 104px; width: 104px; aspect-ratio: 1; border-radius: 4px; }
+body:not(.admin) .card.row .card-copy { flex: 1 1 auto; gap: 4px; }
+body:not(.admin) .card.row .kicker, body:not(.admin) .card.row p.dek { display: none; }
+body:not(.admin) .card.row :is(h2, h3) { font-size: 1.1875rem; line-height: 1.25; }
+body:not(.admin) .sec-lead .card:hover, body:not(.admin) .sec-grid .card:hover { translate: none; box-shadow: none; }
+@media (min-width: 768px) {
+  .sec-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 28px; align-items: start; }
+  body:not(.admin) .card.row { flex-direction: column; justify-content: flex-start; gap: 12px; }
+  body:not(.admin) .card.row .media { flex: none; width: 100%; aspect-ratio: 3 / 2; }
+  body:not(.admin) .card.row .card-copy { gap: 8px; }
+  body:not(.admin) .card.row .kicker { display: inline-block; }
+  body:not(.admin) .card.row p.dek { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  body:not(.admin) .card.row :is(h2, h3) { font-size: 1.3rem; }
+  body:not(.admin) .card.row.without-photo { background: var(--surface-2); border-radius: 4px; padding: 20px; }
+}
+@media (min-width: 1024px) { .sec-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .sec-lead { margin-bottom: 32px; } }
+@media (hover: none), (prefers-reduced-motion: reduce) { .sec-lead .card:hover .media img, .sec-grid .card:hover .media img { transform: none; } }
 
 /* ---------- Article ---------- */
 .article { max-width: 760px; margin: 0 auto; padding: 36px 0 0; }
@@ -402,6 +432,8 @@ body:not(.admin) .card.lead:hover h2 { text-decoration:underline; text-decoratio
 body:not(.admin) .card.default { background:var(--surface); border:1px solid var(--line); border-radius:4px; overflow:hidden; gap:0; }
 body:not(.admin) .card.default .media { border-radius:0; }
 body:not(.admin) .card.default .card-copy { padding:22px; }
+/* A story without a photo is a text-only card: it takes its content's height instead of stretching to a photo card's (issue #162). */
+body:not(.admin) .card.default.without-photo { align-self:start; }
 body:not(.admin) .hero-side { display:flex; flex-direction:column; gap:20px; padding:18px 0 4px; border-top:3px solid var(--brand); }
 body:not(.admin) .latest-heading h2 { font:600 1.5rem/1.2 var(--serif); letter-spacing:-.025em; margin:4px 0 0; }
 body:not(.admin) .latest-heading .eyebrow { margin:0; font-size:.6rem; }
@@ -435,8 +467,8 @@ body:not(.admin) .area-invitation>a { display:inline-flex; align-items:center; m
 body:not(.admin) .cta { border-radius:4px; background:#E0F5F7; padding:38px 42px; margin-top:52px; }
 body:not(.admin) .cta h2 { font-size:clamp(2rem,3.5vw,3.15rem); line-height:1.05; letter-spacing:-.04em; font-weight:600; }
 body:not(.admin) .cta .eyebrow { margin-bottom:9px; }
-body:not(.admin) .page-head { border-bottom:2px solid var(--brand); padding-top:48px; margin-bottom:32px; }
-body:not(.admin) .page-head h1 { font-size:clamp(2.4rem,5.5vw,4.2rem); font-weight:600; letter-spacing:-.045em; }
+body:not(.admin) .page-head { border-bottom:2px solid var(--brand); padding-top:clamp(20px,4vw,48px); margin-bottom:clamp(20px,3vw,32px); }
+body:not(.admin) .page-head h1 { font-size:clamp(2.2rem,5.5vw,4.2rem); font-weight:600; letter-spacing:-.045em; line-height:1.08; }
 body:not(.admin) .article { padding-top:30px; max-width:780px; }
 body:not(.admin) .article-breadcrumb { display:flex; gap:10px; align-items:center; color:var(--ink-3); font-size:.7rem; margin-bottom:34px; }
 body:not(.admin) .article-breadcrumb a { min-height:30px; display:inline-flex; align-items:center; text-decoration:none; }
@@ -565,9 +597,6 @@ html body:not(.admin) .spotlight-heading .eyebrow { font-size:.875rem; font-weig
 @media (min-width: 621px) { .magazine-home { --home-gap: 56px; } }
 body:not(.admin) .magazine-home .hero { padding-top: 20px; }
 body:not(.admin) .magazine-home .cta { margin-top: var(--home-gap); }
-/* Stories without a photo: a flat section colour (no gradient) behind the label. */
-body:not(.admin) .magazine-home .placeholder { background: var(--sec, var(--brand-text)); }
-@media (max-width: 619px) { body:not(.admin) .magazine-home .card.default.without-photo .media { aspect-ratio: 16 / 5; } }
 /* "Read the story" and the other home read links: sentence case, 15px, no tracking. Focus draws on the whole link (.featured-link, .card). */
 html body:not(.admin) .magazine-home .card-read { text-transform: none; letter-spacing: 0; font-size: .9375rem; }
 html body:not(.admin) .magazine-home .home-news-heading > a,
@@ -749,13 +778,13 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
 @media(max-width:380px) { body:not(.admin) .header-search svg { display:none; } }
 
 /* Pagination on the section and area pages (issue #96) */
-.pager { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:8px 12px; margin:40px 0 8px; }
-.pager-list { display:flex; flex-wrap:wrap; justify-content:center; gap:6px; list-style:none; margin:0; padding:0; }
-.pager-num, .pager-step { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; padding:0 14px; box-sizing:border-box; border:1px solid var(--line); border-radius:999px; background:var(--surface); color:var(--ink-2); font-size:.9rem; font-weight:600; text-decoration:none; }
-.pager-num:hover, .pager-step:hover { color:var(--ink); border-color:var(--ink-3); }
-.pager-num[aria-current='page'] { background:var(--sec, var(--brand-text)); border-color:var(--sec, var(--brand-text)); color:var(--brand-ink); }
+.pager { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:10px 12px; margin:32px 0 8px; }
+.pager-list { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; list-style:none; margin:0; padding:0; }
+.pager-num, .pager-step { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; padding:0 14px; box-sizing:border-box; border-radius:999px; background:var(--surface-2); color:var(--ink); font-size:1rem; font-weight:600; text-decoration:none; }
+.pager-num:hover, .pager-step:hover { background:#dedbd3; }
+.pager-num[aria-current='page'] { background:var(--sec, var(--brand-text)); color:var(--brand-ink); }
 .pager-step.is-off { visibility:hidden; }
-.pager-gap { display:inline-flex; align-items:center; min-height:44px; color:var(--ink-3); }
+.pager-gap { display:inline-flex; align-items:center; min-height:44px; color:var(--ink-2); }
 @media(max-width:480px) { .pager-step.is-off { display:none; } }
 
 /* ---------- Issues browser (issue #99) ---------- */
@@ -867,7 +896,6 @@ body:not(.admin) .latest-heading .eyebrow,
 body:not(.admin) .latest-stories .card.compact .kicker,
 .spotlight-heading .eyebrow,
 .spotlight-number,
-.placeholder span,
 .site-footer h2,
 .card-read,
 body:not(.admin) .card-read,
@@ -884,7 +912,6 @@ body:not(.admin) .latest-heading .eyebrow,
 body:not(.admin) .masthead-edition,
 body:not(.admin) .conference-strip p,
 .spotlight-number,
-.placeholder span,
 .site-footer h2 { letter-spacing: .08em; }
 body:not(.admin) .card .meta,
 body:not(.admin) .card.lead.without-photo .meta,

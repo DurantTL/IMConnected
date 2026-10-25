@@ -44,7 +44,15 @@ Below the story blocks and above the submit call to action, "From the archive" (
 - One spacing scale between home blocks, set by `--home-gap` on `.magazine-home`: 32px on a phone, 56px from 621px. Each block carries its own top space, so a hidden, reordered or empty block leaves no gap.
 - Home eyebrows keep their words and read as sentence-case labels at 14px with no tracking in the muted ink colour. The featured panel has one kicker, "Featured story · <section label>"; "Read the story" and similar links are sentence case at 15px.
 - Under 620px each section rail keeps its first card whole; the others are compact rows (title, byline and date, a 96px thumbnail on the right, no summary) that are one link at least 44px tall.
-- The decorative numbers beside the "From around our conference" list are gone (the list is still an `<ol>`). Stories without a photo show a flat section colour, never a gradient.
+- The decorative numbers beside the "From around our conference" list are gone (the list is still an `<ol>`). Stories without a photo are text only (issue #162).
+
+## Section and area pages (issue #162)
+
+`SectionList.astro` shows, on page 1 of `/<section>/` and `/<section>/<area>/`, the newest story as a **lead** (`StoryCard` `variant="feature"`, an `h2`): from 1024px the photo takes 7/12 and the text 5/12; below that, and on a phone, the photo comes first at full width. A lead without a photo is text on a tone step across the full width. Pages 2 and above have no lead and a plain list (their stories are `h2`, so the heading order stays h1 then h2).
+
+The stories after the lead use `variant="row"`. Under 768px each is a compact row: title (serif, 19px), then byline and date, with a 104px square thumbnail on the right when there is a photo; no kicker and no summary on a phone (the summary stays in the DOM). Rows are separated by space (24px) only, no rule. From 768px the rows become a calm grid (2 columns at 768px, 3 from 1024px) with no outline or shadow: a text-only story is a tone-step block, a photo story is its photo above the text, and summaries are clamped to three lines (full text kept in the DOM).
+
+A story without a photo is **text only everywhere `StoryCard` is used** (home rails, archive, `/issues/`); the navy placeholder tile and its CSS are gone. The kicker (`kickerMode`) is the area only on a section page (or the story's primary section when it is listed there through `additionalSections`), nothing on an area page, and "Section / Area" elsewhere. The tiny "IMConnected" eyebrow above the page `h1` is gone. The area filters (`.chips`) and the pager are tone-step pills at least 44px tall with 8px or more between them; the current one keeps `aria-current`. Tests: `scripts/test-public-pages.mjs` (lead on page 1 only, no placeholder, no kicker on area pages) and `scripts/test-design-review.mjs`.
 
 ## Event spotlight behavior
 

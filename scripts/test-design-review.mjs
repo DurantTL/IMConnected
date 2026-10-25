@@ -139,10 +139,10 @@ try {
       check(`${name} at ${width}px has no uncaught script errors`, errors.length === 0);
       if (name === 'home') check(`${name} at ${width}px shows the archive rail`, await page.locator('.archive-rail h2').innerText() === 'From the archive');
       if (name === 'section' || name === 'home') {
-        // Cards side by side in a grid row share their top and headline position, photo or not (layout offsets ignore the reveal animation).
+        // Cards with a photo side by side in a grid row share their top and headline position (layout offsets ignore the reveal animation).
         const ragged = await page.evaluate(() => {
           const rows = new Map();
-          for (const card of document.querySelectorAll('main .grid > .card')) {
+          for (const card of document.querySelectorAll('main .grid > .card.with-photo')) { // text-only cards have no picture block, so only cards with a photo share a headline line (issue #162)
             const key = `${[...card.parentElement.parentElement.children].indexOf(card.parentElement)}:${card.offsetTop}`;
             (rows.get(key) || rows.set(key, []).get(key)).push(card);
           }
