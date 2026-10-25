@@ -308,7 +308,7 @@ export function getStoryHash(slug: string): { hash: string | null; status: strin
 // Read-only. Every filter is whitelisted by parsePublishedFilter() and every value is a bound parameter; the search
 // text is LIKE-escaped. The set is the live, non-draft stories (what the public site shows).
 
-export const PUBLISHED_SORTS = ['published_desc', 'published_asc', 'edited_desc', 'date_desc', 'title', 'section'] as const;
+export const PUBLISHED_SORTS = ['published_desc', 'published_asc', 'edited_desc', 'date_desc', 'title', 'section', 'event'] as const;
 export type PublishedSort = (typeof PUBLISHED_SORTS)[number];
 export const PUBLISHED_PER_PAGE = [25, 50, 100] as const;
 export const PUBLISHED_Q_MAX = 200;
@@ -351,6 +351,8 @@ export interface PublishedRow {
   publishedBy: string | null;
   openDraft: boolean;
   draftId: number | null;
+  /** The announcement's event date (YYYY-MM-DD), or null when it has none (issue #168). */
+  eventDate: string | null;
 }
 
 /** Wall clock in America/Chicago for an instant. */
@@ -412,9 +414,11 @@ export const EDITED_GRACE_MS = 60_000;
 const EDITED_COND = `s.edited_at IS NOT NULL AND s.edited_at > ${FIRST_LIVE} + ${EDITED_GRACE_MS}`;
 /** The content type of a live story: no (or unreadable) announcement is a story. Bound values only ever compare against it. */
 const PUB_KIND_SQL = "CASE WHEN json_valid(s.announcement) AND json_extract(s.announcement,'$.kind') IN ('announcement','event') THEN json_extract(s.announcement,'$.kind') ELSE 'story' END";
+/** The announcement's event date as text, or NULL (no announcement, unreadable JSON, a missing, empty or non-text value). A constant expression. */
+const EVENT_DATE_SQL = "NULLIF(CASE WHEN json_valid(s.announcement) THEN CASE WHEN json_type(s.announcement,'$.eventDate') = 'text' THEN json_extract(s.announcement,'$.eventDate') END END, '')";
 const OPEN_DRAFT = "d.status IN ('new', 'in_review')";
 
-const ORDER: Record<PublishedSort, string> = {
+const ORDER: Record<Exclude<PublishedSort, 'event'>, string> = {
   published_desc: `${PUB_AT} DESC, s.slug ASC`,
   published_asc: `${PUB_AT} ASC, s.slug ASC`,
   edited_desc: `CASE WHEN (${EDITED_COND}) THEN s.edited_at END IS NULL, CASE WHEN (${EDITED_COND}) THEN s.edited_at END DESC, s.slug ASC`,
@@ -422,6 +426,22 @@ const ORDER: Record<PublishedSort, string> = {
   title: 's.title COLLATE NOCASE ASC, s.slug ASC',
   section: "s.section COLLATE NOCASE ASC, COALESCE(s.area, '') COLLATE NOCASE ASC, s.slug ASC",
 };
+
+/**
+ * ORDER BY text and its bound values. `event` (issue #168): upcoming first, soonest at the top, then past events newest
+ * first, then those without a date. The text is constant; today (the America/Chicago day, YYYY-MM-DD) is the only bound
+ * value, passed three times.
+ */
+function orderFor(sort: PublishedSort, now: number): { sql: string; args: string[] } {
+  if (sort !== 'event') return { sql: ORDER[sort], args: [] };
+  const { y, mo, d } = chicagoParts(now);
+  const today = `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const ev = EVENT_DATE_SQL;
+  return {
+    sql: `CASE WHEN ${ev} IS NULL THEN 2 WHEN ${ev} >= ? THEN 0 ELSE 1 END, CASE WHEN ${ev} >= ? THEN ${ev} END ASC, CASE WHEN ${ev} < ? THEN ${ev} END DESC, ${ORDER.published_desc}`,
+    args: [today, today, today],
+  };
+}
 
 function publishedWhere(f: PublishedFilter, now: number): { sql: string; args: (string | number)[] } {
   const where = ["s.status = 'live'", 's.draft = 0'];
@@ -449,18 +469,19 @@ function publishedWhere(f: PublishedFilter, now: number): { sql: string; args: (
 export function listStoriesPage(f: PublishedFilter, now = Date.now()): { items: PublishedRow[]; total: number; page: number; pages: number } {
   const db = getDb();
   const { sql, args } = publishedWhere(f, now);
+  const order = orderFor(f.sort, now);
   const total = Number((db.prepare(`SELECT COUNT(*) AS n ${PUB_FROM} ${sql}`).get(...args) as { n: number }).n);
   const pages = Math.max(1, Math.ceil(total / f.perPage));
   const page = Math.min(f.page, pages);
   const rows = db.prepare(`SELECT s.slug, ${PUB_KIND_SQL} AS kind, s.title, s.section, s.area, s.church, s.author, s.date, s.featured, s.newsletter_issue AS issue, CASE WHEN (${EDITED_COND}) THEN s.edited_at END AS edited_at,
-      ${PUB_AT} AS pub_at, CASE WHEN ${PUB_LIVE} THEN CASE WHEN d.published_via_studio = 1 THEN ? ELSE u.name END END AS pub_by, CASE WHEN ${OPEN_DRAFT} THEN 1 ELSE 0 END AS open_draft, d.id AS draft_id
-    ${PUB_FROM} ${sql} ORDER BY ${ORDER[f.sort]} LIMIT ? OFFSET ?`).all(STUDIO_PUBLISHER, ...args, f.perPage, (page - 1) * f.perPage) as Row[];
+      ${PUB_AT} AS pub_at, CASE WHEN ${PUB_LIVE} THEN CASE WHEN d.published_via_studio = 1 THEN ? ELSE u.name END END AS pub_by, CASE WHEN ${OPEN_DRAFT} THEN 1 ELSE 0 END AS open_draft, d.id AS draft_id, ${EVENT_DATE_SQL} AS event_date
+    ${PUB_FROM} ${sql} ORDER BY ${order.sql} LIMIT ? OFFSET ?`).all(STUDIO_PUBLISHER, ...args, ...order.args, f.perPage, (page - 1) * f.perPage) as Row[];
   return {
     total, page, pages,
     items: rows.map((r) => ({
       slug: String(r.slug), kind: (r.kind === 'announcement' || r.kind === 'event' ? r.kind : 'story') as PublishedRow['kind'], title: String(r.title), section: String(r.section), area: opt(r.area), church: opt(r.church), author: String(r.author), date: String(r.date),
       featured: Number(r.featured) === 1, issue: optNum(r.issue) ?? null, editedAt: optNum(r.edited_at) ?? null, publishedAt: optNum(r.pub_at) ?? null,
-      publishedBy: opt(r.pub_by) ?? null, openDraft: Number(r.open_draft) === 1, draftId: optNum(r.draft_id) ?? null,
+      publishedBy: opt(r.pub_by) ?? null, openDraft: Number(r.open_draft) === 1, draftId: optNum(r.draft_id) ?? null, eventDate: opt(r.event_date) ?? null,
     })),
   };
 }

@@ -84,14 +84,37 @@ try {
     );
   }
   // ---- live stories for the Published cards (issue #164): 4 stories, 3 announcements, 2 events; plus rows that never count ----
-  const LIVE = { story: 4, announcement: 3, event: 2 };
+  const LIVE = { story: 0, announcement: 0, event: 0 };
+  // Dates relative to today's America/Chicago day so the event ordering holds on any run date.
+  const ymdNow = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const addDays = (ymd, n) => new Date(Date.parse(ymd + 'T00:00:00Z') + n * DAY).toISOString().slice(0, 10);
   let ln = 0;
-  const liveIns = (kind, status, draft) => {
+  // opts: eventDate (string; null leaves it out; a number is stored as a non-text value), source, pub (published_at), slug, title.
+  const liveIns = (kind, status, draft, opts = {}) => {
     ln++;
-    run("INSERT INTO stories(slug,title,dek,section,area,author,church,date,body,status,source,published_at,updated_at,featured,draft,additional_sections,announcement) VALUES(?,?,'Synthetic summary.','news',NULL,'Synthetic Author','Synthetic Church','2026-06-01','Synthetic body.',?,'editor',?,?,0,?,'[]',?)",
-      `synth-live-${ln}`, `Synthetic Live ${ln}`, status, now, now, draft, kind === 'story' ? null : JSON.stringify({ kind, eventDate: '2026-12-01' }));
+    const slug = opts.slug ?? `synth-live-${ln}`;
+    const ann = kind === 'story' ? null : JSON.stringify({ kind, ...(opts.eventDate === null ? {} : { eventDate: opts.eventDate ?? '2026-12-01' }) });
+    run("INSERT INTO stories(slug,title,dek,section,area,author,church,date,body,status,source,published_at,updated_at,featured,draft,additional_sections,announcement) VALUES(?,?,'Synthetic summary.','news',NULL,'Synthetic Author','Synthetic Church','2026-06-01','Synthetic body.',?,?,?,?,0,?,'[]',?)",
+      slug, opts.title ?? `Synthetic Live ${ln}`, status, opts.source ?? 'editor', opts.pub ?? now, opts.pub ?? now, draft, ann);
+    if (status === 'live' && !draft) LIVE[kind]++;
+    return slug;
   };
-  for (const [k, n] of Object.entries(LIVE)) for (let j = 0; j < n; j++) liveIns(k, 'live', 0);
+  for (let j = 0; j < 4; j++) liveIns('story', 'live', 0);
+  for (let j = 0; j < 3; j++) liveIns('announcement', 'live', 0);
+  // Events, inserted the way Studio (source studio) and the archive adoption (source git) leave them: no draft row at all.
+  const EV = {
+    far: liveIns('event', 'live', 0, { eventDate: addDays(ymdNow, 30), source: 'studio', title: 'Synthetic Event Far', slug: 'synth-ev-far' }),
+    soon: liveIns('event', 'live', 0, { eventDate: addDays(ymdNow, 2), source: 'git', title: 'Synthetic Event Soon', slug: 'synth-ev-soon' }),
+    today: liveIns('event', 'live', 0, { eventDate: ymdNow, source: 'studio', title: 'Synthetic Event Today', slug: 'synth-ev-today' }),
+    yesterday: liveIns('event', 'live', 0, { eventDate: addDays(ymdNow, -1), source: 'git', title: 'Synthetic Event Yesterday', slug: 'synth-ev-yesterday' }),
+    old: liveIns('event', 'live', 0, { eventDate: addDays(ymdNow, -40), source: 'git', title: 'Synthetic Event Old', slug: 'synth-ev-old' }),
+    none: liveIns('event', 'live', 0, { eventDate: null, title: 'Synthetic Event No Date', slug: 'synth-ev-none', pub: now - 1000 }),
+    num: liveIns('event', 'live', 0, { eventDate: 20261201, title: 'Synthetic Event Odd Date', slug: 'synth-ev-num', pub: now - 2000 }),
+  };
+  const EV_ORDER = [EV.today, EV.soon, EV.far, EV.yesterday, EV.old, EV.none, EV.num];
+  // 27 more announcements (30 in all) so the live section has a second page; newest published first is by published_at.
+  const ANN_EXTRA = [];
+  for (let j = 0; j < 27; j++) ANN_EXTRA.push(liveIns('announcement', 'live', 0, { slug: `synth-ann-${String(j).padStart(2, '0')}`, title: `Synthetic Announcement ${String(j).padStart(2, '0')}`, source: j % 2 ? 'git' : 'studio', pub: now - 5000 - j * 1000 }));
   liveIns('event', 'unpublished', 0); liveIns('announcement', 'live', 1);
   const ids = (list) => list.map((d) => d.i);
   const open = (d) => d.status === 'new' || d.status === 'in_review';
@@ -175,11 +198,11 @@ try {
     const t = (await get(pth)).text;
     const m = t.match(/<a class="adm-stat" href="([^"]*)" aria-label="([^"]*)">\s*<span class="adm-stat-label">Published<\/span>\s*<strong>(\d+)<\/strong>\s*<span class="adm-stat-note">([^<]*)<\/span>/);
     check(`${pth}: Published card shows ${LIVE[k]} live ${k} items`, m && Number(m[3]) === LIVE[k], m ? m[3] : 'no card');
-    check(`${pth}: Published card links to the published list for ${k}, says it is live, reads well to screen readers`, m && m[1].replace(/&amp;/g, '&') === (k === 'story' ? '/admin/published?kind=story' : `/admin/published?kind=${k}`) && m[4] === 'Live on the site' && m[2] === `Published, ${LIVE[k]}, live on the site`, m ? `${m[1]} ${m[2]}` : '');
+    check(`${pth}: Published card (issue #168: the live section's #live on the two type pages, the published list for stories) for ${k}, says it is live, reads well to screen readers`, m && m[1].replace(/&amp;/g, '&') === (k === 'story' ? '/admin/published?kind=story' : '#live') && m[4] === 'Live on the site' && m[2] === `Published, ${LIVE[k]}, live on the site`, m ? `${m[1]} ${m[2]}` : '');
     check(`${pth}: the Published card is not a draft status (no status= in its link, not aria-current)`, m && !m[1].includes('status=') && !/class="adm-stat"[^>]*href="[^"]*published\?[^"]*"[^>]*aria-current/.test(t));
   }
   r = await list('kind=all&status=all&perPage=100');
-  check('/admin?kind=all: the Published card counts every type and opens the whole list', />\s*<strong>9<\/strong>\s*<span class="adm-stat-note">Live on the site/.test(r.text) && r.text.includes('href="/admin/published"'));
+  check('/admin?kind=all: the Published card counts every type and opens the whole list', new RegExp(`>\\s*<strong>${LIVE.story + LIVE.announcement + LIVE.event}<\\/strong>\\s*<span class="adm-stat-note">Live on the site`).test(r.text) && r.text.includes('href="/admin/published"'));
   check('the draft status filters are unchanged: status=published is still the drafts table, not the live stories', sameSet((await list('kind=all&status=published&perPage=100')).ids, ids(D.filter((d) => d.status === 'published'))));
   check('Newest published heading links to the whole published list (the panel shows every type)', (await get('/admin')).text.includes('<h2 id="home-pub"><a class="adm-head-link" href="/admin/published">Newest published</a></h2>'));
 
@@ -330,6 +353,58 @@ try {
     check(`malicious back ${JSON.stringify(back.slice(0, 32))} only yields a drafts list address`, b.status === 200 && carried.length > 0 && carried.every(good) && cancels.length > 0 && cancels.every(good) && !/evil/i.test(b.text), `${carried} | ${cancels}`);
   }
 
+  // ---- issue #168: "Live on the site" on /admin/events and /admin/announcements ----
+  const section = (html) => { const a = html.indexOf('<section class="adm-live"'); return a === -1 ? '' : html.slice(a, html.indexOf('</section>', a)); };
+  const liveSlugs = (html) => [...section(html).matchAll(/name="slug" value="([^"]+)" form="bulk-live-(?:event|announcement)"/g)].map((m) => m[1]);
+  const liveRows = (html) => [...section(html).matchAll(/<tr>[\s\S]*?<\/tr>/g)].map((m) => m[0]).filter((x) => x.includes('bulk-item'));
+  const liveSet = (kind) => rows("SELECT slug FROM stories WHERE status = 'live' AND draft = 0 AND json_extract(announcement, '$.kind') = ?", kind).map((x) => x.slug);
+  const evHtml = (await get('/admin/events')).text;
+  const annHtml = (await get('/admin/announcements')).text;
+  const storyHtml = (await get('/admin')).text;
+  check('events page: h2 "Live events (n)" with every live event counted', evHtml.includes(`<h2 id="live-heading">Live events (${LIVE.event})</h2>`) && LIVE.event === 7);
+  check('announcements page: h2 "Live announcements (n)"', annHtml.includes(`<h2 id="live-heading">Live announcements (${LIVE.announcement})</h2>`) && LIVE.announcement === 30);
+  check('the live section comes after the drafts table and its bulk bar, and has id="live"', section(evHtml).includes('id="live"') && evHtml.indexOf('id="live"') > evHtml.indexOf('class="adm-table-card"') && evHtml.indexOf('id="live"') > evHtml.indexOf('id="bulk-form"'));
+  check('events page lists exactly the live events (Studio and archive ones with no draft row included), none of the announcements or stories', [...liveSlugs(evHtml)].sort().join() === liveSet('event').sort().join() && liveSlugs(evHtml).length === LIVE.event);
+  check('announcements page: only announcements (25 on the first page), no event or story slugs', liveSlugs(annHtml).length === 25 && liveSlugs(annHtml).every((x) => liveSet('announcement').includes(x)));
+  check('/admin (stories) has no live section and no live bulk bar', !storyHtml.includes('id="live"') && !storyHtml.includes('bulk-live-'));
+  check('events: upcoming soonest first (today counts as upcoming), then past newest first, then undated', same(liveSlugs(evHtml), EV_ORDER), liveSlugs(evHtml).join());
+  const rowOf = (html, slug) => liveRows(html).find((x) => x.includes(`value="${slug}"`)) || '';
+  check('each event row shows its event date, "No date" when missing or not text', rowOf(evHtml, EV.today).includes(`datetime="${ymdNow}"`) && rowOf(evHtml, EV.far).includes(`datetime="${addDays(ymdNow, 30)}"`) && rowOf(evHtml, EV.none).includes('No date') && rowOf(evHtml, EV.num).includes('No date') && !rowOf(evHtml, EV.old).includes('No date'));
+  check('announcement rows have no event-date column', !section(annHtml).includes('Event date'));
+  check('rows carry the published columns: title to the public page, section, story date, published day, View on site, Edit, Unpublish with a back value', ['Section</th>', 'Story date</th>', 'Published</th>'].every((t) => section(evHtml).includes(t)) && /href="http[^"]*\/stories\/synth-ev-today\/" rel="noopener"/.test(rowOf(evHtml, EV.today)) && rowOf(evHtml, EV.today).includes('View on site') && rowOf(evHtml, EV.today).includes('action="/api/admin/stories/edit"') && rowOf(evHtml, EV.today).includes('action="/api/admin/stories/unpublish"') && rowOf(evHtml, EV.today).includes('name="back" value="/admin/events"') && rowOf(evHtml, EV.today).includes('data-confirm='));
+  const ev2 = (await get('/admin/events?status=all&q=Synthetic&perPage=50')).text;
+  check('the live section ignores the drafts filters (same rows) and its Unpublish carries the drafts view as back', same(liveSlugs(ev2), EV_ORDER) && rowOf(ev2, EV.today).includes('name="back" value="/admin/events?status=all&amp;q=Synthetic&amp;perPage=50"'));
+  // Announcements: the published list's default order, newest published first.
+  const annOrder = rows("SELECT slug FROM stories WHERE status = 'live' AND draft = 0 AND json_extract(announcement, '$.kind') = 'announcement' ORDER BY published_at DESC, slug ASC").map((x) => x.slug);
+  check('announcements: newest published first', same(liveSlugs(annHtml), annOrder.slice(0, 25)), liveSlugs(annHtml).slice(0, 4).join());
+  // livePage: its own parameter, whitelisted, clamped, never touching the drafts table.
+  const ap2 = (await get('/admin/announcements?livePage=2')).text;
+  check('livePage=2 shows the other five announcements and "Showing 26–30 of 30"', same(liveSlugs(ap2), annOrder.slice(25)) && section(ap2).includes('Showing 26–30 of 30'));
+  for (const bad of ['abc', '0', '-1', '1.5', '1e3', '', '%27%20OR%201%3D1']) check(`livePage=${JSON.stringify(decodeURIComponent(bad))} is page 1`, same(liveSlugs((await get(`/admin/announcements?livePage=${bad}`)).text), annOrder.slice(0, 25)));
+  check('livePage=999 and 999999 are clamped to the last page; more than six digits is not a page number (page 1)', same(liveSlugs((await get('/admin/announcements?livePage=999')).text), annOrder.slice(25)) && same(liveSlugs((await get('/admin/announcements?livePage=999999')).text), annOrder.slice(25)) && same(liveSlugs((await get('/admin/announcements?livePage=99999999999')).text), annOrder.slice(0, 25)));
+  check('the drafts table is untouched by livePage (same rows as without it)', same(shown((await get('/admin/announcements?livePage=2&status=all')).text), shown((await get('/admin/announcements?status=all')).text)) && shown((await get('/admin/announcements?status=all')).text).length === 4);
+  const pagerLinks = [...section(annHtml).matchAll(/href="([^"]*livePage[^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
+  check('the live pager uses livePage links that end in #live and a labelled nav', section(annHtml).includes('aria-label="Pages of live announcements"') && pagerLinks.includes('/admin/announcements?livePage=2#live'));
+  const pagerKeep = (await get('/admin/announcements?status=all&q=Synthetic&livePage=2')).text;
+  check('...and keep the drafts filters, with page 1 leaving livePage out', section(pagerKeep).includes('href="/admin/announcements?q=Synthetic&amp;status=all#live"') && section(pagerKeep).includes('href="/admin/announcements?q=Synthetic&amp;status=all&amp;livePage=2#live"'));
+  check('the section ends with "See all n in Published" linking to the type', section(annHtml).includes(`<a href="/admin/published?kind=announcement">See all ${LIVE.announcement} in Published</a>`) && section(evHtml).includes(`<a href="/admin/published?kind=event">See all ${LIVE.event} in Published</a>`));
+  // Published list: the new `event` sort and the unchanged default.
+  const pubEv = await fetch(BASE + '/admin/published?kind=event&sort=event', { headers }).then((x) => x.text());
+  const pubSlugs = [...pubEv.matchAll(/name="slug" value="([^"]+)" form="bulk-form"/g)].map((m) => m[1]);
+  check('/admin/published?sort=event orders events like the live section, and the sort menu offers it', same(pubSlugs, EV_ORDER) && /<option value="event" selected>Event date/.test(pubEv));
+  const pubAll = await fetch(BASE + '/admin/published?kind=all&sort=event&perPage=100', { headers }).then((x) => x.text());
+  const pubAllSlugs = [...pubAll.matchAll(/name="slug" value="([^"]+)" form="bulk-form"/g)].map((m) => m[1]);
+  const at = (x) => pubAllSlugs.indexOf(x);
+  const storySlugs = rows("SELECT slug FROM stories WHERE status = 'live' AND draft = 0 AND announcement IS NULL").map((x) => x.slug);
+  check('sort=event over all types: upcoming soonest first, then past newest first, then everything undated', pubAllSlugs.length === LIVE.story + LIVE.announcement + LIVE.event && at(EV.today) < at(EV.soon) && at(EV.soon) < at(EV.far) && at(EV.far) < at(EV.yesterday) && at(EV.yesterday) < at(EV.old) && at(EV.old) < at(EV.none) && at(EV.none) < at(EV.num) && storySlugs.every((x) => at(x) > at(EV.old)), pubAllSlugs.slice(0, 8).join());
+  check('an unknown sort on the published list still falls back to the default', (await fetch(BASE + '/admin/published?sort=eventually', { headers }).then((x) => x.text())).includes('<option value="" selected>Default order (published, newest first)'));
+  // Two bulk bars on one page: distinct names, no id collisions.
+  const ids2 = [...evHtml.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
+  check('two bulk bars have distinct accessible names and no duplicate ids', evHtml.includes('aria-label="Bulk actions for drafts"') && evHtml.includes('aria-label="Bulk actions for live events"') && annHtml.includes('aria-label="Bulk actions for live announcements"') && new Set(ids2).size === ids2.length, ids2.filter((x, k) => ids2.indexOf(x) !== k).join());
+  check('headings: one h1, h2 for the live section, no skipped level; both tables have captions', (evHtml.match(/<h1[ >]/g) || []).length === 1 && !/<h3[ >]/.test(section(evHtml)) && section(evHtml).includes('<caption class="visually-hidden">Live events, 1 to 7 of 7</caption>') && evHtml.includes('<caption class="visually-hidden">Drafts,'));
+  check('the live bulk bar offers Unpublish and Edit fields only', /id="bulk-live-event"[\s\S]*Unpublish selected[\s\S]*Edit fields/.test(evHtml) && !/bulk-live-event[\s\S]{0,900}Reject selected/.test(evHtml));
+  check('no submitter contact details on either page', [evHtml, annHtml].every((h) => !h.includes('contacts.invalid') && !h.includes('555-0100') && !h.includes('Submitter Person')));
+
   // ---- layout in a real browser (optional) ----
   const root = process.env.PLAYWRIGHT_ROOT || '/opt/node-tools';
   let chromium = null;
@@ -343,7 +418,7 @@ try {
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
     page.setDefaultTimeout(12000);
-    for (const [name, url] of [['home', '/admin'], ['filtered', '/admin?kind=all&status=all&q=synthetic&section=news&perPage=50&page=2']]) {
+    for (const [name, url] of [['home', '/admin'], ['filtered', '/admin?kind=all&status=all&q=synthetic&section=news&perPage=50&page=2'], ['events-live', '/admin/events?status=all'], ['announcements-live', '/admin/announcements?livePage=2']]) {
       for (const w of [360, 390, 768, 1280]) {
         await page.setViewportSize({ width: w, height: 900 });
         await page.goto(BASE + url);
@@ -363,6 +438,58 @@ try {
     check('with JavaScript a select applies on change and the URL keeps the state', page.url().includes('sort=title'));
     check('no uncaught browser errors', errors.length === 0, errors.join('; '));
   } else console.log('SKIP browser checks (Playwright not found)');
+  // ---- issue #168: Unpublish and bulk from the live section return to the same Announcements/Events view ----
+  const postForm = async (url, fields) => {
+    const body = new URLSearchParams();
+    for (const [k, v] of Object.entries(fields)) body.set(k, v);
+    const res = await fetch(BASE + url, { method: 'POST', redirect: 'manual', headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+    return { status: res.status, location: res.headers.get('location') || '', text: await res.text() };
+  };
+  const stat = (slug) => rows('SELECT status FROM stories WHERE slug = ?', slug)[0]?.status;
+  let u = await postForm('/api/admin/stories/unpublish', { slug: EV.old, back: '/admin/events?status=all&sort=title&perPage=50&livePage=2&kind=all&junk=1' });
+  check('Unpublish from the live section returns to /admin/events with the rebuilt view (kind and junk dropped) and a notice', u.status === 303 && u.location === '/admin/events?status=all&sort=title&perPage=50&livePage=2&n=unpublished' && stat(EV.old) === 'unpublished', u.location);
+  LIVE.event--;
+  u = await postForm('/api/admin/stories/unpublish', { slug: ANN_EXTRA[0], back: '/admin/announcements?status=scheduled' });
+  check('...and an Announcements back address goes to /admin/announcements', u.status === 303 && u.location === '/admin/announcements?status=scheduled&n=unpublished' && stat(ANN_EXTRA[0]) === 'unpublished', u.location);
+  LIVE.announcement--;
+  u = await postForm('/api/admin/stories/unpublish', { slug: 'synth-no-such-story', back: '/admin/events?livePage=3' });
+  check('a failed Unpublish returns to the same view with an error code', u.status === 303 && u.location === '/admin/events?livePage=3&e=story_missing', u.location);
+  u = await postForm('/api/admin/stories/unpublish', { slug: EV.yesterday, back: '/admin/published?kind=event&sort=event&perPage=50' });
+  check('a Published list back address is still tried first and returns to the Published list', u.status === 303 && u.location === '/admin/published?kind=event&sort=event&perPage=50&n=unpublished' && stat(EV.yesterday) === 'unpublished', u.location);
+  LIVE.event--;
+  for (const back of ['//evil.example', '//evil.example/admin/events', 'https://evil.example/admin/events', '/admin/editors', '/admin/events/../editors', '/administrator', '%2F%2Fevil.example', '/\\evil.example', 'javascript:alert(1)', '/admin/events%3Fx', 'x'.repeat(5000), '']) {
+    u = await postForm('/api/admin/stories/unpublish', { slug: '', back });
+    check(`a hostile back ${JSON.stringify(back.slice(0, 30))} falls back to the plain Published list (nothing is unpublished, never an external address)`, u.status === 303 && u.location === '/admin/published?e=slug_bad', u.location);
+  }
+  // Bulk: confirmation, Edit fields and result pages rebuild the same address and never unpublish before the confirm step.
+  const bulkLive = async (fields) => {
+    const f = new FormData();
+    for (const [k, v] of Object.entries(fields)) f.set(k, v);
+    const res = await fetch(BASE + '/admin/bulk', { method: 'POST', headers, body: f });
+    return { status: res.status, text: await res.text() };
+  };
+  const wantEv = '/admin/events?status=all&livePage=2';
+  let bl = await bulkLive({ action: 'unpublish', slug: EV.soon, back: '/admin/events?livePage=2&status=all&junk=1' });
+  check('bulk Unpublish confirmation from the live section: Cancel and the hidden back are the rebuilt events view, nothing is unpublished yet', bl.status === 200 && cancelOf(bl.text).includes(wantEv) && backsOf(bl.text).length > 0 && backsOf(bl.text).every((v) => v === wantEv) && stat(EV.soon) === 'live', `${cancelOf(bl.text)} ${backsOf(bl.text)}`);
+  bl = await bulkLive({ action: 'editstory', slug: EV.soon, back: '/admin/events?livePage=2&status=all' });
+  check('bulk Edit fields page keeps the events view', bl.status === 200 && cancelOf(bl.text).includes(wantEv) && backsOf(bl.text).every((v) => v === wantEv), `${cancelOf(bl.text)}`);
+  bl = await bulkLive({ action: 'unpublish', step: 'run', slug: EV.soon, back: '/admin/events?livePage=2&status=all' });
+  check('bulk Unpublish result: "Back to the list" returns to /admin/events?…', bl.status === 200 && /1 of 1 unpublished/.test(bl.text) && cancelOf(bl.text).includes(wantEv) && stat(EV.soon) === 'unpublished', `${cancelOf(bl.text)}`);
+  LIVE.event--;
+  bl = await bulkLive({ action: 'unpublish', slug: EV.far, back: '/admin/announcements?status=all&page=3&livePage=2' });
+  check('a drafts page parameter and livePage both survive the back round trip', cancelOf(bl.text).includes('/admin/announcements?status=all&page=3&livePage=2'), `${cancelOf(bl.text)}`);
+  bl = await bulkLive({ action: 'unpublish', slug: EV.far, back: '?kind=event&sort=event' });
+  check('a bare Published query string is still the Published list', cancelOf(bl.text).includes('/admin/published?kind=event&sort=event'), `${cancelOf(bl.text)}`);
+  for (const back of ['//evil.example', 'https://evil.example/', '/admin/editors', '/admin/events/../editors', '%2F%2Fevil.example', '/\\evil.example', 'javascript:alert(1)', 'x'.repeat(5000)]) {
+    bl = await bulkLive({ action: 'unpublish', slug: EV.far, back });
+    check(`bulk Unpublish with a hostile back ${JSON.stringify(back.slice(0, 30))} only yields the plain Published list`, bl.status === 200 && backsOf(bl.text).length > 0 && backsOf(bl.text).every((v) => v === '/admin/published') && cancelOf(bl.text).every((v) => v === '/admin/published') && !/evil/i.test(bl.text) && stat(EV.far) === 'live', `${backsOf(bl.text)} | ${cancelOf(bl.text)}`);
+  }
+  // Counts follow the live set, and an empty live section says so.
+  const ev3 = (await get('/admin/events')).text;
+  check('after the unpublishes the heading, card and rows follow the live set', ev3.includes(`<h2 id="live-heading">Live events (${LIVE.event})</h2>`) && same(liveSlugs(ev3), EV_ORDER.filter((x) => stat(x) === 'live')) && ev3.includes(`Published, ${LIVE.event}, live on the site`), `${LIVE.event} ${liveSlugs(ev3)}`);
+  rows("SELECT slug FROM stories WHERE status = 'live' AND json_extract(announcement, '$.kind') = 'event'").forEach((x) => run("UPDATE stories SET status = 'unpublished', rev = rev + 1 WHERE slug = ?", x.slug));
+  const ev4 = (await get('/admin/events')).text;
+  check('with no live events: "Live events (0)", "Nothing live yet." and no live bulk bar', ev4.includes('<h2 id="live-heading">Live events (0)</h2>') && section(ev4).includes('Nothing live yet.') && !ev4.includes('bulk-live-event') && ev4.includes('aria-label="Published, 0, live on the site"'));
   console.log(`\n${checks} draft list checks passed.`);
 } finally {
   await browser?.close();

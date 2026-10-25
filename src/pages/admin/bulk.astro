@@ -10,7 +10,7 @@ import { validSlug } from '../../lib/story-publish';
 import { intParam } from '../../lib/draft-form';
 import { BULK_MAX, bulkReason, publishDraftItem, rejectDraftItem, unpublishStoryItem } from '../../lib/bulk-actions';
 import { EDIT_FORM_KEYS, describeChanges, editDraftItem, editStoryItem, parseEditChanges, type EditChanges } from '../../lib/bulk-edit';
-import { safeDraftBack, safePublishedBack } from '../../lib/admin-back';
+import { safeDraftBack, safeLiveBack } from '../../lib/admin-back';
 import { SECTIONS } from '../../lib/site';
 import { readFormLimited } from '../../lib/draft-http';
 import { clientIp } from '../../lib/request';
@@ -68,7 +68,7 @@ if (!form || form === 'too_big') {
 
 // The list view the person came from (filters, sort, page), rebuilt from the parsed filter; never the raw `back` text.
 const rawBack = form && form !== 'too_big' ? form.get('back') : null;
-const back = draftBased(action) ? safeDraftBack(rawBack) : safePublishedBack(rawBack);
+const back = draftBased(action) ? safeDraftBack(rawBack) : safeLiveBack(rawBack);
 const verb = { publish: 'Publish', unpublish: 'Unpublish', reject: 'Reject', edit: 'Edit', editstory: 'Edit' }[action];
 const past = { publish: 'published', unpublish: 'unpublished', reject: 'rejected', edit: 'updated', editstory: 'updated' }[action];
 const badgeOk = { publish: 'Published', unpublish: 'Unpublished', reject: 'Rejected', edit: 'Updated', editstory: 'Updated' }[action];

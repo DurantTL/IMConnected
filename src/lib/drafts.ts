@@ -323,6 +323,8 @@ export interface DraftListFilter {
   sort: DraftSort;
   perPage: number;
   page: number;
+  /** Page of the "Live on the site" section on /admin/announcements and /admin/events (issue #168); the drafts query ignores it. */
+  livePage: number;
 }
 
 /**
@@ -348,9 +350,12 @@ export function normalizeDraftFilter(raw: { [K in keyof DraftListFilter]?: unkno
   const perPage = (PER_PAGE_CHOICES as readonly number[]).includes(perPageNum) ? perPageNum : 25;
   const pageNum = Number(str(raw.page));
   const page = Number.isInteger(pageNum) && pageNum >= 1 ? Math.min(pageNum, 1_000_000) : 1;
+  const liveRaw = str(raw.livePage).trim();
+  const liveNum = /^\d{1,6}$/.test(liveRaw) ? Number(liveRaw) : 0;
+  const livePage = Number.isInteger(liveNum) && liveNum >= 1 ? Math.min(liveNum, 100_000) : 1;
   // eslint-disable-next-line no-control-regex
   const q = str(raw.q).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, DRAFT_QUERY_MAX).trim();
-  return { q, status, kind, section, source, issue, from: date(raw.from), to: date(raw.to), sort, perPage, page };
+  return { q, status, kind, section, source, issue, from: date(raw.from), to: date(raw.to), sort, perPage, page, livePage };
 }
 
 const KIND_SQL = "CASE WHEN json_valid(d.announcement) THEN COALESCE(json_extract(d.announcement,'$.kind'),'story') ELSE 'story' END";

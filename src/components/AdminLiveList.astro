@@ -1,0 +1,114 @@
+---
+// "Live on the site" on /admin/announcements and /admin/events (issue #168): every live, non-draft item of the page's type,
+// straight from the stories table through listStoriesPage() (the same type rule and rows as /admin/published). It has its
+// own page parameter, `livePage`, so it never disturbs the drafts table's `page`.
+import '../styles/admin-lists.css';
+import { listStoriesPage, parsePublishedFilter, type PublishedRow } from '../lib/story-store';
+import { listHref, pageWindow, type ListView } from '../lib/draft-list-ui';
+import { fmtTime, sectionLabel } from '../lib/admin-ui';
+import { siteUrl } from '../lib/draft-http';
+import BulkBar from './BulkBar.astro';
+
+interface Props { kind: 'announcement' | 'event'; view: ListView; back: string }
+const { kind, view, back } = Astro.props;
+const isEvent = kind === 'event';
+const words = isEvent ? { one: 'Event', many: 'events', title: 'Live events' } : { one: 'Announcement', many: 'announcements', title: 'Live announcements' };
+const base = siteUrl();
+// Events: soonest upcoming first, then past, then undated. Announcements: newest published first (the published list's default).
+const f = parsePublishedFilter(new URLSearchParams({ kind, perPage: '25', page: String(view.filter.livePage), ...(isEvent ? { sort: 'event' } : {}) }));
+let items: PublishedRow[] = [];
+let total = 0, page = 1, pages = 1;
+let failed = false;
+try { ({ items, total, page, pages } = listStoriesPage(f)); } catch (err) {
+  failed = true;
+  console.error('[admin] could not read the live list', err instanceof Error ? err.message.slice(0, 200) : 'unknown error');
+}
+const live = (p: number) => `${listHref(view, { livePage: p })}#live`;
+const first = total === 0 ? 0 : (page - 1) * f.perPage + 1;
+const last = Math.min(total, page * f.perPage);
+const iso = (ms: number) => new Date(ms).toISOString();
+const fmtDay = (ms: number) => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: 'short', day: 'numeric' });
+const fmtYmd = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d); return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' }) : d; };
+const barId = `bulk-live-${kind}`;
+---
+<section class="adm-live" id="live" aria-labelledby="live-heading">
+  <h2 id="live-heading">{words.title}{failed ? '' : ` (${total})`}</h2>
+  <p class="admin-note">Everything of this type that is on the public site now, including items published from Studio or from the archive. Editing loads the current text into a draft; publishing it overwrites the live item.</p>
+  {failed ? (
+    <p class="admin-error" role="alert">The live list could not be read. Please reload in a minute.</p>
+  ) : total === 0 ? (
+    <div class="adm-table-card"><p class="adm-empty">Nothing live yet.</p></div>
+  ) : (
+    <>
+    <BulkBar id={barId} ariaLabel={`Bulk actions for live ${words.many}`} action="unpublish" label="Unpublish selected" noun={words.many} back={back} more={[{ action: 'editstory', label: 'Edit fields' }]} />
+    <div class="adm-table-card">
+    <table class="adm-table">
+      <caption class="visually-hidden">{words.title}, {first} to {last} of {total}</caption>
+      <thead>
+        <tr>
+          <th scope="col" class="adm-col-pick"><span class="visually-hidden">Select</span></th>
+          <th scope="col">{words.one}</th>
+          {isEvent && <th scope="col">Event date</th>}
+          <th scope="col">Section</th>
+          <th scope="col">Story date</th>
+          <th scope="col">Published</th>
+          <th scope="col"><span class="visually-hidden">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((r) => {
+          const title = r.title || r.slug;
+          return (
+          <tr>
+            <td class="adm-col-pick">
+              <label class="adm-pick"><input class="bulk-item" type="checkbox" name="slug" value={r.slug} form={barId} aria-label={`${title} (${r.date})`} /></label>
+            </td>
+            <td class="adm-cell-story">
+              <a class="adm-title" href={`${base}/stories/${r.slug}/`} rel="noopener">{title}</a>
+              <span class="adm-sub">{r.church ? `${r.church} · ` : ''}/stories/{r.slug}/</span>
+              {(r.featured || r.openDraft) && <span class="adm-cell-stack">{r.featured && <span class="adm-badge featured">Featured</span>}{r.openDraft && <span class="adm-badge opendraft">Open draft</span>}</span>}
+            </td>
+            {isEvent && <td data-label="Event date">{r.eventDate ? <time datetime={r.eventDate}>{fmtYmd(r.eventDate)}</time> : 'No date'}</td>}
+            <td data-label="Section">{sectionLabel(r.section, r.area)}</td>
+            <td data-label="Story date">{fmtYmd(r.date)}</td>
+            <td data-label="Published">{r.publishedAt ? <time datetime={iso(r.publishedAt)} title={fmtTime(r.publishedAt)}>{fmtDay(r.publishedAt)}</time> : '—'}</td>
+            <td class="adm-cell-open adm-live-actions">
+              <a class="cms-btn secondary" href={`${base}/stories/${r.slug}/`} rel="noopener">View on site<span class="visually-hidden"> {title}</span></a>
+              <form method="post" action="/api/admin/stories/edit">
+                <input type="hidden" name="slug" value={r.slug} />
+                <button class="cms-btn" type="submit">Edit<span class="visually-hidden"> {title}</span></button>
+              </form>
+              <form method="post" action="/api/admin/stories/unpublish" data-confirm={`Unpublish "${title}"? It will be hidden from the public site.`}>
+                <input type="hidden" name="slug" value={r.slug} />
+                <input type="hidden" name="back" value={back} />
+                <button class="cms-btn danger" type="submit">Unpublish<span class="visually-hidden"> {title}</span></button>
+              </form>
+            </td>
+          </tr>
+          );
+        })}
+      </tbody>
+    </table>
+    </div>
+    <div class="adm-pager">
+      <p>Showing {first}–{last} of {total}. <a href={`/admin/published?kind=${kind}`}>See all {total} in Published</a></p>
+      {pages > 1 && (
+        <nav aria-label={`Pages of live ${words.many}`}>
+          <ul>
+            <li>{page > 1 ? <a href={live(page - 1)} rel="prev">Previous</a> : <span class="adm-disabled">Previous</span>}</li>
+            {pageWindow(page, pages).map((p) => (
+              <li>{p === null ? <span aria-hidden="true">…</span> : <a href={live(p)} aria-current={p === page ? 'page' : undefined} aria-label={`Live page ${p}`}>{p}</a>}</li>
+            ))}
+            <li>{page < pages ? <a href={live(page + 1)} rel="next">Next</a> : <span class="adm-disabled">Next</span>}</li>
+          </ul>
+        </nav>
+      )}
+    </div>
+    </>
+  )}
+</section>
+<script is:inline>
+  document.querySelectorAll('.adm-live form[data-confirm]').forEach(function (f) {
+    f.addEventListener('submit', function (e) { if (!confirm(f.getAttribute('data-confirm'))) e.preventDefault(); });
+  });
+</script>
