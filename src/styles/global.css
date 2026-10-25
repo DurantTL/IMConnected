@@ -142,7 +142,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 /* across the conference list */
 .area-col { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: flex; flex-direction: column; gap: 16px; box-shadow: var(--shadow-sm); min-width: 0; }
 .area-col .card + .card { border-top: 1px solid var(--line); padding-top: 14px; }
-.area-col h3.area-title { margin: 0; font: 700 0.78rem/1 var(--sans); letter-spacing: 0.1em; text-transform: uppercase; color: var(--sec); }
+.area-col h3.area-title { margin: 0; font: 700 0.78rem/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--sec); }
 .area-col .empty { color: var(--ink-3); font-size: 0.9rem; margin: 0; }
 
 /* CTA */
@@ -642,7 +642,7 @@ body:not(.admin) .article .byline { border-top:1px solid var(--line); border-bot
 body:not(.admin) .article>figure { margin:0 0 36px; }
 body:not(.admin) .article>figure img { border-radius:0; }
 body:not(.admin) .article .prose { max-width:66ch; line-height:1.85; }
-.article-provenance { margin:10px 0 0; color:var(--ink-3); font:600 .85rem/1.5 var(--sans); }
+.article-provenance { margin:10px 0 0; color:var(--ink-3); font:600 .875rem/1.5 var(--sans); }
 body:not(.admin) .article .key-points { max-width:66ch; margin:0 auto 32px; font-family:var(--serif); font-size:1.07rem; padding:18px 22px; border:1px solid var(--line); border-left:4px solid var(--brand-text); border-radius:6px; background:var(--paper, transparent); }
 body:not(.admin) .article .key-points h2 { margin:0 0 8px; font:700 .8125rem/1.4 var(--sans); letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); }
 body:not(.admin) .article .key-points ul { margin:0; padding-left:1.2em; }
@@ -796,12 +796,14 @@ body:not(.admin) .article .prose { font-size:1.07rem; line-height:1.7; }
 .issue-block-head h2 a { color:inherit; text-decoration:none; display:inline-block; min-height:44px; }
 .issue-block-head h2 a:hover { text-decoration:underline; text-underline-offset:4px; }
 .issue-title { display:block; margin-top:2px; font-size:.62em; font-weight:500; color:var(--ink-2); letter-spacing:0; overflow-wrap:anywhere; }
-.issue-meta { margin:6px 0 0; color:var(--ink-3); font:600 .85rem/1.5 var(--sans); }
+.issue-meta { margin:6px 0 0; color:var(--ink-3); font:600 .875rem/1.5 var(--sans); }
+/* An issue page's kicker carries the sent date, so it follows the 14px date floor. */
+body:not(.admin) .page-head .kicker:has(time) { font-size:.875rem; }
 .issue-more { display:inline-flex; align-items:center; min-height:44px; padding:0 4px; font:700 .9rem/1.4 var(--sans); color:var(--brand-text); text-decoration:none; }
 .issue-more:hover { text-decoration:underline; text-underline-offset:4px; }
 .issue-steps { display:flex; flex-wrap:wrap; justify-content:space-between; gap:12px; margin-top:44px; padding-top:20px; border-top:1px solid var(--line); }
 .issue-step { display:flex; flex-direction:column; justify-content:center; gap:2px; min-height:44px; max-width:100%; padding:10px 18px; border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); color:var(--ink-2); text-decoration:none; overflow-wrap:anywhere; }
-.issue-step span { font:700 .8125rem/1.5 var(--sans); letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); }
+.issue-step span { font:700 .8125rem/1.5 var(--sans); letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); }
 .issue-step strong { font-family:var(--serif); font-size:1.05rem; color:var(--ink); }
 .issue-step:hover { border-color:var(--ink-3); }
 .issue-step.is-next { text-align:right; margin-left:auto; }
