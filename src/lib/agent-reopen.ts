@@ -57,7 +57,7 @@ export function reopenAgentStory(input: ReopenRequest, ip: string): { id: number
         const target = getSection(changes.section);
         if (target && changes.section !== story.fields.section && !isValidArea(changes.section, story.fields.area)) changes.area = target.areas?.[0]?.key ?? '';
       }
-      const parsed = parseAgentStory({ title: 'Reopened story', body: 'Existing published body is preserved.', section: story.fields.section, area: story.fields.area,
+      const parsed = parseAgentStory({ title: 'Reopened story', body: 'Existing published body is preserved; this placeholder is never stored.', section: story.fields.section, area: story.fields.area,
         ...changes, ...(input.photos !== undefined ? { photos: input.photos } : {}), note: input.note });
       if (parsed.suggestedPublishAt != null) checkSuggestionFuture(parsed.suggestedPublishAt); // after the receipt lookup above: a replay never reaches this
       if (story.photos.length + (parsed.photos?.length ?? 0) > LIMITS.maxPhotos) throw new AgentError('too_many_photos', `The existing and new photos together must not exceed ${LIMITS.maxPhotos}.`);

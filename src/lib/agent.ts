@@ -19,7 +19,7 @@ export class AgentError extends Error {
   }
 }
 
-export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, author: 120, authorTitle: 120, photoCredit: 120, church: 160, alt: 300, caption: 300, note: 1000, url: 2000, perHour: 60, batchMaxStories: 20, batchStoriesPerHour: 300 };
+export const AGENT_LIMITS = { maxBodyBytes: 40 * 1024 * 1024, bodyMin: 50, author: 120, authorTitle: 120, photoCredit: 120, church: 160, alt: 300, caption: 300, note: 1000, url: 2000, perHour: 60, batchMaxStories: 20, batchStoriesPerHour: 300 };
 /** Room kept for the JSON around the photos (title, body of up to 20,000 characters, keys, quotes). */
 export const AGENT_JSON_ALLOWANCE_BYTES = 128 * 1024;
 /**
@@ -289,6 +289,9 @@ export function parseAgentStory(input: unknown): AgentStory {
   if (title.length > LIMITS.title) throw new AgentError('title_too_long', `The title is longer than ${LIMITS.title} characters.`);
   if (dek.length > LIMITS.dek) throw new AgentError('dek_too_long', `The summary (dek) is longer than ${LIMITS.dek} characters.`);
   if (present.has('body') && !bodyRaw) throw new AgentError('body_required', 'A story needs body text.');
+  // A floor that catches empty or accidental bodies but keeps short verbatim archive notices (an 89-character
+  // baptism notice is real copy). Substance is judged by the person who reviews the draft.
+  if (present.has('body') && bodyRaw && bodyRaw.length < AGENT_LIMITS.bodyMin) throw new AgentError('body_too_short', `The body is shorter than ${AGENT_LIMITS.bodyMin} characters.`);
   if (bodyRaw.length > LIMITS.bodyMax) throw new AgentError('body_too_long', `The body is longer than ${LIMITS.bodyMax} characters.`);
   if (author.length > AGENT_LIMITS.author) throw new AgentError('author_too_long', 'The author is too long.');
   if (church.length > AGENT_LIMITS.church) throw new AgentError('church_too_long', 'The church is too long.');
