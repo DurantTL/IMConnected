@@ -21,6 +21,7 @@ const TITLE = 'Synthetic harvest dinner feeds the neighborhood';
 const DEK = 'A made-up dek about a made-up dinner.';
 const CAPTION = 'Synthetic caption volunteers setting tables';
 const LONG = 'This sentence goes on with several clauses, ' + 'each one adding a little more detail about the synthetic evening, '.repeat(6) + 'and then it ends.';
+const ARIA_NAME = 'Microsoft Aria Online (Natural) - English (United States)';
 const ARIA = 'Microsoft Aria Online (Natural) - English (United States)';
 const SHA = 'a'.repeat(64);
 // A loose list (each item is a paragraph inside the li) must still be read once.
@@ -59,14 +60,18 @@ try {
       if (o.unsupported) { delete window.SpeechSynthesisUtterance; Object.defineProperty(window, 'speechSynthesis', { value: undefined, configurable: true }); return; }
       window.__spoken = []; window.__calls = []; window.__hold = !!o.hold; window.__pauseEnds = !!o.pauseEnds; window.__noRestart = !!o.noRestart; window.__cancelEnds = !!o.cancelEnds;
       const VOICES = [{ lang: 'fr-FR', name: 'Thomas', default: false, localService: true }, { lang: 'en-US', name: 'Microsoft David Desktop - English (United States)', default: true, localService: true }, { lang: 'en-US', name: 'eSpeak English', default: false, localService: true }, { lang: 'en-US', name: 'Samantha', default: false, localService: true }, { lang: 'en-US', name: 'Google US English', default: false, localService: false }, { lang: 'en-US', name: 'Microsoft Aria Online (Natural) - English (United States)', default: false, localService: false }];
+      for (const v of VOICES) v.voiceURI = v.name;
+      if (o.dupes) VOICES.push({ lang: 'en-US', name: 'Alex', voiceURI: 'alex-1', default: false, localService: true }, { lang: 'en-US', name: 'Alex', voiceURI: 'alex-2', default: false, localService: true }, { lang: 'en-US', name: 'Alex', voiceURI: 'alex-2', default: false, localService: true });
+      window.__voices = VOICES;
+      if (o.badStorage) { Storage.prototype.getItem = () => { throw new Error('blocked'); }; Storage.prototype.setItem = () => { throw new Error('blocked'); }; }
       window.__late = !!o.late;
       class U { constructor(text) { this.text = text; this.lang = ''; this.voice = null; } }
       window.SpeechSynthesisUtterance = U;
       const synth = {
         speaking: false, paused: false, cur: null, voiceCalls: 0,
-        getVoices() { this.voiceCalls++; window.__voiceCalls = this.voiceCalls; return window.__late && !window.__lateFired ? [] : VOICES; },
+        getVoices() { this.voiceCalls++; window.__voiceCalls = this.voiceCalls; return window.__late && !window.__lateFired ? [] : window.__voices; },
         addEventListener(type, fn) { if (type === 'voiceschanged') window.__voicesChanged = fn; },
-        speak(u) { window.__spoken.push({ text: u.text, lang: u.lang, voice: u.voice && u.voice.name, rate: u.rate, pitch: u.pitch, played: !this.paused }); this.cur = u; this.speaking = true; this.flush(); },
+        speak(u) { window.__spoken.push({ text: u.text, lang: u.lang, voice: u.voice && u.voice.name, voiceURI: u.voice && u.voice.voiceURI, rate: u.rate, pitch: u.pitch, played: !this.paused }); this.cur = u; this.speaking = true; this.flush(); },
         flush() { const u = this.cur; if (u && !this.paused && !window.__hold) setTimeout(() => { if (this.cur === u && !this.paused) { this.cur = null; this.speaking = false; u.onend && u.onend({}); } }, 0); },
         cancel() { window.__calls.push('cancel'); const u = this.cur; this.cur = null; this.speaking = false; /* stays paused, like Chrome */ if (window.__cancelEnds && u) setTimeout(() => u.onend && u.onend({}), 0); },
         pause() { window.__calls.push('pause'); this.paused = true; if (window.__pauseEnds && this.cur) { const u = this.cur; this.cur = null; setTimeout(() => u.onend && u.onend({}), 0); } },
@@ -259,21 +264,13 @@ try {
     await delay(50);
     sp = await page.evaluate(() => window.__spoken);
     check(`Try voice speaks only the sample with the chosen voice and speed (${width}px)`, sp.length === 1 && sp[0].text === 'This is how stories will sound.' && sp[0].voice === 'Samantha' && sp[0].rate === 1.3);
-    await page.evaluate(() => { window.__hold = true; window.__spoken.length = 0; });
-    await page.locator('[data-listen-start]').click();
-    await page.locator('[data-listen-settings] summary').evaluate((el) => { el.parentElement.open = true; });
-    await page.locator('[data-listen-try]').focus();
-    await page.evaluate(() => { window.__hold = false; });
-    await page.locator('[data-listen-try]').click();
-    await delay(100);
-    sp = await page.evaluate(() => window.__spoken);
-    check(`Try voice while reading replaces the story with just the sample and keeps focus (${width}px)`, sp.length === 2 && sp[1].text === 'This is how stories will sound.' && await page.locator('[data-listen-start]').isVisible() && await page.evaluate(() => document.activeElement.hasAttribute('data-listen-try')));
+    check(`after Try voice from idle the player is still idle (${width}px)`, await page.locator('[data-listen-start]').isVisible() && !(await page.locator('[data-listen-pause]').isVisible()));
     await context.close();
   }
 
   // Voices that load late fill the list; a stored choice is kept.
   ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen', { late: true }));
-  check('with no voices yet the Voice list is empty and disabled', (await page.locator('[data-listen-voice] option').count()) === 0 && await page.locator('[data-listen-voice]').isDisabled());
+  check('with no voices yet the Voice list shows one "Device default voice" option, selected and usable', (await page.locator('[data-listen-voice] option').allTextContents()).join() === 'Device default voice' && (await page.locator('[data-listen-voice]').inputValue()) === '' && !(await page.locator('[data-listen-voice]').isDisabled()));
   await page.evaluate(() => localStorage.setItem('imc.listen.v1', '{"voice":"Samantha","rate":0.8}'));
   await page.reload();
   await page.evaluate(() => { window.__lateFired = true; window.__voicesChanged(); });
@@ -284,6 +281,88 @@ try {
   ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen', { unsupported: true }));
   check('Voice and speed stays hidden when speechSynthesis is missing', !(await page.locator('[data-listen-settings] summary').isVisible()));
   await context.close();
+
+  // Try voice keeps the reader's place (issue #165 review).
+  for (const mode of ['reading', 'paused', 'pauseEnds']) {
+    ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen', mode === 'pauseEnds' ? { pauseEnds: true, cancelEnds: true, hold: true } : { cancelEnds: true, hold: true }));
+    await page.locator('[data-listen-start]').click();
+    if (mode !== 'reading') { await page.locator('[data-listen-pause]').click(); await delay(100); }
+    await page.locator('[data-listen-settings] summary').click();
+    await page.locator('[data-listen-rate]').selectOption('1.3');
+    await page.locator('[data-listen-try]').focus();
+    await page.locator('[data-listen-try]').click();
+    await delay(100);
+    const st = await page.locator('[data-listen-status]').textContent();
+    check(`Try voice while ${mode}: the player is left Paused with a message, nothing advances`, st === 'Playing a voice sample. Press Resume to continue the story.' && (await page.locator('[data-listen-pause]').textContent()) === 'Resume' && (await page.evaluate(() => window.__spoken.length)) === 2 && (await page.evaluate(() => window.__spoken[1].text)) === 'This is how stories will sound.' && await page.evaluate(() => document.activeElement.hasAttribute('data-listen-try')));
+    await page.evaluate(() => { window.__hold = false; });
+    await page.locator('[data-listen-pause]').click();
+    await finished(page);
+    const after = (await page.evaluate(() => window.__spoken)).slice(2);
+    const resumed = mode === 'pauseEnds' ? refTexts.slice(1) : refTexts;
+    check(`Try voice while ${mode}: Resume continues from the same place with the new speed, no chunk skipped or doubled`, after.map((x) => x.text).join('|') === resumed.join('|') && after.every((x) => x.rate === 1.3));
+    await context.close();
+  }
+
+  // localStorage that throws never breaks the control.
+  {
+    ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen', { badStorage: true }));
+    const errs = []; page.on('pageerror', (e) => errs.push(e.message));
+    await page.locator('[data-listen-settings] summary').click();
+    await page.locator('[data-listen-rate]').selectOption('1.15');
+    await page.locator('[data-listen-voice]').selectOption('Samantha');
+    await page.locator('[data-listen-start]').click();
+    await finished(page);
+    const sp = await page.evaluate(() => window.__spoken);
+    check('with blocked localStorage the control still works for this visit, without errors', errs.length === 0 && sp.length > 5 && sp.every((x) => x.voice === 'Samantha' && x.rate === 1.15));
+    await context.close();
+  }
+
+  // Duplicate names, late voice changes and the voice lock.
+  {
+    ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen', { dupes: true }));
+    await page.locator('[data-listen-settings] summary').click();
+    const labels = await page.locator('[data-listen-voice] option').allTextContents();
+    const values = await page.locator('[data-listen-voice] option').evaluateAll((os) => os.map((o) => o.value));
+    check('duplicate voice names give distinct options and exact duplicates are dropped', labels.length === 7 && new Set(labels).size === 7 && new Set(values).size === 7 && labels.filter((t) => t.startsWith('Alex')).length === 2);
+    await page.locator('[data-listen-voice]').selectOption('alex-2');
+    check('the stored choice is the voiceURI', (await page.evaluate(() => localStorage.getItem('imc.listen.v1'))) === '{"voice":"alex-2","rate":0.95}');
+    await page.locator('[data-listen-start]').click();
+    await finished(page);
+    check('the second of two same-named voices is the one used', (await page.evaluate(() => window.__spoken)).every((x) => x.voiceURI === 'alex-2'));
+    await page.reload();
+    check('the chosen duplicate is selected again after a reload', (await page.locator('[data-listen-voice]').inputValue()) === 'alex-2');
+    await context.close();
+
+    ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen', { hold: true }));
+    await page.locator('[data-listen-start]').click();
+    await page.evaluate(() => { window.__voices = [{ lang: 'en-US', name: 'Aaron Neural', voiceURI: 'Aaron Neural', default: false, localService: false }, ...window.__voices.slice().reverse(), window.__voices[0]]; window.__voicesChanged(); });
+    await page.locator('[data-listen-settings] summary').click();
+    const lab2 = await page.locator('[data-listen-voice] option').allTextContents();
+    check('a late voices-changed with new and reordered voices leaves no duplicate options', lab2.length === 6 && new Set(lab2).size === 6 && lab2[0] === 'Aaron Neural (recommended)');
+    await page.evaluate(() => { window.__hold = false; window.speechSynthesis.flush(); });
+    await finished(page);
+    check('mid-story the voice stays locked to the one chosen at Listen', (await page.evaluate(() => window.__spoken)).every((x) => x.voice === ARIA_NAME));
+    await page.evaluate(() => { window.__spoken.length = 0; });
+    await page.locator('[data-listen-start]').click();
+    await finished(page);
+    check('the next Listen uses the new recommended voice', (await page.evaluate(() => window.__spoken)).every((x) => x.voice === 'Aaron Neural'));
+    await context.close();
+
+    // An unknown stored voice falls back on the real utterance, not just in the select.
+    ({ context, page } = await open({ width: 390, height: 900 }, 'synthetic-listen'));
+    await page.evaluate(() => localStorage.setItem('imc.listen.v1', '{"voice":"Gone Voice","rate":0.8}'));
+    await page.reload();
+    await page.locator('[data-listen-start]').click();
+    await finished(page);
+    check('an unknown stored voice speaks with the recommended voice and the stored valid speed', (await page.evaluate(() => window.__spoken)).every((x) => x.voice === ARIA_NAME && x.rate === 0.8));
+    // The summary shows an open/closed sign.
+    const sign = () => page.evaluate(() => getComputedStyle(document.querySelector('[data-listen-settings] summary'), '::after').content);
+    const closedSign = await sign();
+    await page.locator('[data-listen-settings] summary').click();
+    const openSign = await sign();
+    check('the Voice and speed summary shows a different sign when closed and open', closedSign !== openSign && closedSign.length > 2 && openSign.length > 2);
+    await context.close();
+  }
 
   // No client chunk may contain a regex lookbehind: Safari before 16.4 fails to parse the whole chunk.
   const astro = path.resolve('dist/client/_astro');

@@ -837,7 +837,10 @@ body:not(.admin) .cta-pair .cta-half h2 { font-size: clamp(1.4rem, 2.4vw, 1.9rem
 .listen-status { font-size: 0.85rem; color: var(--ink-3); min-width: 0; overflow-wrap: anywhere; }
 /* Voice and speed (issue #165): a native disclosure on its own row, same button look, no new colours or motion. */
 .listen-settings { flex: 1 0 100%; }
-.listen-settings summary { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); font: 600 0.86rem/1.4 var(--sans); cursor: pointer; }
+.listen-settings summary { display: inline-flex; align-items: center; gap: 8px; list-style: none; min-height: 44px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); font: 600 0.86rem/1.4 var(--sans); cursor: pointer; }
+.listen-settings summary::-webkit-details-marker { display: none; }
+.listen-settings summary::after { content: "\25B8"; font-size: 0.8em; }
+.listen-settings[open] summary::after { content: "\25BE"; }
 .listen-settings summary:hover { color: var(--ink); }
 .listen-settings[open] summary { color: var(--ink); }
 .listen-panel { display: grid; gap: 6px; max-width: 360px; margin-top: 10px; font: 600 0.86rem/1.4 var(--sans); color: var(--ink-2); }

@@ -16,8 +16,9 @@
 //  3. The exact locale (en-US on an en-US page; a bare "en" page counts as en-US) ahead of other regions.
 //  4. A local voice is only a tie-break after all of that, never the first rule.
 //  5. Last: name, then the browser's own order, so the result never depends on sort stability.
+//  6. Voices are identified by `voiceURI` (the name when it is empty); exact duplicates (same key) are dropped after ranking.
 
-export interface VoiceLike { name: string; lang: string; localService?: boolean; default?: boolean }
+export interface VoiceLike { name: string; lang: string; voiceURI?: string; localService?: boolean; default?: boolean }
 
 export const SPEEDS = [
   { label: 'Slower', rate: 0.8 },
@@ -32,6 +33,9 @@ export const SAMPLE_TEXT = 'This is how stories will sound.';
 const STRONG = /\b(natural|neural)\b/i;
 const GOOD = /\b(online|enhanced|premium|siri)\b|^google\b/i;
 const ROBOTIC = /espeak|\bdesktop\b|^microsoft (david|zira|mark)\b|^(fred|albert|bad news|bells|boing|bubbles|cellos|jester|organ|superstar|trinoids|whisper|wobble|zarvox|junior|ralph|kathy|agnes|bahh|good news|hysterical|pipe organ)\b/i;
+
+/** The identity of a voice: its voiceURI, or its name when the browser gives none. Saved settings store this. */
+export const voiceKey = (v: VoiceLike): string => v.voiceURI || v.name;
 
 const norm = (lang: string) => String(lang || '').toLowerCase().replace(/_/g, '-');
 
@@ -66,7 +70,8 @@ export function rankVoices<T extends VoiceLike>(voices: readonly T[], lang: stri
       if (la !== lb) return lb - la;
       return a.v.name < b.v.name ? -1 : a.v.name > b.v.name ? 1 : a.i - b.i;
     })
-    .map(({ v }) => v);
+    .map(({ v }) => v)
+    .filter((v, i, all) => all.findIndex((o) => voiceKey(o) === voiceKey(v)) === i);
 }
 
 export interface ListenSettings { voice: string; rate: number }

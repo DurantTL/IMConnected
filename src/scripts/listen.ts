@@ -3,7 +3,7 @@
 // browser has speechSynthesis and SpeechSynthesisUtterance. Voice and speed (issue #165): voices are ranked by
 // src/lib/listen-voices.ts and the reader's choice is kept in this browser's localStorage (`imc.listen.v1`).
 
-import { rankVoices, parseSettings, SPEEDS, DEFAULT_RATE, SETTINGS_KEY, SAMPLE_TEXT, type ListenSettings } from '../lib/listen-voices';
+import { rankVoices, voiceKey, parseSettings, SPEEDS, DEFAULT_RATE, SETTINGS_KEY, SAMPLE_TEXT, type ListenSettings } from '../lib/listen-voices';
 
 const SKIP_TAGS = new Set(['FIGURE', 'FIGCAPTION', 'BUTTON', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'NAV', 'FORM', 'IFRAME', 'DIALOG', 'SVG', 'IMG', 'VIDEO', 'AUDIO', 'SELECT', 'TEXTAREA', 'INPUT']);
 const BLOCK_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'UL', 'OL', 'DIV', 'BLOCKQUOTE', 'SECTION', 'ASIDE', 'ARTICLE', 'HEADER', 'FOOTER', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH', 'PRE', 'DL', 'DT', 'DD', 'DETAILS', 'SUMMARY', 'HR']);
@@ -95,13 +95,16 @@ function init(): void {
   const stopBtn = box.querySelector<HTMLButtonElement>('[data-listen-stop]')!;
   const status = box.querySelector<HTMLElement>('[data-listen-status]')!;
   const lang = (document.documentElement.lang || 'en').trim() || 'en';
-  const base = lang.split('-')[0].toLowerCase();
   let run = 0; // a new number for every start/stop, so a late "end" event from a cancelled chunk is ignored
   let paused = false;
   let held = false; // a chunk ended while paused: speak the next one on Resume
   let chunks: string[] = [];
   let index = 0; // the next chunk to speak
   let voice: SpeechSynthesisVoice | undefined;
+  // The voice fixed when Listen starts: a late voices-changed event must not switch it mid-story. A change of the
+  // Voice setting (the reader's own choice) releases it.
+  let lockedVoice: SpeechSynthesisVoice | undefined;
+  let locked = false;
   // The utterance being spoken. It stays referenced (some browsers drop events of unreferenced ones), and a late
   // end/error event from any other (cancelled or replaced) utterance is ignored.
   let current: SpeechSynthesisUtterance | undefined;
@@ -118,19 +121,27 @@ function init(): void {
   const readSaved = () => { try { settings = parseSettings(localStorage.getItem(SETTINGS_KEY)); } catch { settings = parseSettings(null); } };
   const save = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* not saved */ } };
   // The chosen voice when the device still has it, otherwise the recommended (first ranked) one.
-  const pickVoice = (): SpeechSynthesisVoice | undefined => ranked.find((v) => v.name === settings.voice) || ranked[0] || voices.find((v) => v.default);
+  const pickVoice = (): SpeechSynthesisVoice | undefined => ranked.find((v) => voiceKey(v) === settings.voice) || ranked.find((v) => v.name === settings.voice) || ranked[0] || voices.find((v) => v.default);
   const fillVoices = () => {
     if (!voiceSel) return;
     voiceSel.textContent = '';
+    const seen: Record<string, number> = {};
     ranked.forEach((v, i) => {
       const o = document.createElement('option');
-      o.value = v.name;
-      o.textContent = i === 0 ? v.name + ' (recommended)' : v.name;
+      o.value = voiceKey(v);
+      seen[v.name] = (seen[v.name] || 0) + 1;
+      const label = seen[v.name] > 1 ? `${v.name} (${seen[v.name]})` : v.name;
+      o.textContent = i === 0 ? label + ' (recommended)' : label;
       voiceSel.appendChild(o);
     });
+    if (!ranked.length) {
+      const o = document.createElement('option');
+      o.value = '';
+      o.textContent = 'Device default voice';
+      voiceSel.appendChild(o);
+    }
     const chosen = pickVoice();
-    if (chosen) voiceSel.value = chosen.name;
-    voiceSel.disabled = ranked.length === 0;
+    voiceSel.value = chosen ? voiceKey(chosen) : '';
   };
   const loadVoices = () => {
     try { voices = synth.getVoices() || []; } catch { voices = []; }
@@ -146,7 +157,7 @@ function init(): void {
   loadVoices();
   try { synth.addEventListener?.('voiceschanged', loadVoices); } catch { /* the default voice is used */ }
   // Changes apply from the next sentence: speak() reads the settings for every chunk. Focus stays where it is.
-  voiceSel?.addEventListener('change', () => { settings.voice = voiceSel.value; save(); });
+  voiceSel?.addEventListener('change', () => { settings.voice = voiceSel.value; locked = false; lockedVoice = undefined; save(); });
   rateSel?.addEventListener('change', () => { const r = Number(rateSel.value); settings.rate = SPEEDS.some((sp) => sp.rate === r) ? r : DEFAULT_RATE; save(); });
 
   const show = (state: 'idle' | 'playing' | 'paused', message: string) => {
@@ -172,7 +183,7 @@ function init(): void {
 
   const speak = (text: string, mine: number) => {
     const u = new SpeechSynthesisUtterance(text);
-    voice = pickVoice(); // read for every chunk, so a change applies from the next sentence
+    voice = locked ? lockedVoice : pickVoice(); // the settings are read for every chunk, so a change applies from the next sentence
     u.lang = voice?.lang || lang;
     if (voice) u.voice = voice;
     u.rate = settings.rate;
@@ -193,6 +204,7 @@ function init(): void {
     current = undefined; clearWatchdog();
     cancelSpeech();
     run++; paused = false; held = false; index = 0;
+    lockedVoice = pickVoice(); locked = true;
     show('playing', 'Reading the story aloud.');
     next();
     pause.focus();
@@ -222,10 +234,14 @@ function init(): void {
     }
   });
   stopBtn.addEventListener('click', () => stop());
-  // "Try voice" says one neutral sentence (no story text) with the chosen voice and speed. It replaces any story
-  // reading in progress, and focus stays on the button.
+  // "Try voice" says one neutral sentence (no story text) with the chosen voice and speed. Idle: just the sample.
+  // While reading or paused the story keeps its place: it is left Paused at the chunk that was in progress (or the
+  // next one when that chunk had already ended), and Resume continues from there with the new settings. The run
+  // counter and `current` are reset first, so a late end from the cancelled chunk can never advance the story.
   tryBtn?.addEventListener('click', () => {
-    stop('', false);
+    const active = start.hidden; // Listen is hidden while a story is playing or paused
+    const resumeAt = held ? index : Math.max(index - 1, 0);
+    if (active) { run++; current = undefined; clearWatchdog(); paused = true; held = true; index = resumeAt; cancelSpeech(); } else stop('', false);
     const u = new SpeechSynthesisUtterance(SAMPLE_TEXT);
     const v = pickVoice();
     u.lang = v?.lang || lang;
@@ -233,6 +249,7 @@ function init(): void {
     u.rate = settings.rate;
     u.pitch = 1;
     synth.speak(u);
+    if (active) show('paused', 'Playing a voice sample. Press Resume to continue the story.');
   });
   window.addEventListener('pagehide', () => stop(''));
   window.addEventListener('pageshow', (e) => { if (e.persisted) show('idle', ''); });
