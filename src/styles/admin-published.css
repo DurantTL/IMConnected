@@ -85,3 +85,13 @@
 @media (max-width: 359px) {
   .adm-stat-cards { grid-template-columns:minmax(0,1fr); }
 }
+
+/* Content type tabs (issue #164). */
+.adm-kind-tabs { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.adm-kind-tabs a { display:inline-flex; align-items:center; gap:4px; min-height:44px; padding:0 16px; border:1px solid var(--adm-line,#dce6ea); border-radius:999px; background:var(--adm-card,#fff); color:var(--adm-navy,#003b5c); font-weight:600; text-decoration:none; box-sizing:border-box; }
+.adm-kind-tabs a:hover { border-color:var(--adm-navy,#003b5c); }
+.adm-kind-tabs a[aria-current] { background:var(--adm-navy,#003b5c); border-color:var(--adm-navy,#003b5c); color:#fff; }
+.adm-kind-tabs a:focus-visible { outline:3px solid var(--adm-gold,#f0b323); outline-offset:2px; }
+.adm-kind-n { font-weight:400; }
+.adm-badge.kind-announcement { background:var(--adm-navy-soft,#e6f0f4); color:var(--adm-navy,#003b5c); }
+.adm-badge.kind-event { background:var(--adm-purple-soft,#f1eaf7); color:var(--adm-purple,#582c83); }

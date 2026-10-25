@@ -2,7 +2,7 @@
    summary line and chips, data table, pager and badges. Colours come from the shell's --adm-* properties
    with the approved values as fallbacks, so this file also works on its own. */
 
-.adm-stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin: 0 0 18px; padding: 0; list-style: none; }
+.adm-stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 14px; margin: 0 0 18px; padding: 0; list-style: none; }
 .adm-stat-cards li { display: flex; min-width: 0; }
 .adm-stat { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 16px 18px; border: 1px solid var(--adm-line, #dce6ea); border-radius: var(--adm-radius, 14px); background: var(--adm-card, #fff); color: var(--adm-ink, #243640); text-decoration: none; min-width: 0; }
 .adm-stat:hover { border-color: var(--adm-navy, #003b5c); }

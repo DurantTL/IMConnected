@@ -1,4 +1,4 @@
-import { canonicalSectionKey, getSection, normalizeAdditionalSections, parseAdditionalSections, sectionMembershipSql } from './site';
+import { SECTIONS, canonicalSectionKey, getSection, normalizeAdditionalSections, parseAdditionalSections, sectionMembershipSql } from './site';
 import { parseAnnouncement, announcementJson, type Announcement } from './announcement';
 import { refFromRow, type NewsletterRef } from './newsletter-issues';
 // Stories and their photos in the database. Since epic #25 step 4 this is the source of truth: publishing, editing and
@@ -314,7 +314,12 @@ export const PUBLISHED_PER_PAGE = [25, 50, 100] as const;
 export const PUBLISHED_Q_MAX = 200;
 const PUBLISHED_PAGE_MAX = 100_000;
 
+export const PUBLISHED_KINDS = ['all', 'story', 'announcement', 'event'] as const;
+export type PublishedKind = (typeof PUBLISHED_KINDS)[number];
+
 export interface PublishedFilter {
+  /** Content type: no announcement is a story (issue #164). */
+  kind: PublishedKind;
   q: string;
   section: string;
   area: string;
@@ -332,6 +337,7 @@ export interface PublishedFilter {
 
 export interface PublishedRow {
   slug: string;
+  kind: 'story' | 'announcement' | 'event';
   title: string;
   section: string;
   area?: string;
@@ -374,7 +380,9 @@ export function parsePublishedFilter(params: URLSearchParams): PublishedFilter {
   const sort = (PUBLISHED_SORTS as readonly string[]).includes(one('sort')) ? (one('sort') as PublishedSort) : 'published_desc';
   const perPage = (PUBLISHED_PER_PAGE as readonly number[]).includes(Number(one('perPage'))) ? Number(one('perPage')) : 25;
   const pageRaw = /^\d{1,6}$/.test(one('page')) ? Number(one('page')) : 1;
+  const kindRaw = one('kind');
   return {
+    kind: (PUBLISHED_KINDS as readonly string[]).includes(kindRaw) ? (kindRaw as PublishedKind) : 'all',
     // Control characters would be noise in a LIKE; the length is capped before it reaches SQL.
     q: one('q').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, PUBLISHED_Q_MAX),
     section: sec ? sec.key : '',
@@ -402,6 +410,8 @@ const PUB_FROM = 'FROM stories s LEFT JOIN drafts d ON d.slug = s.slug LEFT JOIN
 const FIRST_LIVE = 'COALESCE(NULLIF(d.submitter_notified_at, 0), s.published_at)';
 export const EDITED_GRACE_MS = 60_000;
 const EDITED_COND = `s.edited_at IS NOT NULL AND s.edited_at > ${FIRST_LIVE} + ${EDITED_GRACE_MS}`;
+/** The content type of a live story: no (or unreadable) announcement is a story. Bound values only ever compare against it. */
+const PUB_KIND_SQL = "CASE WHEN json_valid(s.announcement) AND json_extract(s.announcement,'$.kind') IN ('announcement','event') THEN json_extract(s.announcement,'$.kind') ELSE 'story' END";
 const OPEN_DRAFT = "d.status IN ('new', 'in_review')";
 
 const ORDER: Record<PublishedSort, string> = {
@@ -416,6 +426,7 @@ const ORDER: Record<PublishedSort, string> = {
 function publishedWhere(f: PublishedFilter, now: number): { sql: string; args: (string | number)[] } {
   const where = ["s.status = 'live'", 's.draft = 0'];
   const args: (string | number)[] = [];
+  if (f.kind !== 'all') { where.push(`${PUB_KIND_SQL} = ?`); args.push(f.kind); }
   if (f.q) {
     const like = `%${escapeLike(f.q)}%`;
     where.push("(s.title LIKE ? ESCAPE '\\' OR s.slug LIKE ? ESCAPE '\\' OR COALESCE(s.church, '') LIKE ? ESCAPE '\\' OR s.author LIKE ? ESCAPE '\\' OR s.body LIKE ? ESCAPE '\\')");
@@ -441,13 +452,13 @@ export function listStoriesPage(f: PublishedFilter, now = Date.now()): { items: 
   const total = Number((db.prepare(`SELECT COUNT(*) AS n ${PUB_FROM} ${sql}`).get(...args) as { n: number }).n);
   const pages = Math.max(1, Math.ceil(total / f.perPage));
   const page = Math.min(f.page, pages);
-  const rows = db.prepare(`SELECT s.slug, s.title, s.section, s.area, s.church, s.author, s.date, s.featured, s.newsletter_issue AS issue, CASE WHEN (${EDITED_COND}) THEN s.edited_at END AS edited_at,
+  const rows = db.prepare(`SELECT s.slug, ${PUB_KIND_SQL} AS kind, s.title, s.section, s.area, s.church, s.author, s.date, s.featured, s.newsletter_issue AS issue, CASE WHEN (${EDITED_COND}) THEN s.edited_at END AS edited_at,
       ${PUB_AT} AS pub_at, CASE WHEN ${PUB_LIVE} THEN CASE WHEN d.published_via_studio = 1 THEN ? ELSE u.name END END AS pub_by, CASE WHEN ${OPEN_DRAFT} THEN 1 ELSE 0 END AS open_draft, d.id AS draft_id
     ${PUB_FROM} ${sql} ORDER BY ${ORDER[f.sort]} LIMIT ? OFFSET ?`).all(STUDIO_PUBLISHER, ...args, f.perPage, (page - 1) * f.perPage) as Row[];
   return {
     total, page, pages,
     items: rows.map((r) => ({
-      slug: String(r.slug), title: String(r.title), section: String(r.section), area: opt(r.area), church: opt(r.church), author: String(r.author), date: String(r.date),
+      slug: String(r.slug), kind: (r.kind === 'announcement' || r.kind === 'event' ? r.kind : 'story') as PublishedRow['kind'], title: String(r.title), section: String(r.section), area: opt(r.area), church: opt(r.church), author: String(r.author), date: String(r.date),
       featured: Number(r.featured) === 1, issue: optNum(r.issue) ?? null, editedAt: optNum(r.edited_at) ?? null, publishedAt: optNum(r.pub_at) ?? null,
       publishedBy: opt(r.pub_by) ?? null, openDraft: Number(r.open_draft) === 1, draftId: optNum(r.draft_id) ?? null,
     })),
@@ -456,11 +467,11 @@ export function listStoriesPage(f: PublishedFilter, now = Date.now()): { items: 
 
 export interface PublishedCounts { all: number; featured: number; openDraft: number; editedThisMonth: number; thisYear: number; year: string }
 
-/** The summary cards: one aggregate query over the live set. */
-export function publishedCounts(now = Date.now()): PublishedCounts {
+/** The summary cards: one aggregate query over the live set (of one content type when `kind` is not 'all'). */
+export function publishedCounts(now = Date.now(), kind: PublishedKind = 'all'): PublishedCounts {
   const { year, startMs } = chicagoMonthStart(now);
   const r = getDb().prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(s.featured = 1), 0) AS f, COALESCE(SUM(${OPEN_DRAFT}), 0) AS o,
-      COALESCE(SUM((${EDITED_COND}) AND s.edited_at >= ?), 0) AS e, COALESCE(SUM(substr(s.date, 1, 4) = ?), 0) AS y ${PUB_FROM} WHERE s.status = 'live' AND s.draft = 0`).get(startMs, year) as Row;
+      COALESCE(SUM((${EDITED_COND}) AND s.edited_at >= ?), 0) AS e, COALESCE(SUM(substr(s.date, 1, 4) = ?), 0) AS y ${PUB_FROM} WHERE s.status = 'live' AND s.draft = 0${kind === 'all' ? '' : ` AND ${PUB_KIND_SQL} = ?`}`).get(startMs, year, ...(kind === 'all' ? [] : [kind])) as Row;
   return { all: Number(r.n), featured: Number(r.f), openDraft: Number(r.o), editedThisMonth: Number(r.e), thisYear: Number(r.y), year };
 }
 
@@ -470,4 +481,33 @@ export function publishedFacets(): { issues: number[]; years: string[] } {
   const issues = (db.prepare("SELECT DISTINCT newsletter_issue AS n FROM stories WHERE status = 'live' AND draft = 0 AND newsletter_issue IS NOT NULL ORDER BY n DESC").all() as { n: number }[]).map((r) => Number(r.n));
   const years = (db.prepare("SELECT DISTINCT substr(date, 1, 4) AS y FROM stories WHERE status = 'live' AND draft = 0 ORDER BY y DESC").all() as { y: string }[]).map((r) => String(r.y)).filter((y) => /^\d{4}$/.test(y));
   return { issues, years };
+}
+
+/** Live, non-draft items per content type: one grouped read-only query (the tabs and the Published cards). */
+export function publishedKindCounts(): Record<PublishedKind, number> {
+  const rows = getDb().prepare(`SELECT ${PUB_KIND_SQL} AS kind, COUNT(*) AS n FROM stories s WHERE s.status = 'live' AND s.draft = 0 GROUP BY 1`).all() as { kind: string; n: number }[];
+  const out: Record<PublishedKind, number> = { all: 0, story: 0, announcement: 0, event: 0 };
+  for (const r of rows) {
+    const k = r.kind === 'announcement' || r.kind === 'event' ? r.kind : 'story';
+    out[k] += Number(r.n);
+    out.all += Number(r.n);
+  }
+  return out;
+}
+
+/**
+ * Live items per section for one content type ('all' for every type), by membership: a story counts under its primary
+ * section and under each additional section, once per section. Every section in site.ts is present, empty ones as 0.
+ */
+export function publishedSectionCounts(kind: PublishedKind = 'all'): Record<string, number> {
+  const cond = `s.status = 'live' AND s.draft = 0${kind === 'all' ? '' : ` AND ${PUB_KIND_SQL} = ?`}`;
+  const args = kind === 'all' ? [] : [kind, kind];
+  const rows = getDb().prepare(`SELECT m.k AS k, COUNT(*) AS n FROM (
+      SELECT s.id AS id, s.section AS k FROM stories s WHERE ${cond}
+      UNION
+      SELECT s.id AS id, je.value AS k FROM stories s, json_each(s.additional_sections) je WHERE ${cond}
+    ) m GROUP BY m.k`).all(...args) as { k: string; n: number }[];
+  const out: Record<string, number> = Object.fromEntries(SECTIONS.map((x) => [x.key, 0]));
+  for (const r of rows) if (r.k in out) out[r.k] = Number(r.n);
+  return out;
 }
