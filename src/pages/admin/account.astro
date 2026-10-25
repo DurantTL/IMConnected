@@ -11,7 +11,7 @@ import { audit } from '../../lib/auth/audit';
 import { field, readForm } from '../../lib/auth/form';
 import { clientIp } from '../../lib/request';
 import { getDb } from '../../lib/db';
-import { PROVIDER_LABEL, beginFlow, enabledProviders, isProvider, listLinks, otherFirstFactors, providerConfig } from '../../lib/auth/oauth';
+import { PROVIDER_LABEL, beginFlow, enabledProviders, isProvider, listLinks, otherFirstFactors, providerConfig, sessionBinding } from '../../lib/auth/oauth';
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -166,8 +166,8 @@ if (Astro.request.method === 'POST') {
       } else error = 'That passkey was not found.';
     }
   } else if (action === 'oauth_link') {
-    // Link a Google or Microsoft account to THIS editor. A fresh second factor starts it; the cookie made here is bound to this
-    // editor's id and the provider, and the callback only links for this same fully signed-in editor. The session is not changed.
+    // Link a Google or Microsoft account to THIS editor. A fresh second factor starts it; the signed cookie made here is bound to this
+    // editor's id, this session and the provider, and the callback only links for this same fully signed-in editor. The session is not changed.
     const provider = field(form, 'provider', 20);
     const cfg = isProvider(provider) ? providerConfig(provider) : null;
     if (!isProvider(provider) || !cfg) {
@@ -177,7 +177,7 @@ if (Astro.request.method === 'POST') {
       error = `${PROVIDER_LABEL[provider]} is already linked. Unlink it first to link a different account.`;
       Astro.response.status = 409;
     } else if (await fresh(form)) {
-      const location = beginFlow(cfg, Astro.cookies, { intent: 'link', uid: user.id });
+      const location = beginFlow(cfg, Astro.cookies, { intent: 'link', uid: user.id, sid: sessionBinding(session.id) });
       audit('auth.oauth_link_started', { userId: user.id, ip, detail: { provider } });
       return Astro.redirect(location, 303);
     }

@@ -130,7 +130,7 @@ export async function resendInvite(actor: { id: number; name: string }, targetId
   return { ok: true, userId: targetId, resent: true, ...sent };
 }
 
-export type ChangeResult = { ok: true } | { ok: false; error: string; status: number };
+export type ChangeResult = { ok: true; reinvite?: boolean } | { ok: false; error: string; status: number };
 
 /**
  * Change a role, or disable/enable, in ONE transaction that also protects the last active admin:
@@ -205,14 +205,14 @@ export function resetUserTwoFactor(actor: { id: number }, targetId: number, ip: 
     const n = resetTwoFactor(db, targetId);
     audit('admin.reset_2fa', { userId: actor.id, target: `user:${targetId}`, ip, detail: n });
     db.exec('COMMIT');
-    return { ok: true };
+    return { ok: true, reinvite: n.reinvite };
   } catch (err) {
     try { db.exec('ROLLBACK'); } catch { /* already closed */ }
     throw err;
   }
 }
 
-/** Remove one linked Google / Microsoft account from an editor (an administrator's action; audited with the actor, never an address). */
+/** Remove one linked Google / Microsoft account from an editor and sign them out everywhere, in one transaction (an administrator's action; audited with the actor and the number of sessions, never an address). */
 export function unlinkOauth(actor: { id: number }, targetId: number, provider: string, ip: string): ChangeResult {
   if (provider !== 'google' && provider !== 'microsoft') return { ok: false, error: 'Choose a provider.', status: 400 };
   const db = getDb();
@@ -223,7 +223,8 @@ export function unlinkOauth(actor: { id: number }, targetId: number, provider: s
       db.exec('ROLLBACK');
       return { ok: false, error: 'That linked account was not found.', status: 404 };
     }
-    audit('auth.oauth_unlinked', { userId: actor.id, target: `user:${targetId}`, ip, detail: { provider, by: 'admin' } });
+    const out = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+    audit('auth.oauth_unlinked', { userId: actor.id, target: `user:${targetId}`, ip, detail: { provider, by: 'admin', sessionsRevoked: Number(out.changes) } });
     db.exec('COMMIT');
     return { ok: true };
   } catch (err) {

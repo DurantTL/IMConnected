@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AstroCookies } from 'astro';
 import { getDb } from '../db';
+import { signToken, verifyToken } from './secret';
 import { GUID, PERSONAL_TID, validateClaims as checkClaims } from './oauth-claims.mjs';
 
 // Google and Microsoft 365 sign-in (issue #11), invite-only. This module holds the provider configuration, the
@@ -133,9 +134,17 @@ export const enabledProviders = (): Provider[] => PROVIDERS.filter((p) => provid
 
 // ---- the state cookie ----
 
-/** `i` is the intent: 'login' (sign-in start) or 'link' (an editor linking a provider from My account, with `u` the editor's user id). */
-interface Pending { p: Provider; state: string; verifier: string; nonce: string; exp: number; i?: 'login' | 'link'; u?: number }
-export type FlowIntent = { intent: 'login' } | { intent: 'link'; uid: number };
+/**
+ * The flow cookie's payload, signed with signToken() (so it can't be forged or altered by the holder). `i` is the intent: 'login'
+ * (sign-in start) or 'link' (an editor linking a provider from My account), where `u` is the editor's user id and `s` a hash of the
+ * session that started it (sessionBinding()); the callback needs the same user AND the same session.
+ */
+interface Pending { p: Provider; state: string; verifier: string; nonce: string; exp: number; i: 'login' | 'link'; u?: number; s?: string }
+export type FlowIntent = { intent: 'login' } | { intent: 'link'; uid: number; sid: string };
+const FLOW_PURPOSE = 'oauth-flow v1';
+
+/** What a link cookie is bound to: a hash of the session's id (itself the SHA-256 of the session token); never the token. */
+export const sessionBinding = (sessionId: string): string => createHash('sha256').update(`oauth-link ${sessionId}`).digest('base64url');
 
 // SameSite=Lax (not Strict): the provider sends the browser back with a cross-site top-level GET, which must carry it.
 const cookieOptions = { httpOnly: true, secure: true, sameSite: 'lax', path: '/' } as const;
@@ -151,8 +160,8 @@ export function beginFlow(c: ProviderConfig, cookies: AstroCookies, intent: Flow
   const state = random();
   const verifier = random();
   const nonce = random();
-  const pending: Pending = { p: c.provider, state, verifier, nonce, exp: Date.now() + OAUTH_COOKIE_MS, i: intent.intent, ...(intent.intent === 'link' ? { u: intent.uid } : {}) };
-  cookies.set(OAUTH_COOKIE, Buffer.from(JSON.stringify(pending)).toString('base64url'), { ...cookieOptions, maxAge: OAUTH_COOKIE_MS / 1000 });
+  const pending: Pending = { p: c.provider, state, verifier, nonce, exp: Date.now() + OAUTH_COOKIE_MS, i: intent.intent, ...(intent.intent === 'link' ? { u: intent.uid, s: intent.sid } : {}) };
+  cookies.set(OAUTH_COOKIE, signToken(FLOW_PURPOSE, pending), { ...cookieOptions, maxAge: OAUTH_COOKIE_MS / 1000 });
   const url = new URL(c.authUrl);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', c.clientId);
@@ -176,23 +185,29 @@ const safeEqual = (a: string, b: string) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
-/** Read and validate the cookie against the `state` the provider returned. The cookie is single use: callers clear it. */
-export function readFlow(cookies: AstroCookies, provider: Provider, returnedState: string): ({ verifier: string; nonce: string } & ({ intent: 'login' } | { intent: 'link'; uid: number })) | 'missing' | 'expired' | 'mismatch' {
+/**
+ * Read and validate the cookie against the `state` the provider returned. The cookie is single use: callers clear it. An unsigned,
+ * altered or wrongly-signed cookie is treated exactly like a missing one ('missing': nothing counted, nothing audited).
+ */
+export function readFlow(cookies: AstroCookies, provider: Provider, returnedState: string): ({ verifier: string; nonce: string } & ({ intent: 'login' } | { intent: 'link'; uid: number; sid: string })) | 'missing' | 'expired' | 'mismatch' {
   const raw = cookies.get(OAUTH_COOKIE)?.value;
-  if (!raw || raw.length > 1000) return 'missing';
+  if (!raw || raw.length > 1200) return 'missing';
   let pending: Pending;
   try {
-    pending = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    const v = verifyToken(FLOW_PURPOSE, raw) as Pending | null;
+    if (!v) return 'missing';
+    pending = v;
   } catch {
-    return 'mismatch';
+    return 'missing'; // no AUTH_SECRET: nothing under /admin runs anyway
   }
-  if (!pending || typeof pending.state !== 'string' || typeof pending.verifier !== 'string' || typeof pending.nonce !== 'string' || typeof pending.exp !== 'number') return 'mismatch';
+  if (typeof pending.state !== 'string' || typeof pending.verifier !== 'string' || typeof pending.nonce !== 'string' || typeof pending.exp !== 'number') return 'mismatch';
   if (pending.exp < Date.now()) return 'expired';
   if (pending.p !== provider || !returnedState || !safeEqual(pending.state, returnedState)) return 'mismatch';
   if (pending.i === 'link') {
-    if (!Number.isInteger(pending.u) || (pending.u as number) < 1) return 'mismatch';
-    return { verifier: pending.verifier, nonce: pending.nonce, intent: 'link', uid: pending.u as number };
+    if (!Number.isInteger(pending.u) || (pending.u as number) < 1 || typeof pending.s !== 'string' || !pending.s) return 'mismatch';
+    return { verifier: pending.verifier, nonce: pending.nonce, intent: 'link', uid: pending.u as number, sid: pending.s };
   }
+  if (pending.i !== 'login') return 'mismatch';
   return { verifier: pending.verifier, nonce: pending.nonce, intent: 'login' };
 }
 
@@ -204,9 +219,6 @@ export interface Claims {
 }
 
 const MAX_TOKEN_RESPONSE = 100_000; // bytes
-
-/** application/x-www-form-urlencoded encoding of one value (RFC 6749 section 2.3.1 asks for it before the Basic header's base64). */
-const formEncode = (v: string) => new URLSearchParams({ v }).toString().slice(2);
 
 /** Base64url-decode an ID token's payload. No signature check: see exchangeCode(). */
 export function decodeIdTokenPayload(idToken: string): Claims | null {
@@ -243,20 +255,20 @@ async function readLimited(res: Response, max: number): Promise<string | null> {
 
 /**
  * Exchange the code at the token endpoint: POST over HTTPS (or loopback http in tests), form body with grant_type, code,
- * redirect_uri and the PKCE code_verifier, the client id and secret (each form-urlencoded, per RFC 6749 2.3.1) in an HTTP Basic
- * header (never in a URL), no redirects, 10 second timeout for the whole response, body capped at 100 KB (Content-Length first,
- * then a running byte count). The ID token's payload is read from that response; it comes straight from the provider over TLS in
+ * redirect_uri, the PKCE code_verifier and the client id and secret (client_secret_post; never in a URL), no redirects, 10 second timeout for the whole response, body capped at 100 KB (Content-Length first,
+ * then a running count of the DECODED bytes, so a compressed response can't get past it). The ID token's payload is read from that response; it comes straight from the provider over TLS in
  * answer to our authenticated request, so its signature is not re-checked (OpenID Connect Core 3.1.3.7); issuer, audience,
  * expiry and nonce are checked in validateClaims(). Returns null on any failure and never surfaces the provider's body.
  */
 export async function exchangeCode(c: ProviderConfig, code: string, verifier: string): Promise<Claims | null> {
   if (!safeEndpoint(c.tokenUrl)) return null;
   try {
-    const body = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: c.redirectUri, code_verifier: verifier });
-    const basic = Buffer.from(`${formEncode(c.clientId)}:${formEncode(c.clientSecret)}`).toString('base64');
+    // client_secret_post: the client id and secret travel in the form body (Google and Entra both accept it), so there is no Basic
+    // header and no encoding step to get wrong (Entra secrets contain `~`).
+    const body = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: c.redirectUri, code_verifier: verifier, client_id: c.clientId, client_secret: c.clientSecret });
     const res = await fetch(c.tokenUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Authorization: `Basic ${basic}` },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
       body,
       redirect: 'error',
       signal: AbortSignal.timeout(10_000),

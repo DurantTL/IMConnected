@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { SESSION_COOKIE, createSession, readSession, revokeSession, setSessionCookie } from '../../../../lib/auth/session';
 import { audit } from '../../../../lib/auth/audit';
-import { clearFlowCookie, exchangeCode, isProvider, providerConfig, readFlow, validateClaims, type Provider } from '../../../../lib/auth/oauth';
+import { clearFlowCookie, exchangeCode, isProvider, providerConfig, readFlow, sessionBinding, validateClaims, type Provider } from '../../../../lib/auth/oauth';
 import { isAccountLocked, isIpLocked, releaseAttempt, reserveIpAttempt } from '../../../../lib/auth/ratelimit';
 import { clientIp } from '../../../../lib/request';
 import { getDb } from '../../../../lib/db';
@@ -46,8 +46,8 @@ export const GET: APIRoute = async ({ params, url, cookies, request, clientAddre
   const fail = (shown: string) => go(`${dest}?oauth=${shown}`);
   if (!cfg) return fail('unavailable');
   if (!linking && me) return go('/admin'); // already signed in: nothing to do (a sign-in never replaces a full session)
-  if (linking && (!me || me.id !== flow.uid)) {
-    // A link cookie used by another session, another editor or nobody: refused, nothing linked.
+  if (linking && (!me || me.id !== flow.uid || !locals.session || sessionBinding(locals.session.id) !== flow.sid)) {
+    // A link cookie used by another session (even of the same editor, e.g. after signing out and in), another editor or nobody: refused, nothing linked.
     audit('auth.oauth_failed', { userId: me?.id ?? null, ip, detail: { provider, reason: 'link_session' } });
     return go(`${me ? '/admin/account' : '/admin/login'}?oauth=failed`);
   }
@@ -72,10 +72,14 @@ export const GET: APIRoute = async ({ params, url, cookies, request, clientAddre
 
   if (linking) {
     const owner = db.prepare('SELECT user_id FROM oauth_accounts WHERE provider = ? AND provider_user_id = ?').get(provider, result.subject) as { user_id: number } | undefined;
-    if (owner) return failed(owner.user_id === me!.id ? 'link_exists' : 'link_taken', me!.id, owner.user_id === me!.id ? 'exists' : 'taken');
+    if (owner) {
+      releaseAttempt(attempt); // a fully authenticated editor's own refused action, not a sign-in guess: it must not count toward the IP lockout
+      return failed(owner.user_id === me!.id ? 'link_exists' : 'link_taken', me!.id, owner.user_id === me!.id ? 'exists' : 'taken');
+    }
     try {
       db.prepare('INSERT INTO oauth_accounts (provider, provider_user_id, user_id, email_at_link, created_at) VALUES (?, ?, ?, ?, ?)').run(provider, result.subject, me!.id, result.email, Date.now());
     } catch {
+      releaseAttempt(attempt);
       return failed('link_exists', me!.id, 'exists'); // this editor already has a link for the provider (or a concurrent duplicate)
     }
     releaseAttempt(attempt);

@@ -1,24 +1,22 @@
 #!/usr/bin/env node
 // A tiny local OpenID Connect provider for scripts/test-editor-oauth.mjs. It stands in for BOTH Google and Microsoft:
 //   GET  /<google|microsoft>/authorize   -> 302 back to redirect_uri with ?code&state (the test plays the browser)
-//   POST /<google|microsoft>/token       -> checks PKCE (S256), the client id and secret, returns an unsigned id_token
+//   POST /<google|microsoft>/token       -> checks PKCE (S256), the client id and secret, returns an unsigned id_token (client_secret_post: the id and secret must be in the form body)
 //   POST /__identity  {email, email_verified, sub, tid, oid, preferred_username, omit:[...], nonce?: "wrong", aud?: ...}
 //                     sets who the NEXT authorization signs in as (one use)
 //   GET  /__log       -> what the mock saw (never anything but made-up values)
 // Run: MOCK_OIDC_PORT=4417 node scripts/mock-oidc.mjs. Synthetic values only; never point this at a real site's secrets.
 import http from 'node:http';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 
 const PORT = Number(process.env.MOCK_OIDC_PORT || 4417);
 const BASE = `http://localhost:${PORT}`;
-// Made-up ids and secrets with characters that must survive form-urlencoding (+, space, %, :), so an encoding regression is caught.
+// Made-up ids and secrets with characters that must survive form-urlencoding in the body (+, space, %, :), so an encoding regression is caught.
 const CLIENTS = {
   google: { id: 'mock google+client:id%1', secret: 'mock+google secret:%s/x' },
   microsoft: { id: 'mock ms+client:id%2', secret: 'mock+ms secret:%s/y' },
 };
-// application/x-www-form-urlencoded, exactly as RFC 6749 2.3.1 requires before the Basic header's base64.
-const formEncode = (v) => new URLSearchParams({ v }).toString().slice(2);
-const formDecode = (v) => new URLSearchParams(`v=${v}`).get('v');
 
 const codes = new Map(); // code -> { provider, challenge, nonce, identity, redirect_uri }
 let nextIdentity = null;
@@ -57,19 +55,14 @@ http.createServer(async (req, res) => {
     }
     // token endpoint
     const form = new URLSearchParams(await readBody(req));
-    let id = form.get('client_id');
-    let secret = form.get('client_secret');
+    // client_secret_post: the id and secret must be in the form body. A Basic header is not used (and one that disagrees with the body is refused).
+    const id = form.get('client_id');
+    const secret = form.get('client_secret');
     const basic = /^Basic (.+)$/.exec(req.headers.authorization || '');
-    if (basic) {
-      // Strict RFC 6749 2.3.1: base64( formEncode(id) + ':' + formEncode(secret) ). The raw parts must be EXACTLY the form encoding of the
-      // decoded values, so a client that sends encodeURIComponent output or no encoding is refused when a value has special characters.
-      const parts = Buffer.from(basic[1], 'base64').toString().split(':');
-      const strict = parts.length === 2 && parts.every((x) => formEncode(formDecode(x)) === x);
-      [id, secret] = strict ? parts.map(formDecode) : [null, null];
-    }
+    const basicBad = basic && Buffer.from(basic[1], 'base64').toString() !== `${id}:${secret}`;
     const entry = codes.get(form.get('code') || '');
     codes.delete(form.get('code') || ''); // single use
-    if (!entry || entry.provider !== provider || id !== CLIENTS[provider].id || secret !== CLIENTS[provider].secret) {
+    if (!entry || entry.provider !== provider || id !== CLIENTS[provider].id || secret !== CLIENTS[provider].secret || basicBad) {
       log.push({ event: 'token_refused', provider });
       return send(res, 400, { error: 'invalid_grant' });
     }
@@ -100,6 +93,14 @@ http.createServer(async (req, res) => {
     const idToken = `${b64({ alg: 'none', typ: 'JWT' })}.${b64(claims)}.`;
     const ok = { token_type: 'Bearer', access_token: 'mock-access', expires_in: 3600, id_token: idToken };
     // Misbehaving token endpoints, for the "fail closed" tests: a redirect, an oversized body, a response that never finishes in time.
+    if (i.token_mode === 'gzip_ok') {
+      const z = zlib.gzipSync(JSON.stringify(ok));
+      return void (res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip', 'Content-Length': z.length }), res.end(z));
+    }
+    if (i.token_mode === 'gzip_big') { // tiny on the wire (a few hundred bytes), 2 MB once decoded: the cap must count decoded bytes
+      const z = zlib.gzipSync(JSON.stringify({ ...ok, padding: 'x'.repeat(2_000_000) }));
+      return void (res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip', 'Content-Length': z.length }), res.end(z));
+    }
     if (i.token_mode === 'redirect') return send(res, 302, '', { Location: `${BASE}/__log` });
     if (i.token_mode === 'big') return send(res, 200, { ...ok, padding: 'x'.repeat(200_000) });
     if (i.token_mode === 'big_chunked') {

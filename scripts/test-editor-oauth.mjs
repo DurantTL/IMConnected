@@ -9,6 +9,7 @@
 // overrides and OAUTH_TEST_ENDPOINTS=1 are for this test only; they are set with NODE_ENV=production on purpose, to check the
 // startup warnings. All names, addresses and secrets are made up; no real Google or Microsoft endpoint is contacted.
 import { execFileSync, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -191,6 +192,22 @@ async function linkStart(client, provider, identity, code) {
   return { st, back, cookie: client.jar['__Host-imc_oauth'] };
 }
 const finishLink = (client, back) => client.get(back.pathname + back.search);
+/** Plays an attacker who holds a session: builds a flow cookie by hand (unsigned or with a bad MAC) around a REAL authorization code. */
+async function forgeFlow(client, provider, identity, extra, tail) {
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const state = crypto.randomBytes(32).toString('base64url');
+  const nonce = crypto.randomBytes(24).toString('base64url');
+  await setIdentity(identity);
+  const au = new URL(`${OIDC}/${provider}/authorize`);
+  const redirectUri = `${BASE}/admin/oauth/${provider}/callback`;
+  for (const [k, v] of Object.entries({ client_id: provider === 'google' ? G_ID : M_ID, redirect_uri: redirectUri, response_type: 'code', state, nonce, code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', scope: 'openid email profile' })) au.searchParams.set(k, v);
+  const back = new URL((await fetch(au, { redirect: 'manual' })).headers.get('location'));
+  if (back.searchParams.get('code')) seenCodes.push(back.searchParams.get('code'));
+  const body = Buffer.from(JSON.stringify({ p: provider, state, verifier, nonce, exp: Date.now() + 600_000, ...extra })).toString('base64url');
+  client.jar['__Host-imc_oauth'] = body + tail;
+  return finishLink(client, back);
+}
+const recoveryList = (html) => [...((/class="recovery-codes"[\s\S]*?<\/ol>/.exec(html) || [''])[0]).matchAll(/<code>([A-Z0-9-]+)<\/code>/g)].map((m) => m[1]);
 const audits = (action) => q('SELECT * FROM audit_log WHERE action = ?', action);
 const lastFailReason = () => JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'auth.oauth_failed' ORDER BY id DESC LIMIT 1")[0].detail).reason;
 const oauthRows = () => count('SELECT COUNT(*) n FROM oauth_accounts');
@@ -228,7 +245,7 @@ try {
   check('start redirects to the provider with PKCE S256, state, nonce and scope "openid email profile"',
     st.status === 303 && authUrl.searchParams.get('code_challenge_method') === 'S256' && !!authUrl.searchParams.get('code_challenge') && authUrl.searchParams.get('state')?.length >= 32 && !!authUrl.searchParams.get('nonce') && authUrl.searchParams.get('scope') === 'openid email profile' && authUrl.searchParams.get('redirect_uri') === `${BASE}/admin/oauth/google/callback` && authUrl.searchParams.get('client_id') === G_ID && authUrl.searchParams.get('prompt') === 'select_account', st.loc);
   check('state cookie: __Host- name, HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age=600, no Domain', !!oc && /HttpOnly/i.test(oc) && /Secure/i.test(oc) && /SameSite=Lax/i.test(oc) && /Path=\//i.test(oc) && /Max-Age=600/i.test(oc) && !/Domain=/i.test(oc), oc);
-  check('the authorization URL carries no client secret and the cookie does not hold it', !leaks(st.loc) && !leaks(Buffer.from(flow.jar['__Host-imc_oauth'], 'base64url').toString()));
+  check('the authorization URL carries no client secret and the cookie does not hold it', !leaks(st.loc) && !leaks(Buffer.from(flow.jar['__Host-imc_oauth'].split('.')[0], 'base64url').toString()));
 
   // ---- invited email -> account activated, linked, enrollment, no dashboard without a second factor ----
   const ivy = new Client('10.8.3.1');
@@ -339,10 +356,13 @@ try {
 
   // a misbehaving token endpoint fails closed: reason code `exchange`, no session, no secret anywhere (checked by the log checks below)
   const tk = new Client('10.8.4.8');
-  for (const [mode, label] of [['redirect', 'a redirect from the token endpoint'], ['big', 'an oversized token response (Content-Length over 100 KB)'], ['big_chunked', 'an oversized token response with no Content-Length (running byte count)']]) {
+  for (const [mode, label] of [['redirect', 'a redirect from the token endpoint'], ['big', 'an oversized token response (Content-Length over 100 KB)'], ['big_chunked', 'an oversized token response with no Content-Length (running byte count)'], ['gzip_big', 'a gzip token response that is tiny on the wire but 2 MB decoded (the cap counts decoded bytes)']]) {
     res = await signIn(tk, 'google', googleId(TAMPER, { token_mode: mode }));
     check(`${label} fails closed`, res.cb.loc === '/admin/login?oauth=failed' && lastFailReason() === 'exchange' && !tk.hasSession(), `${res.cb.loc} ${lastFailReason()}`);
   }
+  const tz = new Client('10.8.4.9');
+  res = await signIn(tz, 'google', googleId(TAMPER, { token_mode: 'gzip_ok' }));
+  check('a small gzip-encoded token response is decoded and accepted (the cap is not a blanket refusal)', res.cb.loc === '/admin/2fa' && tz.hasSession(), String(res.cb.loc));
   const t0 = Date.now();
   res = await signIn(tk, 'google', googleId(TAMPER, { token_mode: 'slow' }));
   check('a token response that does not finish within 10 s fails closed (timeout)', res.cb.loc === '/admin/login?oauth=failed' && lastFailReason() === 'exchange' && !tk.hasSession() && Date.now() - t0 < 12_500 && Date.now() - t0 >= 9_000, `${res.cb.loc} ${Date.now() - t0}ms`);
@@ -410,8 +430,8 @@ try {
   lk = await linkStart(acc, 'microsoft', IVY_MS, '12345678');
   check('...and a wrong code starts nothing either', lk.st.status === 401 && !('__Host-imc_oauth' in acc.jar));
   lk = await linkStart(acc, 'microsoft', IVY_MS, recovery[1]);
-  const lkc = lk.cookie ? JSON.parse(Buffer.from(lk.cookie, 'base64url').toString()) : {};
-  check('with a fresh recovery code the flow starts: a link-intent cookie bound to her user id and the provider', lk.st.status === 303 && lkc.i === 'link' && lkc.u === ivyRow.id && lkc.p === 'microsoft', JSON.stringify(lkc));
+  const lkc = lk.cookie ? JSON.parse(Buffer.from(lk.cookie.split('.')[0], 'base64url').toString()) : {};
+  check('with a fresh recovery code the flow starts: a link-intent cookie bound to her user id and the provider', lk.st.status === 303 && lkc.i === 'link' && lkc.u === ivyRow.id && lkc.p === 'microsoft' && /^[A-Za-z0-9_-]{43}$/.test(lkc.s || '') && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(lk.cookie) && !lk.cookie.includes(sessionBefore), JSON.stringify(lkc));
   const sessionBeforeLink = acc.jar['__Host-imc_session'];
   const lcb = await finishLink(acc, lk.back);
   check('the callback links the account and returns to My account; the session is unchanged', lcb.status === 303 && lcb.loc === '/admin/account?oauth=linked' && acc.jar['__Host-imc_session'] === sessionBeforeLink && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ? AND provider = 'microsoft' AND email_at_link = 'ivy.at.work@example.test'", ivyRow.id) === 1, `${lcb.status} ${lcb.loc}`);
@@ -480,6 +500,9 @@ try {
   check('starting a link for a provider that is already linked is refused (409), no code spent', r.status === 409 && !('__Host-imc_oauth' in alice.jar));
   r = await alice.post('/admin/account', { action: 'oauth_link', provider: 'github', code: aRecovery[2] });
   check('an unknown provider cannot be linked', r.status === 404);
+  const APW = 'alice sets a long password 55';
+  r = await alice.post('/admin/account', { action: 'password_set', next: APW, confirm: APW, code: aRecovery[2] });
+  check('...and the refused starts really spent no code: aRecovery[2] still works as the fresh factor (here to set a password)', r.status === 200 && /Password set/.test(r.ok), `${r.status} ${r.error}`);
 
   // A link-intent cookie cannot be used by another session or user, or with no session.
   lk = await linkStart(acc, 'google', googleId('ivy.google.two@example.test', { sub: 'g-ivy-two' }), recovery[5]);
@@ -488,6 +511,12 @@ try {
   const byAlice = await finishLink(alice, lk.back);
   check('a link cookie replayed by another signed-in editor links nothing', byAlice.loc === '/admin/account?oauth=failed' && oauthRows() === rowsBeforeReplay && !('__Host-imc_oauth' in alice.jar), `${byAlice.loc}`);
   check('...and the refusal is audited', JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'auth.oauth_failed' ORDER BY id DESC LIMIT 1")[0].detail).reason === 'link_session');
+  const ivyB = new Client('10.8.6.10'); // the same editor in a different session (signed in again with her password)
+  await ivyB.post('/admin/login', { email: INVITEE, password: GOOD });
+  r = await ivyB.post('/admin/2fa', { code: recovery[6] });
+  ivyB.jar['__Host-imc_oauth'] = lk.cookie;
+  const bySame = await finishLink(ivyB, lk.back);
+  check('a valid signed link cookie used in a different session of the SAME editor links nothing (bound to the session that started it)', r.loc === '/admin' && bySame.loc === '/admin/account?oauth=failed' && oauthRows() === rowsBeforeReplay, `${r.loc} ${bySame.loc}`);
   const nobody = new Client('10.8.6.6');
   nobody.jar['__Host-imc_oauth'] = lk.cookie;
   const byNobody = await finishLink(nobody, lk.back);
@@ -498,14 +527,17 @@ try {
   const byMid = await finishLink(mid, lk.back);
   check('...nor a session that has not passed 2FA', oauthRows() === rowsBeforeReplay && byMid.loc.startsWith('/admin/login?oauth='), `${byMid.loc}`);
   const own = await finishLink(acc, lk.back);
-  check('Ivy\'s own callback still works afterwards (the genuine one)', own.loc === '/admin/account?oauth=linked' && oauthRows() === rowsBeforeReplay + 1, `${own.loc}`);
+  check('Ivy\'s own callback still works afterwards (the genuine one, same session)', own.loc === '/admin/account?oauth=linked' && oauthRows() === rowsBeforeReplay + 1, `${own.loc}`);
   run("UPDATE users SET role = 'editor' WHERE id = ?", ivyRow.id); // create-admin.mjs made Ivy an administrator; from here on she is an ordinary editor
   r = await acc.post('/admin/editors', { action: 'oauth_unlink', id: String(orlaId), provider: 'microsoft' });
   check('an editor (not an admin) cannot unlink anyone else', r.status === 403 && count("SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?", orlaId) === 1, String(r.status));
+  const orlaSessions = count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', orlaId);
   r = await alice.post('/admin/editors', { action: 'oauth_unlink', id: String(orlaId), provider: 'microsoft' });
+  const unlinkPage = r;
   const ul = q("SELECT user_id, detail, target FROM audit_log WHERE action = 'auth.oauth_unlinked' ORDER BY id DESC LIMIT 1")[0];
   check('an administrator unlinks it (fresh sign-in covers the factor), audited with the actor', r.status === 200 && /Linked account removed/.test(r.ok) && count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', orlaId) === 0 && ul.user_id === adminId && ul.target === `user:${orlaId}` && /admin/.test(ul.detail), `${r.status} ${r.error} ${r.ok}`);
   r = await alice.post('/admin/editors', { action: 'oauth_unlink', id: String(orlaId), provider: 'microsoft' });
+  check('...and signs the target out everywhere in the same transaction (audited count); the confirm text says so', orlaSessions >= 1 && count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', orlaId) === 0 && JSON.parse(ul.detail).sessionsRevoked === orlaSessions && /signed out everywhere/.test(unesc(unlinkPage.ok || '')) , `${orlaSessions} ${ul.detail}`);
   check('unlinking a link that is not there is a 404', r.status === 404);
   const rowsBeforeOrla = oauthRows();
   const orla2 = new Client('10.8.6.8');
@@ -514,14 +546,68 @@ try {
   const moId = q('SELECT id FROM users WHERE email = ?', MSONLY)[0].id;
   check('(setup) another editor has a link and a session', count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', moId) === 1 && count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', moId) >= 1);
   r = await alice.post('/admin/editors', { action: 'reset2fa', id: String(moId) });
+  const resetPage = r;
   const rz = q("SELECT detail FROM audit_log WHERE action = 'admin.reset_2fa' ORDER BY id DESC LIMIT 1")[0];
   check('Reset two-step sign-in also removes that editor\'s linked accounts (same transaction, audited)', r.status === 200 && count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', moId) === 0 && count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', moId) === 0 && JSON.parse(rz.detail).oauthLinks === 1, `${r.status} ${r.error} ${rz.detail}`);
+  check('an OAuth-only editor (no password) is back to Invited after the reset: audited reinvite, old invites gone, page says what to do', q('SELECT status FROM users WHERE id = ?', moId)[0].status === 'invited' && JSON.parse(rz.detail).reinvite === true && count('SELECT COUNT(*) n FROM invites WHERE user_id = ?', moId) === 0 && /back to Invited: send them a new invite/.test(unesc(resetPage.ok)), `${resetPage.ok}`);
   r = await alice.get('/admin/editors');
   const mo2 = new Client('10.8.6.9');
   const rowsBeforeMo = oauthRows();
   res = await signIn(mo2, 'microsoft', { tid: TENANT, oid: OID, email: MSONLY });
   check('after Reset two-step sign-in, the same provider identity gets no_account and creates nothing (no hand-over to enrollment)', res.cb.loc === '/admin/login?oauth=no_account' && oauthRows() === rowsBeforeMo && !mo2.hasSession() && count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', moId) === 0, `${res.cb.loc}`);
-  check('...and the reset confirmation text says so', /any linked Google or Microsoft 365 account/.test(unesc(r.text)));
+  check('...and the reset confirmation text says so', /any linked Google or Microsoft 365 account/.test(unesc(r.text)) && /go back to Invited and you send them a new invite/.test(unesc(r.text)));
+  r = await alice.post('/admin/editors', { action: 'resend', id: String(moId) });
+  check('Resend invite works for the re-invited editor', r.status === 200 && /New invite created/.test(r.ok) && count('SELECT COUNT(*) n FROM invites WHERE user_id = ? AND used_at IS NULL AND expires_at > ?', moId, Date.now()) === 1, `${r.status} ${r.error} ${r.ok}`);
+  const mo3 = new Client('10.8.6.11');
+  res = await signIn(mo3, 'microsoft', { tid: TENANT, oid: OID, email: MSONLY });
+  check('...and accepting it through Microsoft links the account, activates it and goes to enrollment', res.cb.loc === '/admin/2fa/setup' && q('SELECT status FROM users WHERE id = ?', moId)[0].status === 'active' && count('SELECT COUNT(*) n FROM oauth_accounts WHERE user_id = ?', moId) === 1, `${res.cb.loc}`);
+
+  // ---- the flow cookie is signed: a hand-made cookie can't link anything ----
+  const auditN = () => count("SELECT COUNT(*) n FROM audit_log WHERE action IN ('auth.oauth_failed', 'auth.oauth_linked', 'auth.oauth_login')");
+  const FREE = { tid: TENANT, oid: '12121212-0000-4111-8222-333333333333', email: 'forged.link@example.test' };
+  const auditBeforeForge = auditN();
+  const rowsBeforeForge = oauthRows();
+  const forged = await forgeFlow(acc, 'microsoft', FREE, { i: 'link', u: ivyRow.id, s: 'anything' }, '');
+  check('a hand-forged link cookie (valid JSON, no MAC) links nothing and writes no audit row', forged.loc === '/admin/account?oauth=failed' && oauthRows() === rowsBeforeForge && auditN() === auditBeforeForge && !('__Host-imc_oauth' in acc.jar), `${forged.loc}`);
+  const forged2 = await forgeFlow(acc, 'microsoft', FREE, { i: 'link', u: ivyRow.id, s: 'anything' }, '.' + 'A'.repeat(43));
+  check('...nor with a wrong MAC', forged2.loc === '/admin/account?oauth=failed' && oauthRows() === rowsBeforeForge && auditN() === auditBeforeForge);
+  const fm = new Client('10.8.8.1');
+  await setIdentity(FREE);
+  const fst = await fm.get('/admin/oauth/microsoft'); // a genuine, signed LOGIN cookie
+  const fback = new URL((await fetch(fst.loc, { redirect: 'manual' })).headers.get('location'));
+  if (fback.searchParams.get('code')) seenCodes.push(fback.searchParams.get('code'));
+  const [fbody, fmac] = fm.jar['__Host-imc_oauth'].split('.');
+  const flipped = JSON.parse(Buffer.from(fbody, 'base64url').toString());
+  check('(setup) a genuine login cookie is signed and says intent login', flipped.i === 'login' && /^[A-Za-z0-9_-]{43}$/.test(fmac));
+  flipped.i = 'link';
+  flipped.u = ivyRow.id;
+  flipped.s = 'anything';
+  acc.jar['__Host-imc_oauth'] = `${Buffer.from(JSON.stringify(flipped)).toString('base64url')}.${fmac}`;
+  const flippedRes = await finishLink(acc, fback);
+  check('a signed login cookie with its intent changed to link fails the MAC: nothing linked, no audit row', flippedRes.loc === '/admin/account?oauth=failed' && oauthRows() === rowsBeforeForge && auditN() === auditBeforeForge, `${flippedRes.loc}`);
+
+  // ---- refused link attempts by a signed-in editor don't count toward the IP lockout ----
+  const ipKey = 'ip:10.8.6.1';
+  const attemptsBefore = count('SELECT COUNT(*) n FROM login_attempts WHERE key = ?', ipKey);
+  let pool = recoveryList((await acc.post('/admin/account', { action: 'recovery', code: recovery[7] })).text);
+  let refused = 0;
+  for (let i = 0; i < 11; i++) {
+    if (pool.length === 1) pool = recoveryList((await acc.post('/admin/account', { action: 'recovery', code: pool[0] })).text);
+    const code = pool.shift();
+    const att = await linkStart(acc, 'microsoft', { tid: TENANT, oid: 'cccccccc-0000-4111-8222-444444444444', email: 'taken.again@example.test' }, code); // alice's subject
+    const done = att.back ? await finishLink(acc, att.back) : att.st;
+    if (done.loc === '/admin/account?oauth=taken') refused++;
+  }
+  check('11 refused link attempts (the account belongs to another editor) all answer "taken" and do not count toward the IP lockout', pool.length > 0 && refused === 11 && count('SELECT COUNT(*) n FROM login_attempts WHERE key = ?', ipKey) === attemptsBefore, `${refused} ${pool.length}`);
+
+  // ---- reset: an editor with a password stays active; one without goes back to Invited ----
+  r = await alice.post('/admin/editors', { action: 'reset2fa', id: String(ivyRow.id) });
+  const rzI = JSON.parse(q("SELECT detail FROM audit_log WHERE action = 'admin.reset_2fa' ORDER BY id DESC LIMIT 1")[0].detail);
+  check('Reset two-step sign-in for an editor WITH a password: stays active, no re-invite', r.status === 200 && q('SELECT status FROM users WHERE id = ?', ivyRow.id)[0].status === 'active' && rzI.reinvite === false && !/back to Invited/.test(r.ok) && count('SELECT COUNT(*) n FROM sessions WHERE user_id = ?', ivyRow.id) === 0, `${r.status} ${r.error} ${r.ok}`);
+  const ivyAgain = new Client('10.8.8.2');
+  r = await ivyAgain.post('/admin/login', { email: INVITEE, password: GOOD });
+  const r2 = await ivyAgain.get('/admin/2fa');
+  check('...and she signs in with her password and is sent to enrollment, as before', r.status === 303 && r.loc === '/admin/2fa' && r2.status === 302 && r2.loc === '/admin/2fa/setup', `${r.status} ${r.loc} ${r2.loc}`);
 
   // ---- rate limiting and flooding ----
   const junk = new Client('10.8.7.1');

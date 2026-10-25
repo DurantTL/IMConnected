@@ -78,7 +78,7 @@ if (Astro.request.method === 'POST') {
           // Own account: don't render the admin view for someone who may no longer be an admin or signed in.
           if (targetId === user.id && action === 'disable') return Astro.redirect('/admin/login', 303);
           if (targetId === user.id && action === 'role' && field(form!, 'role', 20) !== 'admin') return Astro.redirect('/admin/editors', 303);
-          message = action === 'role' ? 'Role changed.' : action === 'disable' ? 'Account disabled and signed out everywhere.' : action === 'enable' ? 'Account re-enabled.' : action === 'revoke' ? 'Invite revoked. The link no longer works.' : action === 'oauth_unlink' ? 'Linked account removed.' : 'Two-step sign-in reset. They set it up again at their next sign-in.';
+          message = action === 'role' ? 'Role changed.' : action === 'disable' ? 'Account disabled and signed out everywhere.' : action === 'enable' ? 'Account re-enabled.' : action === 'revoke' ? 'Invite revoked. The link no longer works.' : action === 'oauth_unlink' ? 'Linked account removed. They were signed out everywhere.' : r.reinvite ? 'Two-step sign-in reset. They have no password, so they are back to Invited: send them a new invite (Manage, then Send a new invite).' : 'Two-step sign-in reset. They set it up again at their next sign-in.';
         } else {
           error = r.error;
           Astro.response.status = r.status;
@@ -217,7 +217,7 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="id" value={p.id} />
                     <input type="hidden" name="provider" value={l.provider} />
                     <input type="hidden" name="assertion" value="" />
-                    <p class="admin-note">{l.provider === 'google' ? 'Google' : 'Microsoft 365'} is linked ({l.email}). Removing the link means this account can no longer sign in with it. Their password and passkeys are not touched.</p>
+                    <p class="admin-note">{l.provider === 'google' ? 'Google' : 'Microsoft 365'} is linked ({l.email}). Removing the link means this account can no longer sign in with it, and they will be signed out everywhere. Their password and passkeys are not touched.</p>
                     {needFresh && <FreshField id={`ul-code-${p.id}-${l.provider}`} hasPasskeys={hasPk} />}
                     <button type="submit" class="cms-btn danger">Unlink {l.provider === 'google' ? 'Google' : 'Microsoft 365'}</button>
                   </form>
@@ -227,7 +227,7 @@ const twoFa = (p: (typeof people)[number]) => {
                     <input type="hidden" name="action" value="reset2fa" />
                     <input type="hidden" name="id" value={p.id} />
                     <input type="hidden" name="assertion" value="" />
-                    <p class="admin-note">For someone who lost their devices and recovery codes. Confirm who they are first. Removes their authenticator, passkeys, recovery codes and any linked Google or Microsoft 365 account, and signs them out; they set up two-step sign-in again next time.</p>
+                    <p class="admin-note">For someone who lost their devices and recovery codes. Confirm who they are first. Removes their authenticator, passkeys, recovery codes and any linked Google or Microsoft 365 account, and signs them out. If they have no password (they joined with Google or Microsoft), they go back to Invited and you send them a new invite; otherwise they set up two-step sign-in again next time.</p>
                     {needFresh && <FreshField id={`rst-code-${p.id}`} hasPasskeys={hasPk} />}
                     <button type="submit" class="cms-btn danger">Reset two-step sign-in</button>
                   </form>
