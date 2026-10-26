@@ -9,7 +9,7 @@ services:
     ports:
       - "4321:4321"
     # To update after a merge:  docker compose pull && docker compose up -d
-    # (xCloud does this automatically when the deploy branch moves; see the README)
+    # (xCloud does this automatically when the deploy branch moves; see docs/OPERATIONS.md)
 
 volumes:
   imconnected-data:

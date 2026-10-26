@@ -26,7 +26,7 @@ Every story is reviewed by a person. Nothing reaches the public site until an ed
 
 ### For church members
 - **Submit a Story** at `/submit/`. The form takes a story, an announcement or an event, with up to six photos and a caption and description for each.
-- Spam is filtered by Cloudflare Turnstile, hidden traps, rate limits and an email confirmation. The submitter receives a thank-you email when their story is published.
+- Spam is filtered by Cloudflare Turnstile, hidden traps, a minimum fill time, an Origin check and rate limits. Submitters confirm their address by email, and a confirmed submitter receives a thank-you email when their story is published.
 
 ### For editors (`/admin`)
 - **Inboxes** for Stories, Announcements and Events, with status cards, search, filters and bulk actions (publish, unpublish, reject, edit fields). Every bulk action shows a confirmation page first.
@@ -41,6 +41,8 @@ Every story is reviewed by a person. Nothing reaches the public site until an ed
   - a password, or Google or Microsoft 365 (the first step);
   - an authenticator app or passkey, or a recovery code when the device is lost (the second step).
 
+  A passkey on its own also counts as both steps.
+
 ### For the newsletter and the AI agent
 - **IMConnected Studio** publishes a finished newsletter's stories to the site in one step. It also imports the story list and copies photos to WordPress.
 - **The AI agent API** lets the communication director's agent send stories, announcements and backfilled archive notices. Everything it sends becomes a draft that waits for a person.
@@ -50,11 +52,12 @@ Every story is reviewed by a person. Nothing reaches the public site until an ed
 ## How a story reaches the site
 
 ```
- Church member ──► /submit ─────────┐
-                                    │   validated, photos checked, HTML escaped
- AI agent ──► /api/agent/stories ───┼──► Draft in the dashboard (status "new")
-                                    │         │ editors notified by email (title + link only)
- Editor ──► "New story" in /admin ──┘         ▼
+ Church member ──► /submit ─────────┐   validated, photos checked, HTML escaped;
+                                    │   editors emailed (title, church and link)
+ AI agent ──► /api/agent/stories ───┼──► Draft in the dashboard
+                                    │   ("new"; "in review" for a reopened story)
+ Editor ──► "New story" in /admin ──┘         │
+                                              ▼
                                       An editor reviews, edits, then Publishes or Rejects
                                               │   (always a person's decision)
  IMConnected Studio ──► /api/publish ─────────┤
@@ -73,9 +76,9 @@ Every story is reviewed by a person. Nothing reaches the public site until an ed
 | Web framework | [Astro 7](https://astro.build) with the Node adapter. Story, section, issue and home pages and the feeds are rendered on the server and cached in memory. `/submit/`, `/search/` and `/confirm/` are static. |
 | Data | One **SQLite** database (Node's built-in `node:sqlite`) in `DATA_DIR`, plus photo files in `DATA_DIR/media`. The database holds stories, drafts, accounts, sessions and the audit log. Schema changes are numbered migrations in `src/lib/db/migrations/`. |
 | Search | SQLite FTS5 (`GET /api/search`). |
-| Email | [Resend](https://resend.com), optional. It sends submission confirmations, editor notifications, invites and thank-you notes. |
+| Email | [Resend](https://resend.com), optional. It sends submission confirmations, editor notifications, invites, thank-you notes and the backup alert to administrators. |
 | Backups | A nightly snapshot of the database and photos, uploaded to a Google Drive Shared Drive (7 daily and 4 weekly copies). |
-| Deployment | A Docker image built by GitHub Actions once a day (or on demand) and pushed to GHCR. The server pulls it from the `deploy` branch. |
+| Deployment | A Docker image built by GitHub Actions once a day (or on demand) and pushed to GHCR. After publishing it, the workflow moves the `deploy` branch; the host watches that branch and pulls the new image. |
 
 Publishing a story never touches git. The database and its photo folder are the only copy of the stories, which is why the nightly backup matters.
 
@@ -85,14 +88,14 @@ Publishing a story never touches git. The database and its photo folder are the 
 
 | Endpoint | Who uses it | Access |
 | --- | --- | --- |
-| `GET /`, `/stories/<slug>/`, `/<section>/`, `/<section>/<area>/`, `/announcements/`, `/issues/`, `/issues/<n>/` | Readers | Public |
+| `GET /`, `/stories/<slug>/`, `/<section>/`, `/<section>/<area>/` (and their `/page/<n>/` pages), `/announcements/`, `/issues/`, `/issues/<n>/` | Readers | Public |
 | `GET /rss.xml`, `GET /stories.json` | Feed readers, Studio | Public. `/stories.json` is a versioned contract: fields may be added but are never renamed. |
 | `GET /api/search?q=&section=` | The search page | Public, 120 searches per IP every 10 minutes |
 | `GET /api/navigation` | The header and footer on static pages | Public |
 | `POST /api/submit`, `POST /api/confirm` | The submit form, confirmation links | Public, with spam checks |
-| `GET /media/*` | Story photos | Public |
-| `POST /api/publish`, `GET /api/stories`, `GET /api/studio-photo`, `GET /api/studio-draft-flyer` | IMConnected Studio | `Bearer PUBLISH_TOKEN`, with CORS for `PUBLISH_ORIGINS` |
-| `GET /api/agent/sections`, `POST /api/agent/stories`, `POST /api/agent/stories/batch`, `POST /api/agent/stories/reopen`, `GET /api/agent/stories/<id>` | The AI agent | `Bearer AGENT_API_TOKEN`, 60 calls per hour |
+| `GET /media/*`, `GET /images/stories/*` | Story photos (old `/images/stories/` links in sent newsletters still work) | Public |
+| `GET`/`POST /api/publish`, `GET /api/stories`, `GET /api/studio-photo`, `GET /api/studio-draft-flyer` | IMConnected Studio | `Bearer PUBLISH_TOKEN`, with CORS for `PUBLISH_ORIGINS` |
+| `GET /api/agent/sections`, `POST /api/agent/stories`, `POST /api/agent/stories/batch`, `POST /api/agent/stories/reopen`, `GET /api/agent/stories/<id>`, `GET /api/agent/stories?sourceUrl=` | The AI agent | `Bearer AGENT_API_TOKEN`, 60 calls per hour |
 | `/admin*`, `/api/admin/*` | Editors | Session and two-step verification |
 
 ### The AI agent API at a glance
@@ -119,9 +122,9 @@ curl -s -X POST https://stories.imadventist.org/api/agent/stories \
   | Title | up to 140 characters |
   | Summary (`dek`) | up to 240 characters |
   | Body | **50 to 20,000 characters**, after trimming (`limits.bodyMin`) |
-  | Photos | up to 6, sent as `data:` URLs (JPEG, PNG, WebP or AVIF), up to 10 MB each, 40 MB per request |
-- **Safe to retry.** Posting the same `sourceUrl` updates the same draft, and a repeated `requestId` is acknowledged without writing anything twice.
-- **Batch:** up to 20 stories per call, and each one succeeds or fails on its own.
+  | Photos | up to 6, sent as `data:` URLs (JPEG, PNG, WebP or AVIF), up to 10 MB each. The whole request is at most 40 MB of JSON, which leaves about 30 MB for photos after base64 (`photoBudget.maxImageBytesPerRequest`). |
+- **Safe to retry.** Posting the same `sourceUrl` updates the same draft while no editor has touched it (after that it is refused with `409`), and a repeated `requestId` is acknowledged without writing anything twice.
+- **Batch:** up to 20 stories per call (at most 300 stories an hour), and each one succeeds or fails on its own.
 - **Reopen:** proposes changes to a story that is already published, as a new draft.
 
 The full reference is in [docs/AGENT-API.md](docs/AGENT-API.md): every field, the error codes, read-back, batch, reopen and announcements.
@@ -196,8 +199,10 @@ npm run build && npm start          # production build and server
 To try the dashboard, use a throwaway data folder with made-up secrets:
 
 ```bash
-DATA_DIR=/tmp/imc-data AUTH_SECRET=$(openssl rand -hex 32) npm start
-DATA_DIR=/tmp/imc-data node scripts/create-admin.mjs test@example.com "Test Admin"
+export DATA_DIR=/tmp/imc-data SITE_URL=http://localhost:4321
+export AUTH_SECRET=$(openssl rand -hex 32)   # keep it for the whole session
+npm start
+node scripts/create-admin.mjs test@example.com "Test Admin"   # in a second shell with the same exports
 ```
 
 Session cookies are always `Secure`, so sign in with Chrome or Firefox on `localhost`. Point `EMAIL_API_URL` at `scripts/mock-email.mjs` to see emails without sending any.
