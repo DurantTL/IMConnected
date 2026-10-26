@@ -52,7 +52,7 @@ you to review the current branch against `origin/main`.
    - `/api/publish` still commits first and records the Studio draft second,
      and a database error there never fails the publish;
    - schema drift between `src/content.config.ts`, `src/lib/story-publish.ts`,
-     `src/lib/story-store.ts`, `src/lib/feed.ts`, `scripts/import-git-stories.mjs`, `src/lib/site.ts` and the README example (`.pages.yml` is a frozen archive config);
+     `src/lib/story-store.ts`, `src/lib/feed.ts`, `scripts/import-git-stories.mjs`, `src/lib/site.ts` and the story format example in `docs/STORAGE.md` (`.pages.yml` is a frozen archive config);
    - `/api/publish`: the bearer token is compared in constant time, 503 when
      `PUBLISH_TOKEN` is unset or short, CORS only for `PUBLISH_ORIGINS`, every
      story field still goes through the escaping and control-character

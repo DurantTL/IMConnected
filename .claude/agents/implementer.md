@@ -18,7 +18,7 @@ You implement one IMConnected issue. The caller gives you the issue number.
      sending a newsletter).
 3. Follow the rules in `AGENTS.md`: sections live only in `src/lib/site.ts`;
    keep `src/content.config.ts`, `.pages.yml`, `src/lib/submission.ts` and the
-   README story example in sync; never render submitted text as raw HTML; no
+   story format example in `docs/STORAGE.md` in sync; never render submitted text as raw HTML; no
    database.
 4. Use synthetic data only. Never put real submitters' contact details, real
    people's names in made-up stories, or secrets in code, sample stories,
