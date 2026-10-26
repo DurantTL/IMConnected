@@ -31,7 +31,7 @@ const hint = /storage quota/i.test(err)
       <strong>Backups are off.</strong>
       {s.missing.length > 0 && <span> Not set: {s.missing.join(', ')}.</span>}
       {s.problems.map((p) => <span> {p}.</span>)}
-      <span> The owner sets these in the server's <code>.env</code> (see the README, "Nightly backups to Google Drive").</span>
+      <span> The owner sets these in the server's <code>.env</code> (see "Nightly backups to Google Drive" in docs/OPERATIONS.md).</span>
     </div>
   ) : s.overdue ? (
     <p class="admin-error" role="alert" id="backup-state"><strong>No successful backup in the last 48 hours.</strong> The administrators are emailed once a day until one succeeds.</p>

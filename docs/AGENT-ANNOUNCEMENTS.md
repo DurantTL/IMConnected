@@ -2,7 +2,7 @@
 
 The agent submits to `POST /api/agent/stories` with its existing bearer authentication. These requests create **new drafts** for an editor. A person reviews and publishes them. The agent cannot publish, submit raw modules or upload iframe HTML.
 
-An administrator configures `AGENT_API_TOKEN` as described in the [README](../README.md#ai-agent-api). `GET /api/agent/sections` returns valid categories and announcement capabilities. Use the same token for every endpoint; store it in the agent's secure configuration. The agent can read its own draft back with `GET /api/agent/stories/<id>` or `?sourceUrl=`, and may add an optional `requestId` to make a retry safe; an update that omits `announcement` keeps the stored metadata, an `announcement` object is a patch merged into it, and `announcement: null` clears it (see the README's AI agent API section for omission rules, refusal reasons and the read-back fields).
+An administrator configures `AGENT_API_TOKEN` as described in the [AI agent API reference](AGENT-API.md). `GET /api/agent/sections` returns valid categories and announcement capabilities. Use the same token for every endpoint; store it in the agent's secure configuration. The agent can read its own draft back with `GET /api/agent/stories/<id>` or `?sourceUrl=`, and may add an optional `requestId` to make a retry safe; an update that omits `announcement` keeps the stored metadata, an `announcement` object is a patch merged into it, and `announcement: null` clears it (see the README's AI agent API section for omission rules, refusal reasons and the read-back fields).
 
 ## Request example
 
