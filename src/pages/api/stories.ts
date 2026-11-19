@@ -35,11 +35,13 @@ export const GET: APIRoute = async ({ request, url, clientAddress }) => {
   const limit = rawLimit !== null && /^\d{1,4}$/.test(rawLimit) ? Math.min(Math.max(Number(rawLimit), 1), STUDIO_LIST_MAX) : 50;
   const section = canonicalSectionKey(url.searchParams.get('section') || undefined);
   if (section && !getSection(section)) return studioJson(request, 400, { ok: false, error: 'That section does not exist.' });
+  // `sort=uploaded` orders by when each story first went live instead of its story date; anything else is the default.
+  const sort = url.searchParams.get('sort') === 'uploaded' ? 'uploaded' : 'date';
 
   const site = new URL(siteUrl());
   let stories: Awaited<ReturnType<typeof listPublishedForStudio>>;
   try {
-    stories = await listPublishedForStudio(site, { limit, section });
+    stories = await listPublishedForStudio(site, { limit, section, sort });
   } catch (err) {
     if (err instanceof StoriesUnavailable) return studioJson(request, 503, { ok: false, error: 'The stories can’t be read right now. Please try again in a minute.' });
     throw err;
