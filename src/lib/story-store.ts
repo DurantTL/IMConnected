@@ -245,12 +245,12 @@ export function writeStory(s: StoryInput, now: number, mode: 'upsert' | 'insert'
   if (cur) {
     id = Number(cur.id);
     db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, additional_sections=?, newsletter_issue=?, newsletter_position=?, key_points=?, edited_at=COALESCE(?, edited_at), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, id);
+      photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, draft_id=?, published_at=?, updated_at=?, published_by=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, additional_sections=?, newsletter_issue=?, newsletter_position=?, key_points=?, edited_at=COALESCE(?, edited_at), first_live_at=COALESCE(first_live_at, ?), rev=rev+1 WHERE id = ?`).run(...cols, editedAt, s.publishedAt, id);
     db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
   } else {
     const r = db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, announcement, additional_sections, newsletter_issue, newsletter_position, key_points, edited_at, slug)
-      VALUES (${Array(cols.length + 2).fill('?').join(',')})`).run(...cols, editedAt, s.slug);
+      photos, photo_alts, featured, draft, body, status, source, draft_id, published_at, updated_at, published_by, content_hash, photo_layout, story_blocks, announcement, additional_sections, newsletter_issue, newsletter_position, key_points, edited_at, first_live_at, slug)
+      VALUES (${Array(cols.length + 3).fill('?').join(',')})`).run(...cols, editedAt, s.publishedAt, s.slug);
     id = Number(r.lastInsertRowid);
   }
   const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom, fit, fit_fill, caption) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');

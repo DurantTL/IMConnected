@@ -234,11 +234,11 @@ for (const f of files) {
         if (row) {
           id = Number(row.id);
           db.prepare(`UPDATE stories SET title=?, dek=?, section=?, area=?, story_column=?, author=?, author_title=?, church=?, date=?, image=?, image_alt=?, photo_credit=?,
-            photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, published_at=?, updated_at=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, additional_sections=?, edited_at=NULL, rev=rev+1 WHERE id = ?`).run(...cols, id);
+            photos=?, photo_alts=?, featured=?, draft=?, body=?, status=?, source=?, published_at=?, updated_at=?, content_hash=?, photo_layout=?, story_blocks=?, announcement=?, additional_sections=?, edited_at=NULL, first_live_at=COALESCE(first_live_at, ?), rev=rev+1 WHERE id = ?`).run(...cols, cols[19], id);
           db.prepare('DELETE FROM story_photos WHERE story_id = ?').run(id);
         } else {
           id = Number(db.prepare(`INSERT INTO stories (title, dek, section, area, story_column, author, author_title, church, date, image, image_alt, photo_credit,
-            photos, photo_alts, featured, draft, body, status, source, published_at, updated_at, content_hash, photo_layout, story_blocks, announcement, additional_sections, slug) VALUES (${Array(cols.length + 1).fill('?').join(',')})`).run(...cols, slug).lastInsertRowid);
+            photos, photo_alts, featured, draft, body, status, source, published_at, updated_at, content_hash, photo_layout, story_blocks, announcement, additional_sections, first_live_at, slug) VALUES (${Array(cols.length + 2).fill('?').join(',')})`).run(...cols, cols[19], slug).lastInsertRowid);
         }
         const ins = db.prepare('INSERT INTO story_photos (story_id, position, kind, path, url, alt, sha256, bytes, focal_x, focal_y, zoom, fit, fit_fill, caption) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         for (const r of rows) ins.run(id, r.position, r.kind, r.path, r.url, r.alt, r.sha256, r.bytes, s.photoFocus[r.position]?.focalX ?? 50, s.photoFocus[r.position]?.focalY ?? 50, s.photoFocus[r.position]?.zoom ?? 1, s.photoFocus[r.position]?.fit ?? 'cover', s.photoFocus[r.position]?.fitFill ?? 'blur', s.captions?.[r.position] ?? '');

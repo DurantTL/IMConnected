@@ -1262,6 +1262,17 @@ try {
     check('drafts: every item carries uploadedAt (when it was created)', d.drafts.every((x) => /^\d{4}-\d{2}-\d{2}T/.test(x.uploadedAt)));
     r = await S('/api/stories?limit=50&sort=uploaded', { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
     check('sort=uploaded: most recently added first, whatever the story date', r.status === 200 && r.data.stories[0].id === slug && r.data.stories.every((s, i, a) => i === 0 || a[i - 1].uploadedAt >= s.uploadedAt), r.data.stories.slice(0, 3).map((s) => s.id + ' ' + s.uploadedAt).join(' | '));
+    const firstUp = live.uploadedAt;
+    await new Promise((res) => setTimeout(res, 1100));
+    const again = await call(BASE, 'POST', '/api/publish', { token: PUBLISH_TOKEN, json: { newsletter: { name: 'E2E Issue', issueDate: '2026-10-19' }, stories: [{ ref: 'a', title: 'Studio Story Live Before The Next Build', section: 'news', area: 'churches', author: 'Studio Author', dek: 'Published seconds ago.', body: 'A made-up story body for the list, edited by a republish.', photos: [{ url: dataUrl(PNG_A), alt: 'Studio alt' }, { url: 'https://stories.imadventist.org/images/x/photo.jpg', alt: 'Second' }] }] } });
+    r = await S('/api/stories?limit=50', { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
+    const liveAgain = r.data.stories.find((s) => s.id === slug);
+    check('a Studio republish of the same story keeps uploadedAt unchanged', again.status === 200 && !!liveAgain && liveAgain.excerpt.includes('republish') && liveAgain.uploadedAt === firstUp, `${again.status} ${firstUp} -> ${liveAgain?.uploadedAt}`);
+    const midnight = Date.UTC(2026, 0, 5);
+    run('UPDATE stories SET rev = rev + 1, first_live_at = ? WHERE slug = ?', midnight, slug);
+    r = await S('/api/stories?limit=50', { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
+    check('a bare UTC-midnight first-live (adopted story date) is shown as noon America/Chicago that day', r.data.stories.find((s) => s.id === slug)?.uploadedAt === '2026-01-05T18:00:00.000Z', r.data.stories.find((s) => s.id === slug)?.uploadedAt);
+    run('UPDATE stories SET rev = rev + 1, first_live_at = ? WHERE slug = ?', Date.parse(firstUp), slug);
     r = await S('/api/stories?limit=50&sort=bogus', { token: PUBLISH_TOKEN });
     check('an unknown sort is the default (story date) order', r.status === 200 && r.data.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date));
 

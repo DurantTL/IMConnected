@@ -25,8 +25,8 @@ export interface StudioStory extends FeedItem {
   /** Where it came from: the story's source (form, studio, editor, agent), or "site" for a story imported from git. */
   source: DraftSource | 'site';
   /**
-   * When the story first went live on the site (ISO 8601), whatever its own story `date` says. Republishing or editing
-   * never moves it. Studio sorts by it so a newsletter picks up what was added since the last one.
+   * When the story first went live on the site (ISO 8601), whatever its own story `date` says. Editing, republishing,
+   * unpublishing and publishing again never move it (stories.first_live_at, migration 040). Studio sorts by it so a newsletter picks up what was added since the last one.
    */
   uploadedAt: string;
 }
@@ -91,14 +91,17 @@ export async function listPublishedForStudio(site: URL, opts: { limit: number; s
   const uploaded = new Map<string, number>();
   let live: ReturnType<typeof listLiveFromDb>;
   try {
-    // First time live: drafts.submitter_notified_at is set once, at a draft's first publish, and kept by every later one
-    // (the same rule as the dashboard's "edited" check in story-store.ts); else the story's own published_at.
+    // First time live: stories.first_live_at (set once, never moved); older rows fall back to the draft's first-publish
+    // stamp, else the story's own published_at.
     const rows = getDb().prepare(
-      'SELECT s.slug, s.source, COALESCE(NULLIF(d.submitter_notified_at, 0), s.published_at) AS first_live FROM stories s LEFT JOIN drafts d ON d.slug = s.slug',
+      'SELECT s.slug, s.source, COALESCE(s.first_live_at, NULLIF(d.submitter_notified_at, 0), s.published_at) AS first_live FROM stories s LEFT JOIN drafts d ON d.slug = s.slug',
     ).all() as { slug: string; source: string; first_live: number | null }[];
     for (const r of rows) {
       sources.set(r.slug, r.source === 'git' ? 'site' : (r.source as DraftSource));
-      uploaded.set(r.slug, Number(r.first_live ?? 0));
+      let ms = Number(r.first_live ?? 0);
+      // A bare story date (adoption/import) is UTC midnight, which is the evening before in America/Chicago: show noon Chicago that day.
+      if (ms > 0 && ms % 86_400_000 === 0) ms += 18 * 3_600_000;
+      uploaded.set(r.slug, ms);
     }
     live = listLiveFromDb(); // read straight from the table, never the page cache: a change by another process shows at once
   } catch (err) {
