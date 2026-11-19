@@ -1248,7 +1248,7 @@ try {
     const builtCount = fs.readdirSync(path.join(ROOT, 'src/content/stories')).filter((f) => f.endsWith('.md') && !/^draft:\s*true\s*$/m.test(fs.readFileSync(path.join(ROOT, 'src/content/stories', f), 'utf8').split(/^---\s*$/m)[1] ?? '')).length; // however many real stories are live today
     check('stories: every story in the build is there (newest first)', built.length === builtCount && builtCount > 0 && d.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), `${built.length}`);
     const feed = JSON.parse((await S('/stories.json')).text).stories; // rendered by the server since epic #25 step 2
-    const strip = (o) => { const { status, source, url, image, photos, excerpt, ...rest } = o; return rest; };
+    const strip = (o) => { const { status, source, url, image, photos, excerpt, uploadedAt, ...rest } = o; return rest; };
     const sameAsFeed = feed.every((f) => { const s = d.stories.find((b) => b.id === f.id); return s && JSON.stringify(strip(s)) === JSON.stringify(strip(f)); });
     check('stories: each item has exactly the /stories.json fields and values (feedItem), plus status and source', sameAsFeed && built.every((s) => s.status === 'published'), JSON.stringify(built[0]).slice(0, 300));
     const feedKeys = new Set(feed.flatMap((f) => Object.keys(f)));
@@ -1258,6 +1258,23 @@ try {
     check('...with absolute links and its photos', live && /^http:\/\/localhost:\d+\/media\/stories\/2026-10-19-studio-story-live-before-the-next-build\/[0-9a-f]{64}\.png$/.test(live.image) && live.image.startsWith(BASE + '/media/stories/') && live.imageAlt === 'Studio alt' && live.photos[0] === 'https://stories.imadventist.org/images/x/photo.jpg' && live.photoAlts[0] === 'Second' && live.sectionLabel === 'News' && live.areaLabel === 'Churches' && live.date === '2026-10-19');
     check('...Studio\'s reads: title, dek, section, sectionLabel, areaLabel, date, url, image, imageAlt, photoCredit/photos, status and source are present', live && ['title', 'dek', 'section', 'sectionLabel', 'areaLabel', 'date', 'url', 'image', 'imageAlt', 'photos', 'photoAlts', 'status', 'source'].every((k) => k in live));
     check('...and every url is on the site\'s own origin', d.stories.every((s) => s.url.startsWith(BASE + '/')));
+    check('stories: every item carries uploadedAt (ISO, when it first went live)', d.stories.every((s) => /^\d{4}-\d{2}-\d{2}T/.test(s.uploadedAt)) && live && Math.abs(Date.parse(live.uploadedAt) - now) < 120_000, live && live.uploadedAt);
+    check('drafts: every item carries uploadedAt (when it was created)', d.drafts.every((x) => /^\d{4}-\d{2}-\d{2}T/.test(x.uploadedAt)));
+    r = await S('/api/stories?limit=50&sort=uploaded', { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
+    check('sort=uploaded: most recently added first, whatever the story date', r.status === 200 && r.data.stories[0].id === slug && r.data.stories.every((s, i, a) => i === 0 || a[i - 1].uploadedAt >= s.uploadedAt), r.data.stories.slice(0, 3).map((s) => s.id + ' ' + s.uploadedAt).join(' | '));
+    const firstUp = live.uploadedAt;
+    await new Promise((res) => setTimeout(res, 1100));
+    const again = await call(BASE, 'POST', '/api/publish', { token: PUBLISH_TOKEN, json: { newsletter: { name: 'E2E Issue', issueDate: '2026-10-19' }, stories: [{ ref: 'a', title: 'Studio Story Live Before The Next Build', section: 'news', area: 'churches', author: 'Studio Author', dek: 'Published seconds ago.', body: 'A made-up story body for the list, edited by a republish.', photos: [{ url: dataUrl(PNG_A), alt: 'Studio alt' }, { url: 'https://stories.imadventist.org/images/x/photo.jpg', alt: 'Second' }] }] } });
+    r = await S('/api/stories?limit=50', { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
+    const liveAgain = r.data.stories.find((s) => s.id === slug);
+    check('a Studio republish of the same story keeps uploadedAt unchanged', again.status === 200 && !!liveAgain && liveAgain.excerpt.includes('republish') && liveAgain.uploadedAt === firstUp, `${again.status} ${firstUp} -> ${liveAgain?.uploadedAt}`);
+    const midnight = Date.UTC(2026, 0, 5);
+    run('UPDATE stories SET rev = rev + 1, first_live_at = ? WHERE slug = ?', midnight, slug);
+    r = await S('/api/stories?limit=50', { token: PUBLISH_TOKEN, headers: { Origin: TOOLS_ORIGIN } });
+    check('a bare UTC-midnight first-live (adopted story date) is shown as noon America/Chicago that day', r.data.stories.find((s) => s.id === slug)?.uploadedAt === '2026-01-05T18:00:00.000Z', r.data.stories.find((s) => s.id === slug)?.uploadedAt);
+    run('UPDATE stories SET rev = rev + 1, first_live_at = ? WHERE slug = ?', Date.parse(firstUp), slug);
+    r = await S('/api/stories?limit=50&sort=bogus', { token: PUBLISH_TOKEN });
+    check('an unknown sort is the default (story date) order', r.status === 200 && r.data.stories.every((s, i, a) => i === 0 || a[i - 1].date >= s.date));
 
     // unpublish hides it
     run("UPDATE stories SET rev = rev + 1, status = 'unpublished' WHERE slug = ?", slug);
